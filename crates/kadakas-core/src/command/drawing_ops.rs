@@ -18,6 +18,54 @@ impl Tx<'_> {
         }
     }
 
+    /// Makes the render style with this name the active one (a scene restore). A style of the
+    /// document wins. A built-in style that the document does not hold yet is added to it, as the
+    /// view bar does. An unknown name changes nothing and gives false: the style may have been
+    /// deleted.
+    fn restore_style(&mut self, name: &str, out: &mut Outcome) -> Result<bool, CommandError> {
+        let name = name.trim();
+        let found = self
+            .doc
+            .resources
+            .iter()
+            .find(|r| {
+                r.name.eq_ignore_ascii_case(name)
+                    && crate::present::render_style(self.doc, r.id).is_some()
+            })
+            .map(|r| r.id);
+        let id = match found {
+            Some(id) => id,
+            None => {
+                let Some((preset, style)) = crate::present::RenderStyle::presets()
+                    .into_iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                else {
+                    return Ok(false);
+                };
+                let before = out.created.len();
+                self.run_plant(
+                    &Command::AddResource {
+                        name: preset.to_string(),
+                        body: ResourceBody::Render(Box::new(
+                            crate::present::RenderResource::RenderStyle(style),
+                        )),
+                    },
+                    out,
+                )?;
+                // The scene restore creates the style, so the list of created IDs keeps it out.
+                match out.created.get(before).copied() {
+                    Some(id) => {
+                        out.created.truncate(before);
+                        ResourceId(id)
+                    }
+                    None => return Ok(false),
+                }
+            }
+        };
+        self.doc.drawing.presentation.active_style = Some(id);
+        Ok(true)
+    }
+
     /// Makes the page size of a title block equal to the size of its sheet.
     pub(super) fn sync_title_block(&mut self, id: ObjectId) {
         let Some(o) = self.doc.object(id) else { return };
@@ -262,6 +310,39 @@ impl Tx<'_> {
                     .ok_or_else(|| invalid(format!("no saved view named '{name}'")))?;
                 views.remove(i);
             }
+            Command::UseRenderStyle { name } => {
+                if !self.restore_style(name, out)? {
+                    return Err(invalid(format!("no render style named '{name}'")));
+                }
+            }
+            Command::RenameView { name, new_name } => {
+                let new_name = new_name.trim().to_string();
+                if new_name.is_empty() {
+                    return Err(invalid("a saved view needs a name"));
+                }
+                let views = &mut self.doc.drawing.saved_views;
+                let i = views
+                    .iter()
+                    .position(|v| v.name.eq_ignore_ascii_case(name.trim()))
+                    .ok_or_else(|| invalid(format!("no saved view named '{name}'")))?;
+                if views
+                    .iter()
+                    .enumerate()
+                    .any(|(j, v)| j != i && v.name.eq_ignore_ascii_case(&new_name))
+                {
+                    return Err(invalid(format!("a saved view named '{new_name}' exists")));
+                }
+                views[i].name = new_name;
+            }
+            Command::MoveView { name, to } => {
+                let views = &mut self.doc.drawing.saved_views;
+                let i = views
+                    .iter()
+                    .position(|v| v.name.eq_ignore_ascii_case(name.trim()))
+                    .ok_or_else(|| invalid(format!("no saved view named '{name}'")))?;
+                let v = views.remove(i);
+                views.insert((*to).min(views.len()), v);
+            }
             Command::RestoreView { name } => {
                 let view = self
                     .doc
@@ -284,6 +365,10 @@ impl Tx<'_> {
                 }
                 if let Some(c) = view.active_class.filter(|c| self.doc.class(*c).is_some()) {
                     self.doc.active_class = c;
+                }
+                if let Some(style) = view.render_style.as_deref() {
+                    // A style that was deleted since is skipped: the rest of the view applies.
+                    self.restore_style(style, out)?;
                 }
             }
             _ => unreachable!("run_drawing gets drawing commands only"),

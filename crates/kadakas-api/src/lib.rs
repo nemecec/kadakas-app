@@ -971,6 +971,8 @@ pub const METHODS: &[(&str, &str)] = &[
     sheets_api::SAVED_VIEW_SAVE,
     sheets_api::SAVED_VIEW_RESTORE,
     sheets_api::SAVED_VIEW_DELETE,
+    sheets_api::SAVED_VIEW_RENAME,
+    sheets_api::SAVED_VIEW_MOVE,
     // Annotation (see annotation_api.rs).
     annotation_api::TEXT_STYLE_LIST,
     annotation_api::TEXT_STYLE_GET,

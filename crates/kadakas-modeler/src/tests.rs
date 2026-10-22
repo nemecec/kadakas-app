@@ -1142,6 +1142,7 @@ fn the_actions_of_the_modeler_are_the_ones_it_runs() {
 }
 
 mod modeling;
+mod scenes;
 
 /// A surface model with a square, selected.
 fn add_model_square(app: &mut ModelerApp, x: f64) -> kadakas_core::model::ObjectId {

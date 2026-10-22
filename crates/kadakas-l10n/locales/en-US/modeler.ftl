@@ -81,7 +81,6 @@ modeler-entity-many =
         [one] { $count } object selected.
        *[other] { $count } objects selected.
     }
-modeler-scenes-later = Scenes (saved views) come in a later version.
 
 modeler-tool-later = { $name }: { $note }
 modeler-nothing-to-undo = There is nothing to undo.

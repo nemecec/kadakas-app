@@ -2567,8 +2567,10 @@ if TYPE_CHECKING:
     SavedViewListParams = TypedDict("SavedViewListParams", {}, total=False)
 
     SavedViewSaveParams = TypedDict("SavedViewSaveParams", {
+        'camera': dict[str, Any] | None,
         'name': Required[str],
         'pan': list[float] | None,
+        'render_style': str | None,
         'zoom': float | None,
     }, total=False)
 
@@ -2578,6 +2580,16 @@ if TYPE_CHECKING:
 
     SavedViewDeleteParams = TypedDict("SavedViewDeleteParams", {
         'name': Required[str],
+    }, total=False)
+
+    SavedViewRenameParams = TypedDict("SavedViewRenameParams", {
+        'name': Required[str],
+        'new_name': Required[str],
+    }, total=False)
+
+    SavedViewMoveParams = TypedDict("SavedViewMoveParams", {
+        'name': Required[str],
+        'to': Required[int],
     }, total=False)
 
     TextStyleListParams = TypedDict("TextStyleListParams", {}, total=False)
@@ -5197,13 +5209,13 @@ class Api:
         return self._call("saved_view.list", params or None)
 
     def saved_view_save(self, **params: "Unpack[SavedViewSaveParams]") -> Any:
-        """Save the current view: the visibility of all layers and classes, the active layer and class, and the 3D view settings. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle)}. A view with the same name is replaced.
+        """Save the current view: the visibility of all layers and classes, the active layer and class, the 3D view settings and the active render style. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle), camera? ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}, the free 3D camera of a scene), render_style? (name of a style of the document or a built-in style, default the active style; null for none)}. A view with the same name is replaced and keeps its place in the list. The list is the list of scenes of the 3D modeler (MOD-10).
 
         JSON-RPC method ``saved_view.save``."""
         return self._call("saved_view.save", params or None)
 
     def saved_view_restore(self, **params: "Unpack[SavedViewRestoreParams]") -> Any:
-        """Apply a saved view (one undo step): layer and class visibility, active layer and class, and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.
+        """Apply a saved view (one undo step): layer and class visibility, active layer and class, the render style and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.
 
         JSON-RPC method ``saved_view.restore``."""
         return self._call("saved_view.restore", params or None)
@@ -5213,6 +5225,18 @@ class Api:
 
         JSON-RPC method ``saved_view.delete``."""
         return self._call("saved_view.delete", params or None)
+
+    def saved_view_rename(self, **params: "Unpack[SavedViewRenameParams]") -> Any:
+        """Rename a saved view (one undo step). params: {name, new_name}. The new name must be free. The place in the list stays.
+
+        JSON-RPC method ``saved_view.rename``."""
+        return self._call("saved_view.rename", params or None)
+
+    def saved_view_move(self, **params: "Unpack[SavedViewMoveParams]") -> Any:
+        """Move a saved view to a place in the list (one undo step), which sets the order of the scenes. params: {name, to (0 is first; past the end means last)}.
+
+        JSON-RPC method ``saved_view.move``."""
+        return self._call("saved_view.move", params or None)
 
     def text_style_list(self, **params: "Unpack[TextStyleListParams]") -> Any:
         """The text styles of the document. Returns {items: [{id, name, ...fields, used_by}]}.
@@ -5969,6 +5993,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "saved_view.save",
     "saved_view.restore",
     "saved_view.delete",
+    "saved_view.rename",
+    "saved_view.move",
     "text_style.list",
     "text_style.get",
     "text_style.create",

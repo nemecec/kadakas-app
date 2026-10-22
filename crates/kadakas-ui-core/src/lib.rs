@@ -38,6 +38,7 @@ pub mod plugin_form;
 pub mod plugin_tool;
 pub mod polygon3d;
 pub mod profile;
+pub mod scene_panel;
 pub mod snap;
 pub mod style_edit;
 pub mod tags;

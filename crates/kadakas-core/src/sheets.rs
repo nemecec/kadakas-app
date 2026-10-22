@@ -218,11 +218,55 @@ pub struct SavedView {
     pub projection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The free 3D camera of a scene (MOD-10). A standard view cannot say where the person stood,
+    /// so the modeler keeps the camera too. The app uses `view` and ignores this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<ViewCamera>,
+    /// The name of the render style of the scene (3D-08): a style of the document or a built-in
+    /// style. `None`: a restore leaves the style as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_style: Option<String>,
 }
 
 impl SavedView {
     pub fn is_finite(&self) -> bool {
-        self.zoom.is_none_or(|z| z.is_finite() && z > 0.0) && self.pan.is_none_or(|p| p.is_finite())
+        self.zoom.is_none_or(|z| z.is_finite() && z > 0.0)
+            && self.pan.is_none_or(|p| p.is_finite())
+            && self.camera.as_ref().is_none_or(ViewCamera::is_valid)
+    }
+}
+
+/// An orbit camera in a saved view: the point looked at, the turn about the vertical axis
+/// (`yaw`), the look up or down (`pitch`), the distance to the target in mm, the field of view
+/// and the projection.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ViewCamera {
+    pub target: [f64; 3],
+    /// Radians.
+    pub yaw: f64,
+    /// Radians.
+    pub pitch: f64,
+    /// mm. For the parallel projection it sets the zoom.
+    pub distance: f64,
+    /// The vertical field of view in degrees.
+    pub fov: f64,
+    /// `perspective` or `ortho` (the ids of `view.list`).
+    pub projection: String,
+}
+
+impl ViewCamera {
+    pub fn is_valid(&self) -> bool {
+        self.target
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= 1.0e9)
+            && self.yaw.is_finite()
+            && self.pitch.is_finite()
+            && self.distance.is_finite()
+            && self.distance > 0.0
+            && self.distance <= 1.0e9
+            && self.fov.is_finite()
+            && (1.0..=170.0).contains(&self.fov)
+            && matches!(self.projection.as_str(), "perspective" | "ortho")
     }
 }
 

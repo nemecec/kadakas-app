@@ -17,13 +17,13 @@
 | Tool bar | The Getting Started set: Select, Eraser, Line, Rectangle, Circle, Arc, Push/Pull, Move, Rotate, Scale, Tape Measure, Paint Bucket, Orbit, Pan, Zoom, Zoom Extents. |
 | 3D view | The scene, drawn by the same GPU renderer as the app. The drawing axes are red (X), green (Y) and blue (up). |
 | Status bar | The instruction for the active tool, or the last message. At the right is the **Measurements** box. |
-| Tray | **Entity Info**, **Tags**, **Materials** and **Scenes**. A click on a title bar collapses the panel. View > Tray hides the tray. |
+| Tray | **Entity Info**, **Tags**, **Materials**, **Soften Edges**, **Scenes** and **Styles**. A click on a title bar collapses the panel. View > Tray hides the tray. |
 
 Select, the drawing tools of MOD-08, Move, Rotate, Scale, the Paint Bucket, Tape Measure and the navigation tools run.
 
 **Measurements box.** It shows the size of the selection (length, width and height in the units of the person), the field of view while the Zoom tool is active, and the live value of a drawing tool that runs (length, width and height, radius, bulge, distance). You type into it without a click: digits and the marks of values start the text, letters follow once the text has started (`24s`, `500r`, `3'6"`), Backspace erases, Enter applies and Esc clears. See "Modeling" below.
 
-**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. A surface model also shows its numbers of vertices, edges and faces and whether the faces close a volume. A selected face shows its area, normal, edges and holes. After a merge (Erase, or a flush Push/Pull), the face that stays has the lower id and its own attributes and material. It also has the attributes that it did not have from the merged faces. The status line names what was taken or dropped. A selected edge shows its length, ends, curve and the number of faces on it. Several faces and edges show their counts. **Materials** is the list of the materials of the model (see "Paint Bucket and Materials" below). **Scenes** is a placeholder; scenes come with MOD-10.
+**Entity Info.** It shows the type, the id, the layer, the class, the size and the lowest corner of the selected object. For several objects it shows the count and the size of the box around them. With no selection it shows the active layer and class. A surface model also shows its numbers of vertices, edges and faces and whether the faces close a volume. A selected face shows its area, normal, edges and holes. After a merge (Erase, or a flush Push/Pull), the face that stays has the lower id and its own attributes and material. It also has the attributes that it did not have from the merged faces. The status line names what was taken or dropped. A selected edge shows its length, ends, curve and the number of faces on it. Several faces and edges show their counts. **Materials** is the list of the materials of the model (see "Paint Bucket and Materials" below). **Scenes** and **Styles** are described in "Scenes and styles" below.
 
 **Unsaved changes.** The session knows when the model has changes that nobody saved. File > New, File > Open, a file from the launcher, File > Quit and the close button then ask the same three questions as the app: Save and open, Don't save, or Cancel. Only one question is open at a time. A second request is dropped, and the status line says so. A drawing tool or an undo makes unsaved changes.
 
@@ -530,6 +530,67 @@ Edit > Solid Tools holds Check Solid, Union, Subtract, Intersect, Trim, Split an
 - Property tests: for boxes on a grid (also Trim and Split) (planes, edges and corners shared often) and for a turned box, `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)`. A refusal changes nothing.
 - Integration tests (`crates/kadakas-core/tests/solid_tools.rs`): each operation is one undo step and comes back with undo and redo, a refusal makes no step, the edit and the report are JSON. Also lines and circles of the person that survive a union, a cylinder cut in half that keeps its curves as chains, and the count of previews in the window.
 - Tests of the window and of `ui-core`: operands, order, preview in both languages, one undo step, refusals without ids, Check Solid, the menu.
+
+## Scenes and styles (MOD-10)
+
+A scene is a saved view of the document. It keeps the camera, which tags and layers are visible, the active tag and layer, and the render style. The scenes of the modeler are the saved views of the document, in the same order. The Vectorworks-like app lists the same saved views in its Navigation palette. One `.kad` file shows the same scenes in both programs. The wording of the panels follows the public SketchUp help for scenes and styles. It is not verified against the product.
+
+### The Scenes panel
+
+| Button | What it does |
+|---|---|
+| Add | Stores the present camera, tags, layers and style as a new scene. The name is `Scene 1`, `Scene 2` and so on. The name is ready to type over. |
+| Update | Stores the present camera, tags, layers and style in the chosen scene. The scene keeps its place in the list. |
+| Rename | Changes the name. A double click on a scene does the same. The name must be free (case does not count) and not empty. |
+| Delete | Deletes the chosen scene. Undo brings it back. |
+| Up and Down | Move the chosen scene in the list. The list is the order of the scenes. |
+
+A click on a scene shows it. The tags and layers are set to the saved state, the active tag and layer are restored, the render style is set, and the camera moves to the saved view. This is one undo step for the document. The camera is not part of the undo history, like every camera move. A star after the name of the scene that was shown last means that the camera, a tag, a layer or the style changed since. Update stores the change. A tooltip says so.
+
+The camera moves in a short animation of half a second (smoothstep easing, the short way round for the turn, even steps for the distance). A change of projection happens at the start. **View > Animate Scene Changes**, and the check box at the bottom of the panel, switch the animation off. The choice is kept in `modeler.json` (`animate_scenes`). The animation stops when the person moves the view. Entity Info is not changed by scenes.
+
+### The Styles panel
+
+The panel has a list of styles. It offers the five built-in styles from 3D-08 (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) and then the other render styles of the document. A built-in style joins the document as a render style resource when it is chosen for the first time. The 3D view draws with the render style of the document (the mode, edges, shadows, sun, textures and background). A choice is one undo step.
+
+### What is stored
+
+A scene is a `SavedView` of `drawing.saved_views`. MOD-10 added two optional fields. Older files have none. A program from before MOD-10 drops them when it saves.
+
+- `camera`: the free orbit camera `{target [x, y, z], yaw, pitch, distance, fov, projection}`. Angles are radians. Lengths are mm. `fov` is degrees. The projection is `perspective` or `ortho`. The app has no free camera. It uses `view` and `projection`. The modeler stores the nearest standard view in `view`. The camera is checked: finite numbers, a distance above 0, a field of view from 1 to 170 degrees.
+- `render_style`: the name of a render style. A restore finds it by name among the styles of the document, then among the built-in styles, which it adds. A name that does not exist any more (the style was deleted or renamed) leaves the style as it is and the rest of the view applies.
+
+A scene of the modeler has no `zoom` and no `pan`, which belong to the 2D plan. When the modeler shows a saved view that the app made, it uses the standard view and the projection of that view, and the plan view becomes the Top view. A saved view with no 3D part only sets the tags, layers and style, and the status line says so. When the app stores a view again under the name of a scene, it keeps the `camera` of that scene and stores the active style.
+
+### Commands and the API
+
+Every action is one command and one undo step, so agents and the JSON-RPC API do the same. The existing methods were reused. These are new:
+
+| Method | What it does |
+|---|---|
+| `saved_view.save` | New params `camera` and `render_style`. A scene with the same name is replaced in its place. Without `render_style` it stores the active style. |
+| `saved_view.restore` | Also sets the render style. |
+| `saved_view.rename` {name, new_name} | Command `RenameView`. |
+| `saved_view.move` {name, to} | Command `MoveView`. 0 is first, a place past the end means last. |
+
+The command `UseRenderStyle {name}` makes a style the active one and adds a built-in style to the document when needed (`execute`). `render_style.*` works as before. The command schema (`crates/kadakas-core/tests/command_schema.json`) has the new commands.
+
+The headless code is `kadakas_ui_core::scene_panel` (rows, commands, activation goal, styles, the camera transition) and the drawing is `kadakas-modeler/src/scenes_panel.rs`. The window runs the actions in `ModelerApp::scene_action`.
+
+### Tests
+
+- Unit tests of `scene_panel`: names, add, update, rename, delete and move with undo, the goal for a free camera and for a view of the app, the nearest standard view, the styles, the transition.
+- Property tests: random scene edits keep the names unique and undo exactly, the saved camera survives JSON, the transition stays finite and between its ends.
+- Tests of the window: each action is one undo step, refusals change nothing, the animation runs and can be switched off or interrupted, a saved file shows the same scenes when opened, a scene is a saved view for the API and the reverse, both languages.
+- Core and API tests: the new commands, the restore of a built-in style, one undo step, and the JSON methods.
+
+### Not done
+
+- Scene thumbnails and scene tabs over the 3D view. The list in the tray is the only place.
+- Per-scene choices of what to update (SketchUp lets a person pick which properties an update keeps). Update stores everything.
+- Shadow settings, fog and sections of a scene. The sun belongs to the document.
+- A scene transition in the Vectorworks-like app. It sets the standard view at once.
+- Styles with edge and face settings of their own beyond the 3D-08 fields, and the style mixer.
 
 ## Clean room
 

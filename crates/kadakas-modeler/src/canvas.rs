@@ -300,8 +300,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     let (overlay, overlay_rev) =
         view3d.selection_lines_with(&scene, rev, &session.selection, extra_key, || extra);
     let doc = session.editor.doc();
-    let mut style = resolve_style(doc, None);
-    style.mode = session.view.mode;
+    // The render style of the document decides how the model is drawn (3D-08, MOD-10). The
+    // modeler has no other control for the mode.
+    let style = resolve_style(doc, None);
     let look = view3d.look(doc, &scene, rev, style.textures);
     let geometry = view3d.geometry_key(&scene, rev);
     let light = light_for(doc, &style);

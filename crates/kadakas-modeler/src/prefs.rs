@@ -51,6 +51,8 @@ pub struct Prefs {
     pub language: Option<String>,
     /// The tray on the right shows.
     pub tray: bool,
+    /// The camera moves in a short animation when a scene is shown (MOD-10).
+    pub animate_scenes: bool,
     /// Units and formats of the app (`prefs.json`). Never written here.
     #[serde(skip)]
     pub units: kadakas_units::Settings,
@@ -62,6 +64,7 @@ impl Default for Prefs {
             theme: ThemeChoice::System,
             language: None,
             tray: true,
+            animate_scenes: true,
             units: kadakas_units::Settings::default(),
         }
     }

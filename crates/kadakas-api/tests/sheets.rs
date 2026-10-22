@@ -80,6 +80,8 @@ fn every_method_is_listed_and_described() {
         "saved_view.save",
         "saved_view.restore",
         "saved_view.delete",
+        "saved_view.rename",
+        "saved_view.move",
         "export.file",
     ] {
         assert!(names.contains(&m), "{m} is not in METHODS");
@@ -1188,4 +1190,104 @@ fn a_viewport_keeps_its_own_visibility() {
         json!({"op": "add_object", "class": c, "shape": {"kind": "text", "at": [100, 100], "text": "LATER", "height": 400}}),
     );
     assert!(svg(&mut s).contains("LATER"));
+}
+
+#[test]
+fn saved_views_work_as_scenes_with_camera_style_order_and_names() {
+    let mut s = model();
+    let cam = json!({"target": [1.0, 2.0, 3.0], "yaw": 0.5, "pitch": 0.4, "distance": 9000.0, "fov": 40.0, "projection": "perspective"});
+    call(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "B", "camera": cam, "render_style": "Hidden Line"}),
+    );
+    call(&mut s, "saved_view.save", json!({"name": "A"}));
+    call(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "C", "render_style": null}),
+    );
+    let list = call(&mut s, "saved_view.list", json!({}));
+    assert_eq!(list["views"][0]["camera"], cam);
+    assert_eq!(list["views"][0]["render_style"], "Hidden Line");
+    assert!(list["views"][1].get("camera").is_none());
+    assert!(list["views"][1].get("render_style").is_none());
+    // Save under the same name replaces the scene in its place.
+    call(&mut s, "saved_view.save", json!({"name": "b"}));
+    let names = |s: &mut Session| -> Vec<String> {
+        call(s, "saved_view.list", json!({}))["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&mut s), ["b", "A", "C"]);
+    // Restore sets the render style: a built-in style joins the document.
+    call(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "Wire", "render_style": "Wireframe"}),
+    );
+    call(&mut s, "saved_view.restore", json!({"name": "Wire"}));
+    let active = call(&mut s, "render_style.list", json!({}));
+    assert!(active.to_string().contains("Wireframe"));
+    assert_eq!(call(&mut s, "undo", json!({}))["done"], true);
+    // Rename and move: one undo step each.
+    call(
+        &mut s,
+        "saved_view.rename",
+        json!({"name": "A", "new_name": "First"}),
+    );
+    assert_eq!(names(&mut s), ["b", "First", "C", "Wire"]);
+    assert!(
+        fail(
+            &mut s,
+            "saved_view.rename",
+            json!({"name": "C", "new_name": "first"})
+        )
+        .contains("exists")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "saved_view.rename",
+            json!({"name": "C", "new_name": " "})
+        )
+        .contains("name")
+    );
+    assert!(
+        fail(
+            &mut s,
+            "saved_view.rename",
+            json!({"name": "Q", "new_name": "z"})
+        )
+        .contains("no saved view")
+    );
+    call(&mut s, "saved_view.move", json!({"name": "Wire", "to": 0}));
+    assert_eq!(names(&mut s), ["Wire", "b", "First", "C"]);
+    call(&mut s, "saved_view.move", json!({"name": "Wire", "to": 99}));
+    assert_eq!(names(&mut s), ["b", "First", "C", "Wire"]);
+    assert_eq!(call(&mut s, "undo", json!({}))["done"], true);
+    assert_eq!(names(&mut s), ["Wire", "b", "First", "C"]);
+    assert_eq!(call(&mut s, "undo", json!({}))["done"], true);
+    assert_eq!(call(&mut s, "undo", json!({}))["done"], true);
+    assert_eq!(names(&mut s), ["b", "A", "C", "Wire"]);
+    assert!(fail(&mut s, "saved_view.move", json!({"name": "Wire"})).contains("'to'"));
+    // A camera that cannot be used is refused, and nothing is stored.
+    for bad in [
+        json!({"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 0, "fov": 40, "projection": "perspective"}),
+        json!({"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 5, "fov": 400, "projection": "perspective"}),
+        json!({"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": 5, "fov": 40, "projection": "fisheye"}),
+    ] {
+        assert!(
+            fail(
+                &mut s,
+                "saved_view.save",
+                json!({"name": "Bad", "camera": bad})
+            )
+            .contains("camera")
+        );
+    }
+    assert_eq!(names(&mut s).len(), 4);
 }

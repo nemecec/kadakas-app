@@ -1246,7 +1246,7 @@
       "type": "string"
     },
     "SavedView": {
-      "description": "A saved view: name, layer visibility, active layer and camera.",
+      "description": "A saved view (a scene of the 3D modeler): name, layers and classes (lists of [id, visible]), active_layer, active_class, zoom, pan, view, projection, mode, camera ({target [x, y, z], yaw, pitch, distance, fov, projection}) and render_style (a name).",
       "type": "object"
     },
     "Shape": {
@@ -3690,7 +3690,68 @@
       "type": "object"
     },
     {
-      "description": "Apply a saved view: layer and class visibility and the active layer and class.\nThe camera part (zoom, pan, 3D view) is for the host to apply.",
+      "description": "Make the render style with this name the active one (3D-08). A style of the document wins.\nA built-in style (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) that the\ndocument does not hold yet is added to it. One undo step.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "use_render_style",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Give a saved view another name (a scene, MOD-10). The name must be free, and the place in\nthe list stays.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "new_name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "rename_view",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "name",
+        "new_name"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Move a saved view to place `to` of the list (0 is first). A place past the end means last.\nThe order of the list is the order of the scenes.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "const": "move_view",
+          "type": "string"
+        },
+        "to": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "op",
+        "name",
+        "to"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Apply a saved view: layer and class visibility, the active layer and class and the render\nstyle (a style of the document, or a built-in style that the document gets). The camera\npart (zoom, pan, 3D view) is for the host to apply.",
       "properties": {
         "name": {
           "type": "string"

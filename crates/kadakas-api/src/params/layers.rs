@@ -207,6 +207,30 @@ pub struct SavedViewSaveParams {
     /// model point at the middle
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pan: Option<Point>,
+    /// {target [x, y, z], yaw, pitch, distance, fov, projection}
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<SavedViewCamera>,
+    /// name of a render style
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_style: Option<String>,
+}
+
+// The free 3D camera of a scene.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedViewCamera {
+    /// [x, y, z] in mm
+    pub target: [Num; 3],
+    /// radians
+    pub yaw: Num,
+    /// radians
+    pub pitch: Num,
+    /// mm
+    pub distance: Num,
+    /// degrees
+    pub fov: Num,
+    /// perspective or ortho
+    pub projection: String,
 }
 
 // Parameters of `saved_view.restore`.
@@ -221,6 +245,23 @@ pub struct SavedViewRestoreParams {
 #[serde(deny_unknown_fields)]
 pub struct SavedViewDeleteParams {
     pub name: String,
+}
+
+// Parameters of `saved_view.rename`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedViewRenameParams {
+    pub name: String,
+    pub new_name: String,
+}
+
+// Parameters of `saved_view.move`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SavedViewMoveParams {
+    pub name: String,
+    /// place in the list, 0 is first
+    pub to: u32,
 }
 
 entries! {
@@ -241,4 +282,6 @@ entries! {
     "saved_view.save" => SavedViewSaveParams,
     "saved_view.restore" => SavedViewRestoreParams,
     "saved_view.delete" => SavedViewDeleteParams,
+    "saved_view.rename" => SavedViewRenameParams,
+    "saved_view.move" => SavedViewMoveParams,
 }

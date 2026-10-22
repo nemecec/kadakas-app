@@ -81,7 +81,6 @@ modeler-entity-many =
         [one] { $count } objekt valitud.
        *[other] { $count } objekti valitud.
     }
-modeler-scenes-later = Stseenid (salvestatud vaated) tulevad hilisemas versioonis.
 
 modeler-tool-later = { $name }: { $note }
 modeler-nothing-to-undo = Tagasivõtta ei ole midagi.

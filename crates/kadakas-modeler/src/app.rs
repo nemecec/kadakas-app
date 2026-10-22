@@ -18,6 +18,7 @@ use kadakas_ui_core::modeler::{self, ModelerTool, ToolState};
 use kadakas_ui_core::modeling;
 use kadakas_ui_core::nav3d::{self, Frame, Nav3d, NavAction};
 use kadakas_ui_core::profile::Profile;
+use kadakas_ui_core::scene_panel;
 use kadakas_view3d::input::action_for_event;
 use kadakas_view3d::view3d::View3d;
 
@@ -27,6 +28,7 @@ use crate::edit3d::Edit3d;
 use crate::files::{self, Ask};
 use crate::launch::Launch;
 use crate::prefs::{self, Prefs, ThemeChoice};
+use crate::scenes_panel::{self, ScenesState};
 use crate::tags_panel::{self, TagsState};
 use crate::toolbar;
 use crate::tray::{self, TrayAction, TrayData, TrayState, TrayUi};
@@ -108,6 +110,8 @@ pub enum Cmd {
     SetFov(f32),
     Projection(bool),
     ToggleTray,
+    /// Switch the camera transition of scenes on or off (MOD-10).
+    ToggleSceneAnimation,
     Theme(ThemeChoice),
     /// A fixed language, or `None` for the language of the system.
     Language(Option<String>),
@@ -202,6 +206,11 @@ pub struct ModelerApp {
     pub context: EditContext,
     /// The Tags panel: the chosen row, a rename, a delete that waits for the answer.
     pub tags: TagsState,
+    /// The Scenes panel: the chosen row, a rename, the scene that was shown last (MOD-10).
+    pub scenes: ScenesState,
+    /// The camera transition that runs, with the camera it set last. If the camera is not that
+    /// one at the next frame, the person moved it and the transition stops.
+    scene_anim: Option<(scene_panel::Transition, kadakas_render::Camera)>,
     /// A question about guides or a resize that waits for the answer.
     pub confirm: Option<Confirm>,
     /// The solid tools take the newer solid as the first one (MOD-09).
@@ -266,6 +275,8 @@ impl ModelerApp {
             canvas_rect: None,
             context: EditContext::new(),
             tags: TagsState::default(),
+            scenes: ScenesState::default(),
+            scene_anim: None,
             confirm: None,
             solid_swap: false,
             solid_hint: std::cell::RefCell::default(),
@@ -578,6 +589,8 @@ impl ModelerApp {
         self.info_cache = None;
         self.context = EditContext::new();
         self.tags = TagsState::default();
+        self.scenes = ScenesState::default();
+        self.scene_anim = None;
         self.confirm = None;
         self.path = path;
         self.nav.clear_history();
@@ -774,6 +787,12 @@ impl ModelerApp {
                 });
             }
             Cmd::ToggleTray => self.prefs.tray = !self.prefs.tray,
+            Cmd::ToggleSceneAnimation => {
+                self.prefs.animate_scenes = !self.prefs.animate_scenes;
+                if !self.prefs.animate_scenes {
+                    self.scene_anim = None;
+                }
+            }
             Cmd::Theme(t) => self.prefs.theme = t,
             Cmd::Language(l) => self.prefs.language = l,
             Cmd::About => self.about.open(),
@@ -1634,6 +1653,186 @@ impl ModelerApp {
         }
     }
 
+    // ---- scenes and styles (MOD-10) ----------------------------------------------------------
+
+    /// Runs a command of the Scenes or Styles panel. `now` is the time of the frame in seconds
+    /// and `size` the size of the 3D view. Every command is one undo step.
+    pub fn scene_action(&mut self, a: scenes_panel::Action, now: f64, size: glam::Vec2) {
+        use scenes_panel::Action;
+        let doc = self.session.editor.doc();
+        let camera = self.nav.camera;
+        let mut added = None;
+        let result: Result<(Option<Command>, String), scene_panel::Problem> = match &a {
+            Action::Add => {
+                let name = scene_panel::new_name(doc);
+                added = Some(name.clone());
+                scene_panel::add(doc, &name, &camera)
+                    .map(|c| (Some(c), tr!("modeler-scenes-added", name = name)))
+            }
+            Action::Update(n) => scene_panel::update(doc, n, &camera)
+                .map(|c| (Some(c), tr!("modeler-scenes-updated", name = n.clone()))),
+            Action::Rename(n, new) => scene_panel::rename(doc, n, new).map(|c| {
+                (
+                    Some(c),
+                    tr!("modeler-scenes-renamed", old = n.clone(), name = new.trim()),
+                )
+            }),
+            Action::Delete(n) => scene_panel::delete(doc, n)
+                .map(|c| (Some(c), tr!("modeler-scenes-deleted", name = n.clone()))),
+            Action::Move(n, delta) => scene_panel::move_by(doc, n, *delta).map(|c| {
+                let place = doc
+                    .drawing
+                    .saved_views
+                    .iter()
+                    .position(|v| v.name.eq_ignore_ascii_case(n))
+                    .map_or(0, |i| (i as isize + delta).max(0) as usize + 1);
+                (
+                    c,
+                    tr!("modeler-scenes-moved", name = n.clone(), place = place),
+                )
+            }),
+            Action::Style(n) => {
+                let name = n.clone();
+                Ok((
+                    scene_panel::use_style(doc, n),
+                    tr!("modeler-style-changed", name = name),
+                ))
+            }
+            Action::Activate(n) => {
+                self.show_scene(n, now, size);
+                return;
+            }
+            Action::Animate(on) => {
+                self.prefs.animate_scenes = *on;
+                if !*on {
+                    self.scene_anim = None;
+                }
+                return;
+            }
+        };
+        let (command, message) = match result {
+            Ok(r) => r,
+            Err(p) => {
+                self.status = scenes_panel::problem_text(p);
+                return;
+            }
+        };
+        if let Some(c) = command {
+            if let Err(e) = self.session.editor.execute(&c) {
+                self.status = match a {
+                    Action::Style(_) => tr!("modeler-style-failed", reason = e.to_string()),
+                    _ => tr!("modeler-scenes-failed", reason = e.to_string()),
+                };
+                return;
+            }
+            self.status = message;
+        }
+        // The panel follows what was done.
+        match a {
+            Action::Add => {
+                if let Some(name) = added {
+                    self.scenes.active = Some(name.clone());
+                    self.scenes.begin_rename(&name);
+                }
+            }
+            Action::Update(n) => self.scenes.active = Some(n),
+            Action::Rename(old, new) => {
+                let new = new.trim().to_string();
+                if self
+                    .scenes
+                    .active
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(&old))
+                {
+                    self.scenes.active = Some(new.clone());
+                }
+                self.scenes.chosen = Some(new);
+            }
+            Action::Delete(n)
+                if self
+                    .scenes
+                    .chosen
+                    .as_deref()
+                    .is_some_and(|x| x.eq_ignore_ascii_case(&n)) =>
+            {
+                self.scenes.chosen = None;
+            }
+            _ => {}
+        }
+        self.after_history();
+    }
+
+    /// Shows a scene: the tags, layers and style in one undo step, and the camera, moved in a
+    /// short animation unless the person switched that off.
+    fn show_scene(&mut self, name: &str, now: f64, size: glam::Vec2) {
+        let act = match scene_panel::activate(self.session.editor.doc(), name) {
+            Ok(a) => a,
+            Err(p) => {
+                self.status = scenes_panel::problem_text(p);
+                return;
+            }
+        };
+        if let Err(e) = self.session.editor.execute(&act.command) {
+            self.status = tr!("modeler-scenes-failed", reason = e.to_string());
+            return;
+        }
+        self.scenes.active = Some(name.to_string());
+        let goal = match act.goal {
+            scene_panel::Goal::Camera(c) => Some(c),
+            scene_panel::Goal::Standard(view, projection) => {
+                let frame = self.frame(size);
+                let mut probe = Nav3d::new();
+                probe.camera = self.nav.camera;
+                probe.standard_view(view, &frame);
+                if let Some(p) = projection {
+                    probe.set_projection(p);
+                }
+                Some(probe.camera)
+            }
+            scene_panel::Goal::Stay => None,
+        };
+        self.status = match goal {
+            Some(_) => tr!("modeler-scenes-shown", name = name),
+            None => tr!("modeler-scenes-view-only", name = name),
+        };
+        if let Some(to) = goal {
+            if self.prefs.animate_scenes && to != self.nav.camera {
+                let t = scene_panel::Transition::new(self.nav.camera, to, now);
+                self.scene_anim = Some((t, self.nav.camera));
+            } else {
+                self.scene_anim = None;
+                self.nav.camera = to;
+            }
+        }
+        self.after_history();
+    }
+
+    /// One step of the camera transition. It stops when the camera is not the one that the
+    /// transition set last: the person moved it.
+    fn step_scene_animation(&mut self, ctx: &egui::Context, now: f64) {
+        let Some((t, last)) = self.scene_anim else {
+            return;
+        };
+        if self.nav.camera != last {
+            self.scene_anim = None;
+            return;
+        }
+        let (camera, done) = t.at(now);
+        self.nav.camera = camera;
+        if done {
+            self.scene_anim = None;
+        } else {
+            self.scene_anim = Some((t, camera));
+            ctx.request_repaint();
+        }
+    }
+
+    /// True while a scene transition moves the camera.
+    #[cfg(test)]
+    pub fn scene_animating(&self) -> bool {
+        self.scene_anim.is_some()
+    }
+
     // ---- the frame ---------------------------------------------------------------------------
 
     /// Draws the window. Runs once per frame.
@@ -1677,6 +1876,7 @@ impl ModelerApp {
             crate::statusbar::show(ui, &status_line, self.tools.active(), &measurement);
         });
         let mut tag_out: Vec<tags_panel::Outcome> = Vec::new();
+        let mut scene_out: Vec<scenes_panel::Action> = Vec::new();
         let mut tray_actions: Vec<TrayAction> = Vec::new();
         if self.prefs.tray {
             let rows = self.material_rows();
@@ -1703,6 +1903,16 @@ impl ModelerApp {
                         parts: !self.edit.sub.is_empty(),
                     };
                     let tags_state = &mut self.tags;
+                    let scenes_state = &mut self.scenes;
+                    let doc = self.session.editor.doc();
+                    let scene_rows = scene_panel::rows(doc, scenes_state.active.as_deref());
+                    let style_rows = scene_panel::styles(doc);
+                    let animating = self.scene_anim.is_some();
+                    let modified = scenes_state
+                        .active
+                        .as_deref()
+                        .is_some_and(|n| scene_panel::is_modified(doc, n, &self.nav.camera));
+                    let animate = self.prefs.animate_scenes;
                     tray_actions = tray::show(
                         ui,
                         &mut self.tray,
@@ -1710,6 +1920,20 @@ impl ModelerApp {
                         &data,
                         &mut |ui, slot| {
                             tag_out.push(tags_panel::show(ui, tags_state, slot, &view));
+                        },
+                        &mut |ui, slot| match slot {
+                            tray::ScenesSlot::Scenes => {
+                                let v = scenes_panel::SceneView {
+                                    rows: &scene_rows,
+                                    animating,
+                                    modified,
+                                    animate,
+                                };
+                                scene_out.extend(scenes_panel::show(ui, scenes_state, &v));
+                            }
+                            tray::ScenesSlot::Styles => {
+                                scene_out.extend(scenes_panel::styles(ui, &style_rows));
+                            }
                         },
                     );
                 });
@@ -1751,6 +1975,11 @@ impl ModelerApp {
         for cmd in cmds {
             self.run(cmd, size);
         }
+        let now = ctx.input(|i| i.time);
+        for action in scene_out {
+            self.scene_action(action, now, size);
+        }
+        self.step_scene_animation(&ctx, now);
         self.edit.follow(self.tools.active());
         // A view that has rested becomes an entry of the history (Previous and Next).
         let now = ctx.input(|i| i.time);

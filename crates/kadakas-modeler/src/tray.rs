@@ -2,7 +2,7 @@
 //! title bar that collapses it. Entity Info shows the data of the selection, the materials of a
 //! face and a summary of the plants, hardscapes and site models (MOD-05). Materials is the list
 //! of the materials of the model with thumbnails and a small editor. Scenes (saved views,
-//! MOD-10) is a placeholder that says so.
+//! MOD-10) and Styles are drawn by `scenes_panel`; the tray only places them.
 //!
 //! The panels draw and return [`TrayAction`]s; the program runs them after the frame. The
 //! logic (what a request does, the questions) is in `kadakas_ui_core::materials`.
@@ -26,6 +26,8 @@ pub struct TrayState {
     pub soften: bool,
     pub scenes: bool,
     pub tags: bool,
+    /// The style picker (MOD-10).
+    pub styles: bool,
 }
 
 impl Default for TrayState {
@@ -36,6 +38,7 @@ impl Default for TrayState {
             soften: true,
             scenes: true,
             tags: true,
+            styles: true,
         }
     }
 }
@@ -775,9 +778,13 @@ pub fn materials(ui: &mut egui::Ui, tray: &mut TrayUi, data: &TrayData, out: &mu
     }
 }
 
-/// The Scenes panel. Scenes are saved views (MOD-10).
-pub fn scenes(ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new(tr!("modeler-scenes-later")).weak());
+/// The parts of the tray that `scenes_panel` draws (MOD-10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScenesSlot {
+    /// The list of scenes.
+    Scenes,
+    /// The style picker.
+    Styles,
 }
 
 /// Draws the whole tray inside `ui`. Returns what the person asked for. `tags` draws the part of
@@ -789,6 +796,7 @@ pub fn show(
     tray: &mut TrayUi,
     data: &TrayData,
     tags: &mut dyn FnMut(&mut egui::Ui, crate::tags_panel::Slot),
+    scenes: &mut dyn FnMut(&mut egui::Ui, ScenesSlot),
 ) -> Vec<TrayAction> {
     let mut out = Vec::new();
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -832,7 +840,14 @@ pub fn show(
             "tray-scenes",
             tr!("modeler-tray-scenes"),
             &mut state.scenes,
-            scenes,
+            |ui| scenes(ui, ScenesSlot::Scenes),
+        );
+        panel(
+            ui,
+            "tray-styles",
+            tr!("modeler-tray-styles"),
+            &mut state.styles,
+            |ui| scenes(ui, ScenesSlot::Styles),
         );
     });
     out

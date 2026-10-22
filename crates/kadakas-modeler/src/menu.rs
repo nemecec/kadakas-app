@@ -375,6 +375,13 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 app.prefs.tray,
                 Cmd::ToggleTray,
             );
+            choice(
+                ui,
+                cmds,
+                tr!("modeler-view-animate-scenes"),
+                app.prefs.animate_scenes,
+                Cmd::ToggleSceneAnimation,
+            );
             ui.separator();
             let show = app.edit.cache.show;
             choice(

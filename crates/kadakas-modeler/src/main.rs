@@ -18,6 +18,7 @@ mod icons;
 mod launch;
 mod menu;
 mod prefs;
+mod scenes_panel;
 mod soften;
 mod statusbar;
 mod tags_panel;

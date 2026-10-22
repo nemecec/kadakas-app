@@ -311,6 +311,8 @@ const TABLE: &[(&str, Class)] = &[
     ("revision_cloud.add", Edit),
     ("saved_view.delete", Edit),
     ("saved_view.list", Read),
+    ("saved_view.move", Edit),
+    ("saved_view.rename", Edit),
     ("saved_view.restore", Ui),
     ("saved_view.save", Edit),
     ("scale_bar.add", Edit),

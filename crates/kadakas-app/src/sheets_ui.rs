@@ -493,12 +493,60 @@ pub fn capture(session: &Session, name: &str, zoom: f64, pan: DVec2) -> SavedVie
         view: Some(session.view.view.id().to_string()),
         projection: Some(session.view.projection.id().to_string()),
         mode: Some(session.view.mode.id().to_string()),
+        // A scene of the modeler keeps its free camera when the app stores the view again under
+        // the same name (MOD-10). The app has no such camera of its own.
+        camera: doc.drawing.saved_view(name).and_then(|v| v.camera.clone()),
+        render_style: doc
+            .drawing
+            .presentation
+            .active_style
+            .and_then(|id| doc.resources.get(id))
+            .map(|r| r.name.clone()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_keeps_the_camera_of_a_scene_and_stores_the_active_style() {
+        use kadakas_core::sheets::ViewCamera;
+        let mut session = Session::with_sequential_ids();
+        let cam = ViewCamera {
+            target: [1.0, 2.0, 3.0],
+            yaw: 0.5,
+            pitch: 0.25,
+            distance: 5000.0,
+            fov: 35.0,
+            projection: "perspective".into(),
+        };
+        session
+            .editor
+            .execute(&Command::SaveView {
+                view: Box::new(SavedView {
+                    name: "Scene 1".into(),
+                    camera: Some(cam.clone()),
+                    ..SavedView::default()
+                }),
+            })
+            .unwrap();
+        session
+            .editor
+            .execute(&Command::UseRenderStyle {
+                name: "Realistic".into(),
+            })
+            .unwrap();
+        // The app stores the view again under the name of a scene of the modeler.
+        let v = capture(&session, "scene 1", 0.5, DVec2::ZERO);
+        assert_eq!(v.camera, Some(cam));
+        assert_eq!(v.render_style.as_deref(), Some("Realistic"));
+        assert!(
+            capture(&session, "other", 0.5, DVec2::ZERO)
+                .camera
+                .is_none()
+        );
+    }
 
     fn square(x0: f64, y0: f64, x1: f64, y1: f64, ccw: bool) -> Vec<DVec2> {
         let mut r = vec![

@@ -441,8 +441,27 @@ pub enum Command {
     DeleteView {
         name: String,
     },
-    /// Apply a saved view: layer and class visibility and the active layer and class.
-    /// The camera part (zoom, pan, 3D view) is for the host to apply.
+    /// Make the render style with this name the active one (3D-08). A style of the document wins.
+    /// A built-in style (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) that the
+    /// document does not hold yet is added to it. One undo step.
+    UseRenderStyle {
+        name: String,
+    },
+    /// Give a saved view another name (a scene, MOD-10). The name must be free, and the place in
+    /// the list stays.
+    RenameView {
+        name: String,
+        new_name: String,
+    },
+    /// Move a saved view to place `to` of the list (0 is first). A place past the end means last.
+    /// The order of the list is the order of the scenes.
+    MoveView {
+        name: String,
+        to: usize,
+    },
+    /// Apply a saved view: layer and class visibility, the active layer and class and the render
+    /// style (a style of the document, or a built-in style that the document gets). The camera
+    /// part (zoom, pan, 3D view) is for the host to apply.
     RestoreView {
         name: String,
     },
@@ -2066,6 +2085,9 @@ impl<'a> Tx<'a> {
             | Command::SetProjectGuid { .. }
             | Command::SaveView { .. }
             | Command::DeleteView { .. }
+            | Command::UseRenderStyle { .. }
+            | Command::RenameView { .. }
+            | Command::MoveView { .. }
             | Command::RestoreView { .. } => self.run_drawing(cmd, out)?,
             Command::TransformObjects { .. }
             | Command::TransformObjects3d { .. }

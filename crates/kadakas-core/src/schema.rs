@@ -264,7 +264,7 @@ schema_impl!(crate::picture::ImageResource, "ImageResource", |_g| opaque(
 ));
 
 schema_impl!(crate::sheets::SavedView, "SavedView", |_g| opaque(
-    "A saved view: name, layer visibility, active layer and camera."
+    "A saved view (a scene of the 3D modeler): name, layers and classes (lists of [id, visible]), active_layer, active_class, zoom, pan, view, projection, mode, camera ({target [x, y, z], yaw, pitch, distance, fov, projection}) and render_style (a name)."
 ));
 schema_impl!(crate::sheets::PaperSize, "PaperSize", |_g| string_enum::<
     crate::sheets::PaperSize,

@@ -91,14 +91,22 @@ pub const SAVED_VIEW_LIST: (&str, &str) = (
 );
 pub const SAVED_VIEW_SAVE: (&str, &str) = (
     "saved_view.save",
-    "Save the current view: the visibility of all layers and classes, the active layer and class, and the 3D view settings. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle)}. A view with the same name is replaced.",
+    "Save the current view: the visibility of all layers and classes, the active layer and class, the 3D view settings and the active render style. params: {name, zoom? (px per mm), pan? ([x, y] model point at the middle), camera? ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}, the free 3D camera of a scene), render_style? (name of a style of the document or a built-in style, default the active style; null for none)}. A view with the same name is replaced and keeps its place in the list. The list is the list of scenes of the 3D modeler (MOD-10).",
 );
 pub const SAVED_VIEW_RESTORE: (&str, &str) = (
     "saved_view.restore",
-    "Apply a saved view (one undo step): layer and class visibility, active layer and class, and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.",
+    "Apply a saved view (one undo step): layer and class visibility, active layer and class, the render style and the 3D view settings. params: {name}. Returns the view, including zoom and pan for the host to apply.",
 );
 pub const SAVED_VIEW_DELETE: (&str, &str) =
     ("saved_view.delete", "Delete a saved view. params: {name}.");
+pub const SAVED_VIEW_RENAME: (&str, &str) = (
+    "saved_view.rename",
+    "Rename a saved view (one undo step). params: {name, new_name}. The new name must be free. The place in the list stays.",
+);
+pub const SAVED_VIEW_MOVE: (&str, &str) = (
+    "saved_view.move",
+    "Move a saved view to a place in the list (one undo step), which sets the order of the scenes. params: {name, to (0 is first; past the end means last)}.",
+);
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
@@ -143,6 +151,8 @@ const KNOWN: &[&str] = &[
     "saved_view.save",
     "saved_view.restore",
     "saved_view.delete",
+    "saved_view.rename",
+    "saved_view.move",
 ];
 
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Res> {
@@ -189,6 +199,28 @@ fn run(s: &mut Session, method: &str, p: &Value) -> Res {
                 .execute(&Command::DeleteView { name })
                 .map_err(RpcError::from)?;
             Ok(json!({"ok": true}))
+        }
+        "saved_view.rename" => {
+            let name = str_field(p, "name")?;
+            let new_name = str_field(p, "new_name")?;
+            s.editor
+                .execute(&Command::RenameView { name, new_name })
+                .map_err(RpcError::from)?;
+            Ok(json!({"views": s.editor.doc().drawing.saved_views}))
+        }
+        "saved_view.move" => {
+            let name = str_field(p, "name")?;
+            let to = p
+                .get("to")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| bad("'to' is a place in the list, 0 or more"))?;
+            s.editor
+                .execute(&Command::MoveView {
+                    name,
+                    to: usize::try_from(to).unwrap_or(usize::MAX),
+                })
+                .map_err(RpcError::from)?;
+            Ok(json!({"views": s.editor.doc().drawing.saved_views}))
         }
         _ => unreachable!("checked by KNOWN"),
     }
@@ -818,7 +850,33 @@ fn saved_view_save(s: &mut Session, p: &Value) -> Res {
         view: Some(s.view.view.id().to_string()),
         projection: Some(s.view.projection.id().to_string()),
         mode: Some(s.view.mode.id().to_string()),
+        camera: p
+            .get("camera")
+            .filter(|v| !v.is_null())
+            .map(|v| parse::<ViewCamera>(v.clone()))
+            .transpose()?,
+        render_style: match p.get("render_style") {
+            None => doc
+                .drawing
+                .presentation
+                .active_style
+                .and_then(|id| doc.resources.get(id))
+                .map(|r| r.name.clone()),
+            Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| bad("render_style is a name"))?,
+            ),
+        },
     };
+    if let Some(c) = &view.camera
+        && !c.is_valid()
+    {
+        return Err(bad(
+            "camera: finite numbers, distance above 0, fov 1 to 170 degrees, projection perspective or ortho",
+        ));
+    }
     s.editor
         .execute(&Command::SaveView {
             view: Box::new(view.clone()),
