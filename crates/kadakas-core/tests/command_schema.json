@@ -468,6 +468,88 @@
             "scope"
           ],
           "type": "object"
+        },
+        {
+          "description": "Move, Rotate and Scale of geometry (MOD-05): moves the given `vertices`, all vertices of the\ngiven `faces` and the ends of the given `edges` by an affine map. `matrix` has 12 numbers,\nthe three columns of the 3x3 part and then the translation (the layout of\n`glam::DAffine3::to_cols_array`), in the local coordinates of the model. Every face that\nhas a moved vertex is refitted to a plane; a face that is no longer flat is folded into\ntriangles along new soft and smooth edges. See the module `transform`.",
+          "properties": {
+            "action": {
+              "const": "transform_vertices",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "matrix": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 12,
+              "minItems": 12,
+              "type": "array"
+            },
+            "vertices": {
+              "items": {
+                "$ref": "#/$defs/VertexId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "matrix"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Copy of faces and edges in the same model (Move with Ctrl, `5x`): `count` copies, the\nfirst placed by `matrix`, the next by the matrix applied twice, three times and so on\n(a row of copies at the same step; a rotation turns each copy further). The copies have new\nids and weld to the geometry they land on. See the module `transform`.",
+          "properties": {
+            "action": {
+              "const": "copy_geometry",
+              "type": "string"
+            },
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "faces": {
+              "items": {
+                "$ref": "#/$defs/FaceId"
+              },
+              "type": "array"
+            },
+            "matrix": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 12,
+              "minItems": 12,
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "matrix",
+            "count"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1717,6 +1799,12 @@
         }
       ],
       "description": "A polyline point: [x, y] is a corner; {p: [x, y], kind: corner | point_on_arc | bezier | cubic} is a curved vertex; {p, kind: arc, radius} is a fillet."
+    },
+    "VertexId": {
+      "description": "The id of a vertex in its surface model.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
     },
     "VertexKind": {
       "anyOf": [
@@ -3820,6 +3908,46 @@
         "op",
         "ids",
         "array"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Move, turn or scale objects in 3D, or copy them (MOD-05; the 3D tools of the modeler). The\nmap `matrix` has 12 numbers (the three columns of the 3x3 part, then the translation) in\nworld coordinates (the `z` includes the elevation of the layer). Surface models and\ncomponent instances take any affine map through their transform (a turn about any axis,\na stretch along any axes, a shear). Plan objects (plants, hardscapes, site models, symbols,\nextrudes and the like) take only maps that keep the vertical: a move (its height is\nignored, with a note: their heights come from their layer), a turn about a vertical axis,\nand a scale in the plan, with the rules of `TransformObjects`. A group moves as one unit.\nWith `copy` the originals stay; `count` copies are made, the first placed by the map, the\nnext by the map applied twice, and so on (an array along a vector, or around an axis), and\ntheir IDs are returned in `created`, copy by copy. One undo step.",
+      "properties": {
+        "copy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "count": {
+          "default": 1,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ids": {
+          "items": {
+            "$ref": "#/$defs/ObjectId"
+          },
+          "type": "array"
+        },
+        "matrix": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 12,
+          "minItems": 12,
+          "type": "array"
+        },
+        "op": {
+          "const": "transform_objects3d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "ids",
+        "matrix"
       ],
       "type": "object"
     },

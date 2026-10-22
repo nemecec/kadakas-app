@@ -55,6 +55,62 @@ pub fn transform_object(o: &mut Object, xf: &Xf) -> Result<(), String> {
     Ok(())
 }
 
+/// Puts a 3D map (in world coordinates, with the layer at height `elevation`) on one object.
+/// Surface models and component instances take any affine map through their transform. Other
+/// objects take a move, a turn about a vertical axis and a scale in the plan; their height is not
+/// changed (it comes from the layer), which is said in `notes`.
+pub fn transform_object3(
+    o: &mut Object,
+    world: &glam::DAffine3,
+    elevation: f64,
+    notes: &mut Vec<String>,
+) -> Result<(), String> {
+    use glam::{DAffine3, DVec3};
+    // From the world to the drawing of this object and back: the layer lifts the object.
+    let lift = DAffine3::from_translation(DVec3::new(0.0, 0.0, elevation));
+    let d = lift.inverse() * *world * lift;
+    match &mut o.shape {
+        Shape::SurfaceModel(m) => {
+            let mut turned = (**m).clone();
+            turned.place(d * turned.transform);
+            o.shape = Shape::SurfaceModel(Box::new(turned));
+            Ok(())
+        }
+        Shape::Component { symbol, transform } => {
+            o.shape = Shape::Component {
+                symbol: *symbol,
+                transform: crate::component::raw(&(d * crate::component::affine(transform))),
+            };
+            Ok(())
+        }
+        Shape::Group { .. } => Ok(()),
+        shape => {
+            let m3 = d.matrix3;
+            let vertical = m3.x_axis.z.abs() < 1e-9
+                && m3.y_axis.z.abs() < 1e-9
+                && m3.z_axis.x.abs() < 1e-9
+                && m3.z_axis.y.abs() < 1e-9;
+            if !vertical {
+                return Err(format!(
+                    "a {} can only be moved, turned about a vertical axis and scaled in the plan",
+                    shape.kind()
+                ));
+            }
+            let xf = Xf {
+                m: glam::DMat2::from_cols(m3.x_axis.truncate(), m3.y_axis.truncate()),
+                t: d.translation.truncate(),
+            };
+            if d.translation.z.abs() > 1e-9 || (m3.z_axis.z - 1.0).abs() > 1e-9 {
+                notes.push(format!(
+                    "a {} keeps its height: it comes from its layer",
+                    shape.kind()
+                ));
+            }
+            transform_object(o, &xf)
+        }
+    }
+}
+
 impl Tx<'_> {
     /// Copies the objects (and the members of groups among them) and puts `xf` on the copies.
     /// Returns the IDs of the copies of `ids`.
@@ -62,6 +118,16 @@ impl Tx<'_> {
         &mut self,
         ids: &[ObjectId],
         xf: &Xf,
+    ) -> Result<Vec<ObjectId>, CommandError> {
+        self.copy_with(ids, &mut |_, o| transform_object(o, xf))
+    }
+
+    /// Copies the objects (and the members of groups among them) and lets `change` change each
+    /// copy (it gets the document too). Returns the IDs of the copies of `ids`.
+    fn copy_with(
+        &mut self,
+        ids: &[ObjectId],
+        change: &mut dyn FnMut(&Document, &mut Object) -> Result<(), String>,
     ) -> Result<Vec<ObjectId>, CommandError> {
         let all = self.doc.with_members(ids);
         let mut map: HashMap<ObjectId, ObjectId> = HashMap::new();
@@ -72,7 +138,7 @@ impl Tx<'_> {
             let mut o = self.doc.object(old).expect("exists").clone();
             o.id = map[&old];
             o.parent = o.parent.map(|p| map.get(&p).copied().unwrap_or(p));
-            transform_object(&mut o, xf).map_err(invalid)?;
+            change(&*self.doc, &mut o).map_err(invalid)?;
             o.data.remove(EDITING_KEY);
             o.data.remove(EDIT_GROUP_KEY);
             crate::provenance::strip_copy(&mut o.data);
@@ -82,6 +148,77 @@ impl Tx<'_> {
         }
         self.present_copy_slots(&map);
         Ok(ids.iter().map(|id| map[id]).collect())
+    }
+
+    /// `Command::TransformObjects3d`.
+    fn transform_3d(
+        &mut self,
+        ids: &[ObjectId],
+        matrix: &[f64; 12],
+        copy: bool,
+        count: u32,
+        out: &mut Outcome,
+    ) -> Result<(), CommandError> {
+        let world = crate::component::affine(matrix);
+        if !world.is_finite() || world.matrix3.determinant().abs() < 1e-12 {
+            return Err(invalid(
+                "the transform must be finite and must not flatten the objects",
+            ));
+        }
+        if !copy && count != 1 {
+            return Err(invalid("a count other than 1 needs copy"));
+        }
+        if count == 0 {
+            return Err(invalid("the count must be at least 1"));
+        }
+        let ids = unique(ids);
+        if ids.is_empty() {
+            return Err(invalid("give at least one object"));
+        }
+        let mut notes: Vec<String> = Vec::new();
+        if !copy {
+            let leaves = self.editable_leaves(&ids)?;
+            for id in leaves {
+                self.touch(id);
+                let e = self.elevation_of(id);
+                let mut o = self.doc.object(id).expect("checked").clone();
+                transform_object3(&mut o, &world, e, &mut notes).map_err(invalid)?;
+                validate_shape(&o.shape)?;
+                *self.doc.object_mut(id).expect("checked") = o;
+            }
+        } else {
+            for &id in &ids {
+                self.editable(id)?;
+            }
+            let all = self.doc.with_members(&ids);
+            for &id in &all {
+                let layer = self.doc.object(id).expect("exists").layer;
+                self.check_layer(layer)?;
+            }
+            check_created(count as usize, all.len())?;
+            let mut at = glam::DAffine3::IDENTITY;
+            for _ in 0..count {
+                at = world * at;
+                let step = at;
+                let copies = self.copy_with(&ids, &mut |doc, o| {
+                    let e = doc.layer(o.layer).map_or(0.0, |l| l.elevation);
+                    transform_object3(o, &step, e, &mut notes)?;
+                    validate_shape(&o.shape).map_err(|e| e.to_string())
+                })?;
+                out.created.extend(copies.iter().map(|c| c.0));
+            }
+        }
+        notes.sort();
+        notes.dedup();
+        out.notes.extend(notes);
+        Ok(())
+    }
+
+    fn elevation_of(&self, id: ObjectId) -> f64 {
+        self.doc
+            .object(id)
+            .and_then(|o| self.doc.layer(o.layer))
+            .map_or(0.0, |l| l.elevation)
     }
 
     pub(super) fn run_transform(
@@ -124,6 +261,12 @@ impl Tx<'_> {
                     transform_object(o, &xf).map_err(invalid)?;
                 }
             }
+            Command::TransformObjects3d {
+                ids,
+                matrix,
+                copy,
+                count,
+            } => self.transform_3d(ids, matrix, *copy, *count, out)?,
             Command::ArrayObjects { ids, array } => {
                 let ids = unique(ids);
                 if ids.is_empty() {
