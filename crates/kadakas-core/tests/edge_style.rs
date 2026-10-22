@@ -197,3 +197,83 @@ fn a_soft_edge_is_not_drawn_and_shades_round_a_smooth_one_is_drawn() {
         "soft alone keeps the crease"
     );
 }
+
+#[test]
+fn every_edit_of_the_second_part_is_one_step_and_undoes_byte_for_byte() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = boxed(&mut ed);
+    // A square on the top for the offset and the hole.
+    let p = [
+        [250.0, 250.0, 500.0],
+        [750.0, 250.0, 500.0],
+        [750.0, 750.0, 500.0],
+        [250.0, 750.0, 500.0],
+    ];
+    edit(
+        &mut ed,
+        id,
+        Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        },
+    );
+    let inner = |ed: &Editor| {
+        let m = model(ed, id);
+        m.faces()
+            .find(|(f, g)| {
+                g.plane.normal.z > 0.9 && g.holes.is_empty() && m.face_area(*f).unwrap() < 300_000.0
+            })
+            .unwrap()
+            .0
+    };
+    let line = |ed: &Editor| -> Vec<EdgeId> {
+        let m = model(ed, id);
+        m.edges()
+            .filter(|(_, e)| {
+                let (a, b) = (m.vertex(e.v[0]).unwrap(), m.vertex(e.v[1]).unwrap());
+                a.z == 0.0 && b.z == 0.0 && a.y == 0.0 && b.y == 0.0
+            })
+            .map(|(e, _)| e)
+            .collect()
+    };
+    type Make<'a> = Box<dyn Fn(&Editor) -> Edit + 'a>;
+    let cases: Vec<Make<'_>> = vec![
+        Box::new(move |ed| Edit::OffsetFace {
+            face: inner(ed),
+            distance: 50.0,
+            outward: false,
+        }),
+        Box::new(move |ed| Edit::PushPull {
+            face: inner(ed),
+            distance: -500.0,
+        }),
+        Box::new(move |ed| Edit::OffsetEdges {
+            edges: line(ed),
+            distance: 100.0,
+            toward: [500.0, 500.0, 0.0],
+        }),
+        Box::new(move |ed| {
+            // The square on the top along the front edge of the bottom: a sweep.
+            Edit::FollowMe {
+                face: inner(ed),
+                path: line(ed),
+            }
+        }),
+    ];
+    for (i, make) in cases.iter().enumerate() {
+        let before = serde_json::to_string(&ed.doc().object(id).unwrap().shape).unwrap();
+        let depth = ed.undo_depth();
+        let e = make(&ed);
+        let r = ed.execute(&Command::EditSurface { id, edit: e });
+        if r.is_err() {
+            // A refused edit changes nothing.
+            assert_eq!(ed.undo_depth(), depth, "{i}");
+            continue;
+        }
+        assert_eq!(ed.undo_depth(), depth + 1, "{i}");
+        assert!(ed.undo());
+        let after = serde_json::to_string(&ed.doc().object(id).unwrap().shape).unwrap();
+        assert_eq!(before, after, "{i}: undo gives the same text");
+        assert!(ed.redo());
+        assert!(ed.undo());
+    }
+}

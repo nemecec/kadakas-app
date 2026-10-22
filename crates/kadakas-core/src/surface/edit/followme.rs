@@ -315,9 +315,9 @@ pub(super) fn follow_me(
     };
     // The edges of each ring (the copies of the profile) and along the path.
     let mut ring_edges: Vec<Vec<Vec<Option<EdgeId>>>> = Vec::with_capacity(sides + 1);
-    for j in 0..=sides {
+    for ring in &ids {
         let mut r = Vec::new();
-        for l in &ids[j] {
+        for l in ring {
             let len = l.len();
             let es: Vec<Option<EdgeId>> = (0..len)
                 .map(|i| edge(&mut w, l[i], l[(i + 1) % len]))
@@ -459,7 +459,7 @@ pub(super) fn follow_me(
     }
     for run in runs_of(&path_curve, closed) {
         for (li, l) in ids[0].iter().enumerate() {
-            for i in 0..l.len() {
+            for (i, _) in l.iter().enumerate() {
                 let c: Option<Vec<EdgeId>> = run.iter().map(|&j| long[j][li][i]).collect();
                 if let Some(c) = c.filter(|c| !c.is_empty()) {
                     new_curves.push(c);

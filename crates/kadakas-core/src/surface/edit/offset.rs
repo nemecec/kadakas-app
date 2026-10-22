@@ -203,10 +203,7 @@ pub(super) fn chain_of(
     let mut out = vec![first];
     let mut used: BTreeSet<EdgeId> = BTreeSet::new();
     let mut cur = first;
-    loop {
-        let Some(&(e, o)) = at[&cur].iter().filter(|(e, _)| !used.contains(e)).min() else {
-            break;
-        };
+    while let Some(&(e, o)) = at[&cur].iter().filter(|(e, _)| !used.contains(e)).min() {
         used.insert(e);
         if o == first {
             break;
@@ -457,11 +454,11 @@ pub(super) fn offset_loops(
             if !super::arrange::inside(h[0], &outer_ring) {
                 return Err("a hole would leave the face".into());
             }
-            if super::arrange::inside(outer[0], &[h.clone()]) {
+            if super::arrange::inside(outer[0], std::slice::from_ref(h)) {
                 return Err("a hole would swallow the face".into());
             }
             for (hj, g) in holes.iter().enumerate() {
-                if hi != hj && super::arrange::inside(g[0], &[h.clone()]) {
+                if hi != hj && super::arrange::inside(g[0], std::slice::from_ref(h)) {
                     return Err("a hole would swallow another hole".into());
                 }
             }

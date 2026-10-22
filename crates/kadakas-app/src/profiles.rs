@@ -696,9 +696,9 @@ mod tests {
         assert!(listed.contains(&super::Action::ToolLine));
         assert!(listed.iter().all(|a| !a.modeler_only()));
         assert_eq!(
-            listed.len() + 12,
+            listed.len() + 14,
             super::Action::ALL.len(),
-            "twelve actions are for the modeler only"
+            "fourteen actions are for the modeler only"
         );
     }
 

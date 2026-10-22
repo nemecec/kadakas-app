@@ -410,7 +410,7 @@ proptest! {
         n in 3usize..40,
         r in 100.0f64..50_000.0,
         share in 0.02f64..0.95,
-        turn in 0.0f64..6.28,
+        turn in 0.0f64..std::f64::consts::TAU,
     ) {
         let pts: Vec<P> = (0..n)
             .map(|i| {
