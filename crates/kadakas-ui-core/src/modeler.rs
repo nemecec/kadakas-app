@@ -926,10 +926,9 @@ mod tests {
     #[test]
     fn a_tool_that_does_not_run_says_so_in_its_tooltip() {
         assert!(!ModelerTool::Select.tooltip("Space").contains("later"));
-        let tip = ModelerTool::PaintBucket.tooltip("B");
-        assert!(tip.contains("Paint Bucket") && tip.contains('B'));
-        assert!(tip.contains(&tr!("uic-modeler-coming-later")));
-        assert!(!ModelerTool::TapeMeasure.tooltip("T").contains("later"));
+        let tip = ModelerTool::TapeMeasure.tooltip("T");
+        assert!(tip.contains("Tape Measure") && tip.contains('T'));
+        assert!(!tip.contains("later"));
         // Without a key there is no empty bracket.
         assert_eq!(ModelerTool::Select.tooltip(""), ModelerTool::Select.name());
     }
@@ -968,14 +967,9 @@ mod tests {
         for t in ModelerTool::ALL {
             assert!(!t.hint().is_empty());
         }
-        assert_eq!(
-            ModelerTool::PaintBucket.hint(),
-            tr!("uic-modeler-coming-later")
-        );
-        assert_ne!(
-            ModelerTool::TapeMeasure.hint(),
-            tr!("uic-modeler-coming-later")
-        );
+        for t in [ModelerTool::PaintBucket, ModelerTool::TapeMeasure] {
+            assert_ne!(t.hint(), tr!("uic-modeler-coming-later"));
+        }
         assert_ne!(ModelerTool::Move.hint(), tr!("uic-modeler-coming-later"));
         assert_ne!(ModelerTool::Line.hint(), ModelerTool::Rectangle.hint());
         assert_ne!(ModelerTool::Orbit.hint(), ModelerTool::Pan.hint());
