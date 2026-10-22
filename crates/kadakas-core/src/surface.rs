@@ -140,6 +140,7 @@ mod geom;
 mod index;
 mod part;
 mod serial;
+mod solid;
 pub mod sync;
 mod topo;
 
@@ -162,6 +163,8 @@ mod tests_pushpull;
 #[cfg(test)]
 mod tests_review;
 #[cfg(test)]
+mod tests_solid;
+#[cfg(test)]
 mod tests_style;
 #[cfg(test)]
 mod tests_transform;
@@ -173,6 +176,7 @@ pub use edit::style::{
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
+pub use solid::{OpenEdge, OpenKind, Operand, Shell, ShellState, SolidError, SolidOp, SolidReport};
 
 /// The version of the saved form of a surface model (the field `v`). A file with a higher number
 /// is from a newer program: it is kept as it is and cannot be edited (`Shape::Unknown`).
@@ -369,6 +373,9 @@ pub enum SurfaceError {
     /// reason is the message (Move, Rotate and Scale).
     #[error("{0}")]
     Refused(String),
+    /// A solid operation (MOD-09) was refused, see [`SolidError`].
+    #[error("{0}")]
+    Solid(SolidError),
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.

@@ -280,6 +280,8 @@ impl Intent {
                 edges: middles(edges),
                 hidden: *hidden,
             },
+            // Solid tools cannot be replayed on another model: the solids are sets of faces.
+            Edit::Solid { .. } => Intent::Unlogged,
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),

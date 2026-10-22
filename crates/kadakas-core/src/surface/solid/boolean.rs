@@ -1,0 +1,582 @@
+//! The boolean operations of two closed solids (see the module `solid`).
+//!
+//! 1. **Check.** Both inputs must be solids ([`ShellState::Solid`]) that are not stuck to other
+//!    geometry of the model. Nothing is changed before this is known.
+//! 2. **Copy.** A model that holds only the faces of the two solids (the same ids, so the pieces
+//!    can be followed) is cut with Intersect Faces. Every face of a solid that the other one
+//!    crosses is split along the crossing. A crossing too small to be cut is a refusal.
+//! 3. **Locate.** Each piece lies wholly in, outside or on the surface of the other solid, because
+//!    no face crosses the surface any more. A few points of the piece (the centroids of its
+//!    triangles) are located by a ray cast; if they disagree, the piece was not cut and the
+//!    operation is refused.
+//! 4. **Keep.** The rules of the operation say which pieces stay and which turn over (see
+//!    [`fates`]). A piece on the surface of the other solid is told apart by its direction.
+//! 5. **Tidy.** Neighbours in one plane, with the same direction and paint, merge. Edges and
+//!    vertices that no kept face uses go.
+//! 6. **Verify.** Each solid of the result must be closed and have the volume that the operation
+//!    gives (checked with the volumes of the inputs). The model must have no problem that it did
+//!    not have before, and must be within the limits.
+//! 7. **Put in.** The result replaces the geometry of the two solids in the model.
+//!
+//! Everything is done in a copy (`SurfaceModel::apply`), so a refusal leaves the model as it was.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::Value;
+
+use super::super::arrange::reversed;
+use super::super::check::Problem;
+use super::super::edit::{self, ATTR_BACK_MATERIAL, ATTR_MATERIAL};
+use super::super::geom::{self, on_plane};
+use super::super::topo::Topo;
+use super::super::{
+    Edge, EdgeId, Edit, Face, FaceId, IntersectScope, SurfaceError, SurfaceModel, VertexId, key,
+};
+use super::locate::{Soup, Where, centroids};
+use super::shell::{ShellState, crossings_of, state_with};
+use super::{Operand, SolidError, SolidOp};
+
+/// The attribute that tells a piece which solid it came from, in the copy only.
+const SIDE: &str = "solid_side";
+
+fn cut(why: impl Into<String>) -> SurfaceError {
+    SurfaceError::Solid(SolidError::Cut(why.into()))
+}
+
+/// What an operation made: the volumes of its solids in mm³ (see `SurfaceModel::solid_preview`).
+pub(super) struct Outcome {
+    pub volumes: Vec<f64>,
+}
+
+/// The edit `Edit::Solid`.
+pub(in crate::surface) fn solid_edit(
+    m: &mut SurfaceModel,
+    op: SolidOp,
+    first: &[FaceId],
+    second: &[FaceId],
+    notes: &mut Vec<String>,
+) -> Result<(), SurfaceError> {
+    run(m, op, first, second, notes).map(|_| ())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Side {
+    A,
+    B,
+}
+
+/// Where a piece is against the other solid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Class {
+    In,
+    Out,
+    /// On the surface of the other solid, looking the same way.
+    OnSame,
+    /// On the surface of the other solid, looking the opposite way.
+    OnOpp,
+}
+
+/// What becomes of a piece of the solid `side`: the solids of the result it goes into (`0` is
+/// the result of Union, Subtract, Intersect and Trim; Split has `0` (first less second), `1` (the
+/// common part) and `2` (second less first); Trim has `1` for the second solid, which stays), and
+/// whether it turns over.
+fn fates(op: SolidOp, side: Side, at: Class) -> Vec<(usize, bool)> {
+    use Class::{In, OnOpp, OnSame, Out};
+    let keep = |g: usize| vec![(g, false)];
+    match (op, side) {
+        (SolidOp::Union, Side::A) => match at {
+            Out | OnSame => keep(0),
+            _ => vec![],
+        },
+        (SolidOp::Union, Side::B) => match at {
+            Out => keep(0),
+            _ => vec![],
+        },
+        (SolidOp::Intersect, Side::A) => match at {
+            In | OnSame => keep(0),
+            _ => vec![],
+        },
+        (SolidOp::Intersect, Side::B) => match at {
+            In => keep(0),
+            _ => vec![],
+        },
+        (SolidOp::Subtract, Side::A) | (SolidOp::Trim, Side::A) => match at {
+            Out | OnOpp => keep(0),
+            _ => vec![],
+        },
+        (SolidOp::Subtract, Side::B) => match at {
+            In => vec![(0, true)],
+            _ => vec![],
+        },
+        (SolidOp::Trim, Side::B) => match at {
+            In => vec![(1, false), (0, true)],
+            _ => keep(1),
+        },
+        (SolidOp::Split, Side::A) => match at {
+            Out | OnOpp => keep(0),
+            In => vec![(1, false), (2, true)],
+            OnSame => keep(1),
+        },
+        (SolidOp::Split, Side::B) => match at {
+            In => vec![(1, false), (0, true)],
+            Out | OnOpp => keep(2),
+            OnSame => vec![],
+        },
+    }
+}
+
+fn groups_of(op: SolidOp) -> usize {
+    match op {
+        SolidOp::Union | SolidOp::Subtract | SolidOp::Intersect => 1,
+        SolidOp::Trim => 2,
+        SolidOp::Split => 3,
+    }
+}
+
+fn existing(
+    m: &SurfaceModel,
+    ids: &[FaceId],
+    which: Operand,
+) -> Result<BTreeSet<FaceId>, SurfaceError> {
+    if ids.is_empty() {
+        return Err(SurfaceError::Solid(SolidError::Empty(which)));
+    }
+    if let Some(id) = ids.iter().find(|id| !m.faces.contains_key(id)) {
+        return Err(SurfaceError::NoFace(*id));
+    }
+    Ok(ids.iter().copied().collect())
+}
+
+/// Refuses an input that is not a solid.
+fn must_be_solid(which: Operand, s: &super::Shell) -> Result<(), SurfaceError> {
+    let e = match s.state {
+        ShellState::Solid => return Ok(()),
+        ShellState::Open => {
+            let first = s.open_edges[0];
+            SolidError::Open {
+                which,
+                count: s.open_edges.len(),
+                first: first.edge,
+                kind: first.kind,
+            }
+        }
+        ShellState::SelfCrossing => SolidError::SelfCrossing {
+            which,
+            edge: s.crossings[0].0,
+            face: s.crossings[0].1,
+        },
+        ShellState::Inverted => SolidError::Inverted(which),
+        ShellState::Flat => SolidError::Flat(which),
+    };
+    Err(SurfaceError::Solid(e))
+}
+
+/// Refuses a solid whose edges or vertices other geometry uses.
+fn must_be_free(
+    m: &SurfaceModel,
+    topo: &Topo,
+    a: &BTreeSet<FaceId>,
+    b: &BTreeSet<FaceId>,
+) -> Result<(), SurfaceError> {
+    let mut edges: BTreeMap<EdgeId, Operand> = BTreeMap::new();
+    let mut verts: BTreeMap<VertexId, Operand> = BTreeMap::new();
+    for (set, which) in [(a, Operand::First), (b, Operand::Second)] {
+        for id in set {
+            for (x, y) in m.faces[id].uses() {
+                if let Some(e) = topo.edge(x, y) {
+                    edges.insert(e, which);
+                }
+                verts.insert(x, which);
+            }
+        }
+    }
+    for (&e, &which) in &edges {
+        if topo.faces_of(e).any(|f| !a.contains(&f) && !b.contains(&f)) {
+            return Err(SurfaceError::Solid(SolidError::Attached(which)));
+        }
+    }
+    for (&v, &which) in &verts {
+        if topo.edges_at(v).any(|e| !edges.contains_key(&e)) {
+            return Err(SurfaceError::Solid(SolidError::Attached(which)));
+        }
+    }
+    Ok(())
+}
+
+/// A model with only the faces of the two solids, their edges and vertices (the same ids), and the
+/// curves that lie wholly in it. Every face carries the mark of its side.
+fn copy_of(
+    m: &SurfaceModel,
+    topo: &Topo,
+    a: &BTreeSet<FaceId>,
+    b: &BTreeSet<FaceId>,
+) -> SurfaceModel {
+    let mut faces = BTreeMap::new();
+    let mut vertices = BTreeMap::new();
+    let mut edges = BTreeMap::new();
+    for id in a.union(b) {
+        let mut f = m.faces[id].clone();
+        let side = match (a.contains(id), b.contains(id)) {
+            (true, true) => "ab",
+            (true, false) => "a",
+            _ => "b",
+        };
+        f.attrs.insert(SIDE.into(), Value::from(side));
+        for (x, y) in f.uses() {
+            vertices.insert(x, m.vertices[&x]);
+            if let Some(e) = topo.edge(x, y) {
+                edges.insert(e, m.edges[&e]);
+            }
+        }
+        faces.insert(*id, f);
+    }
+    let mut sub = SurfaceModel::from_parts(vertices, edges, faces, m.next_id);
+    for id in sub.edges.keys() {
+        if let Some(at) = m.edge_attrs.get(id) {
+            sub.edge_attrs.insert(*id, at.clone());
+        }
+    }
+    for (c, es) in &m.curves {
+        if es.iter().all(|e| sub.edges.contains_key(e)) {
+            sub.curves.insert(*c, es.clone());
+        }
+    }
+    sub
+}
+
+/// Which solids a piece belongs to: (first, second). A face that both solids use is in both.
+fn roles_of(f: &Face) -> (bool, bool) {
+    match f.attrs.get(SIDE).and_then(Value::as_str) {
+        Some("a") => (true, false),
+        Some("b") => (false, true),
+        _ => (true, true),
+    }
+}
+
+/// Where a piece is against the soup of the other solid. All its points must agree.
+fn class_of(sub: &SurfaceModel, id: FaceId, other: &Soup) -> Result<Class, SurfaceError> {
+    let f = &sub.faces[&id];
+    let (lo, hi) = other.bounds();
+    let pad = geom::plane_tol(&[lo, hi]) * 2.0;
+    let pts =
+        centroids(sub, id).ok_or_else(|| cut(format!("face {id} cannot be cut into triangles")))?;
+    let mut found: Option<Class> = None;
+    for p in pts {
+        let at = if p.cmplt(lo - pad).any() || p.cmpgt(hi + pad).any() {
+            Class::Out
+        } else {
+            match other.locate(p).ok_or_else(|| {
+                cut(format!(
+                    "face {id} lies too close to the other solid to tell where it is"
+                ))
+            })? {
+                Where::In => Class::In,
+                Where::Out => Class::Out,
+                Where::On(n) if n.dot(f.plane.normal) > 0.0 => Class::OnSame,
+                Where::On(_) => Class::OnOpp,
+            }
+        };
+        match found {
+            None => found = Some(at),
+            Some(c) if c == at => {}
+            Some(_) => {
+                return Err(cut(format!(
+                    "face {id} lies partly in and partly out of the other solid and could not be cut there"
+                )));
+            }
+        }
+    }
+    found.ok_or_else(|| cut(format!("face {id} has no area")))
+}
+
+/// The face seen from the other side.
+fn turned(f: &Face) -> Face {
+    let mut g = f.clone();
+    g.plane = g.plane.flipped();
+    g.outer = reversed(&g.outer);
+    let mut holes: Vec<Vec<VertexId>> = g.holes.iter().map(|h| reversed(h)).collect();
+    holes.sort();
+    g.holes = holes;
+    edit::swap_paint(&mut g.attrs);
+    g
+}
+
+/// Removes the edges that no face uses, and the vertices that no edge uses.
+fn prune(res: &mut SurfaceModel) {
+    let used: BTreeSet<(VertexId, VertexId)> = res
+        .faces
+        .values()
+        .flat_map(|f| f.uses().map(|(a, b)| key(a, b)).collect::<Vec<_>>())
+        .collect();
+    let gone: Vec<EdgeId> = res
+        .edges
+        .iter()
+        .filter(|(_, e)| !used.contains(&e.key()))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in gone {
+        res.edges.remove(&id);
+        res.edge_attrs.remove(&id);
+    }
+    res.curves
+        .retain(|_, es| es.iter().all(|e| res.edges.contains_key(e)));
+    let ends: BTreeSet<VertexId> = res.edges.values().flat_map(|e: &Edge| e.v).collect();
+    res.vertices.retain(|v, _| ends.contains(v));
+}
+
+/// True if two faces lie in one plane and look the same way.
+fn flush(res: &SurfaceModel, f: &Face, g: &Face) -> bool {
+    f.plane.normal.dot(g.plane.normal) > 0.0
+        && g.outer.iter().all(|v| on_plane(&f.plane, res.vertices[v]))
+        && f.outer.iter().all(|v| on_plane(&g.plane, res.vertices[v]))
+}
+
+fn same_paint(f: &Face, g: &Face) -> bool {
+    [ATTR_MATERIAL, ATTR_BACK_MATERIAL]
+        .iter()
+        .all(|k| f.attrs.get(*k) == g.attrs.get(*k))
+}
+
+/// Merges neighbours of one solid that lie in one plane, look the same way and have the same
+/// paint (the seams that the cut left). A seam used by more than two faces stays.
+fn tidy(
+    res: &mut SurfaceModel,
+    group: &mut BTreeMap<FaceId, usize>,
+    notes: &mut Vec<String>,
+) -> Result<(), SurfaceError> {
+    let mut by_edge: BTreeMap<(VertexId, VertexId), Vec<FaceId>> = BTreeMap::new();
+    for (&id, f) in &res.faces {
+        for (a, b) in f.uses() {
+            by_edge.entry(key(a, b)).or_default().push(id);
+        }
+    }
+    let topo = Topo::of(res);
+    let mut seams: Vec<EdgeId> = Vec::new();
+    for (k, fs) in &by_edge {
+        let [f, g] = fs.as_slice() else { continue };
+        let (ff, gf) = (&res.faces[f], &res.faces[g]);
+        if group[f] == group[g]
+            && same_paint(ff, gf)
+            && flush(res, ff, gf)
+            && let Some(e) = topo.edge(k.0, k.1)
+        {
+            seams.push(e);
+        }
+    }
+    if seams.is_empty() {
+        return Ok(());
+    }
+    let n = res.apply_with_notes(&Edit::EraseEdges { edges: seams })?;
+    notes.extend(n);
+    group.retain(|id, _| res.faces.contains_key(id));
+    Ok(())
+}
+
+/// Runs an operation on `m` (see the module documentation).
+pub(super) fn run(
+    m: &mut SurfaceModel,
+    op: SolidOp,
+    first: &[FaceId],
+    second: &[FaceId],
+    notes: &mut Vec<String>,
+) -> Result<Outcome, SurfaceError> {
+    // 1. Check.
+    let a = existing(m, first, Operand::First)?;
+    let b = existing(m, second, Operand::Second)?;
+    let before = m.check();
+    let topo = Topo::of(m);
+    let crossings = crossings_of(&before.warnings);
+    let (sa, sb) = (
+        state_with(m, &topo, &a, &crossings),
+        state_with(m, &topo, &b, &crossings),
+    );
+    must_be_solid(Operand::First, &sa)?;
+    must_be_solid(Operand::Second, &sb)?;
+    must_be_free(m, &topo, &a, &b)?;
+
+    // 2. Copy and cut.
+    let mut sub = copy_of(m, &topo, &a, &b);
+    match sub.apply(&Edit::IntersectFaces {
+        scope: IntersectScope::Model,
+        faces: Vec::new(),
+        edges: Vec::new(),
+    }) {
+        Ok(()) => {}
+        Err(e @ SurfaceError::Limit { .. }) => return Err(e),
+        Err(e) => return Err(cut(e.to_string())),
+    }
+    let report = sub.check();
+    if let Some(p) = report.problems.first() {
+        return Err(cut(p.to_string()));
+    }
+    if let Some(Problem::NotIntersected(e, f, at)) = report
+        .warnings
+        .iter()
+        .find(|p| matches!(p, Problem::NotIntersected(..)))
+    {
+        return Err(cut(format!(
+            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+        )));
+    }
+
+    // 3. Locate. A face that both solids use lies on the surface of both, looking the same way.
+    let ids_of = |side: Side| -> Vec<FaceId> {
+        sub.faces
+            .iter()
+            .filter(|(_, f)| {
+                let (in_a, in_b) = roles_of(f);
+                if side == Side::A { in_a } else { in_b }
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    };
+    let (pa, pb) = (ids_of(Side::A), ids_of(Side::B));
+    let soup = |ids: &[FaceId]| {
+        Soup::of(&sub, ids.iter().copied())
+            .ok_or_else(|| cut("a face cannot be cut into triangles"))
+    };
+    let (soup_a, soup_b) = (soup(&pa)?, soup(&pb)?);
+    let mut entries: Vec<(FaceId, usize, bool)> = Vec::new();
+    for (ids, side, other) in [(&pa, Side::A, &soup_b), (&pb, Side::B, &soup_a)] {
+        for &id in ids {
+            let at = if roles_of(&sub.faces[&id]) == (true, true) {
+                Class::OnSame
+            } else {
+                class_of(&sub, id, other)?
+            };
+            for (g, flip) in fates(op, side, at) {
+                entries.push((id, g, flip));
+            }
+        }
+    }
+    entries.sort_by_key(|(id, g, flip)| (*id, *g, *flip));
+    entries.dedup();
+
+    // 4. Keep.
+    let mut res = sub.clone();
+    let mut faces: BTreeMap<FaceId, Face> = BTreeMap::new();
+    let mut group: BTreeMap<FaceId, usize> = BTreeMap::new();
+    let mut used: BTreeSet<FaceId> = BTreeSet::new();
+    for (piece, g, flip) in entries {
+        let id = if used.insert(piece) {
+            piece
+        } else {
+            FaceId(res.alloc())
+        };
+        let mut f = sub.faces[&piece].clone();
+        f.attrs.remove(SIDE);
+        if flip {
+            f = turned(&f);
+        }
+        faces.insert(id, f);
+        group.insert(id, g);
+    }
+    res.faces = faces;
+    prune(&mut res);
+
+    // 5. Tidy.
+    tidy(&mut res, &mut group, notes)?;
+
+    // 6. Verify.
+    let topo_r = Topo::of(&res);
+    let mut volumes = Vec::new();
+    for g in 0..groups_of(op) {
+        let set: BTreeSet<FaceId> = group
+            .iter()
+            .filter(|(_, x)| **x == g)
+            .map(|(id, _)| *id)
+            .collect();
+        if set.is_empty() {
+            let needed = if op == SolidOp::Split { g == 1 } else { g == 0 };
+            if needed {
+                return Err(SurfaceError::Solid(SolidError::NoResult(op)));
+            }
+            volumes.push(0.0);
+            continue;
+        }
+        let s = state_with(&res, &topo_r, &set, &[]);
+        if s.state != ShellState::Solid {
+            return Err(SurfaceError::Solid(SolidError::NotClosed(
+                match s.open_edges.first() {
+                    Some(o) => format!("edge {} is open ({})", o.edge, o.kind),
+                    None => format!("{:?}", s.state).to_lowercase(),
+                },
+            )));
+        }
+        volumes.push(s.volume);
+    }
+    expect_volumes(op, sa.volume, sb.volume, &volumes)?;
+
+    // 7. Put in.
+    put_in(m, &topo, &a, &b, res);
+    edit::check_limits(m)?;
+    if let Some(p) = m.problem() {
+        return Err(SurfaceError::Solid(SolidError::NotClosed(p)));
+    }
+    let after = m.check();
+    if let Some(p) = after.problems.iter().find(|p| !before.problems.contains(p)) {
+        return Err(SurfaceError::Solid(SolidError::NotClosed(p.to_string())));
+    }
+    Ok(Outcome { volumes })
+}
+
+/// The volumes of the result must fit the volumes of the inputs; if they do not, a piece was
+/// kept or dropped wrongly and the result is not used.
+fn expect_volumes(op: SolidOp, va: f64, vb: f64, got: &[f64]) -> Result<(), SurfaceError> {
+    let tol = 1e-6 * (va + vb);
+    let ok = match op {
+        SolidOp::Union => got[0] >= va.max(vb) - tol && got[0] <= va + vb + tol,
+        SolidOp::Intersect => got[0] >= -tol && got[0] <= va.min(vb) + tol,
+        SolidOp::Subtract => got[0] >= va - vb - tol && got[0] <= va + tol,
+        SolidOp::Trim => {
+            got[0] >= va - vb - tol && got[0] <= va + tol && (got[1] - vb).abs() <= tol
+        }
+        SolidOp::Split => {
+            (got[0] + got[1] - va).abs() <= tol && (got[1] + got[2] - vb).abs() <= tol
+        }
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(SurfaceError::Solid(SolidError::NotClosed(
+            "its volume does not fit the volumes of the two solids".into(),
+        )))
+    }
+}
+
+/// Replaces the geometry of the two solids in `m` by the result. The solids share no edge or
+/// vertex with other geometry (checked before), so their edges and vertices go whole.
+fn put_in(
+    m: &mut SurfaceModel,
+    topo: &Topo,
+    a: &BTreeSet<FaceId>,
+    b: &BTreeSet<FaceId>,
+    res: SurfaceModel,
+) {
+    let mut old_edges: BTreeSet<EdgeId> = BTreeSet::new();
+    let mut old_vertices: BTreeSet<VertexId> = BTreeSet::new();
+    for id in a.union(b) {
+        let f = m.faces.remove(id).expect("checked");
+        for (x, y) in f.uses() {
+            old_vertices.insert(x);
+            if let Some(e) = topo.edge(x, y) {
+                old_edges.insert(e);
+            }
+        }
+    }
+    for e in &old_edges {
+        m.edges.remove(e);
+        m.edge_attrs.remove(e);
+    }
+    m.curves
+        .retain(|_, es| !es.iter().any(|e| old_edges.contains(e)));
+    for v in &old_vertices {
+        m.vertices.remove(v);
+    }
+    m.vertices.extend(res.vertices);
+    m.edges.extend(res.edges);
+    m.edge_attrs.extend(res.edge_attrs);
+    m.faces.extend(res.faces);
+    m.curves.extend(res.curves);
+    m.next_id = m.next_id.max(res.next_id);
+}

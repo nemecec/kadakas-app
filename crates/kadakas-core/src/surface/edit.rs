@@ -152,6 +152,17 @@ pub enum Edit {
     /// new faces get the paint of the profile; a curve of the path or of the profile gives soft
     /// and smooth edges. See the module `followme`.
     FollowMe { face: FaceId, path: Vec<EdgeId> },
+    /// Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and
+    /// `second` are the faces of the two solids (see `SurfaceModel::solid_of`); they must not
+    /// share a face. The result replaces the two solids. Subtract and Trim take `second` from
+    /// `first`; Trim keeps `second`; Split makes three solids. An input that is not a closed
+    /// solid, a limit, or a result that is not a closed solid refuses the edit with a reason and
+    /// changes nothing. See the module `solid`.
+    Solid {
+        op: super::SolidOp,
+        first: Vec<FaceId>,
+        second: Vec<FaceId>,
+    },
 }
 
 fn yes() -> bool {
@@ -260,6 +271,7 @@ fn run_noted(
             toward,
         } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
         Edit::FollowMe { face, path } => followme::follow_me(m, before, *face, path, notes),
+        Edit::Solid { op, first, second } => super::solid::solid_edit(m, *op, first, second, notes),
         Edit::SetEdgeStyle {
             edges,
             soft,
