@@ -42,6 +42,22 @@ fn island() -> Vec<DVec2> {
     ]
 }
 
+/// The longest outline of a piece of the pattern, in mm: a unit that crosses the edge by less than
+/// the trim counts whole and adds at most trim x this to the area.
+fn max_piece_perimeter(p: &Pattern) -> f64 {
+    p.compile()
+        .unwrap()
+        .kinds
+        .iter()
+        .flat_map(|k| k.pieces.iter())
+        .map(|ring| {
+            (0..ring.len())
+                .map(|i| ring[i].distance(ring[(i + 1) % ring.len()]))
+                .sum::<f64>()
+        })
+        .fold(0.0, f64::max)
+}
+
 fn limits() -> Limits {
     Limits::new(MAX_UNITS)
 }
@@ -117,7 +133,11 @@ fn without_gaps_the_units_fill_the_region_exactly() {
             let (units, stats) = run(&r, &p, &place);
             let sum: f64 = units.iter().map(|u| u.area).sum();
             assert!(
-                (sum - r.area).abs() < 1e-7 * r.area + 1e-3 + stats.dust_pieces as f64 * DUST_AREA,
+                (sum - r.area).abs()
+                    < 1e-7 * r.area
+                        + 1e-3
+                        + stats.dust_pieces as f64 * DUST_AREA
+                        + stats.trimmed as f64 * units::DEFAULT_TRIM * max_piece_perimeter(&p),
                 "{name} {angle}: {sum} vs {}",
                 r.area
             );
@@ -1025,10 +1045,15 @@ proptest! {
         let p = pat(Bond::ALL[bond], gap);
         let (units, stats) = run(&r, &p, &Placement { origin: Some(DVec2::new(ox, oy)), angle });
         let sum: f64 = units.iter().map(|u| u.area).sum();
-        prop_assert!(sum <= r.area + 1e-3);
+        // Dust is lost; a trimmed unit adds less than trim x its perimeter.
+        let slack = 1e-3 + stats.trimmed as f64 * units::DEFAULT_TRIM * max_piece_perimeter(&p);
+        prop_assert!(sum <= r.area + slack);
         prop_assert!(units.iter().all(|u| u.share <= 1.0 + 1e-9 && u.share > 0.0));
         let fill = sum / r.area;
-        if gap == 0.0 { prop_assert!((fill - 1.0).abs() < 1e-6, "{fill}"); }
+        if gap == 0.0 {
+            let off = (sum - r.area).abs();
+            prop_assert!(off < 1e-6 * r.area + slack + stats.dust_pieces as f64 * DUST_AREA, "{fill}");
+        }
         prop_assert!(fill > 0.5, "{fill}");
         prop_assert_eq!(stats.units, units.len());
     }
@@ -1041,8 +1066,29 @@ proptest! {
         let r = region(&l_shape(), &[island()]);
         let p = Pattern::of_module(presets()[which].1.module.clone().unwrap(), 0.0);
         let s = summarize(&r, &p, &Placement { origin: Some(DVec2::new(ox, oy)), angle }, &SummaryOptions::default()).unwrap();
-        // No gap: the units fill the region, and the types add up to the whole.
-        prop_assert!((s.area_laid_m2 - s.region_area_m2).abs() < 1e-6 * s.region_area_m2.max(1.0));
+        // No gap: the units fill the region, up to three known differences that the report
+        // counts (mm2, from the math of the engine, not a magic number):
+        //  - a clipped piece under DUST_AREA is dropped and counted in `dust_pieces`: it loses
+        //    less than DUST_AREA each;
+        //  - a unit that crosses the edge by less than the trim counts whole and is counted in
+        //    `trimmed_units`: it adds less than trim x perimeter of the piece each;
+        //  - the overlay snaps to a grid of about radius x 2^-29: each cut piece shifts by less
+        //    than its perimeter x that resolution.
+        let perimeter = max_piece_perimeter(&p);
+        let radius = r.lo.abs().max(r.hi.abs()).length() + 1000.0 + 2.0 * perimeter;
+        let snap = (s.cut_units + s.dust_pieces) as f64 * perimeter * radius * 2f64.powi(-29);
+        let lost = s.dust_pieces as f64 * DUST_AREA + snap;
+        let gained = s.trimmed_units as f64 * units::DEFAULT_TRIM * perimeter + snap;
+        let diff_mm2 = (s.area_laid_m2 - s.region_area_m2) * 1e6;
+        prop_assert!(
+            diff_mm2 >= -lost && diff_mm2 <= gained,
+            "laid {} m2, region {} m2: {diff_mm2} mm2 off, allowed -{lost} to +{gained} (dust {}, trimmed {}, cut {})",
+            s.area_laid_m2,
+            s.region_area_m2,
+            s.dust_pieces,
+            s.trimmed_units,
+            s.cut_units
+        );
         let by: f64 = s.by_unit.iter().map(|u| u.area_laid_m2).sum();
         prop_assert!((by - s.area_laid_m2).abs() < 1e-9);
         let n: usize = s.by_unit.iter().map(|u| u.whole_units + u.cut_units).sum();
