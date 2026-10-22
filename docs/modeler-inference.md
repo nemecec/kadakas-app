@@ -8,7 +8,7 @@ The behavior follows the public description of the inference of SketchUp-like mo
 
 ### How the modeler calls it
 
-1. **Scene.** When the geometry changes, build a `Scene` with `SceneBuilder`: `add_point`, `add_edge`, `add_face` (outer loop and holes), `add_surface_model(&SurfaceModel, model_number)`, `add_guide(&Guide, layer_elevation, index)`. A surface model gives its edges (not the ones with the attribute `hidden: true`, unless `add_surface_model_placed_with` is told to show hidden geometry), its faces, and the centers of its circles and arcs (a curve whose corners lie on one circle, so also a regular polygon that is a curve). `finish()` builds the spatial index. A plain face (`add_face`) gives no center, so a rectangle or a square from the rectangle tool has none; `add_polygon_face` gives the center of a regular face for a caller that has no curve.
+1. **Scene.** When the geometry changes, build a `Scene` with `SceneBuilder`: `add_point`, `add_edge`, `add_face` (outer loop and holes), `add_surface_model(&SurfaceModel, model_number)`. A surface model gives its edges (not the ones with the attribute `hidden: true`), its faces, and the centers of its circles and arcs (a curve whose corners lie on one circle, so also a regular polygon that is a curve). `finish()` builds the spatial index. A plain face (`add_face`) gives no center, so a rectangle or a square from the rectangle tool has none; `add_polygon_face` gives the center of a regular face for a caller that has no curve. `add_guide(&Guide, layer_elevation, index)` adds a guide (see "Guides" below). `add_surface_model_placed_with` can offer hidden edges and faces too.
 2. **Camera.** Each frame make a `Camera` with `Camera::look_at(eye, target, up, Projection, viewport_px)`. Perspective (`fov_y`) and parallel (`height`) work.
 3. **Engine.** The active tool keeps one `Inferencer`. On a pointer move call `infer(&scene, &camera, pointer_px, reference)`. `reference` is the last point of the tool, or `None` before the first click.
 4. **Draw.** The `Inference` has `point`, `kind`, `screen` (the pixel of the point), `color`, `label` (en-US or et, from `kadakas-l10n`), `lines` (cue lines, some dotted), `locked`, `source` and `other` (tags of the edge, face or curve), and `constraint` (the point, line or plane that holds the point).
@@ -33,7 +33,7 @@ A `Tag` is a number that the caller chooses. For a surface model the tag says th
 | Intersection | Intersection | near black | two edges cross, an edge crosses a face, an axis line crosses an edge |
 | OnEdge | On Edge | red | on an edge |
 | GuidePoint | Guide Point | amber | a guide point |
-| OnGuide | On Guide | amber | on a guide line (the part of a line without ends that the pointer is near) |
+| OnGuide | On Guide | amber | on a guide line |
 | OnAxis(X, Y, Z) | On Red / Green / Blue Axis | red, green, blue | on a line along an axis from the reference point |
 | FromPoint(axis) | From Point | axis color, dotted | on a line along an axis from the point that you paused on; where such a line crosses an axis line from the reference point, the crossing |
 | Parallel | Parallel to Edge | magenta | parallel to the edge that you hovered |
