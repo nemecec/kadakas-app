@@ -623,3 +623,4 @@ fn choosing_another_tool_drops_the_step_and_the_redo() {
 }
 
 mod review;
+mod review_component;

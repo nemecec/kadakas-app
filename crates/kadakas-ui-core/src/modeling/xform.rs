@@ -189,12 +189,39 @@ impl Subject {
         if !self.parts.is_empty() {
             return None;
         }
-        let model = model_of(w.doc, *id)?;
-        let fr = frame_of(w.doc, *id);
+        // The points of the local box: the vertices of a model, or the corners of the box of the
+        // definition of an instance, with the map to the world.
+        let (fr, points): (DAffine3, Vec<DVec3>) = if let Some(model) = model_of(w.doc, *id) {
+            (
+                frame_of(w.doc, *id),
+                model.vertices().map(|(_, p)| p).collect(),
+            )
+        } else if let Some(kadakas_core::model::Shape::Component { symbol, transform }) =
+            w.doc.object(*id).map(|o| &o.shape)
+        {
+            let (a, b) = kadakas_core::component::definition_bounds(&w.doc.resources, *symbol)?;
+            let lift = DAffine3::from_translation(DVec3::new(
+                0.0,
+                0.0,
+                super::scenes::elevation(w.doc, *id),
+            ));
+            let corners = (0..8usize)
+                .map(|i| {
+                    DVec3::new(
+                        if i & 1 == 0 { a.x } else { b.x },
+                        if i & 2 == 0 { a.y } else { b.y },
+                        if i & 4 == 0 { a.z } else { b.z },
+                    )
+                })
+                .collect();
+            (lift * kadakas_core::component::affine(transform), corners)
+        } else {
+            return None;
+        };
         let rot = orthonormal(fr.matrix3)?;
         let inv = rot.transpose();
         let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
-        for (_, p) in model.vertices() {
+        for p in points {
             let q = inv * (fr.transform_point3(p) - fr.translation);
             lo = lo.min(q);
             hi = hi.max(q);
