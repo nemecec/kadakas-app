@@ -365,3 +365,64 @@ fn a_face_value_may_name_the_material() {
     );
     assert_eq!(present::material_ref(ed.doc(), "nothing"), None);
 }
+
+#[test]
+fn material_uses_counts_slots_site_textures_and_both_sides_of_faces() {
+    use kadakas_core::site::{SiteSettings, SurfaceLook};
+    let (mut ed, id, [a, b], brick, grass) = two_faces();
+    paint(&mut ed, id, &[a], PaintSide::Front, Some(brick)).unwrap();
+    paint(&mut ed, id, &[b], PaintSide::Back, Some(brick)).unwrap();
+    // An object slot and a class slot.
+    ed.execute(&Command::SetMaterialSlot {
+        target: SlotTarget::Object {
+            object: id,
+            slot: None,
+        },
+        material: Some(brick),
+    })
+    .unwrap();
+    let class = ed.doc().active_class;
+    ed.execute(&Command::SetMaterialSlot {
+        target: SlotTarget::Class { class },
+        material: Some(brick),
+    })
+    .unwrap();
+    // The texture of a site model counts as a use too.
+    let settings = SiteSettings {
+        surface_look: SurfaceLook::Texture,
+        texture: Some(brick),
+        ..Default::default()
+    };
+    ed.execute(&Command::AddObject {
+        shape: Shape::SiteModel {
+            points: Vec::new(),
+            lines: Vec::new(),
+            settings,
+        },
+        layer: None,
+        class: None,
+        attrs: Attributes::default(),
+    })
+    .unwrap();
+    let uses = present::material_uses(ed.doc(), brick);
+    assert_eq!((uses.slots, uses.faces), (3, 2));
+    assert_eq!(uses.total(), 5);
+    assert_eq!(uses.models.len(), 1);
+    assert_eq!(uses.models[0].1, vec![a], "front");
+    assert_eq!(uses.models[0].2, vec![b], "back");
+    assert!(present::material_uses(ed.doc(), grass).is_unused());
+    let whole = SlotTarget::Object {
+        object: id,
+        slot: None,
+    };
+    let part = SlotTarget::Object {
+        object: id,
+        slot: Some("trunk".into()),
+    };
+    assert!(present::is_whole_object_slot(&whole, id));
+    assert!(!present::is_whole_object_slot(&part, id));
+    assert_eq!(
+        present::face_materials(ed.doc(), &model(&ed, id).face(a).unwrap().attrs),
+        (Some(brick), None)
+    );
+}
