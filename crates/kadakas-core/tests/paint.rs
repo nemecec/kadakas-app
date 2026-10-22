@@ -959,3 +959,195 @@ fn a_face_that_names_a_material_that_is_gone_shows_the_default_and_counts_for_no
     );
     assert!(present::material_uses(ed.doc(), brick).is_unused());
 }
+
+#[test]
+fn a_face_that_names_the_material_shows_it_and_counts_as_a_use_and_can_edit_follows_the_layer() {
+    // A file made by hand: the face holds the name of the material, not its id.
+    let (mut ed, _, _, brick, _) = two_faces();
+    let mut m = SurfaceModel::new();
+    let p = [
+        [0.0, 0.0, 0.0],
+        [10.0, 0.0, 0.0],
+        [10.0, 10.0, 0.0],
+        [0.0, 10.0, 0.0],
+    ];
+    m.apply(&Edit::AddEdges {
+        edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+    })
+    .unwrap();
+    let face = m.faces().next().unwrap().0;
+    m.apply(&Edit::SetFaceMaterial {
+        faces: vec![face],
+        side: PaintSide::Front,
+        material: Some("BRICK".into()),
+    })
+    .unwrap();
+    let id = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::new(m)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let uses = present::material_uses(ed.doc(), brick);
+    assert_eq!((uses.faces, uses.total()), (1, 1));
+    assert_eq!(uses.models[0].0, id);
+    let scene = mesh::build(ed.doc());
+    assert!(
+        (0..scene.mesh.triangle_count()).any(|t| scene.mesh.paint_of(t) == Some(brick)),
+        "the name draws the material"
+    );
+    assert_eq!(
+        present::material_ref(ed.doc(), "brick"),
+        Some(brick),
+        "any case"
+    );
+    // An object can be edited unless its layer is locked.
+    let obj = ed.doc().object(id).unwrap().clone();
+    assert!(present::can_edit(ed.doc(), &obj));
+    ed.execute(&Command::ModifyLayer {
+        id: obj.layer,
+        name: None,
+        visible: None,
+        locked: Some(true),
+        elevation: None,
+        scale: None,
+    })
+    .unwrap();
+    assert!(!present::can_edit(ed.doc(), &obj));
+}
+
+#[test]
+fn exploding_a_painted_group_gives_the_material_to_a_group_inside() {
+    let (mut ed, id, _, brick, _) = two_faces();
+    let inner = ed
+        .execute(&Command::Group {
+            ids: vec![id],
+            name: None,
+        })
+        .map(|o| ObjectId(o.created[0]))
+        .unwrap();
+    let outer = ed
+        .execute(&Command::Group {
+            ids: vec![inner],
+            name: None,
+        })
+        .map(|o| ObjectId(o.created[0]))
+        .unwrap();
+    set_object_material(&mut ed, outer, brick);
+    ed.execute(&Command::Explode { ids: vec![outer] }).unwrap();
+    assert!(ed.doc().object(outer).is_none());
+    assert_eq!(present::object_material(ed.doc(), inner), Some(brick));
+}
+
+#[test]
+fn every_kind_of_edit_replays_from_the_log_to_the_same_model() {
+    use kadakas_core::surface::IntersectScope;
+    let mut m = SurfaceModel::new();
+    let sq = |x: f64| {
+        let p = [
+            [x, 0.0, 0.0],
+            [x + 1000.0, 0.0, 0.0],
+            [x + 1000.0, 1000.0, 0.0],
+            [x, 1000.0, 0.0],
+        ];
+        (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect::<Vec<_>>()
+    };
+    m.apply(&Edit::AddEdges { edges: sq(0.0) }).unwrap();
+    let floor = m.faces().next().unwrap().0;
+    m.apply(&Edit::PushPull {
+        face: floor,
+        distance: 500.0,
+    })
+    .unwrap();
+    m.apply(&Edit::IntersectFaces {
+        scope: IntersectScope::Model,
+        faces: Vec::new(),
+        edges: Vec::new(),
+    })
+    .unwrap();
+    // A second square far away, copied, turned over, painted and erased.
+    m.apply(&Edit::AddEdges { edges: sq(5000.0) }).unwrap();
+    let far = m
+        .faces()
+        .find(|(_, f)| {
+            f.outer
+                .iter()
+                .any(|v| m.vertex(*v).is_some_and(|p| p.x >= 5000.0))
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    m.apply(&Edit::IntersectFaces {
+        scope: IntersectScope::Selection,
+        faces: vec![far],
+        edges: Vec::new(),
+    })
+    .unwrap();
+    let corner = vertex_at(&m, [5000.0, 0.0, 0.0]);
+    m.apply(&Edit::TransformVertices {
+        vertices: vec![corner],
+        faces: Vec::new(),
+        edges: Vec::new(),
+        matrix: DAffine3::from_translation(DVec3::new(-100.0, 0.0, 0.0)).to_cols_array(),
+    })
+    .unwrap();
+    m.apply(&Edit::CopyGeometry {
+        faces: vec![far],
+        edges: Vec::new(),
+        matrix: DAffine3::from_translation(DVec3::new(0.0, 3000.0, 0.0)).to_cols_array(),
+        count: 1,
+    })
+    .unwrap();
+    m.apply(&Edit::ReverseFaces { faces: vec![far] }).unwrap();
+    m.apply(&Edit::SetFaceMaterial {
+        faces: vec![far],
+        side: PaintSide::Both,
+        material: Some(ResourceId::from_num(7).to_string()),
+    })
+    .unwrap();
+    m.apply(&Edit::AddCurve {
+        points: (0..8)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 8.0;
+                [-3000.0 + 300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+            })
+            .collect(),
+        closed: true,
+    })
+    .unwrap();
+    let circle = m
+        .faces()
+        .filter(|(_, f)| f.outer.len() == 8)
+        .map(|(id, _)| id)
+        .next()
+        .unwrap();
+    m.apply(&Edit::EraseFaces {
+        faces: vec![circle],
+    })
+    .unwrap();
+    let some_edge = m.edges().next().unwrap().0;
+    m.apply(&Edit::EraseEdges {
+        edges: vec![some_edge],
+    })
+    .unwrap();
+    // Replay the log on an empty model: the same model comes out.
+    assert!(m.log().len() >= 10, "{} entries", m.log().len());
+    let mut fresh = SurfaceModel::new();
+    for entry in m.log() {
+        kadakas_core::surface::sync::replay_intent(&mut fresh, &entry.intent)
+            .unwrap_or_else(|e| panic!("{:?}: {e}", entry.intent));
+    }
+    assert_eq!(
+        (fresh.vertex_count(), fresh.edge_count(), fresh.face_count()),
+        (m.vertex_count(), m.edge_count(), m.face_count())
+    );
+    let paint_of = |s: &SurfaceModel| {
+        s.faces()
+            .filter(|(_, f)| f.attrs.contains_key(ATTR_MATERIAL))
+            .count()
+    };
+    assert_eq!(paint_of(&fresh), paint_of(&m));
+}
