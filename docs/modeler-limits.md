@@ -213,10 +213,10 @@ The largest value after the size guard is the definition: 16 MiB of text at most
 
 "Safety guard" means that the number has no measured cause. It is a protection, and the user is free to choose the value.
 
-- `MAX_VERTICES` (50,000): keep. Safety guard. With more faces, raise it to about 52,000. A terrain with 99,458 faces has 50,176 vertices. At 100k vertices the cost is still linear.
-- `MAX_EDGES` (100,000): keep, or 150,000 together with faces. Safety guard. At 150k edges a command costs 0.18 s and the text is 18 MB.
-- `MAX_FACES` (50,000): **keep, or raise to 100,000 for triangulated meshes.** The user decides. At 100k faces the check on each command takes 0.18 s (now 0.09 s). The full check takes 1.3 s. The text is 18 to 19 MB and the load takes 0.34 s. A command takes 0.4 s. The collaboration value is 18.5 MB of 32 MiB. Nothing breaks. Do not go above about 150,000, because the value reaches 29 MB there.
-- `MAX_LOOP_VERTICES` (200,000): keep, or 300,000 together with faces. Safety guard. Triangles need 3 per face, so 300k fits 100k faces. Quads still stop at 75,000 faces.
+- `MAX_VERTICES` (55,000, raised from 50,000 on 2026-10-22): safety guard. A terrain with 99,458 faces has 50,176 vertices, so 55,000 leaves room. At 100k vertices the cost is still linear.
+- `MAX_EDGES` (150,000, raised from 100,000 on 2026-10-22): safety guard. At 150k edges a command costs 0.18 s and the text is 18 MB.
+- `MAX_FACES` (100,000, raised from 50,000 on 2026-10-22, decided by the user): triangulated meshes can use 50,000 vertices now. At 100k faces the check on each command takes 0.18 s (now 0.09 s). The full check takes 1.3 s. The text is 18 to 19 MB and the load takes 0.34 s. A command takes 0.4 s. The collaboration value is 18.5 MB of 32 MiB. Nothing breaks. Do not go above about 150,000, because the value reaches 29 MB there.
+- `MAX_LOOP_VERTICES` (300,000, raised from 200,000 on 2026-10-22): safety guard. Triangles need 3 per face, so 300k fits 100k faces. Quads still stop at 75,000 faces.
 - `MAX_EDIT_EDGES` (10,000): keep. Safety guard. It is now also a time bound. An edit of 10,000 edges takes 0.2 to 0.75 s on any model up to 80,000 edges. It took 6 to 190 s before the index.
 - `MAX_PARTS` (10,000): keep. Safety guard. Every operation except Explode takes under 0.3 s at 10,000 parts.
 - `MAX_LEAVES` (20,000): keep. Safety guard. A walk takes 6 ms and a refusal takes 1 ms. A higher value is possible, but the total of models binds first.
@@ -224,7 +224,8 @@ The largest value after the size guard is the definition: 16 MiB of text at most
 - `MAX_TOTAL_MODELS` (new, 250,000): keep. The memory measurement backs it. 250,000 models need 0.54 GB for the mesh and 0.62 GB for the inference scene. That is 1.2 GB in all.
 - `MAX_DEFINITION_EDGES` (new, 100,000): keep. It equals the limit of one model. A definition of 99,996 edges adds, closes and opens in under 0.2 s. Its text is 11.4 MB.
 - `MAX_DEFINITION_BYTES` (new, 16 MiB): keep. It is half of the limit of one collaboration value. Add, edit and close of 16 MiB take under 0.07 s. A definition with few edges can still have a lot of text, such as names and logs. The edge limit does not bound that text.
-- `MAX_EXPLODE_FACES` (new, 20,000): keep, or choose by parts. Cost guard. The cost follows the number of parts. 3,333 cubes (20k faces) take 7 s. 10,000 squares take 22 s. Two parts with 20k faces together take 0.65 s.
+- `MAX_EXPLODE_FACES` (new, 20,000): keep. Cost guard. The cost follows the number of parts. 3,333 cubes (20k faces) take 7 s. 10,000 squares take 22 s. Two parts with 20k faces together take 0.65 s.
+- `MAX_EXPLODE_PARTS` (new, 2,000, decided by the user on 2026-10-22): cost guard. It refuses before any work. 1,000 squares take 0.22 s and 5,000 take 5.3 s, so 2,000 parts stay near one second.
 - `MAX_COMPONENT_DEPTH` (16): keep. Safety guard. The depth costs nothing.
 - `MAX_GROUP_DEPTH` (32): keep. Safety guard. 32 nested groups cost under 0.1 s.
 - Instances (no limit): keep. The total of models is the bound. An instance costs 0.6 to 0.9 KB. The file limit of 32 MiB is reached at about 110,000 instances.

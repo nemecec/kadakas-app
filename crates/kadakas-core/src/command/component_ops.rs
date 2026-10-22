@@ -33,6 +33,19 @@ fn check_explode_size(faces: usize) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// Refuses an explode that would weld more than [`component::MAX_EXPLODE_PARTS`] parts. The cost
+/// of the weld follows the number of parts, not the number of faces.
+fn check_explode_parts(parts: usize) -> Result<(), CommandError> {
+    if parts > component::MAX_EXPLODE_PARTS {
+        return Err(invalid(format!(
+            "this explode would weld {} parts, the limit is {}. Explode the parts in smaller groups, or keep the component",
+            component::grouped(parts),
+            component::grouped(component::MAX_EXPLODE_PARTS)
+        )));
+    }
+    Ok(())
+}
+
 /// Longest name of a group.
 const MAX_NAME: usize = 200;
 
@@ -439,36 +452,43 @@ impl Tx<'_> {
             Shape::SurfaceModel(m) => m.face_count(),
             _ => 0,
         };
+        let parts_of = |shape: &Shape| usize::from(matches!(shape, Shape::SurfaceModel(_)));
         let mut new_faces = 0usize;
+        let mut new_parts = 0usize;
         // The model that each level welds into, counted once for the level.
         let mut present: BTreeMap<(Option<ObjectId>, LayerId), usize> = BTreeMap::new();
         for &id in ids {
             let o = self.doc.object(id).expect("checked");
-            new_faces += match &o.shape {
+            let (f, p) = match &o.shape {
                 Shape::Group { .. } => self
                     .doc
                     .children(id)
                     .into_iter()
                     .filter_map(|k| self.doc.object(k))
-                    .map(|k| faces_of(&k.shape))
-                    .sum(),
+                    .fold((0, 0), |(f, p), k| {
+                        (f + faces_of(&k.shape), p + parts_of(&k.shape))
+                    }),
                 Shape::Component { symbol, .. } => {
-                    self.doc.resources.symbol(*symbol).map_or(0, |d| {
+                    self.doc.resources.symbol(*symbol).map_or((0, 0), |d| {
                         d.parts
                             .iter()
                             .filter(|p| p.parent.is_none())
-                            .map(|p| faces_of(&p.shape))
-                            .sum()
+                            .fold((0, 0), |(f, n), p| {
+                                (f + faces_of(&p.shape), n + parts_of(&p.shape))
+                            })
                     })
                 }
-                _ => 0,
+                _ => (0, 0),
             };
+            new_faces += f;
+            new_parts += p;
             present.entry((o.parent, o.layer)).or_insert_with(|| {
                 component::raw_model(self.doc, o.parent, o.layer)
                     .and_then(|t| self.doc.object(t))
                     .map_or(0, |t| faces_of(&t.shape))
             });
         }
+        check_explode_parts(new_parts)?;
         check_explode_size(new_faces)?;
         let total = new_faces + present.values().sum::<usize>();
         let max = crate::surface::MAX_FACES * crate::surface::limit_scale();

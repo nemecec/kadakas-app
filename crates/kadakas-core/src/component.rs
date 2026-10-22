@@ -113,6 +113,10 @@ pub const MAX_DEFINITION_BYTES: usize = 16 * 1024 * 1024;
 /// Most faces that one explode may add to the surface model of its level. An explode welds all
 /// the parts into one model, and the cost grows faster than the number of faces.
 pub const MAX_EXPLODE_FACES: usize = 20_000;
+/// Most parts (surface models) that one explode may weld into the model of its level. The weld
+/// takes the parts one after another and its cost follows the number of parts: 1,000 squares
+/// took 0.22 s, 5,000 took 5.3 s and 10,000 took 22 s. About 2,000 parts stay near one second.
+pub const MAX_EXPLODE_PARTS: usize = 2_000;
 
 /// A number with a comma between the thousands, for the messages: 250,000.
 pub fn grouped(n: usize) -> String {

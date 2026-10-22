@@ -798,6 +798,51 @@ fn an_explode_of_exactly_20000_faces_runs() {
     assert_eq!(models, vec![20_000]);
 }
 
+/// `n` one-face parts in a row.
+fn small_parts(n: usize) -> Vec<Part> {
+    (0..n).map(|i| grid_part(1, i as f64 * 2_000.0)).collect()
+}
+
+#[test]
+fn an_explode_of_more_than_2000_parts_is_refused_and_changes_nothing() {
+    assert_eq!(component::MAX_EXPLODE_PARTS, 2_000);
+    // Few faces, many parts: the cost follows the parts, so the part limit refuses it.
+    let (mut ed, inst) = explode_world(small_parts(2_001));
+    let (rev, n) = (ed.revision(), ed.doc().objects.len());
+    let t = limits_common::cpu();
+    let e = ed
+        .execute(&Command::Explode { ids: vec![inst] })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        limits_common::cpu() - t < 5.0,
+        "the refusal comes before any work"
+    );
+    assert!(
+        e.contains("would weld 2,001 parts, the limit is 2,000") && e.contains("smaller groups"),
+        "{e}"
+    );
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));
+}
+
+#[test]
+#[ignore = "slow in a debug build (the real weld of 2,000 parts); run it with --ignored"]
+fn an_explode_of_exactly_2000_parts_runs() {
+    let (mut ed, inst) = explode_world(small_parts(2_000));
+    ed.execute(&Command::Explode { ids: vec![inst] })
+        .expect("2,000 parts are within the limit");
+    let models: Vec<usize> = ed
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::SurfaceModel(m) => Some(m.face_count()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(models, vec![2_000]);
+}
+
 #[test]
 fn a_group_of_more_than_20000_faces_is_refused_too() {
     let (mut ed, _) = explode_world(vec![]);
@@ -1057,7 +1102,7 @@ fn the_faces_of_all_ids_are_added_before_any_work_starts() {
 
 #[test]
 fn the_faces_that_the_target_already_holds_count_too() {
-    // A model of 40,000 faces on the layer, a group of 10,001 faces: 50,001 in one model.
+    // A terrain of 90,738 triangles on the layer, a group of 10,001 faces: 100,739 in one model.
     let mut ed = Editor::with_sequential_ids();
     let add = |ed: &mut Editor, m: SurfaceModel| {
         ObjectId(
@@ -1073,7 +1118,7 @@ fn the_faces_that_the_target_already_holds_count_too() {
     };
     add(
         &mut ed,
-        limits_common::construct(&limits_common::grid_mesh(200, 0.0, 0.0, 0.0)),
+        limits_common::construct(&limits_common::terrain_mesh(213, 0.0, 0.0, 0.0)),
     );
     let g1 = add(
         &mut ed,
@@ -1100,7 +1145,7 @@ fn the_faces_that_the_target_already_holds_count_too() {
         .to_string();
     assert!(limits_common::cpu() - t < 5.0, "refused before any weld");
     assert!(
-        e.contains("a surface model of 50,001 faces, the limit is 50,000"),
+        e.contains("a surface model of 100,739 faces, the limit is 100,000"),
         "{e}"
     );
     assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));

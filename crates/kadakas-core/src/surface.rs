@@ -191,13 +191,19 @@ pub(crate) const fn limit_scale() -> usize {
 /// command 0.11 s, the full check 0.55 s, and 6.3 MB of text (156 bytes per vertex), far below
 /// 32 MiB, the largest property that collaboration sends. Adding one box to 800 separate boxes
 /// takes about 30 ms.
-pub const MAX_VERTICES: usize = 50_000;
+///
+/// Raised on 2026-10-22 (from 50,000 vertices, 100,000 edges, 50,000 faces and 200,000 loop
+/// vertices) after a new measurement, see `docs/modeler-limits.md`. A terrain at 99,500 faces:
+/// the check of each command 0.18 s, the full check 1.26 s, 18.3 MB of text and one whole-model
+/// update of 18.5 MB (the limit of one collaboration value is 32 MiB). The costs grow in line with
+/// the size. Spiky meshes grow faster than that (the full check took 13.9 s at 100,000 faces).
+pub const MAX_VERTICES: usize = 55_000;
 /// Most edges of one model.
-pub const MAX_EDGES: usize = 100_000;
+pub const MAX_EDGES: usize = 150_000;
 /// Most faces of one model.
-pub const MAX_FACES: usize = 50_000;
+pub const MAX_FACES: usize = 100_000;
 /// Most vertex uses in the loops of all faces together.
-pub const MAX_LOOP_VERTICES: usize = 200_000;
+pub const MAX_LOOP_VERTICES: usize = 300_000;
 /// Most edges that one edit may add.
 pub const MAX_EDIT_EDGES: usize = 10_000;
 
