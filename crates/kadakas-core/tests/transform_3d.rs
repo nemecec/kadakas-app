@@ -368,3 +368,27 @@ fn the_layer_elevation_is_part_of_the_world() {
     let at = m.transform.transform_point3(DVec3::ZERO) + DVec3::new(0.0, 0.0, e);
     assert!((at - DVec3::new(0.0, -e, 0.0)).length() < 1e-6, "{at:?}");
 }
+
+#[test]
+fn the_height_note_names_the_kind_so_a_window_can_say_it_in_its_language() {
+    let mut ed = Editor::with_sequential_ids();
+    let p = plant(&mut ed);
+    let out = ed
+        .execute(&Command::TransformObjects3d {
+            ids: vec![p],
+            matrix: DAffine3::from_translation(DVec3::new(0.0, 0.0, 300.0)).to_cols_array(),
+            copy: false,
+            count: 1,
+        })
+        .unwrap();
+    let kinds: Vec<_> = out
+        .notes
+        .iter()
+        .filter_map(|n| kadakas_core::command::height_note_kind(n))
+        .collect();
+    assert_eq!(kinds, vec!["plant"]);
+    assert_eq!(
+        kadakas_core::command::height_note_kind("something else"),
+        None
+    );
+}

@@ -545,7 +545,12 @@ fn scale_about_the_center_with_ctrl() {
     let mut r = rig(ModelerTool::Scale);
     let id = make_box(&mut r);
     select_object(&mut r, id);
-    r.tools.toggle_ctrl();
+    // The copy key is held: Scale works about the center.
+    r.tools.set_context(XContext {
+        objects: vec![id],
+        center: true,
+        ..XContext::default()
+    });
     start_scale(&mut r, v(1000.0, 1000.0, 500.0));
     enter(&mut r, "2");
     let (lo, hi) = bounds(&r, id);
@@ -616,3 +621,5 @@ fn choosing_another_tool_drops_the_step_and_the_redo() {
     r.click(v(0.0, 0.0, 0.0));
     assert!(r.tools.excluded().models.contains(&id));
 }
+
+mod review;

@@ -23,7 +23,10 @@ pub mod select;
 mod tools;
 mod xform;
 
-pub use exec::{Action, Target, run as run_actions, run_noted as run_actions_noted};
+pub use exec::{
+    Action, Ran, Target, run as run_actions, run_full as run_actions_full,
+    run_noted as run_actions_noted,
+};
 pub use plane::Plane3;
 pub use scenes::{SceneCache, Scenes, World, elevation, frame_of, model_of};
 pub use select::{Item, SubSelection};

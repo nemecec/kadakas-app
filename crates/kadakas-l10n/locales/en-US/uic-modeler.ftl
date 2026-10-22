@@ -48,3 +48,5 @@ uic-modeler-hint-rotate = Click the center, click the start of the angle, then t
 uic-modeler-hint-scale = Click a grip on the box around the selection, move, and click again. Ctrl scales about the center, Shift toggles uniform scaling. Type a factor (2), three factors (1;1;2) or a length.
 uic-modeler-measure-angle = Angle
 uic-modeler-measure-scale = Scale
+uic-modeling-angle-needed = Type an angle to finish the rotation.
+uic-modeling-height-kept = A { $kind } keeps its height: it comes from its layer.

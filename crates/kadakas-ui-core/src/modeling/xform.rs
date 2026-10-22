@@ -32,9 +32,10 @@
 //! The window passes the selection with [`Context`] before each event. With nothing selected the
 //! window picks the entity under the pointer first (as Select does), then calls the tool.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use glam::{DAffine3, DQuat, DVec3};
+use glam::{DAffine3, DMat3, DQuat, DVec3};
 use kadakas_core::model::ObjectId;
 use kadakas_core::surface::{EdgeId, FaceId};
 use kadakas_l10n::tr;
@@ -72,6 +73,8 @@ pub struct Context {
     pub object_bounds: Option<(DVec3, DVec3)>,
     /// Shift is down.
     pub shift: bool,
+    /// The copy key (Ctrl, Option on a Mac) is held: Scale works about the center.
+    pub center: bool,
 }
 
 /// What the tool works on: whole objects, or faces and edges of surface models.
@@ -80,6 +83,63 @@ pub struct Subject {
     objects: Vec<ObjectId>,
     parts: BTreeMap<ObjectId, (Vec<FaceId>, Vec<EdgeId>)>,
     bounds: Option<(DVec3, DVec3)>,
+    /// The box in the own axes of a single object that has a transform.
+    oriented: Option<OBox>,
+}
+
+/// A box in the axes of a frame (a rigid map from the box to the world): the box around the
+/// selection that Scale puts its grips on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct OBox {
+    frame: DAffine3,
+    lo: DVec3,
+    hi: DVec3,
+}
+
+impl OBox {
+    fn world_aligned(lo: DVec3, hi: DVec3) -> OBox {
+        OBox {
+            frame: DAffine3::IDENTITY,
+            lo,
+            hi,
+        }
+    }
+
+    fn world(&self, p: DVec3) -> DVec3 {
+        self.frame.transform_point3(p)
+    }
+
+    /// A world ray in the axes of the box.
+    fn ray(&self, r: &Ray) -> Ray {
+        let inv = self.frame.inverse();
+        Ray {
+            origin: inv.transform_point3(r.origin),
+            dir: inv.transform_vector3(r.dir),
+        }
+    }
+
+    /// The world map that scales by `factors` in the axes of the box about `anchor` (in the box).
+    fn scaling(&self, anchor: DVec3, factors: DVec3) -> DAffine3 {
+        self.frame * scaling(anchor, factors) * self.frame.inverse()
+    }
+
+    fn edges(&self) -> Vec<[DVec3; 2]> {
+        box_edges(self.lo, self.hi)
+            .into_iter()
+            .map(|[a, b]| [self.world(a), self.world(b)])
+            .collect()
+    }
+}
+
+/// The columns of a matrix made orthonormal (Gram-Schmidt, a proper rotation).
+fn orthonormal(m: DMat3) -> Option<DMat3> {
+    let x = m.x_axis.try_normalize()?;
+    let y = (m.y_axis - x * x.dot(m.y_axis)).try_normalize()?;
+    let mut z = x.cross(y);
+    if z.dot(m.z_axis) < 0.0 {
+        z = -z;
+    }
+    Some(DMat3::from_cols(x, y, z))
 }
 
 impl Subject {
@@ -113,9 +173,46 @@ impl Subject {
             objects,
             parts,
             bounds: None,
+            oriented: None,
         };
         s.bounds = s.measure(w, ctx.object_bounds);
+        s.oriented = s.orient(w);
         Some(s)
+    }
+
+    /// The box in the own axes of a single surface model that is placed by a transform (turned
+    /// or not). Several objects, parts and other objects use the world box.
+    fn orient(&self, w: &World) -> Option<OBox> {
+        let [id] = self.objects.as_slice() else {
+            return None;
+        };
+        if !self.parts.is_empty() {
+            return None;
+        }
+        let model = model_of(w.doc, *id)?;
+        let fr = frame_of(w.doc, *id);
+        let rot = orthonormal(fr.matrix3)?;
+        let inv = rot.transpose();
+        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+        for (_, p) in model.vertices() {
+            let q = inv * (fr.transform_point3(p) - fr.translation);
+            lo = lo.min(q);
+            hi = hi.max(q);
+        }
+        (lo.is_finite() && hi.is_finite()).then_some(OBox {
+            frame: DAffine3 {
+                matrix3: rot,
+                translation: fr.translation,
+            },
+            lo,
+            hi,
+        })
+    }
+
+    /// The box for the grips of Scale.
+    fn scale_box(&self) -> Option<OBox> {
+        self.oriented
+            .or_else(|| self.bounds.map(|(lo, hi)| OBox::world_aligned(lo, hi)))
     }
 
     fn measure(&self, w: &World, objects: Option<(DVec3, DVec3)>) -> Option<(DVec3, DVec3)> {
@@ -371,7 +468,7 @@ enum XRun {
     Scale {
         subject: Subject,
         grip: Grip,
-        bounds: (DVec3, DVec3),
+        bounds: OBox,
         factors: DVec3,
         uniform: bool,
     },
@@ -402,7 +499,7 @@ enum LastKind {
     },
     Scale {
         grip: Grip,
-        bounds: (DVec3, DVec3),
+        bounds: OBox,
         about_center: bool,
         uniform: bool,
     },
@@ -425,6 +522,19 @@ pub struct Xform {
     hover_grip: Option<Grip>,
     pending: Option<Last>,
     last: Option<(Last, u64)>,
+    /// The subject of the last selection and revision (it walks the vertices of the models).
+    cache: RefCell<Option<(CacheKey, Option<Subject>)>>,
+    /// How many times the subject was measured (a test counts them).
+    builds: std::cell::Cell<u64>,
+}
+
+/// What decides that the subject can be kept.
+#[derive(Clone, Debug, PartialEq)]
+struct CacheKey {
+    rev: u64,
+    objects: Vec<ObjectId>,
+    parts: SubSelection,
+    object_bounds: Option<(DVec3, DVec3)>,
 }
 
 /// True for the tools of this module.
@@ -453,6 +563,25 @@ impl Xform {
         self.cursor = None;
     }
 
+    /// The subject of the selection, kept for the revision and the selection.
+    fn subject(&self, w: &World) -> Option<Subject> {
+        let key = CacheKey {
+            rev: w.scenes.rev,
+            objects: self.ctx.objects.clone(),
+            parts: self.ctx.parts.clone(),
+            object_bounds: self.ctx.object_bounds,
+        };
+        if let Some((k, s)) = &*self.cache.borrow()
+            && *k == key
+        {
+            return s.clone();
+        }
+        self.builds.set(self.builds.get() + 1);
+        let s = Subject::resolve(w, &self.ctx);
+        *self.cache.borrow_mut() = Some((key, s.clone()));
+        s
+    }
+
     pub fn in_progress(&self) -> bool {
         !matches!(self.run, XRun::Idle)
     }
@@ -466,6 +595,16 @@ impl Xform {
 
     pub fn set_context(&mut self, ctx: Context) {
         self.ctx = ctx;
+    }
+
+    /// How many times the subject was measured.
+    pub fn subject_builds(&self) -> u64 {
+        self.builds.get()
+    }
+
+    /// True while Scale works about the center (the copy key is held).
+    fn about_center(&self) -> bool {
+        self.ctx.center
     }
 
     /// Ctrl was pressed: copy (Move, Rotate) or about the center (Scale) is toggled.
@@ -607,7 +746,7 @@ impl Xform {
             }
             _ => {
                 self.last = None;
-                let Some(subject) = Subject::resolve(w, &self.ctx) else {
+                let Some(subject) = self.subject(w) else {
                     return Out::msg(tr!("uic-modeling-select-first"));
                 };
                 self.run = XRun::Move {
@@ -656,7 +795,7 @@ impl Xform {
         match std::mem::take(&mut self.run) {
             XRun::Idle => {
                 self.last = None;
-                let Some(subject) = Subject::resolve(w, &self.ctx) else {
+                let Some(subject) = self.subject(w) else {
                     return Out::msg(tr!("uic-modeling-select-first"));
                 };
                 let n = if self.hover_normal == DVec3::ZERO {
@@ -664,6 +803,9 @@ impl Xform {
                 } else {
                     self.hover_normal
                 };
+                // The normal faces the viewer: a positive angle turns counterclockwise as the
+                // viewer sees it, also on the back of a face.
+                let n = if n.dot(p.ray.dir) > 0.0 { -n } else { n };
                 let Some(plane) = Plane3::through(p.inf.point, n) else {
                     return Out::default();
                 };
@@ -770,15 +912,12 @@ impl Xform {
     // ---- Scale ---------------------------------------------------------------------------------
 
     fn grips(&self, w: &World) -> Vec<(Grip, DVec3)> {
-        let Some(subject) = Subject::resolve(w, &self.ctx) else {
+        let Some(bx) = self.subject(w).and_then(|s| s.scale_box()) else {
             return Vec::new();
         };
-        let Some((lo, hi)) = subject.bounds else {
-            return Vec::new();
-        };
-        usable_grips(lo, hi)
+        usable_grips(bx.lo, bx.hi)
             .into_iter()
-            .map(|g| (g, g.point(lo, hi)))
+            .map(|g| (g, bx.world(g.point(bx.lo, bx.hi))))
             .collect()
     }
 
@@ -809,10 +948,10 @@ impl Xform {
         match std::mem::take(&mut self.run) {
             XRun::Idle => {
                 self.last = None;
-                let Some(subject) = Subject::resolve(w, &self.ctx) else {
+                let Some(subject) = self.subject(w) else {
                     return Out::msg(tr!("uic-modeling-select-first"));
                 };
-                let Some(bounds) = subject.bounds else {
+                let Some(bounds) = subject.scale_box() else {
                     return Out::default();
                 };
                 let Some(grip) = self.grip_at(w, &p.ray) else {
@@ -845,7 +984,15 @@ impl Xform {
                     };
                     return Out::msg(tr!("uic-modeling-too-small"));
                 }
-                self.finish_scale(subject, grip, bounds, factors, uniform, false)
+                self.finish_scale(
+                    subject,
+                    grip,
+                    bounds,
+                    factors,
+                    uniform,
+                    self.about_center(),
+                    false,
+                )
             }
             other => {
                 self.run = other;
@@ -856,26 +1003,16 @@ impl Xform {
 
     /// The distance from the anchor to the grip along the axes that the grip scales (the length
     /// that a typed length is measured against).
-    fn ref_length(
-        &self,
-        grip: Grip,
-        bounds: (DVec3, DVec3),
-        about_center: bool,
-        uniform: bool,
-    ) -> f64 {
-        let anchor = grip.anchor(bounds.0, bounds.1, about_center);
-        let g = grip.point(bounds.0, bounds.1);
-        let mut r = g - anchor;
-        if uniform && grip.axes() < 3 {
-            // A uniform scale from a face or an edge grip: the diagonal of the box.
-            r = bounds.1 - bounds.0;
-        }
-        r.length()
+    fn ref_length(&self, grip: Grip, bounds: OBox, about_center: bool) -> f64 {
+        let anchor = grip.anchor(bounds.lo, bounds.hi, about_center);
+        let g = grip.point(bounds.lo, bounds.hi);
+        // Along the axes of the grip, also when the scale is uniform.
+        (g - anchor).length()
     }
 
     /// The factors that the pointer ray gives for the grip.
     fn scale_to(&mut self, ray: &Ray) {
-        let ctrl = self.ctrl;
+        let ctrl = self.about_center();
         let shift = self.ctx.shift;
         let XRun::Scale {
             grip,
@@ -888,8 +1025,9 @@ impl Xform {
             return;
         };
         *uniform = (grip.axes() == 3) != shift;
-        let anchor = grip.anchor(bounds.0, bounds.1, ctrl);
-        let g = grip.point(bounds.0, bounds.1);
+        let ray = &bounds.ray(ray);
+        let anchor = grip.anchor(bounds.lo, bounds.hi, ctrl);
+        let g = grip.point(bounds.lo, bounds.hi);
         let r = g - anchor;
         if r.length() < 1e-9 {
             return;
@@ -926,18 +1064,19 @@ impl Xform {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_scale(
         &mut self,
         subject: Subject,
         grip: Grip,
-        bounds: (DVec3, DVec3),
+        bounds: OBox,
         factors: DVec3,
         uniform: bool,
+        about_center: bool,
         redo: bool,
     ) -> Out {
-        let about_center = self.ctrl;
-        let anchor = grip.anchor(bounds.0, bounds.1, about_center);
-        let action = subject.action(scaling(anchor, factors), 0);
+        let anchor = grip.anchor(bounds.lo, bounds.hi, about_center);
+        let action = subject.action(bounds.scaling(anchor, factors), 0);
         self.pending = Some(Last {
             subject,
             kind: LastKind::Scale {
@@ -1000,17 +1139,35 @@ impl Xform {
                 self.finish_move(subject, base, d, 1, false, false)
             }
             (Some(ModelerTool::Move), XRun::Idle) => self.redo_move(v, revision),
-            (Some(ModelerTool::Rotate), XRun::Angle { subject, plane, .. }) => match v {
-                Value::Angle(a) => self.finish_rotate_typed(subject, plane, a),
+            (
+                Some(ModelerTool::Rotate),
+                XRun::Angle {
+                    subject,
+                    plane,
+                    start,
+                    radius,
+                    angle,
+                },
+            ) => match v {
+                // The typed angle goes the way the pointer was dragged; a minus reverses it.
+                Value::Angle(a) => {
+                    let way = if angle.abs() > 1e-9 {
+                        angle.signum()
+                    } else {
+                        1.0
+                    };
+                    self.finish_rotate_typed(subject, plane, a * way)
+                }
                 _ => {
+                    // The protractor stays as it was.
                     self.run = XRun::Angle {
                         subject,
                         plane,
-                        start: 0.0,
-                        radius: 0.0,
-                        angle: 0.0,
+                        start,
+                        radius,
+                        angle,
                     };
-                    Out::default()
+                    Out::msg(tr!("uic-modeling-angle-needed"))
                 }
             },
             (Some(ModelerTool::Rotate), XRun::Idle) => self.redo_rotate(v, revision),
@@ -1031,12 +1188,12 @@ impl Xform {
                     uniform,
                     factors,
                 };
-                let about_center = self.ctrl;
+                let about_center = self.about_center();
                 let Some(f) = self.typed_factors(v, grip, bounds, about_center, uniform) else {
                     return Out::default();
                 };
                 self.run = XRun::Idle;
-                self.finish_scale(subject, grip, bounds, f, uniform, false)
+                self.finish_scale(subject, grip, bounds, f, uniform, about_center, false)
             }
             (Some(ModelerTool::Scale), XRun::Idle) => self.redo_scale(v, revision),
             (_, run) => {
@@ -1100,7 +1257,13 @@ impl Xform {
             Value::Count(n) if l.copy => (angle, n, false),
             Value::Divide(n) if l.copy => (whole / f64::from(n), n, true),
             Value::Angle(deg) => {
-                let a = deg.to_radians();
+                // The way of the step before; a minus reverses it.
+                let way = if angle.abs() > 1e-9 {
+                    angle.signum()
+                } else {
+                    1.0
+                };
+                let a = deg.to_radians() * way;
                 if l.divided && l.copy {
                     (a / f64::from(l.count), l.count, true)
                 } else {
@@ -1133,8 +1296,7 @@ impl Xform {
         let Some(f) = self.typed_factors(v, grip, bounds, about_center, uniform) else {
             return Out::default();
         };
-        self.ctrl = about_center;
-        self.finish_scale(l.subject, grip, bounds, f, uniform, true)
+        self.finish_scale(l.subject, grip, bounds, f, uniform, about_center, true)
     }
 
     /// The factors for a typed value.
@@ -1142,7 +1304,7 @@ impl Xform {
         &self,
         v: Value,
         grip: Grip,
-        bounds: (DVec3, DVec3),
+        bounds: OBox,
         about_center: bool,
         uniform: bool,
     ) -> Option<DVec3> {
@@ -1165,7 +1327,7 @@ impl Xform {
                 DVec3::new(x.unwrap_or(1.0), y.unwrap_or(1.0), z.unwrap_or(1.0))
             }
             Value::Length(l) => {
-                let r = self.ref_length(grip, bounds, about_center, uniform);
+                let r = self.ref_length(grip, bounds, about_center);
                 if r < 1e-9 {
                     return None;
                 }
@@ -1229,10 +1391,10 @@ impl Xform {
                 factors,
                 ..
             } => {
-                let anchor = grip.anchor(bounds.0, bounds.1, self.ctrl);
+                let anchor = grip.anchor(bounds.lo, bounds.hi, self.about_center());
                 pv.shape
-                    .extend(moved_outline(subject, w, &scaling(anchor, *factors)));
-                pv.shape.extend(box_edges(bounds.0, bounds.1));
+                    .extend(moved_outline(subject, w, &bounds.scaling(anchor, *factors)));
+                pv.shape.extend(bounds.edges());
             }
             XRun::Idle => match self.tool {
                 Some(ModelerTool::Rotate) => {
@@ -1249,10 +1411,8 @@ impl Xform {
                         .hover_grip
                         .and_then(|h| grips.iter().position(|(g, _)| *g == h));
                     pv.grips = grips.into_iter().map(|(_, p)| p).collect();
-                    if let Some(s) = Subject::resolve(w, &self.ctx)
-                        && let Some((lo, hi)) = s.bounds
-                    {
-                        pv.shape.extend(box_edges(lo, hi));
+                    if let Some(bx) = self.subject(w).and_then(|s| s.scale_box()) {
+                        pv.shape.extend(bx.edges());
                     }
                 }
                 _ => {}
@@ -1262,7 +1422,7 @@ impl Xform {
 
     /// A radius for the protractor before the center is clicked: a share of the selection.
     fn hint_radius(&self, w: &World) -> f64 {
-        Subject::resolve(w, &self.ctx)
+        self.subject(w)
             .and_then(|s| s.bounds)
             .map_or(500.0, |(lo, hi)| ((hi - lo).length() * 0.5).max(100.0))
     }

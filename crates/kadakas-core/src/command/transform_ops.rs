@@ -55,6 +55,18 @@ pub fn transform_object(o: &mut Object, xf: &Xf) -> Result<(), String> {
     Ok(())
 }
 
+const HEIGHT_NOTE_MID: &str = " keeps its height: it comes from its layer";
+
+fn height_note(kind: &str) -> String {
+    format!("a {kind}{HEIGHT_NOTE_MID}")
+}
+
+/// The kind of object in a note of `transform_objects3d` that says an object keeps its height (a
+/// plan object that was moved up or down). A window shows its own words for it.
+pub fn height_note_kind(note: &str) -> Option<&str> {
+    note.strip_prefix("a ")?.strip_suffix(HEIGHT_NOTE_MID)
+}
+
 /// Puts a 3D map (in world coordinates, with the layer at height `elevation`) on one object.
 /// Surface models and component instances take any affine map through their transform. Other
 /// objects take a move, a turn about a vertical axis and a scale in the plan; their height is not
@@ -101,10 +113,7 @@ pub fn transform_object3(
                 t: d.translation.truncate(),
             };
             if d.translation.z.abs() > 1e-9 || (m3.z_axis.z - 1.0).abs() > 1e-9 {
-                notes.push(format!(
-                    "a {} keeps its height: it comes from its layer",
-                    shape.kind()
-                ));
+                notes.push(height_note(shape.kind()));
             }
             transform_object(o, &xf)
         }

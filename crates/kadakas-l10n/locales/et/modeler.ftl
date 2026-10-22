@@ -73,6 +73,7 @@ modeler-entity-class = Klass
 modeler-entity-size = Suurus
 modeler-entity-position = Asukoht
 modeler-entity-rotation = Pööre (x, y, z)
+modeler-entity-skewed = Viltu (teljed ei ole risti)
 modeler-entity-scale = Mõõtkava
 modeler-entity-corner = Madalaim nurk
 modeler-entity-many =

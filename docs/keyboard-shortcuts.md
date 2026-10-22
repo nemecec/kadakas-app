@@ -254,7 +254,7 @@ These are modifier keys of the tools. They are the same in every profile of the 
 
 | Key | Move and Rotate | Scale |
 |---|---|---|
-| Ctrl (Option on macOS), pressed once | Toggles copy (a plus shows at the pointer). After a copy, type `5x` for five copies or `/5` for five copies that divide the step | Toggles scaling about the center of the box |
+| Ctrl (Option on macOS), pressed alone and let go | Toggles copy (a plus shows at the pointer; Ctrl+Z and other combinations do not toggle). After a copy, type `5x` for five copies or `/5` for five copies that divide the step | Held: scales about the center of the box |
 | Shift (held) | Keeps the direction that the inference found (Move); keeps the plane that the pointer showed (Rotate) | Toggles uniform scaling |
 | Arrow keys | Lock the direction to an axis (Move); lock the plane of the protractor (Rotate) | none |
 | Enter | Applies the typed value | Applies the typed value |

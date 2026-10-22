@@ -48,3 +48,5 @@ uic-modeler-hint-rotate = Klõpsa keskpunktil, siis nurga algusel ja lõpuks nur
 uic-modeler-hint-scale = Klõpsa valiku ümber oleva kasti haaranditel, liigu ja klõpsa uuesti. Ctrl suurendab keskpunkti ümber, Shift lülitab ühtlase mõõtkava sisse. Trüki tegur (2), kolm tegurit (1;1;2) või pikkus.
 uic-modeler-measure-angle = Nurk
 uic-modeler-measure-scale = Mõõtkava
+uic-modeling-angle-needed = Pöörde lõpetamiseks trüki nurk.
+uic-modeling-height-kept = Objekt „{ $kind }“ jääb oma kõrgusele: kõrgus tuleb tema kihist.

@@ -344,6 +344,11 @@ impl Modeling {
         self.xf.copying()
     }
 
+    /// How many times Move, Rotate or Scale measured the selection (a test counts them).
+    pub fn subject_builds(&self) -> u64 {
+        self.xf.subject_builds()
+    }
+
     /// An arrow key for the protractor of Rotate before its center is clicked. True if used.
     pub fn arrow_plane(&mut self, key: Key) -> bool {
         self.xf.arrow(key)

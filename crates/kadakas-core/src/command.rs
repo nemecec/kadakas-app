@@ -31,7 +31,7 @@ mod surface_ops;
 mod table_ops;
 mod transform_ops;
 
-pub use transform_ops::transform_object3;
+pub use transform_ops::{height_note_kind, transform_object3};
 
 pub use steps::{
     Conflict, ConflictKind, Counted, Counts, ObjChange, Refusal, RevertReport, StepData, StepPlace,

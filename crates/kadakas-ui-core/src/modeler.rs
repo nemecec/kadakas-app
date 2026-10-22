@@ -361,6 +361,9 @@ pub struct Placement {
     pub position: [f64; 3],
     pub rotation_deg: [f64; 3],
     pub scale: [f64; 3],
+    /// The axes of the object are not at right angles (a non-uniform scale after a turn): the
+    /// rotation then has no single meaning and Entity Info says "skewed".
+    pub skewed: bool,
 }
 
 impl Placement {
@@ -371,24 +374,17 @@ impl Placement {
         // A mirror shows as a negative scale of the x axis.
         let mirror = m.determinant() < 0.0;
         let sx = if mirror { -scale.x } else { scale.x };
-        let rot = glam::DMat3::from_cols(
-            if scale.x > 0.0 {
-                m.x_axis / sx
-            } else {
-                m.x_axis
-            },
-            if scale.y > 0.0 {
-                m.y_axis / scale.y
-            } else {
-                m.y_axis
-            },
-            if scale.z > 0.0 {
-                m.z_axis / scale.z
-            } else {
-                m.z_axis
-            },
-        );
-        let (x, y, z) = glam::DQuat::from_mat3(&rot).to_euler(glam::EulerRot::XYZ);
+        let unit = |v: glam::DVec3| v.try_normalize().unwrap_or(glam::DVec3::ZERO);
+        let (ux, uy, uz) = (unit(m.x_axis), unit(m.y_axis), unit(m.z_axis));
+        let skewed = ux.dot(uy).abs() > 1e-6 || ux.dot(uz).abs() > 1e-6 || uy.dot(uz).abs() > 1e-6;
+        // The rotation of the axes made orthonormal (the first axis is kept).
+        let x = if mirror { -ux } else { ux };
+        let y = (uy - x * x.dot(uy))
+            .try_normalize()
+            .unwrap_or(glam::DVec3::Y);
+        let z = x.cross(y);
+        let rot = glam::DMat3::from_cols(x, y, z);
+        let (ex, ey, ez) = glam::DQuat::from_mat3(&rot).to_euler(glam::EulerRot::XYZ);
         let clean = |a: f64| {
             let d = a.to_degrees();
             // Rounding noise of a turn that is none.
@@ -396,8 +392,9 @@ impl Placement {
         };
         Placement {
             position: t.translation.to_array(),
-            rotation_deg: [clean(x), clean(y), clean(z)],
+            rotation_deg: [clean(ex), clean(ey), clean(ez)],
             scale: [sx, scale.y, scale.z],
+            skewed,
         }
     }
 }
@@ -421,6 +418,7 @@ fn placement_of(doc: &Document, obj: &kadakas_core::model::Object) -> Option<Pla
                 kadakas_core::plants::link::rotation(obj).to_degrees(),
             ],
             scale: [1.0, 1.0, 1.0],
+            skewed: false,
         }),
         _ => None,
     }

@@ -73,6 +73,7 @@ modeler-entity-class = Class
 modeler-entity-size = Size
 modeler-entity-position = Position
 modeler-entity-rotation = Rotation (x, y, z)
+modeler-entity-skewed = Skewed (the axes are not at right angles)
 modeler-entity-scale = Scale
 modeler-entity-corner = Lowest corner
 modeler-entity-many =

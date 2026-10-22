@@ -49,6 +49,8 @@ pub struct Edit3d {
     shift_down: bool,
     /// The copy key (Ctrl, Option on a Mac) was down in the last frame: a press toggles copy.
     copy_down: bool,
+    /// The copy key went down alone and nothing else was pressed since.
+    copy_arm: bool,
     /// The last inference under the pointer, for the marks.
     hover: Option<Inference>,
     preview: Preview,
@@ -82,6 +84,7 @@ impl Default for Edit3d {
             last_pointer: None,
             shift_down: false,
             copy_down: false,
+            copy_arm: false,
             hover: None,
             preview: Preview::default(),
             band: None,
@@ -274,7 +277,7 @@ impl Edit3d {
         }
 
         if xform {
-            self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev);
+            self.prepare_transform(session, view3d, nav_cam, inp, &cam, rev, tool);
         } else {
             self.copy_down = false;
         }
@@ -452,17 +455,40 @@ impl Edit3d {
         inp: &Input,
         cam: &infer3d::Camera,
         rev: u64,
+        tool: ModelerTool,
     ) {
-        // Ctrl (Option on a Mac) toggles copy: a press, not a hold.
-        let copy_key = if cfg!(target_os = "macos") {
-            inp.mods.alt
+        // Ctrl (Option on a Mac) toggles copy when it is pressed alone and let go without another
+        // key or button (Ctrl+Z and the like do not toggle). Scale takes it held, as Shift.
+        let (key, others) = if cfg!(target_os = "macos") {
+            (
+                inp.mods.alt,
+                inp.mods.ctrl || inp.mods.command || inp.mods.shift,
+            )
         } else {
-            inp.mods.ctrl
+            (inp.mods.ctrl, inp.mods.alt || inp.mods.shift)
         };
-        if copy_key && !self.copy_down {
+        let used = inp.ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                )
+            })
+        });
+        if key && (others || used) {
+            self.copy_arm = false;
+        } else if key && !self.copy_down {
+            self.copy_arm = true;
+        }
+        if !key && self.copy_down && self.copy_arm && tool != ModelerTool::Scale {
             self.modeling.toggle_ctrl();
         }
-        self.copy_down = copy_key;
+        if !key {
+            self.copy_arm = false;
+        }
+        self.copy_down = key;
+        let center = key;
         // With nothing selected, a click picks what is under the pointer first, as Select does:
         // a face or an edge of a surface model, else an object.
         let primary = egui::PointerButton::Primary;
@@ -521,6 +547,7 @@ impl Edit3d {
             parts: self.sub.clone(),
             object_bounds,
             shift: inp.mods.shift,
+            center,
         });
     }
 
@@ -532,12 +559,20 @@ impl Edit3d {
         if out.actions.is_empty() {
             return;
         }
-        match modeling::run_actions_noted(&mut session.editor, &out.actions, out.redo) {
-            Ok((used, notes)) => {
-                self.modeling.committed(used, session.editor.revision());
+        match modeling::run_actions_full(&mut session.editor, &out.actions, out.redo) {
+            Ok(ran) => {
+                self.modeling.committed(ran.used, session.editor.revision());
                 // What the edit changed that was not asked for (a material of a merged face).
-                self.message =
-                    (!notes.is_empty()).then(|| tr!("modeler-edit-note", note = notes.join("; ")));
+                self.message = (!ran.notes.is_empty())
+                    .then(|| tr!("modeler-edit-note", note = ran.notes.join("; ")));
+                // The copies of a Move or Rotate become the selection: the next one moves them.
+                if !ran.objects.is_empty() {
+                    self.sub.clear();
+                    session.selection = ran.objects;
+                } else if !ran.parts.is_empty() {
+                    session.selection.clear();
+                    self.sub.set(ran.parts);
+                }
             }
             Err(e) => {
                 self.message = Some(tr!("modeler-edit-failed", reason = e));
