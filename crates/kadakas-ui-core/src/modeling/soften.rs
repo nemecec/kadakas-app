@@ -125,6 +125,36 @@ impl SoftenPanel {
         }
     }
 
+    /// What the values of the panel would soften, for the preview while the slider is dragged
+    /// (nothing changes in the document until the slider is let go): the edges that would be
+    /// soft, in world coordinates.
+    pub fn preview(&self, doc: &Document, sub: &SubSelection) -> Vec<[glam::DVec3; 2]> {
+        let mut out = Vec::new();
+        for (model, edges) in selected_edges(doc, sub) {
+            let Some(m) = super::scenes::model_of(doc, model) else {
+                continue;
+            };
+            let fr = super::scenes::frame_of(doc, model);
+            let plan = kadakas_core::surface::soften_plan(
+                m,
+                &edges,
+                self.angle.clamp(0.0, 180.0),
+                self.coplanar,
+            );
+            for (e, soft) in plan {
+                if !soft {
+                    continue;
+                }
+                if let Some(ed) = m.edge(e)
+                    && let (Some(a), Some(b)) = (m.vertex(ed.v[0]), m.vertex(ed.v[1]))
+                {
+                    out.push([fr.transform_point3(a), fr.transform_point3(b)]);
+                }
+            }
+        }
+        out
+    }
+
     /// The actions of [`SoftenPanel::change`] ran: the next change takes them back first.
     pub fn committed(&mut self, revision: u64) {
         self.applied = Some((revision, self.asked));

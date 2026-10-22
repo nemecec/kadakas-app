@@ -1492,7 +1492,16 @@ impl ModelerApp {
     pub fn tray_action(&mut self, a: TrayAction) {
         match a {
             TrayAction::OpenInApp => self.open_in_app(),
-            TrayAction::Soften => self.soften_changed(),
+            TrayAction::Soften => {
+                self.edit.soften_preview.clear();
+                self.soften_changed();
+            }
+            TrayAction::SoftenPreview => {
+                self.edit.soften_preview = self
+                    .tray_ui
+                    .soften
+                    .preview(self.session.editor.doc(), &self.edit.sub);
+            }
             TrayAction::Material(req) => {
                 let result = self.materials.apply(
                     &mut self.session.editor,

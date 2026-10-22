@@ -17,6 +17,7 @@
 //! [`select::SubSelection`]. See `docs/modeler.md`.
 
 pub mod exec;
+pub mod messages;
 pub mod paint;
 mod plane;
 mod resize;
@@ -38,9 +39,10 @@ pub use select::{Item, SubSelection};
 pub use soften::{EdgeStyle, SoftenPanel, edge_style_actions};
 pub use tape::{PreviewGuide, RESIZE_RANGE, Resize};
 pub use tools::{
-    DEFAULT_ARC_SIDES, DEFAULT_POLYGON_SIDES, DEFAULT_SIDES, Excluded, LiveLabel, Modeling, Out,
-    Pointer, Preview, arc_points, bulge_of, circle_points, delete_actions, intersect_actions,
-    is_drawing_tool, is_more_tool, polygon_points, radius_to_bulge, takes_values,
+    DEFAULT_ARC_SIDES, DEFAULT_POLYGON_SIDES, DEFAULT_SIDES, Excluded, KeyToggle, LiveLabel,
+    Modeling, Out, Pointer, Preview, arc_points, bulge_of, circle_points, delete_actions,
+    intersect_actions, is_drawing_tool, is_more_tool, polygon_points, radius_to_bulge,
+    takes_values,
 };
 pub use xform::{
     Context as XContext, Grip, Subject, is_transform_tool, usable_grips, xform_action,

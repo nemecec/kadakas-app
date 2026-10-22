@@ -77,6 +77,20 @@ impl SubSelection {
         }
     }
 
+    /// A click on a group of items (a soft surface): replaces the selection with them, or with
+    /// Shift takes them all out when they are all in, else adds them.
+    pub fn click_all(&mut self, items: &[Item], shift: bool) {
+        if !shift {
+            self.set(items.iter().copied());
+        } else if items.iter().all(|i| self.items.contains(i)) {
+            for i in items {
+                self.items.remove(i);
+            }
+        } else {
+            self.items.extend(items.iter().copied());
+        }
+    }
+
     pub fn faces(&self) -> Vec<(ObjectId, FaceId)> {
         self.items
             .iter()
@@ -234,9 +248,63 @@ pub fn without_hidden(doc: &Document, items: Vec<Item>) -> Vec<Item> {
         .into_iter()
         .filter(|i| match i {
             Item::Face(m, f) => !model_of(doc, *m).is_some_and(|s| s.face_hidden(*f)),
-            Item::Edge(m, e) => !model_of(doc, *m).is_some_and(|s| s.edge_hidden(*e)),
+            Item::Edge(m, e) => model_of(doc, *m).is_none_or(|s| s.edge_shown(*e)),
         })
         .collect()
+}
+
+/// What a click on `item` selects (MOD-08): a face of a soft surface selects the whole surface,
+/// its faces and the soft edges between them; any other item is itself. The rule follows the
+/// public help wording ("a soft edge is hidden and the faces it separates become one surface");
+/// smooth-only and hidden edges do not join faces.
+pub fn click_items(world: &World, item: Item) -> Vec<Item> {
+    let Item::Face(m, f) = item else {
+        return vec![item];
+    };
+    match world
+        .scenes
+        .soft_surfaces(world.doc, m)
+        .as_deref()
+        .and_then(|s| s.surface(f).map(|(fs, es)| (fs.to_vec(), es.to_vec())))
+    {
+        Some((fs, es)) => fs
+            .into_iter()
+            .map(|g| Item::Face(m, g))
+            .chain(es.into_iter().map(|e| Item::Edge(m, e)))
+            .collect(),
+        None => vec![item],
+    }
+}
+
+/// What a double click on `item` selects: a face with its edges (for a face of a soft surface,
+/// the surface with all the edges of its faces), or an edge with its faces. Hidden ones stay out
+/// unless Hidden Geometry shows them; the soft edges of the surface are in it.
+pub fn double_click_items(world: &World, item: Item) -> Vec<Item> {
+    let doc = world.doc;
+    let show = world.scenes.show.hidden_geometry;
+    let Item::Face(m, _) = item else {
+        let near = with_neighbors(doc, item);
+        return if show {
+            near
+        } else {
+            without_hidden(doc, near)
+        };
+    };
+    let surface = click_items(world, item);
+    let mut out: BTreeSet<Item> = surface.iter().copied().collect();
+    for i in &surface {
+        if let Item::Face(_, g) = i {
+            for e in face_edges(doc, m, *g) {
+                let keep = show
+                    || out.contains(&Item::Edge(m, e))
+                    || model_of(doc, m).is_none_or(|s| s.edge_shown(e));
+                if keep {
+                    out.insert(Item::Edge(m, e));
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// A face with its edges, or an edge with its faces (a double click).
@@ -362,8 +430,8 @@ pub fn rect_select(world: &World, cam: &Camera, a: DVec2, b: DVec2, crossing: bo
                 .and_then(|p| cam.project(fr.transform_point3(p)))
         };
         for (eid, e) in m.edges() {
-            // Hidden edges are offered when Hidden Geometry shows them.
-            if m.edge_hidden(eid) && !world.scenes.show.hidden_geometry {
+            // Hidden and soft edges are offered when Hidden Geometry shows them.
+            if !m.edge_shown(eid) && !world.scenes.show.hidden_geometry {
                 continue;
             }
             let (Some(p), Some(q)) = (px(e.v[0]), px(e.v[1])) else {

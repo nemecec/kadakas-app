@@ -15,7 +15,7 @@ impl Rig {
     fn set_parts(&mut self, items: Vec<Item>) {
         let mut s = SubSelection::default();
         s.set(items);
-        self.tools.set_parts(s);
+        self.tools.set_parts(&s);
     }
 
     fn live(&mut self) -> Option<(LiveLabel, String)> {

@@ -57,8 +57,10 @@ pub struct Edit3d {
     copy_down: bool,
     /// The copy key went down alone and nothing else was pressed since.
     copy_arm: bool,
-    /// Ctrl (Option on a Mac) was down in the last frame, for the kind of a polygon.
-    poly_key_down: bool,
+    /// Ctrl (Option on a Mac) alone switches the kind of a polygon.
+    poly: modeling::KeyToggle,
+    /// The edges that the Soften Edges slider would soften, while it is dragged (world).
+    pub soften_preview: Vec<[DVec3; 2]>,
     /// The last inference under the pointer, for the marks.
     hover: Option<Inference>,
     preview: Preview,
@@ -133,7 +135,8 @@ impl Default for Edit3d {
             shift_down: false,
             copy_down: false,
             copy_arm: false,
-            poly_key_down: false,
+            poly: modeling::KeyToggle::default(),
+            soften_preview: Vec::new(),
             hover: None,
             preview: Preview::default(),
             band: None,
@@ -227,7 +230,8 @@ fn refresh_extras(extras: &mut Extras, world: &World, rev: u64) {
             .object(id)
             .is_some_and(kadakas_core::visibility::is_hidden);
         for (eid, _) in m.edges() {
-            if (whole || m.edge_hidden(eid))
+            // Hidden and soft edges are drawn ghosted (soft: MOD-08).
+            if (whole || !m.edge_shown(eid))
                 && let Some(s) = world.edge_ends(id, eid)
             {
                 extras.ghost_edges.push(s);
@@ -411,17 +415,30 @@ impl Edit3d {
         // Offset and Follow Me work on the selected faces and edges; Ctrl (Option on a Mac)
         // switches the kind of a polygon.
         if matches!(tool, ModelerTool::Offset | ModelerTool::FollowMe) {
-            self.modeling.set_parts(self.sub.clone());
+            self.modeling.set_parts(&self.sub);
         }
-        let poly_key = if cfg!(target_os = "macos") {
-            inp.mods.alt
-        } else {
-            inp.mods.ctrl
-        };
-        if tool == ModelerTool::Polygon && poly_key && !self.poly_key_down {
-            self.modeling.toggle_polygon_kind();
+        if tool == ModelerTool::Polygon {
+            let (key, others) = if cfg!(target_os = "macos") {
+                (
+                    inp.mods.alt,
+                    inp.mods.ctrl || inp.mods.command || inp.mods.shift,
+                )
+            } else {
+                (inp.mods.ctrl, inp.mods.alt || inp.mods.shift)
+            };
+            let used = inp.ui.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        egui::Event::Key { pressed: true, .. }
+                            | egui::Event::PointerButton { pressed: true, .. }
+                    )
+                })
+            });
+            if self.poly.step(key, others || used) {
+                self.modeling.toggle_polygon_kind();
+            }
         }
-        self.poly_key_down = poly_key;
 
         let mut out = Out::default();
         let mut selection_changed = false;
@@ -614,19 +631,17 @@ impl Edit3d {
                         // Everything connected to what was hit.
                         triple = hit;
                     } else if inp.resp.double_clicked_by(primary) {
-                        // A face with its edges, or an edge with its faces.
+                        // A face with its edges (a soft surface with all its edges), or an edge
+                        // with its faces.
                         if let Some(item) = hit {
-                            let near = modeling::select::with_neighbors(doc, item);
-                            let near = if world.scenes.show.hidden_geometry {
-                                near
-                            } else {
-                                modeling::select::without_hidden(doc, near)
-                            };
-                            self.sub.set(near);
+                            self.sub
+                                .set(modeling::select::double_click_items(&world, item));
                             selection_changed = true;
                         }
-                    } else if hit.is_some() {
-                        self.sub.click(hit, inp.mods.shift);
+                    } else if let Some(item) = hit {
+                        // A face of a soft surface selects the whole surface (MOD-08).
+                        let items = modeling::select::click_items(&world, item);
+                        self.sub.click_all(&items, inp.mods.shift);
                         selection_changed = true;
                     } else {
                         guide_hit =
@@ -1028,6 +1043,17 @@ impl Edit3d {
         let dark = Color32::from_rgb(30, 30, 30);
         for s in &self.preview.shape {
             seg(s, Stroke::new(1.5, dark));
+        }
+        // What the Soften Edges slider would soften: dashed.
+        for s in &self.soften_preview {
+            if let (Some(a), Some(b)) = (px(s[0]), px(s[1])) {
+                painter.extend(egui::Shape::dashed_line(
+                    &[a, b],
+                    Stroke::new(2.0, Color32::from_rgb(230, 140, 30)),
+                    4.0,
+                    3.0,
+                ));
+            }
         }
         for s in &self.preview.erase {
             seg(s, Stroke::new(3.0, Color32::from_rgb(220, 50, 50)));

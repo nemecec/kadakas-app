@@ -1088,6 +1088,7 @@ fn the_silhouette_of_a_painted_cylinder_shows_no_back_color_on_the_gpu_or_the_cp
         kadakas_core::surface::Edit::AddCurve {
             points: ring,
             closed: true,
+            faceted: false,
         },
     );
     let face = match &ed.doc().object(id).unwrap().shape {

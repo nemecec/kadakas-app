@@ -76,17 +76,27 @@ pub(super) fn follow_me(
     let profile_pts: Vec<DVec3> = f.loops().flatten().map(|v| m.vertices[v]).collect();
     let mid = profile_pts.iter().copied().sum::<DVec3>() / profile_pts.len() as f64;
     let pos = |v: &VertexId| m.vertices[v];
-    // The start of the path: nearer to the profile.
+    // The start of the path: nearer to the profile. A closed path starts at the side nearest to
+    // the middle of the profile (so the sweep runs across the profile, whatever the order the
+    // edges were drawn in), at the end of that side nearer to the middle.
     if closed {
-        let i = (0..chain.len())
-            .min_by(|&a, &b| {
-                pos(&chain[a])
-                    .distance(mid)
-                    .total_cmp(&pos(&chain[b]).distance(mid))
-                    .then(a.cmp(&b))
-            })
+        let k = chain.len();
+        let side_dist = |i: usize| {
+            let (a, b) = (pos(&chain[i]), pos(&chain[(i + 1) % k]));
+            geom::point_segment(mid, a, b).0
+        };
+        let i = (0..k)
+            .min_by(|&a, &b| side_dist(a).total_cmp(&side_dist(b)).then(a.cmp(&b)))
             .expect("a chain");
-        chain.rotate_left(i);
+        let (a, b) = (chain[i], chain[(i + 1) % k]);
+        if pos(&b).distance(mid) < pos(&a).distance(mid) {
+            // Start at b and run toward a: the chain reversed.
+            chain.reverse();
+            let j = chain.iter().position(|v| *v == b).expect("in the chain");
+            chain.rotate_left(j);
+        } else {
+            chain.rotate_left(i);
+        }
     } else if pos(chain.last().expect("a chain")).distance(mid) < pos(&chain[0]).distance(mid) {
         chain.reverse();
     }
@@ -96,25 +106,6 @@ pub(super) fn follow_me(
     let dirs: Vec<DVec3> = (0..sides)
         .map(|i| (p[(i + 1) % k] - p[i]).normalize_or_zero())
         .collect();
-    // The plane at each corner (`planes[j]` through `p[j]`), for the rings 1..: a miter, and at the
-    // end of an open path a right angle to the last side.
-    let corner = |j: usize| -> Result<DVec3, SurfaceError> {
-        let (a, b) = if closed {
-            (dirs[(j + sides - 1) % sides], dirs[j % sides])
-        } else if j == 0 {
-            (dirs[0], dirs[0])
-        } else if j >= sides {
-            (dirs[sides - 1], dirs[sides - 1])
-        } else {
-            (dirs[j - 1], dirs[j])
-        };
-        (a + b).try_normalize().ok_or_else(|| {
-            SurfaceError::Refused(format!(
-                "the path of Follow Me turns back on itself at vertex {}",
-                chain[j % k]
-            ))
-        })
-    };
     let n = f.plane.normal;
     if n.dot(dirs[0]).abs() < 1e-6 {
         return Err(SurfaceError::Refused(
@@ -160,40 +151,59 @@ pub(super) fn follow_me(
             count: new_edges,
         });
     }
-    if psides * sides + 1 > MAX_FACES {
+    let faces_after = m.faces.len() + psides * sides + 1;
+    if faces_after > MAX_FACES {
         return Err(SurfaceError::Limit {
             what: "faces",
             max: MAX_FACES,
-            count: psides * sides,
+            count: faces_after,
         });
     }
-
-    // The rings: the points of the profile at each corner.
-    let project = |q: DVec3, d: DVec3, at: DVec3, normal: DVec3| -> DVec3 {
-        q + d * ((at - q).dot(normal) / d.dot(normal))
-    };
-    let mut rings: Vec<Vec<Vec<DVec3>>> = Vec::with_capacity(sides + 1);
-    let first: Vec<Vec<DVec3>> = if closed {
-        let c0 = corner(0)?;
-        loop_pts
+    // A face inside a hole of the profile would share the edges of the hole with the sweep and
+    // the profile: three faces on an edge.
+    for h in &f.holes {
+        let hk = canonical(h);
+        let rk = reversed(h);
+        if m.faces
             .iter()
-            .map(|l| l.iter().map(|q| project(*q, dirs[0], p[0], c0)).collect())
-            .collect()
-    } else {
-        loop_pts.clone()
-    };
-    rings.push(first);
-    for j in 1..=sides {
-        let c = corner(j)?;
-        let at = p[j % k];
-        let d = dirs[j - 1];
-        let prev = rings.last().expect("a ring");
-        let next: Vec<Vec<DVec3>> = prev
-            .iter()
-            .map(|l| l.iter().map(|q| project(*q, d, at, c)).collect())
-            .collect();
-        rings.push(next);
+            .any(|(id, g)| *id != face && (canonical(&g.outer) == hk || canonical(&g.outer) == rk))
+        {
+            return Err(SurfaceError::Refused(
+                "a face fills a hole of the profile: erase the face inside the hole first".into(),
+            ));
+        }
     }
+
+    // The rings: the points of the profile at each corner. A point that would move backward
+    // (a profile too wide for a sharp turn, or across the axis of a turn) folds the solid: refused
+    // with the largest distance from the path that fits.
+    let sweep = Sweep {
+        p: &p,
+        dirs: &dirs,
+        closed,
+    };
+    let rings = match sweep.rings(&loop_pts) {
+        Ok(r) => r,
+        Err(SweepError::Corner(j)) => return Err(corner_error(chain[j % k])),
+        Err(SweepError::Backward(j)) => {
+            let reach = profile_reach(&loop_pts, p[0], dirs[0]);
+            let (mut lo, mut hi) = (0.0f64, 1.0f64);
+            for _ in 0..30 {
+                let mid = (lo + hi) / 2.0;
+                if sweep.rings(&scaled(&loop_pts, p[0], dirs[0], mid)).is_ok() {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            return Err(SurfaceError::Refused(format!(
+                "the profile is too wide for the turn of the path at vertex {}: a point would \
+                 move backward and fold the solid; at most about {} mm from the path fits",
+                chain[j % k],
+                (lo * reach * 100.0).floor() / 100.0
+            )));
+        }
+    };
     let all: Vec<DVec3> = rings.iter().flatten().flatten().copied().collect();
     if all
         .iter()
@@ -222,6 +232,13 @@ pub(super) fn follow_me(
         .iter()
         .flat_map(|(c, es)| es.iter().map(move |e| (*c, *e)))
         .filter_map(|(c, e)| m.edges.get(&e).map(|ed| (ed.key(), c)))
+        .collect();
+    // A faceted curve (a polygon) keeps its corners: no soft and smooth edges from it.
+    let faceted: BTreeSet<CurveId> = m
+        .curves
+        .iter()
+        .filter(|(_, es)| super::style::curve_faceted(m, es))
+        .map(|(c, _)| *c)
         .collect();
     let path_curve: Vec<Option<CurveId>> = (0..sides)
         .map(|i| curve_of.get(&key(chain[i], chain[(i + 1) % k])).copied())
@@ -329,7 +346,7 @@ pub(super) fn follow_me(
     // At an inner corner where the path is one curve, the copy is soft and smooth.
     for j in 1..sides + usize::from(closed) {
         let (a, b) = (path_curve[(j + sides - 1) % sides], path_curve[j % sides]);
-        if a.is_some() && a == b {
+        if a.is_some_and(|c| !faceted.contains(&c)) && a == b {
             for es in &ring_edges[j % (sides + 1)] {
                 for e in es.iter().flatten() {
                     soft(&mut w, *e);
@@ -355,7 +372,7 @@ pub(super) fn follow_me(
         for i in 0..len {
             let before_side = curve_of.get(&key(l[(i + len - 1) % len], l[i]));
             let after_side = curve_of.get(&key(l[i], l[(i + 1) % len]));
-            if before_side.is_some() && before_side == after_side {
+            if before_side.is_some_and(|c| !faceted.contains(c)) && before_side == after_side {
                 for row in &long {
                     if let Some(e) = row[li][i] {
                         soft(&mut w, e);
@@ -384,7 +401,11 @@ pub(super) fn follow_me(
                 }
                 let pts: Vec<DVec3> = q.iter().map(|v| w.pos(*v)).collect();
                 let Some(plane) = Plane::new(pts[0], geom::newell(&pts)) else {
-                    continue;
+                    return Err(SurfaceError::Refused(format!(
+                        "a side of the profile sweeps into no area on the side of the path from \
+                         vertex {}",
+                        chain[j]
+                    )));
                 };
                 let mut g = Face::new(plane, canonical(&q), Vec::new());
                 for (k2, v) in &paint {
@@ -445,33 +466,41 @@ pub(super) fn follow_me(
     }
 
     // Curves: a curve of the profile at each copy, a curve of the path along each point.
-    let mut new_curves: Vec<Vec<EdgeId>> = Vec::new();
-    for es in m_curves_of_profile(&w, &loops, &curve_of) {
+    let mut new_curves: Vec<(Vec<EdgeId>, bool)> = Vec::new();
+    for (cid, es) in m_curves_of_profile(&w, &loops, &curve_of) {
+        let fac = faceted.contains(&cid);
         for (j, ring) in ring_edges.iter().enumerate() {
             if (j == 0 && !first_ring_moved) || (closed && j == sides) {
                 continue;
             }
             let c: Option<Vec<EdgeId>> = es.iter().map(|&(li, i)| ring[li][i]).collect();
             if let Some(c) = c {
-                new_curves.push(c);
+                new_curves.push((c, fac));
             }
         }
     }
     for run in runs_of(&path_curve, closed) {
+        let fac = run
+            .first()
+            .and_then(|j| path_curve[*j])
+            .is_some_and(|c| faceted.contains(&c));
         for (li, l) in ids[0].iter().enumerate() {
             for (i, _) in l.iter().enumerate() {
                 let c: Option<Vec<EdgeId>> = run.iter().map(|&j| long[j][li][i]).collect();
                 if let Some(c) = c.filter(|c| !c.is_empty()) {
-                    new_curves.push(c);
+                    new_curves.push((c, fac));
                 }
             }
         }
     }
     let mut used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
-    for c in new_curves {
+    for (c, fac) in new_curves {
         let unique: BTreeSet<EdgeId> = c.iter().copied().collect();
         if unique.len() == c.len() && c.iter().all(|e| !used.contains(e)) {
             used.extend(c.iter().copied());
+            if fac {
+                super::style::mark_faceted(w.m, &c);
+            }
             let id = CurveId(w.m.alloc());
             w.m.curves.insert(id, c);
         }
@@ -546,7 +575,7 @@ fn m_curves_of_profile(
     w: &Work<'_>,
     loops: &[Vec<VertexId>],
     curve_of: &BTreeMap<(VertexId, VertexId), CurveId>,
-) -> Vec<Vec<(usize, usize)>> {
+) -> Vec<(CurveId, Vec<(usize, usize)>)> {
     let mut side_of: BTreeMap<(VertexId, VertexId), (usize, usize)> = BTreeMap::new();
     for (li, l) in loops.iter().enumerate() {
         for i in 0..l.len() {
@@ -573,7 +602,7 @@ fn m_curves_of_profile(
             })
             .collect();
         if let Some(s) = sides {
-            out.push(s);
+            out.push((c, s));
         }
     }
     out
@@ -611,4 +640,117 @@ fn runs_of(curves: &[Option<CurveId>], closed: bool) -> Vec<Vec<usize>> {
         out.push(run);
     }
     out
+}
+
+fn corner_error(v: VertexId) -> SurfaceError {
+    SurfaceError::Refused(format!(
+        "the path of Follow Me turns back on itself at vertex {v}"
+    ))
+}
+
+/// Why the rings of a sweep cannot be made.
+enum SweepError {
+    /// The path turns back at this corner.
+    Corner(usize),
+    /// A point moves backward on the way to this corner.
+    Backward(usize),
+}
+
+/// A path for the sweep: its corners, the directions of its sides, and whether it is closed.
+struct Sweep<'a> {
+    p: &'a [DVec3],
+    dirs: &'a [DVec3],
+    closed: bool,
+}
+
+impl Sweep<'_> {
+    /// The normal of the plane at corner `j`: a miter, and at the end of an open path a right
+    /// angle to the last side.
+    fn corner(&self, j: usize) -> Result<DVec3, SweepError> {
+        let sides = self.dirs.len();
+        let (a, b) = if self.closed {
+            (self.dirs[(j + sides - 1) % sides], self.dirs[j % sides])
+        } else if j == 0 {
+            (self.dirs[0], self.dirs[0])
+        } else if j >= sides {
+            (self.dirs[sides - 1], self.dirs[sides - 1])
+        } else {
+            (self.dirs[j - 1], self.dirs[j])
+        };
+        (a + b).try_normalize().ok_or(SweepError::Corner(j))
+    }
+
+    /// The points of the profile at each corner (ring 0 is the profile itself on an open path, its
+    /// projection to the plane of the first corner on a closed one).
+    fn rings(&self, loops: &[Vec<DVec3>]) -> Result<Vec<Vec<Vec<DVec3>>>, SweepError> {
+        let k = self.p.len();
+        let sides = self.dirs.len();
+        let all: Vec<DVec3> = loops.iter().flatten().copied().collect();
+        let tol = geom::tol(&all);
+        let project = |q: DVec3, d: DVec3, at: DVec3, normal: DVec3| -> (DVec3, f64) {
+            let t = (at - q).dot(normal) / d.dot(normal);
+            (q + d * t, t)
+        };
+        let mut rings: Vec<Vec<Vec<DVec3>>> = Vec::with_capacity(sides + 1);
+        let first: Vec<Vec<DVec3>> = if self.closed {
+            let c0 = self.corner(0)?;
+            loops
+                .iter()
+                .map(|l| {
+                    l.iter()
+                        .map(|q| project(*q, self.dirs[0], self.p[0], c0).0)
+                        .collect()
+                })
+                .collect()
+        } else {
+            loops.to_vec()
+        };
+        rings.push(first);
+        for j in 1..=sides {
+            let c = self.corner(j)?;
+            let at = self.p[j % k];
+            let d = self.dirs[j - 1];
+            let prev = rings.last().expect("a ring");
+            let mut next: Vec<Vec<DVec3>> = Vec::with_capacity(prev.len());
+            for l in prev {
+                let mut out = Vec::with_capacity(l.len());
+                for q in l {
+                    let (x, t) = project(*q, d, at, c);
+                    // A point on the axis of a turn stays (t = 0); one that goes back folds.
+                    if t < -tol {
+                        return Err(SweepError::Backward(j));
+                    }
+                    out.push(x);
+                }
+                next.push(out);
+            }
+            rings.push(next);
+        }
+        Ok(rings)
+    }
+}
+
+/// The largest distance of a point of the profile from the line of the first side of the path.
+fn profile_reach(loops: &[Vec<DVec3>], p0: DVec3, d0: DVec3) -> f64 {
+    loops
+        .iter()
+        .flatten()
+        .map(|q| geom::point_line(*q, p0, p0 + d0))
+        .fold(0.0, f64::max)
+}
+
+/// The profile scaled by `k` toward the line of the first side of the path (each point toward
+/// its foot on the line).
+fn scaled(loops: &[Vec<DVec3>], p0: DVec3, d0: DVec3, k: f64) -> Vec<Vec<DVec3>> {
+    loops
+        .iter()
+        .map(|l| {
+            l.iter()
+                .map(|q| {
+                    let foot = p0 + d0 * (*q - p0).dot(d0);
+                    foot + (*q - foot) * k
+                })
+                .collect()
+        })
+        .collect()
 }

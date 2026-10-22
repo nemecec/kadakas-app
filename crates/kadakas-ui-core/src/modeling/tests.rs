@@ -938,7 +938,11 @@ fn entity_info_names_a_face_an_edge_and_a_model() {
     sel.set([Item::Edge(model, edge), Item::Face(model, face)]);
     assert!(matches!(
         entity_info_with_parts(r.ed.doc(), &scene, &[], &sel),
-        EntityInfo::Parts { faces: 1, edges: 1 }
+        EntityInfo::Parts {
+            faces: 1,
+            edges: 1,
+            ..
+        }
     ));
     sel.clear();
     match entity_info_with_parts(r.ed.doc(), &scene, &[model], &sel) {

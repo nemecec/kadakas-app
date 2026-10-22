@@ -13,3 +13,4 @@ modeler-entity-smooth = Sile
 modeler-entity-hidden = Peidetud
 modeler-entity-yes = jah
 modeler-entity-no = ei
+modeler-entity-soft-surface = { $faces } tahku (pehme pind)

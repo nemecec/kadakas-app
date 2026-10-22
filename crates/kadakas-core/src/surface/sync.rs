@@ -60,7 +60,12 @@ pub enum Intent {
         material: Option<String>,
     },
     /// A curve (circle or arc) drawn as a chain of edges, by its corner points.
-    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    AddCurve {
+        points: Vec<[f64; 3]>,
+        closed: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        faceted: bool,
+    },
     /// A face pushed or pulled along its normal, by a point inside it.
     PushPullAt { point: [f64; 3], distance: f64 },
     /// Intersect Faces on the whole model.
@@ -172,9 +177,14 @@ impl Intent {
                 side: *side,
                 material: material.clone(),
             },
-            Edit::AddCurve { points, closed } => Intent::AddCurve {
+            Edit::AddCurve {
+                points,
+                closed,
+                faceted,
+            } => Intent::AddCurve {
                 points: points.clone(),
                 closed: *closed,
+                faceted: *faceted,
             },
             Edit::TransformVertices {
                 vertices,
@@ -519,9 +529,14 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
                 material: material.clone(),
             })
         }
-        Intent::AddCurve { points, closed } => m.apply(&Edit::AddCurve {
+        Intent::AddCurve {
+            points,
+            closed,
+            faceted,
+        } => m.apply(&Edit::AddCurve {
             points: points.clone(),
             closed: *closed,
+            faceted: *faceted,
         }),
         Intent::PushPullAt { point, distance } => {
             let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;

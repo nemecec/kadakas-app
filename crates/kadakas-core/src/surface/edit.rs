@@ -45,7 +45,15 @@ pub enum Edit {
     /// the first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces
     /// stay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.
     /// When one of the pieces is in a curve already, the edges are drawn and no new curve is made.
-    AddCurve { points: Vec<[f64; 3]>, closed: bool },
+    /// With `faceted` the curve is a polygon: its edges get the mark `faceted`, and the edges
+    /// that Push/Pull, Follow Me and Offset make between its sides stay creases (drawn, hard)
+    /// instead of soft and smooth.
+    AddCurve {
+        points: Vec<[f64; 3]>,
+        closed: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        faceted: bool,
+    },
     /// Pushes or pulls a face along its normal by `distance` mm (positive is toward the front,
     /// negative toward the back). See the module `pushpull` for the cases. The face keeps its id
     /// and ends as the cap.
@@ -207,7 +215,11 @@ fn run_noted(
     match edit {
         Edit::AddEdges { edges } => add_edges(m, edges),
         Edit::EraseEdges { edges } => erase_edges(m, edges, notes),
-        Edit::AddCurve { points, closed } => add_curve(m, points, *closed),
+        Edit::AddCurve {
+            points,
+            closed,
+            faceted,
+        } => add_curve(m, points, *closed, *faceted),
         Edit::PushPull { face, distance } => {
             pushpull::push_pull(m, before, *face, *distance, notes)
         }
@@ -1524,7 +1536,12 @@ impl Session {
     }
 }
 
-fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<(), SurfaceError> {
+fn add_curve(
+    m: &mut SurfaceModel,
+    points: &[[f64; 3]],
+    closed: bool,
+    faceted: bool,
+) -> Result<(), SurfaceError> {
     let n = points.len();
     let count = if closed { n } else { n.saturating_sub(1) };
     if n < 2 || count < 1 {
@@ -1569,6 +1586,9 @@ fn add_curve(m: &mut SurfaceModel, points: &[[f64; 3]], closed: bool) -> Result<
     let used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
     let unique: BTreeSet<EdgeId> = chain.iter().copied().collect();
     if unique.len() == chain.len() && chain.iter().all(|e| !used.contains(e)) {
+        if faceted {
+            style::mark_faceted(w.m, &chain);
+        }
         let id = super::CurveId(w.m.alloc());
         w.m.curves.insert(id, chain);
     }

@@ -47,7 +47,7 @@ use crate::modeler::ModelerTool;
 
 mod more;
 
-pub use more::{DEFAULT_POLYGON_SIDES, is_more_tool, polygon_points};
+pub use more::{DEFAULT_POLYGON_SIDES, KeyToggle, is_more_tool, polygon_points};
 
 /// Shortest segment or side that a tool draws (mm).
 pub(super) const MIN_LEN: f64 = 0.01;
@@ -870,6 +870,7 @@ impl Modeling {
                 target: self.target(w, hit, selected),
                 points: circle_points(c, &plane, r, theta, self.sides),
                 closed: true,
+                faceted: false,
             }],
             redo,
             message: None,
@@ -940,6 +941,7 @@ impl Modeling {
                 target: self.target(w, hit, selected),
                 points: arc_points(a, b, h, &plane, self.arc_sides),
                 closed: false,
+                faceted: false,
             }],
             redo,
             message: None,

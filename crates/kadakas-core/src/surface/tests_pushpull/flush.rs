@@ -15,6 +15,7 @@ fn box_with_circle() -> (SurfaceModel, FaceId, FaceId) {
     m.apply(&Edit::AddCurve {
         points,
         closed: true,
+        faceted: false,
     })
     .unwrap();
     let disc = m

@@ -30,6 +30,32 @@ use crate::infer3d::TagKind;
 use crate::measure_box::{Phase, Value};
 use crate::modeler::ModelerTool;
 
+/// A modifier key that toggles something when it is pressed and let go alone: Ctrl+Z and the like
+/// (another key, a button, another modifier while it is down) do not toggle (the Polygon kind).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyToggle {
+    down: bool,
+    armed: bool,
+}
+
+impl KeyToggle {
+    /// One frame: `key` is down now, `other` is true when anything else was pressed or held in
+    /// this frame. True when the key was let go alone (toggle now).
+    pub fn step(&mut self, key: bool, other: bool) -> bool {
+        if key && other {
+            self.armed = false;
+        } else if key && !self.down {
+            self.armed = true;
+        }
+        let fire = !key && self.down && self.armed;
+        if !key {
+            self.armed = false;
+        }
+        self.down = key;
+        fire
+    }
+}
+
 /// The default number of sides of a polygon.
 pub const DEFAULT_POLYGON_SIDES: u32 = 6;
 
@@ -209,6 +235,16 @@ fn face_plane(w: &World, model: ObjectId, face: FaceId) -> Option<Plane3> {
     Plane3::through(p0, n)
 }
 
+/// The world plane of an Offset of a chain of edges (the side of `toward`, local), if it has one.
+fn chain_plane(w: &World, model: ObjectId, edges: &[EdgeId], toward: DVec3) -> Option<Plane3> {
+    let m = model_of(w.doc, model)?;
+    let pl = m.offset_chain_plane(edges, toward).ok()?;
+    let fr = frame_of(w.doc, model);
+    let p0 = fr.transform_point3(pl.normal * pl.offset);
+    let n = fr.matrix3.inverse().transpose() * pl.normal;
+    Plane3::through(p0, n)
+}
+
 /// The world length of one local unit along the plane of a face (1 for a model that is not
 /// scaled).
 fn plane_scale(w: &World, model: ObjectId, plane: &Plane3) -> f64 {
@@ -380,8 +416,10 @@ fn chain_through(m: &SurfaceModel, e: EdgeId) -> Vec<EdgeId> {
 
 impl Modeling {
     /// The selected faces and edges, for Offset and Follow Me. Call it before each event.
-    pub fn set_parts(&mut self, parts: SubSelection) {
-        self.more.set_parts(parts);
+    pub fn set_parts(&mut self, parts: &SubSelection) {
+        if self.more.parts != *parts {
+            self.more.set_parts(parts.clone());
+        }
     }
 
     /// Ctrl (Option on a Mac) while drawing a polygon: inscribed or circumscribed.
@@ -442,10 +480,9 @@ impl Modeling {
                 let Some(m) = model_of(w.doc, model) else {
                     return;
                 };
+                // In the plane of the face or the chain; a snapped point counts as it is.
                 let q = match plane {
-                    Some(pl) => pl
-                        .intersect(&p.ray)
-                        .unwrap_or_else(|| pl.project(p.inf.point)),
+                    Some(pl) => Modeling::resolve(p, Some(pl)),
                     None => p.inf.point,
                 };
                 let lq = w.to_local(model, q);
@@ -479,7 +516,7 @@ impl Modeling {
                         }
                     }
                 }
-                self.cursor = Some(p.inf.point);
+                self.more.cursor = Some(p.inf.point);
             }
             Run::Idle => {
                 self.more.cursor = Some(p.inf.point);
@@ -562,6 +599,7 @@ impl Modeling {
                     self.more.circumscribed,
                 ),
                 closed: true,
+                faceted: true,
             }],
             redo,
             message: None,
@@ -584,11 +622,23 @@ impl Modeling {
             return self.finish_offset(model, on, distance, outward, toward, scale, false);
         }
         self.more.last = None;
-        // A selected face, or selected edges of one model, else the face under the pointer.
+        // A selected face, or selected edges of one model, else the face under the pointer. With
+        // several faces selected, the one under the pointer if it is one of them.
         let faces = self.more.parts.faces();
         let edges = self.more.parts.edges();
+        let under = (p.inf.source.kind() == TagKind::Face)
+            .then(|| {
+                w.model(p.inf.source)
+                    .map(|(m, _)| (m, FaceId(p.inf.source.id())))
+            })
+            .flatten();
         let (model, on) = if let [(m, f)] = faces.as_slice() {
             (*m, On::Face(*f))
+        } else if faces.len() > 1 {
+            match under.filter(|u| faces.contains(u)) {
+                Some((m, f)) => (m, On::Face(f)),
+                None => return Out::msg(tr!("uic-modeling-offset-one-face")),
+            }
         } else if faces.is_empty()
             && !edges.is_empty()
             && edges.iter().all(|(m, _)| *m == edges[0].0)
@@ -604,9 +654,10 @@ impl Modeling {
         } else {
             return Out::msg(tr!("uic-modeling-offset-pick"));
         };
+        let toward = w.to_local(model, p.inf.point);
         let plane = match &on {
             On::Face(f) => face_plane(w, model, *f),
-            On::Edges(_) => None,
+            On::Edges(es) => chain_plane(w, model, es, toward),
         };
         let scale = plane.map_or(1.0, |pl| plane_scale(w, model, &pl));
         self.more.run = Run::Offset {
@@ -615,7 +666,7 @@ impl Modeling {
             plane,
             distance: 0.0,
             outward: false,
-            toward: w.to_local(model, p.inf.point),
+            toward,
             scale,
             preview: Vec::new(),
         };
@@ -743,7 +794,7 @@ impl Modeling {
                 self.more.run = Run::Idle;
                 self.finish_polygon(w, selected, c, plane, r, theta, hit, false)
             }
-            (ModelerTool::Polygon, Run::Idle, Value::Length(r) | Value::Radius(r)) => {
+            (ModelerTool::Polygon, Run::Idle, Value::Length(r)) => {
                 match self.more.can_redo(revision) {
                     Some(Last::Polygon {
                         c,
@@ -769,6 +820,12 @@ impl Modeling {
             ) => {
                 self.more.run = Run::Idle;
                 let side = outward != (l < 0.0);
+                // An edge offset to the other side: the point goes across the chain.
+                let toward = if l < 0.0 {
+                    mirror_toward(w, model, &on, toward)
+                } else {
+                    toward
+                };
                 self.finish_offset(model, on, l.abs() / scale, side, toward, scale, false)
             }
             (ModelerTool::Offset, Run::Idle, Value::Length(l)) => {

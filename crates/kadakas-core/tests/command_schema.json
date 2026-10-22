@@ -420,13 +420,16 @@
           "type": "object"
         },
         {
-          "description": "Draws a chain of straight edges through the points (a closed one joins the last point to\nthe first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces\nstay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.\nWhen one of the pieces is in a curve already, the edges are drawn and no new curve is made.",
+          "description": "Draws a chain of straight edges through the points (a closed one joins the last point to\nthe first) and keeps them as one curve (a circle or an arc, MOD-08), so that the pieces\nstay one curve when other edges cut them. Welds, splits and faces work as in `AddEdges`.\nWhen one of the pieces is in a curve already, the edges are drawn and no new curve is made.\nWith `faceted` the curve is a polygon: its edges get the mark `faceted`, and the edges\nthat Push/Pull, Follow Me and Offset make between its sides stay creases (drawn, hard)\ninstead of soft and smooth.",
           "properties": {
             "action": {
               "const": "add_curve",
               "type": "string"
             },
             "closed": {
+              "type": "boolean"
+            },
+            "faceted": {
               "type": "boolean"
             },
             "points": {

@@ -223,6 +223,7 @@ fn a_round_hole_keeps_its_curves_and_smooth_walls() {
     m.apply(&Edit::AddCurve {
         points: points.clone(),
         closed: true,
+        faceted: false,
     })
     .unwrap();
     let disc = face_inside(&m, &points);

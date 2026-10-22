@@ -734,8 +734,15 @@ fn run(
                 *at.entry(v).or_default() += 1;
             }
         }
+        // A polygon (a faceted curve) keeps its corners: the verticals stay creases, and the
+        // copy on the cap is faceted too.
+        let faceted = super::style::curve_faceted(w.m, &es);
+        if faceted {
+            super::style::mark_faceted(w.m, &up);
+        }
         for (v, c) in at {
             if c == 2
+                && !faceted
                 && let Some(ve) = vertical.get(&v)
             {
                 let at = w.m.edge_attrs.entry(*ve).or_default();
@@ -1241,6 +1248,7 @@ mod tests {
         m.apply(&Edit::AddCurve {
             points,
             closed: true,
+            faceted: false,
         })
         .unwrap();
         let disc = *m.faces.iter().find(|(_, f)| f.outer.len() == 12).unwrap().0;

@@ -149,6 +149,7 @@ mod tests;
 mod tests_absorb;
 #[cfg(test)]
 mod tests_followme;
+#[cfg(test)]
 mod tests_hide;
 #[cfg(test)]
 mod tests_index;
@@ -164,7 +165,9 @@ mod tests_style;
 mod tests_transform;
 
 pub use check::{At, Problem, Report};
-pub use edit::style::{ATTR_SMOOTH, ATTR_SOFT, dihedral_of, flagged};
+pub use edit::style::{
+    ATTR_FACETED, ATTR_SMOOTH, ATTR_SOFT, SoftSurfaces, dihedral_of, flagged, soften_plan,
+};
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
@@ -705,6 +708,17 @@ impl SurfaceModel {
         toward: DVec3,
     ) -> Result<(Vec<DVec3>, bool), SurfaceError> {
         edit::offset::chain_line(self, edges, distance, toward, true).map(|(_, c, l)| (l, c))
+    }
+
+    /// The plane that an Offset of the chain `edges` toward `toward` works in (local), MOD-08.
+    pub fn offset_chain_plane(
+        &self,
+        edges: &[EdgeId],
+        toward: DVec3,
+    ) -> Result<Plane, SurfaceError> {
+        let (chain, _) = edit::offset::chain_of(self, edges)?;
+        let pts = self.loop_points(&chain);
+        edit::offset::chain_plane(self, edges, &pts, toward)
     }
 
     /// The triangles of one face (holes are left open).

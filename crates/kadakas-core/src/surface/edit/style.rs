@@ -21,6 +21,28 @@ use super::*;
 pub const ATTR_SOFT: &str = "soft";
 /// The attribute of a smooth edge.
 pub const ATTR_SMOOTH: &str = "smooth";
+/// The attribute of the edges of a faceted curve (a polygon drawn as one curve): the new edges
+/// that a tool makes between its sides stay creases, drawn and hard, as the corners of a polygon
+/// are real corners. The edges of a circle or an arc have no such mark and give soft and smooth
+/// edges.
+pub const ATTR_FACETED: &str = "faceted";
+
+/// True if a curve is faceted: one of its edges has the mark [`ATTR_FACETED`].
+pub(in crate::surface) fn curve_faceted(m: &SurfaceModel, edges: &[EdgeId]) -> bool {
+    edges
+        .iter()
+        .any(|e| flagged(m.edge_attrs.get(e), ATTR_FACETED))
+}
+
+/// Marks the edges as the sides of a faceted curve.
+pub(in crate::surface) fn mark_faceted(m: &mut SurfaceModel, edges: &[EdgeId]) {
+    for e in edges {
+        m.edge_attrs
+            .entry(*e)
+            .or_default()
+            .insert(ATTR_FACETED.into(), serde_json::Value::Bool(true));
+    }
+}
 
 /// Sets or clears the flags of the given edges (hidden is Hide, `Edit::SetHidden`; `None` leaves a flag as it is).
 pub(super) fn set_edge_style(
@@ -57,8 +79,30 @@ pub(super) fn soften_edges(
             "the angle of Soften Edges must be from 0 to 180 degrees".into(),
         ));
     }
-    let ids = existing_edges(m, edges)?;
+    existing_edges(m, edges)?;
+    for (e, soften) in soften_plan(m, edges, angle, coplanar) {
+        set_flag(m, e, ATTR_SOFT, soften);
+        set_flag(m, e, ATTR_SMOOTH, soften && smooth);
+    }
+    Ok(())
+}
+
+/// What Soften Edges would do (for a preview): each given edge that it changes, and whether it
+/// becomes soft (true) or hard (false). Edges that do not exist, that do not have two faces, or
+/// that are between coplanar faces without `coplanar` are left out.
+pub fn soften_plan(
+    m: &SurfaceModel,
+    edges: &[EdgeId],
+    angle: f64,
+    coplanar: bool,
+) -> Vec<(EdgeId, bool)> {
+    let ids: BTreeSet<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|e| m.edges.contains_key(e))
+        .collect();
     let t = super::super::topo::Topo::of(m);
+    let mut out = Vec::new();
     for e in ids {
         let Some(a) = dihedral(m, &t, e) else {
             continue;
@@ -67,11 +111,9 @@ pub(super) fn soften_edges(
         if flat && !coplanar {
             continue;
         }
-        let soften = a < angle || (flat && coplanar);
-        set_flag(m, e, ATTR_SOFT, soften);
-        set_flag(m, e, ATTR_SMOOTH, soften && smooth);
+        out.push((e, a < angle || (flat && coplanar)));
     }
-    Ok(())
+    out
 }
 
 /// The angle in degrees between the two faces of an edge (0 for faces in one plane that agree
@@ -123,4 +165,112 @@ pub fn flagged(attrs: Option<&super::super::Attrs>, key: &str) -> bool {
     attrs
         .and_then(|a| a.get(key))
         .is_some_and(|v| v == &serde_json::Value::Bool(true))
+}
+
+/// The soft surfaces of a model (MOD-08): the sets of faces that are connected through soft
+/// edges. A soft edge joins the faces on its sides (also two coplanar faces); a smooth edge that is
+/// not soft and a hidden edge do not. A face with no soft edge is in no soft surface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SoftSurfaces {
+    /// The surface of each face that has a soft edge (an index into `groups`).
+    of: BTreeMap<FaceId, usize>,
+    /// The faces of each surface, in id order, and the soft edges between them.
+    groups: Vec<(Vec<FaceId>, Vec<EdgeId>)>,
+}
+
+impl SoftSurfaces {
+    /// Finds the soft surfaces: one pass over the faces and the soft edges.
+    pub fn of(m: &SurfaceModel) -> SoftSurfaces {
+        let soft: BTreeMap<(VertexId, VertexId), EdgeId> = m
+            .edges
+            .iter()
+            .filter(|(id, _)| m.edge_soft(**id))
+            .map(|(id, e)| (e.key(), *id))
+            .collect();
+        if soft.is_empty() {
+            return SoftSurfaces::default();
+        }
+        // The faces of each soft edge.
+        let mut faces_of: BTreeMap<EdgeId, Vec<FaceId>> = BTreeMap::new();
+        for (fid, f) in &m.faces {
+            for (a, b) in f.uses() {
+                if let Some(e) = soft.get(&key(a, b)) {
+                    let v = faces_of.entry(*e).or_default();
+                    if v.last() != Some(fid) {
+                        v.push(*fid);
+                    }
+                }
+            }
+        }
+        let mut parent: BTreeMap<FaceId, FaceId> = BTreeMap::new();
+        fn root(p: &mut BTreeMap<FaceId, FaceId>, f: FaceId) -> FaceId {
+            let mut x = f;
+            while let Some(&y) = p.get(&x) {
+                if y == x {
+                    break;
+                }
+                x = y;
+            }
+            // Path halving is not needed for correctness; keep the trees short.
+            let r = x;
+            let mut x = f;
+            while let Some(&y) = p.get(&x) {
+                if y == x {
+                    break;
+                }
+                p.insert(x, r);
+                x = y;
+            }
+            r
+        }
+        for fs in faces_of.values() {
+            for f in fs {
+                parent.entry(*f).or_insert(*f);
+            }
+            for w in fs.windows(2) {
+                let (a, b) = (root(&mut parent, w[0]), root(&mut parent, w[1]));
+                if a != b {
+                    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+                    parent.insert(hi, lo);
+                }
+            }
+        }
+        let mut out = SoftSurfaces::default();
+        let mut index: BTreeMap<FaceId, usize> = BTreeMap::new();
+        let faces: Vec<FaceId> = parent.keys().copied().collect();
+        for f in faces {
+            let r = root(&mut parent, f);
+            let n = out.groups.len();
+            let i = *index.entry(r).or_insert(n);
+            if i == n {
+                out.groups.push((Vec::new(), Vec::new()));
+            }
+            out.groups[i].0.push(f);
+            out.of.insert(f, i);
+        }
+        for (e, fs) in &faces_of {
+            if let Some(i) = fs.first().and_then(|f| out.of.get(f)) {
+                out.groups[*i].1.push(*e);
+            }
+        }
+        out
+    }
+
+    /// The faces and the soft edges of the surface of `face`, or `None` when the face has no soft
+    /// edge.
+    pub fn surface(&self, face: FaceId) -> Option<(&[FaceId], &[EdgeId])> {
+        let i = *self.of.get(&face)?;
+        let (fs, es) = &self.groups[i];
+        Some((fs, es))
+    }
+
+    /// The number of soft surfaces.
+    pub fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    /// True if the model has no soft surface.
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
 }

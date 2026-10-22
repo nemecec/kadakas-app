@@ -342,7 +342,8 @@ impl SceneBuilder {
                     .is_some_and(|v| v == &serde_json::Value::Bool(true))
         };
         for (id, e) in m.edges() {
-            if hidden(m.edge_attrs(id)) {
+            // A soft edge is not drawn, so it is not offered either (MOD-08).
+            if hidden(m.edge_attrs(id)) || (!show_hidden && m.edge_soft(id)) {
                 continue;
             }
             if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {

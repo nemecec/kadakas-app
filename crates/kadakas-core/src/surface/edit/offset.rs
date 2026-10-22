@@ -96,7 +96,7 @@ pub(in crate::surface) fn chain_line(
     let (chain, closed) = chain_of(m, edges)?;
     let pts = m.loop_points(&chain);
     check_distance(std::slice::from_ref(&pts), distance)?;
-    let plane = chain_plane(m, edges, &pts)?;
+    let plane = chain_plane(m, edges, &pts, toward)?;
     let n = plane.normal;
     // The side of `toward`: the side of the nearest side of the chain.
     let k = pts.len();
@@ -191,7 +191,7 @@ fn fitted(
 /// The edges as one chain of vertices in order, and whether it is closed. An open chain starts
 /// at its end with the lower id; a closed one at its lowest vertex, toward the edge with the lower
 /// id.
-pub(super) fn chain_of(
+pub(in crate::surface) fn chain_of(
     m: &SurfaceModel,
     edges: &[EdgeId],
 ) -> Result<(Vec<VertexId>, bool), SurfaceError> {
@@ -232,10 +232,15 @@ pub(super) fn chain_of(
     Ok((out, open.is_none()))
 }
 
-/// The plane of a chain of points: through its points; a straight chain lies in the plane of a
-/// face of one of its edges, else in the horizontal plane (a vertical straight chain is refused).
+/// The plane of a chain of points: through its points; a straight chain lies in the plane of the
+/// face of one of its edges that holds `toward`, else in the horizontal plane (a vertical straight chain is refused).
 /// It faces up (+Z; a vertical plane +Y, then +X).
-fn chain_plane(m: &SurfaceModel, edges: &[EdgeId], pts: &[DVec3]) -> Result<Plane, SurfaceError> {
+pub(in crate::surface) fn chain_plane(
+    m: &SurfaceModel,
+    edges: &[EdgeId],
+    pts: &[DVec3],
+    toward: DVec3,
+) -> Result<Plane, SurfaceError> {
     let p0 = pts[0];
     let tol = geom::tol(pts);
     let far = pts
@@ -253,9 +258,15 @@ fn chain_plane(m: &SurfaceModel, edges: &[EdgeId], pts: &[DVec3]) -> Result<Plan
     let normal = if off.0 > tol {
         dir.cross(off.1 - p0).normalize_or_zero()
     } else {
-        let from_face = edges
+        // The face of the chain whose plane holds the point `toward` (the nearest plane; the
+        // lower id on a tie): a line on the edge of a box goes into the face the pointer is on.
+        let mut cands: Vec<(f64, FaceId)> = edges
             .iter()
-            .find_map(|e| m.faces_of_edge(*e).first().map(|f| m.faces[f].plane.normal));
+            .flat_map(|e| m.faces_of_edge(*e))
+            .map(|f| (m.faces[&f].plane.distance(toward).abs(), f))
+            .collect();
+        cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let from_face = cands.first().map(|(_, f)| m.faces[f].plane.normal);
         match from_face {
             Some(n) => n,
             None if dir.z.abs() < 1.0 - 1e-9 => DVec3::Z,
@@ -290,11 +301,17 @@ fn draw(
         .flat_map(|(c, es)| es.iter().map(move |e| (*c, *e)))
         .filter_map(|(c, e)| m.edges.get(&e).map(|ed| (ed.key(), c)))
         .collect();
+    let faceted: BTreeSet<super::super::CurveId> = m
+        .curves
+        .iter()
+        .filter(|(_, es)| super::style::curve_faceted(m, es))
+        .map(|(c, _)| *c)
+        .collect();
     let mut w = Work::indexed(m);
     let mut drawn = Vec::new();
     let mut touched = BTreeSet::new();
     // Each run of sides of one curve: the spans of its new edges (start and end vertex).
-    let mut runs: Vec<Vec<(VertexId, VertexId)>> = Vec::new();
+    let mut runs: Vec<(super::super::CurveId, Vec<(VertexId, VertexId)>)> = Vec::new();
     for (l, pts) in lines {
         let k = l.len();
         let sides = if closed { k } else { k - 1 };
@@ -320,20 +337,20 @@ fn draw(
             match (side_curve(i), &mut run) {
                 (Some(c), Some((rc, spans))) if *rc == c => spans.push(span),
                 (c, r) => {
-                    if let Some((_, spans)) = r.take() {
-                        runs.push(spans);
+                    if let Some(done) = r.take() {
+                        runs.push(done);
                     }
                     *r = c.map(|c| (c, vec![span]));
                 }
             }
         }
-        if let Some((_, spans)) = run {
-            runs.push(spans);
+        if let Some(done) = run {
+            runs.push(done);
         }
     }
     w.solve_after_add(&drawn, &touched)?;
     let used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
-    for spans in runs {
+    for (cid, spans) in runs {
         let mut chain: Vec<EdgeId> = Vec::new();
         let mut ok = true;
         for (x, y) in spans {
@@ -351,6 +368,9 @@ fn draw(
             && unique.len() == chain.len()
             && chain.iter().all(|e| !used.contains(e))
         {
+            if faceted.contains(&cid) {
+                super::style::mark_faceted(w.m, &chain);
+            }
             let id = super::super::CurveId(w.m.alloc());
             w.m.curves.insert(id, chain);
         }
@@ -368,7 +388,11 @@ fn largest_fit(
     closed: bool,
 ) -> f64 {
     let (mut lo, mut hi) = (0.0, upto);
-    for _ in 0..48 {
+    // Halve until the step is below a sixteenth of the length tolerance (about 24 steps for 10 m).
+    let all: Vec<DVec3> = loops.iter().flatten().copied().collect();
+    let tol = geom::tol(&all);
+    let steps = ((upto / tol).log2().ceil() + 4.0).clamp(1.0, 48.0) as usize;
+    for _ in 0..steps {
         let mid = (lo + hi) / 2.0;
         if offset_loops(loops, n, plane, sign * mid, closed).is_ok() {
             lo = mid;
@@ -465,17 +489,40 @@ pub(super) fn offset_loops(
     // The holes stay inside the outer loop and outside each other.
     if let Some((outer, holes)) = rings.split_first().filter(|_| closed) {
         let outer_ring = [outer.clone()];
-        for (hi, h) in holes.iter().enumerate() {
+        for h in holes {
             if !super::arrange::inside(h[0], &outer_ring) {
                 return Err("a hole would leave the face".into());
             }
             if super::arrange::inside(outer[0], std::slice::from_ref(h)) {
                 return Err("a hole would swallow the face".into());
             }
-            for (hj, g) in holes.iter().enumerate() {
-                if hi != hj && super::arrange::inside(g[0], std::slice::from_ref(h)) {
-                    return Err("a hole would swallow another hole".into());
-                }
+        }
+        // A hole inside another: only a hole whose box holds the first point of the other can
+        // (a box tree, so a face with many holes is not quadratic).
+        let boxes = BoxTree::new(
+            holes
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let (lo, hi) = super::arrange::box_of(h);
+                    (
+                        lo.extend(0.0),
+                        hi.extend(0.0),
+                        u32::try_from(i).unwrap_or(u32::MAX),
+                    )
+                })
+                .collect(),
+        );
+        for (gi, g) in holes.iter().enumerate() {
+            let p = g[0].extend(0.0);
+            let mut swallowed = false;
+            boxes.query(p, p, &mut |hi| {
+                let hi = hi as usize;
+                swallowed |=
+                    hi != gi && super::arrange::inside(g[0], std::slice::from_ref(&holes[hi]));
+            });
+            if swallowed {
+                return Err("a hole would swallow another hole".into());
             }
         }
     }

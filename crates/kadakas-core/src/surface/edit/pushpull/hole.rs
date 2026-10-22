@@ -71,7 +71,8 @@ pub(super) fn target(
         }
         let cap: Vec<DVec2> = f.outer.iter().map(lift).collect();
         let shape = Shape::new(m, g);
-        let margin = geom::tol(&[p0 + n * s]);
+        let cap3: Vec<DVec3> = f.outer.iter().map(|v| m.vertices[v] + n * s).collect();
+        let margin = geom::tol(&cap3);
         match fit(&cap, &shape, margin) {
             Fit::Apart => {}
             Fit::Inside => {
@@ -85,6 +86,29 @@ pub(super) fn target(
                      touches or crosses its border or a hole, or lies across two faces): a hole \
                      through needs the whole face inside one face of the other side, away from \
                      its edges"
+                )));
+            }
+        }
+    }
+    // A face back to back with the face of the other side under the hole (a solid that stands
+    // under the slab): the walls would end on it.
+    if let Some((gid, s)) = found {
+        let g = &m.faces[&gid];
+        let cap3: Vec<DVec3> = f.outer.iter().map(|v| m.vertices[v] + n * s).collect();
+        let cap: Vec<DVec2> = cap3.iter().map(|p| g.plane.project(*p)).collect();
+        let margin = geom::tol(&cap3);
+        for (&hid, h) in &m.faces {
+            if hid == gid
+                || hid == face
+                || h.plane.normal.dot(g.plane.normal) > -(1.0 - 1e-9)
+                || !on_plane(&g.plane, m.vertices[&h.outer[0]])
+            {
+                continue;
+            }
+            if fit(&cap, &Shape::new(m, h), margin) != Fit::Apart {
+                return Err(SurfaceError::Unsolved(format!(
+                    "face {face} cannot be pushed through: face {hid} lies back to back under the \
+                     hole (another solid stands under the slab there)"
                 )));
             }
         }

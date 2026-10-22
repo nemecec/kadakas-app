@@ -48,6 +48,8 @@ pub enum TrayAction {
     OpenInApp,
     /// A value of the Soften Edges panel changed: apply it to the selection (MOD-08).
     Soften,
+    /// The slider of the Soften Edges panel is being dragged: show what it would soften.
+    SoftenPreview,
 }
 
 /// What the tray draws from: the data of the program for one frame.
@@ -468,8 +470,16 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                     row(ui, tr!("modeler-entity-hidden"), yes_no(style.hidden));
                 });
         }
-        EntityInfo::Parts { faces, edges } => {
-            ui.label(tr!("modeler-entity-parts", faces = *faces, edges = *edges));
+        EntityInfo::Parts {
+            faces,
+            edges,
+            soft_surface,
+        } => {
+            if *soft_surface {
+                ui.label(tr!("modeler-entity-soft-surface", faces = *faces));
+            } else {
+                ui.label(tr!("modeler-entity-parts", faces = *faces, edges = *edges));
+            }
         }
         EntityInfo::Many { count, size } => {
             ui.label(tr!("modeler-entity-many", count = *count));
@@ -804,10 +814,10 @@ pub fn show(
             "tray-soften",
             tr!("modeler-tray-soften"),
             &mut state.soften,
-            |ui| {
-                if crate::soften::panel(ui, &mut tray.soften, data.edges_selected) {
-                    out.push(TrayAction::Soften);
-                }
+            |ui| match crate::soften::panel(ui, &mut tray.soften, data.edges_selected) {
+                Some(crate::soften::Change::Apply) => out.push(TrayAction::Soften),
+                Some(crate::soften::Change::Preview) => out.push(TrayAction::SoftenPreview),
+                None => {}
             },
         );
         panel(

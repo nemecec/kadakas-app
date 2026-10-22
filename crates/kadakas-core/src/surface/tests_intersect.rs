@@ -625,6 +625,7 @@ fn split_edges_keep_their_curve_and_attributes_and_split_faces_keep_theirs() {
     m.apply(&Edit::AddCurve {
         points,
         closed: true,
+        faceted: false,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;

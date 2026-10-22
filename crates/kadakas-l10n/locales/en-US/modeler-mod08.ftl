@@ -13,3 +13,4 @@ modeler-entity-smooth = Smooth
 modeler-entity-hidden = Hidden
 modeler-entity-yes = yes
 modeler-entity-no = no
+modeler-entity-soft-surface = { $faces } faces (soft surface)

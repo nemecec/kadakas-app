@@ -70,6 +70,8 @@ pub enum Action {
         target: Target,
         points: Vec<DVec3>,
         closed: bool,
+        /// A polygon: its corners stay corners (see `Edit::AddCurve`).
+        faceted: bool,
     },
     /// Edges erased (the Eraser).
     EraseEdges { model: ObjectId, edges: Vec<EdgeId> },
@@ -298,7 +300,7 @@ pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Re
                     .into_iter()
                     .map(|n| match kadakas_core::command::height_note_kind(&n) {
                         Some(kind) => kadakas_l10n::tr!("uic-modeling-height-kept", kind = kind),
-                        None => n,
+                        None => super::messages::localize(&n),
                     })
                     .collect(),
                 ..Ran::default()
@@ -342,7 +344,7 @@ pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Re
             if undo_first {
                 editor.redo();
             }
-            Err(e.to_string())
+            Err(super::messages::localize(&e.to_string()))
         }
     }
 }
@@ -495,9 +497,15 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
         Action::AddEdges { segments, .. } => vec![edit(Edit::AddEdges {
             edges: segments.iter().map(|s| [at(s[0]), at(s[1])]).collect(),
         })],
-        Action::AddCurve { points, closed, .. } => vec![edit(Edit::AddCurve {
+        Action::AddCurve {
+            points,
+            closed,
+            faceted,
+            ..
+        } => vec![edit(Edit::AddCurve {
             points: points.iter().map(|p| at(*p)).collect(),
             closed: *closed,
+            faceted: *faceted,
         })],
         Action::EraseEdges { edges, .. } => vec![edit(Edit::EraseEdges {
             edges: edges.clone(),

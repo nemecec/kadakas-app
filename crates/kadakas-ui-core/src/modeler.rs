@@ -388,7 +388,12 @@ pub enum EntityInfo {
         style: EdgeFlags,
     },
     /// Several faces and edges of surface models.
-    Parts { faces: usize, edges: usize },
+    Parts {
+        faces: usize,
+        edges: usize,
+        /// The faces and edges are one soft surface (MOD-08) and nothing else.
+        soft_surface: bool,
+    },
     /// Several objects.
     Many {
         count: usize,
@@ -715,6 +720,28 @@ pub fn entity_info(doc: &Document, scene: &Scene, selection: &[ObjectId]) -> Ent
     }
 }
 
+/// True if the items are exactly the faces and soft edges of one soft surface (MOD-08).
+fn is_one_soft_surface(doc: &Document, items: &[crate::modeling::Item]) -> bool {
+    use crate::modeling::{Item, model_of};
+    let Some(&Item::Face(mid, f)) = items.iter().find(|i| matches!(i, Item::Face(..))) else {
+        return false;
+    };
+    let Some(m) = model_of(doc, mid) else {
+        return false;
+    };
+    let soft = kadakas_core::surface::SoftSurfaces::of(m);
+    let Some((fs, es)) = soft.surface(f) else {
+        return false;
+    };
+    let want: std::collections::BTreeSet<Item> = fs
+        .iter()
+        .map(|g| Item::Face(mid, *g))
+        .chain(es.iter().map(|e| Item::Edge(mid, *e)))
+        .collect();
+    let have: std::collections::BTreeSet<Item> = items.iter().copied().collect();
+    want == have
+}
+
 /// The Entity Info of a selection that may hold faces and edges of surface models. With none, it
 /// is [`entity_info`] of the selected objects.
 pub fn entity_info_with_parts(
@@ -789,6 +816,7 @@ pub fn entity_info_with_parts(
         many => EntityInfo::Parts {
             faces: many.iter().filter(|i| matches!(i, Item::Face(..))).count(),
             edges: many.iter().filter(|i| matches!(i, Item::Edge(..))).count(),
+            soft_surface: is_one_soft_surface(doc, many),
         },
     }
 }
