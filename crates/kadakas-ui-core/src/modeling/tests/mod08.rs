@@ -406,3 +406,211 @@ fn push_pull_of_a_square_on_a_box_to_the_bottom_cuts_a_hole_in_one_step() {
     assert!(r.model().check().is_closed());
     assert!(r.model().face(inner).is_none(), "a hole through");
 }
+
+// ---- review round ------------------------------------------------------------------------------
+
+#[test]
+fn the_polygon_kind_toggles_only_on_the_key_alone() {
+    use crate::modeling::KeyToggle;
+    let mut k = KeyToggle::default();
+    // Ctrl down and up alone: one toggle.
+    assert!(!k.step(true, false));
+    assert!(k.step(false, false));
+    // Ctrl+Z: no toggle.
+    assert!(!k.step(true, false));
+    assert!(!k.step(true, true));
+    assert!(!k.step(false, false));
+    // Held over several frames, then let go: one toggle.
+    assert!(!k.step(true, false));
+    assert!(!k.step(true, false));
+    assert!(k.step(false, false));
+}
+
+#[test]
+fn esc_in_the_middle_of_polygon_and_offset_draws_nothing() {
+    let mut r = rig(ModelerTool::Polygon);
+    r.click(v(0.0, 0.0, 0.0));
+    assert!(r.tools.in_progress());
+    assert!(r.tools.cancel());
+    assert!(!r.tools.in_progress());
+    assert!(r.ed.doc().objects.is_empty());
+    let mut r = square_rig(ModelerTool::Offset);
+    let face = r.model().faces().next().unwrap().0;
+    let depth = r.ed.undo_depth();
+    r.click_inf(
+        on_face(v(500.0, 500.0, 0.0), face),
+        down_ray(v(500.0, 500.0, 0.0)),
+    );
+    assert!(r.tools.in_progress());
+    assert!(r.tools.cancel());
+    assert!(!r.tools.in_progress());
+    assert_eq!(r.ed.undo_depth(), depth);
+    assert_eq!(r.model().face_count(), 1);
+}
+
+#[test]
+fn a_negative_distance_typed_while_an_edge_offset_runs_goes_to_the_other_side() {
+    let mut r = rig(ModelerTool::Line);
+    r.click(v(0.0, 0.0, 0.0));
+    r.click(v(1000.0, 0.0, 0.0));
+    r.tools.cancel();
+    let model = r.model_id();
+    let edges: Vec<Item> = r
+        .model()
+        .edges()
+        .map(|(e, _)| Item::Edge(model, e))
+        .collect();
+    r.tools.choose(ModelerTool::Offset);
+    r.set_parts(edges);
+    // The pointer above the line (+y), then -100 typed: below it.
+    r.click(v(500.0, 300.0, 0.0));
+    assert!(r.tools.in_progress());
+    r.type_text("-100");
+    assert!(
+        r.model()
+            .vertices()
+            .any(|(_, p)| p.distance(v(0.0, -100.0, 0.0)) < 1e-6),
+        "{:?}",
+        r.model().vertices().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn several_selected_faces_offset_the_one_under_the_pointer() {
+    let mut r = rig(ModelerTool::Rectangle);
+    r.click(v(0.0, 0.0, 0.0));
+    r.click(v(1000.0, 1000.0, 0.0));
+    r.click(v(2000.0, 0.0, 0.0));
+    r.click(v(3000.0, 1000.0, 0.0));
+    let model = r.model_id();
+    let faces: Vec<FaceId> = r.model().faces().map(|(f, _)| f).collect();
+    assert_eq!(faces.len(), 2);
+    r.tools.choose(ModelerTool::Offset);
+    r.set_parts(faces.iter().map(|f| Item::Face(model, *f)).collect());
+    // Not on one of them: says so.
+    let out = r.click(v(9000.0, 9000.0, 0.0));
+    assert!(out.message.is_some() && !r.tools.in_progress());
+    r.click_inf(
+        on_face(v(2500.0, 500.0, 0.0), faces[1]),
+        down_ray(v(2500.0, 500.0, 0.0)),
+    );
+    r.type_text("100");
+    assert_eq!(r.model().face_count(), 3);
+}
+
+/// A 24-sided cylinder (soft sides), drawn with the tools.
+fn cylinder_rig() -> (Rig, ObjectId) {
+    let mut r = rig(ModelerTool::Circle);
+    r.click(v(0.0, 0.0, 0.0));
+    r.click(v(300.0, 0.0, 0.0));
+    let face = r.model().faces().next().unwrap().0;
+    r.tools.choose(ModelerTool::PushPull);
+    r.click_inf(on_face(v(0.0, 0.0, 0.0), face), down_ray(v(0.0, 0.0, 0.0)));
+    r.type_text("800");
+    let id = r.model_id();
+    (r, id)
+}
+
+fn with_world<T>(r: &mut Rig, f: impl FnOnce(&World) -> T) -> T {
+    let rev = r.ed.revision();
+    let scenes = r.cache.get(r.ed.doc(), rev);
+    let world = World {
+        doc: r.ed.doc(),
+        scenes,
+    };
+    f(&world)
+}
+
+#[test]
+fn a_click_on_a_soft_surface_selects_the_whole_surface() {
+    let (mut r, id) = cylinder_rig();
+    let side = r
+        .model()
+        .faces()
+        .find(|(_, f)| f.plane.normal.z.abs() < 1e-9)
+        .unwrap()
+        .0;
+    let cap = r
+        .model()
+        .faces()
+        .find(|(_, f)| f.plane.normal.z > 0.9)
+        .unwrap()
+        .0;
+    let items = with_world(&mut r, |w| select::click_items(w, Item::Face(id, side)));
+    let faces = items.iter().filter(|i| matches!(i, Item::Face(..))).count();
+    let edges = items.iter().filter(|i| matches!(i, Item::Edge(..))).count();
+    assert_eq!(
+        (faces, edges),
+        (24, 24),
+        "the sides and the soft edges, not the caps"
+    );
+    assert!(!items.contains(&Item::Face(id, cap)));
+    // A cap is one face.
+    let one = with_world(&mut r, |w| select::click_items(w, Item::Face(id, cap)));
+    assert_eq!(one, vec![Item::Face(id, cap)]);
+    // Shift toggles the whole surface.
+    let mut sel = SubSelection::default();
+    sel.click_all(&one, false);
+    sel.click_all(&items, true);
+    assert_eq!(sel.len(), 49);
+    sel.click_all(&items, true);
+    assert_eq!(sel.len(), 1);
+    // A double click: the surface with all the edges of its faces (the two rims too).
+    let dbl = with_world(&mut r, |w| {
+        select::double_click_items(w, Item::Face(id, side))
+    });
+    let edges = dbl.iter().filter(|i| matches!(i, Item::Edge(..))).count();
+    assert_eq!(edges, 24 + 48);
+    // Entity Info says it is one soft surface.
+    use crate::modeler::{EntityInfo, entity_info_with_parts};
+    let scene = kadakas_core::mesh::build(r.ed.doc());
+    let mut s = SubSelection::default();
+    s.set(items.clone());
+    assert!(matches!(
+        entity_info_with_parts(r.ed.doc(), &scene, &[], &s),
+        EntityInfo::Parts {
+            faces: 24,
+            soft_surface: true,
+            ..
+        }
+    ));
+    // A window around everything stays geometric: the soft edges are not drawn, so not taken.
+    let cam = Camera::look_at(
+        v(0.0, 0.0, 5000.0),
+        v(0.0, 0.0, 0.0),
+        DVec3::Y,
+        Projection::Orthographic { height: 2000.0 },
+        DVec2::new(800.0, 800.0),
+    )
+    .unwrap();
+    let (a, b) = (
+        cam.project(v(-500.0, -500.0, 0.0)).unwrap(),
+        cam.project(v(500.0, 500.0, 0.0)).unwrap(),
+    );
+    let win = with_world(&mut r, |w| select::rect_select(w, &cam, a, b, false));
+    assert!(win.iter().all(|i| match i {
+        Item::Edge(m, e) => !model_of(r.ed.doc(), *m).unwrap().edge_soft(*e),
+        Item::Face(..) => true,
+    }));
+}
+
+#[test]
+fn a_pulled_polygon_has_no_soft_surface_and_a_click_selects_one_face() {
+    let mut r = rig(ModelerTool::Polygon);
+    r.click(v(0.0, 0.0, 0.0));
+    r.type_text("500");
+    let face = r.model().faces().next().unwrap().0;
+    r.tools.choose(ModelerTool::PushPull);
+    r.click_inf(on_face(v(0.0, 0.0, 0.0), face), down_ray(v(0.0, 0.0, 0.0)));
+    r.type_text("800");
+    let id = r.model_id();
+    assert!(r.model().edges().all(|(e, _)| !r.model().edge_soft(e)));
+    let side = r
+        .model()
+        .faces()
+        .find(|(_, f)| f.plane.normal.z.abs() < 1e-9)
+        .unwrap()
+        .0;
+    let items = with_world(&mut r, |w| select::click_items(w, Item::Face(id, side)));
+    assert_eq!(items, vec![Item::Face(id, side)]);
+}

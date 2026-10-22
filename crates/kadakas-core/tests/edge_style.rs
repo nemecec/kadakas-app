@@ -273,3 +273,235 @@ fn every_edit_of_the_second_part_is_one_step_and_undoes_byte_for_byte() {
         assert!(ed.undo());
     }
 }
+
+#[test]
+#[ignore = "timing"]
+fn the_scene_of_a_large_soft_grid_is_built_in_time() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    let n = 220usize;
+    let mut edges = Vec::new();
+    for i in 0..=n {
+        let t = 100.0 * i as f64;
+        edges.push([[t, 0.0, 0.0], [t, 100.0 * n as f64, 0.0]]);
+        edges.push([[0.0, t, 0.0], [100.0 * n as f64, t, 0.0]]);
+    }
+    for chunk in edges.chunks(400) {
+        edit(
+            &mut ed,
+            id,
+            Edit::AddEdges {
+                edges: chunk.to_vec(),
+            },
+        );
+    }
+    let all: Vec<EdgeId> = model(&ed, id).edges().map(|(e, _)| e).collect();
+    for chunk in all.chunks(9000) {
+        edit(
+            &mut ed,
+            id,
+            Edit::SetEdgeStyle {
+                edges: chunk.to_vec(),
+                soft: Some(true),
+                smooth: Some(true),
+            },
+        );
+    }
+    let t = std::time::Instant::now();
+    let s = mesh::build(ed.doc());
+    println!(
+        "scene of {} faces with smooth edges: {:.0} ms, {} vertices",
+        model(&ed, id).face_count(),
+        t.elapsed().as_secs_f64() * 1e3,
+        s.mesh.positions.len()
+    );
+}
+
+fn add_material(ed: &mut Editor, name: &str, color: [u8; 4]) -> kadakas_core::resource::ResourceId {
+    use kadakas_core::present;
+    use kadakas_core::resource::{ResourceBody, ResourceId};
+    let m = present::Material {
+        base_color: Color(color),
+        ..Default::default()
+    };
+    let out = ed
+        .execute(&Command::AddResource {
+            name: name.into(),
+            body: ResourceBody::Render(Box::new(present::RenderResource::Material(m))),
+        })
+        .unwrap();
+    ResourceId(out.created[0])
+}
+
+/// The triangles of the scene as sorted (position, normal, color) corners, rounded.
+fn corners(s: &kadakas_core::mesh::Scene) -> Vec<Vec<[i64; 10]>> {
+    let mm = &s.mesh;
+    let mut out: Vec<Vec<[i64; 10]>> = mm
+        .indices
+        .chunks(3)
+        .map(|t| {
+            let mut c: Vec<[i64; 10]> = t
+                .iter()
+                .map(|&i| {
+                    let (p, n, k) = (
+                        mm.positions[i as usize],
+                        mm.normals[i as usize],
+                        mm.colors[i as usize],
+                    );
+                    let r = |x: f32| (x * 100.0).round() as i64;
+                    [
+                        r(p.x),
+                        r(p.y),
+                        r(p.z),
+                        r(n.x),
+                        r(n.y),
+                        r(n.z),
+                        i64::from(k[0]),
+                        i64::from(k[1]),
+                        i64::from(k[2]),
+                        i64::from(k[3]),
+                    ]
+                })
+                .collect();
+            c.sort();
+            c
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn a_hidden_face_of_a_painted_model_leaves_the_others_their_colors_and_normals() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = boxed(&mut ed);
+    let red = add_material(&mut ed, "red", [200, 20, 20, 255]);
+    let m = model(&ed, id);
+    // Paint the face with the highest id, and make the edge between the top and the front
+    // smooth; then hide the face with the lowest id (its triangles come first in the mesh, so
+    // every later triangle would shift if the faces were not filtered with them).
+    let ids: Vec<_> = m.faces().map(|(f, _)| f).collect();
+    let top = *ids.last().unwrap();
+    // The back wall: not next to the smooth edge, and before the painted face in the mesh.
+    let low = m.faces().find(|(_, f)| f.plane.normal.y > 0.9).unwrap().0;
+    assert!(low < top);
+    let e = front_top_edge(m);
+    edit(
+        &mut ed,
+        id,
+        Edit::SetFaceMaterial {
+            faces: vec![top],
+            side: kadakas_core::surface::PaintSide::Both,
+            material: Some(red.to_string()),
+        },
+    );
+    edit(
+        &mut ed,
+        id,
+        Edit::SetEdgeStyle {
+            edges: vec![e],
+            soft: None,
+            smooth: Some(true),
+        },
+    );
+    let all = corners(&mesh::build(ed.doc()));
+    assert_ne!(low, top);
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::SetHidden {
+            faces: vec![low],
+            edges: Vec::new(),
+            hidden: true,
+        },
+    })
+    .unwrap();
+    let shown = corners(&mesh::build(ed.doc()));
+    assert_eq!(
+        shown.len(),
+        all.len() - 2,
+        "the two triangles of the hidden face go"
+    );
+    // Every triangle that is still drawn is drawn exactly as before (the GPU and the CPU views
+    // draw this one scene).
+    for t in &shown {
+        assert!(all.contains(t), "{t:?} changed its look");
+    }
+}
+
+#[test]
+fn a_mirrored_model_keeps_its_smooth_normals_outward() {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    edit(
+        &mut ed,
+        id,
+        Edit::AddCurve {
+            points: (0..12)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+                    [300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+                })
+                .collect(),
+            closed: true,
+            faceted: false,
+        },
+    );
+    let f = model(&ed, id).faces().next().unwrap().0;
+    edit(
+        &mut ed,
+        id,
+        Edit::PushPull {
+            face: f,
+            distance: 800.0,
+        },
+    );
+    let check = |ed: &Editor| {
+        let s = mesh::build(ed.doc());
+        let o = s.origin;
+        let mut sides = 0;
+        for (p, n) in s.mesh.positions.iter().zip(&s.mesh.normals) {
+            if n.z.abs() < 0.5 {
+                let wp = p.as_dvec3() + o;
+                let radial = glam::DVec2::new(wp.x, wp.y).normalize();
+                let nn = glam::DVec2::new(f64::from(n.x), f64::from(n.y));
+                assert!(
+                    nn.dot(radial) > 0.9,
+                    "a side normal points out: {n:?} at {wp:?}"
+                );
+                sides += 1;
+            }
+        }
+        assert!(sides >= 24);
+    };
+    check(&ed);
+    // Mirror the model in x.
+    ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: glam::DAffine3::from_scale(glam::DVec3::new(-1.0, 1.0, 1.0)).to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    check(&ed);
+}
+
+#[test]
+fn edges_that_are_only_smooth_are_drawn_as_lines() {
+    // Files from development builds before soft edges: Push/Pull wrote only `smooth` on the
+    // sides of a cylinder, and the old drawing left smooth edges out. With soft and smooth apart,
+    // those side lines are drawn until the edges are softened (nothing was released, so there is
+    // no migration).
+    let mut ed = Editor::with_sequential_ids();
+    let id = boxed(&mut ed);
+    let e = front_top_edge(model(&ed, id));
+    edit(
+        &mut ed,
+        id,
+        Edit::SetEdgeStyle {
+            edges: vec![e],
+            soft: None,
+            smooth: Some(true),
+        },
+    );
+    assert_eq!(mesh::build(ed.doc()).lines.segment_count(), 12);
+}

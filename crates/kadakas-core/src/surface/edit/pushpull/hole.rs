@@ -95,7 +95,6 @@ pub(super) fn target(
     if let Some((gid, s)) = found {
         let g = &m.faces[&gid];
         let cap3: Vec<DVec3> = f.outer.iter().map(|v| m.vertices[v] + n * s).collect();
-        let cap: Vec<DVec2> = cap3.iter().map(|p| g.plane.project(*p)).collect();
         let margin = geom::tol(&cap3);
         for (&hid, h) in &m.faces {
             if hid == gid
@@ -105,6 +104,9 @@ pub(super) fn target(
             {
                 continue;
             }
+            // In the axes of `h` (its plane looks the other way, so its axes are not those of
+            // `g`).
+            let cap: Vec<DVec2> = cap3.iter().map(|p| h.plane.project(*p)).collect();
             if fit(&cap, &Shape::new(m, h), margin) != Fit::Apart {
                 return Err(SurfaceError::Unsolved(format!(
                     "face {face} cannot be pushed through: face {hid} lies back to back under the \

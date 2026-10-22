@@ -313,7 +313,8 @@ fn follow_me_refuses_what_it_cannot_sweep() {
         .find(|(_, e)| m.vertex(e.v[0]).unwrap().x == 0.0 && m.vertex(e.v[1]).unwrap().x == 0.0)
         .unwrap()
         .0;
-    refused(&mut m, profile, vec![own], "");
+    // The edge lies in the plane of the profile, so that is the reason given first.
+    refused(&mut m, profile, vec![own], "lies along the path");
     let mut m = m0.clone();
     assert_eq!(
         m.apply(&Edit::FollowMe {

@@ -160,6 +160,8 @@ mod tests_offset;
 #[cfg(test)]
 mod tests_pushpull;
 #[cfg(test)]
+mod tests_review;
+#[cfg(test)]
 mod tests_style;
 #[cfg(test)]
 mod tests_transform;

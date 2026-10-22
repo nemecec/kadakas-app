@@ -225,3 +225,39 @@ fn the_soften_panel_and_the_context_commands_change_the_selected_edges() {
     assert!(shown.contains(&tr!("modeler-entity-soft")), "{shown}");
     assert!(shown.contains(&tr!("modeler-tray-soften")), "{shown}");
 }
+
+#[test]
+fn the_soften_slider_previews_while_dragged_and_applies_once_when_let_go() {
+    let (_ctx, mut app, _t) = top_view();
+    let id = new_model(&mut app);
+    edit(&mut app, id, ring(-500.0, 1000.0, 0.0));
+    let face = surface(&app).faces().next().unwrap().0;
+    edit(
+        &mut app,
+        id,
+        Edit::PushPull {
+            face,
+            distance: 500.0,
+        },
+    );
+    let edges: Vec<Item> = surface(&app)
+        .edges()
+        .map(|(e, _)| Item::Edge(id, e))
+        .collect();
+    app.edit.sub.set(edges);
+    let (rev, depth) = (
+        app.session.editor.revision(),
+        app.session.editor.undo_depth(),
+    );
+    // Dragging over 90 degrees: the twelve edges are shown, nothing changes yet.
+    app.tray_ui.soften.angle = 100.0;
+    app.tray_action(TrayAction::SoftenPreview);
+    assert_eq!(app.edit.soften_preview.len(), 12);
+    assert_eq!(app.session.editor.revision(), rev);
+    // Let go: one edit, one undo step, and the preview goes.
+    app.tray_action(TrayAction::Soften);
+    assert!(app.edit.soften_preview.is_empty());
+    assert_eq!(app.session.editor.undo_depth(), depth + 1);
+    let m = surface(&app);
+    assert_eq!(m.edges().filter(|(e, _)| m.edge_soft(*e)).count(), 12);
+}
