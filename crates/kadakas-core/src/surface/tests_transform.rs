@@ -1897,12 +1897,21 @@ fn a_user_soft_edge_between_coplanar_faces_stays() {
         .or_default()
         .insert("soft".into(), true.into());
     let original = m.clone();
+    // One corner up and back: the right face folds and unfolds.
     let corner = vertex_at(&m, [2000.0, 1000.0, 0.0]);
     apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, 400.0))).unwrap();
     assert_eq!(m.face_count(), 3);
     apply(&mut m, mv_vertices(&[corner], DVec3::new(0.0, 0.0, -400.0))).unwrap();
     sound(&m);
     assert_eq!(m.face_count(), 2);
+    assert_same_geometry(&m, &original);
+    // The far side up (the right face tilts, flat) and back: coplanar again, still apart.
+    let far = [corner, vertex_at(&m, [2000.0, 0.0, 0.0])];
+    apply(&mut m, mv_vertices(&far, DVec3::new(0.0, 0.0, 400.0))).unwrap();
+    assert_eq!(m.face_count(), 2, "a tilt keeps the face flat");
+    let notes = apply(&mut m, mv_vertices(&far, DVec3::new(0.0, 0.0, -400.0))).unwrap();
+    sound(&m);
+    assert!(notes.is_empty(), "{notes:?}");
     assert_same_geometry(&m, &original);
     // Moved in the plane: the edge and its attribute stay.
     apply(&mut m, mv_vertices(&[lo], DVec3::new(100.0, 0.0, 0.0))).unwrap();
