@@ -35,6 +35,7 @@ The "Depends on" column lists the other Kadakas crates that a crate uses (`cargo
 | `kadakas-site` | Site model: TIN, contours, slope, site modifiers, cut and fill, grading (pure, wasm-compatible) | core |
 | `kadakas-irrigation` | Irrigation catalog, hydraulics, network solver, layout helpers, reports (pure, wasm-compatible) | core |
 | `kadakas-x3d` | glTF, GLB and OBJ writers, section and elevation drawings from the 3D scene (pure, wasm-compatible) | core, render |
+| `kadakas-meshio` | OBJ, STL and glTF readers and an STL writer for triangle meshes (MOD-12, `docs/interop.md`; pure, wasm-compatible) | none |
 | `kadakas-script` | Python discovery, limited process runs, plug-in object definitions and the reset protocol, the script host (native only; no Python is embedded) | core, sys |
 | `kadakas-plugin-abi` | The versioned ABI of WebAssembly plug-ins: manifest, parameter schema, host and guest messages, helpers for plug-in authors (pure, wasm-compatible; no Kadakas dependency, so a plug-in stays small) | none of ours |
 | `kadakas-plugin` | The plug-in host: a runtime-neutral engine interface, the wasmtime engine with fuel and a memory cap and no imports (native only; hosted modules, the script engine, may import `kadakas.call` and `kadakas.read` and nothing else), the browser engine (the `WebAssembly` API of the page, wasm32 only) on a metered runtime with a module rewrite for fuel and memory, trust by module hash, stores for modules and trust (folder, browser storage, memory), the registry, checks of every answer (objects and tools). It compiles for wasm32 and runs plug-ins there too | core, plugin-abi; native only: sys |
@@ -158,7 +159,7 @@ Update the pinned version in one place, `wasi-sdk.env`: the version, the tag and
 cargo fmt --all --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-crs -p kadakas-plants -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-ui-core -p kadakas-view3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-script-js -p kadakas-feedback -p kadakas-crash -p kadakas-app --target wasm32-unknown-unknown
+cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-crs -p kadakas-plants -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-meshio -p kadakas-ui-core -p kadakas-view3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-script-js -p kadakas-feedback -p kadakas-crash -p kadakas-app --target wasm32-unknown-unknown
 cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```

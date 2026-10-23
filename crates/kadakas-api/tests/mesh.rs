@@ -1560,7 +1560,7 @@ fn every_mesh_method_is_listed_documented_and_has_an_example() {
         .map(|(n, _)| *n)
         .filter(|n| n.starts_with("mesh."))
         .collect();
-    assert_eq!(names.len(), 29, "{names:?}");
+    assert_eq!(names.len(), 30, "{names:?}");
     for (n, d) in METHODS.iter().filter(|(n, _)| n.starts_with("mesh.")) {
         assert!(
             d.contains("params:") || d.contains("params "),
@@ -1590,6 +1590,8 @@ fn every_mesh_method_is_listed_documented_and_has_an_example() {
             "create",
             "batch",
             "render",
+            // It works on a mesh, not on a surface model: a batch cannot hold it.
+            "to_surface",
         ]
         .contains(&op)
         {

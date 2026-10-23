@@ -105,13 +105,13 @@ if TYPE_CHECKING:
     ReportAreasParams = TypedDict("ReportAreasParams", {}, total=False)
 
     ImportFileParams = TypedDict("ImportFileParams", {
-        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc'] | None,
+        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc', 'obj', 'stl', 'gltf', 'glb'] | None,
         'options': dict[str, Any] | None,
         'path': Required[str],
     }, total=False)
 
     ExportFileParams = TypedDict("ExportFileParams", {
-        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'gltf', 'glb', 'obj', 'pdf', 'sheet_svg', 'sheet_png'] | None,
+        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'gltf', 'glb', 'obj', 'stl', 'pdf', 'sheet_svg', 'sheet_png'] | None,
         'options': dict[str, Any] | None,
         'overwrite': bool | None,
         'path': Required[str],
@@ -895,6 +895,14 @@ if TYPE_CHECKING:
         'edges': list[int] | None,
         'id': Required[str],
         'smooth': bool | None,
+    }, total=False)
+
+    MeshToSurfaceParams = TypedDict("MeshToSurfaceParams", {
+        'dry_run': bool | None,
+        'id': Required[str],
+        'merge': bool | None,
+        'soften_below_angle': float | None,
+        'tolerance': float | None,
     }, total=False)
 
     MeshSolidParams = TypedDict("MeshSolidParams", {
@@ -4186,6 +4194,12 @@ class Api:
         JSON-RPC method ``mesh.soften_edges``."""
         return self._call("mesh.soften_edges", params or None)
 
+    def mesh_to_surface(self, **params: "Unpack[MeshToSurfaceParams]") -> Any:
+        """Turn a mesh object (shape kind mesh3d, for example from import.file or an IFC import) into a surface model, in place and in one undo step. params: {id, tolerance? (mm, 0.001 to 1000, default 0.01: vertices closer than this weld), soften_below_angle? (degrees, 0 to 180, default off: edges between faces at an angle below it become soft and smooth, with the soften engine of mesh.soften_edges), merge? (default true: triangles in one plane merge into faces with holes; false keeps every triangle a face), dry_run? (convert nothing and answer with the report)}. The model must fit the limits of a surface model: 55,000 vertices, 150,000 edges, 100,000 faces and 300,000 loop vertices, counted after the merge. A mesh over a limit is refused with the counts (error_id mesh_too_large_for_surface, data over and counts) and nothing changes. Returns {id, kind: surface_model, softened_edges (0 when no angle was given), report: {source_vertices, source_triangles, welded_vertices, degenerate_triangles, duplicate_triangles, joined_slivers, vertices, edges, faces, faces_with_holes, merged_triangles, unmerged_regions, healed_vertices, tolerance_mm, border_edges, nonmanifold_edges, closed, area_mm2, volume_mm3?, considered_edges, softened_edges, soften_below_angle?}, notes?}. The color of the mesh becomes the fill of the object. The sides of the faces follow the winding of the triangles.
+
+        JSON-RPC method ``mesh.to_surface``."""
+        return self._call("mesh.to_surface", params or None)
+
     def mesh_solid(self, **params: "Unpack[MeshSolidParams]") -> Any:
         """A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). Returns the change.
 
@@ -6167,6 +6181,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "mesh.hide",
     "mesh.soften",
     "mesh.soften_edges",
+    "mesh.to_surface",
     "mesh.solid",
     "mesh.make_group",
     "mesh.make_component",

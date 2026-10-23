@@ -39,7 +39,7 @@ def make_box(doc):
 
 def test_the_client_has_a_typed_method_for_every_mesh_call(doc):
     names = [n for n in dir(doc.api) if n.startswith("mesh_")]
-    assert len(names) == 29
+    assert len(names) == 30
     assert "mesh_soften_edges" in names and "mesh_batch" in names and "mesh_render" in names
     assert "Soften every edge under an angle" in doc.api.mesh_soften_edges.__doc__
 

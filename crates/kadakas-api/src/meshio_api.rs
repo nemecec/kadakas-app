@@ -376,7 +376,7 @@ impl Session {
         let bytes = std::fs::read(&path)
             .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?;
         let side_max = limits.max_bytes;
-        let set: MeshSet = match format {
+        let mut set: MeshSet = match format {
             Format::Obj => {
                 let loader = |name: &str| self.sibling(&path, name, &["mtl"], checked, 16 << 20);
                 kadakas_meshio::obj::read(
@@ -408,7 +408,7 @@ impl Session {
         let mut parts = if o.join {
             vec![set.joined()]
         } else {
-            set.parts.clone()
+            std::mem::take(&mut set.parts)
         };
         let (lo, hi) = {
             let mut lo = [f64::INFINITY; 3];

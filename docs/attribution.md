@@ -85,9 +85,10 @@ We implement these from the public descriptions. No code or data is copied unles
 | British Standard BS 5837:2012, root protection area of a single stem (12 x stem diameter, at most a 15 m radius) | `kadakas-core` `plants/tree.rs`: root protection zone of existing trees |
 | buildingSMART IFC (ISO 16739): export is IFC4 only; import reads IFC2x3, IFC4 and IFC4x3. STEP physical file (ISO 10303-21) | `kadakas-ifc`: IFC import and export. https://www.buildingsmart.org |
 | Autodesk DXF reference | `kadakas-io`: DXF import and export. DXF is a format of Autodesk, Inc. |
-| Khronos glTF 2.0 specification | `kadakas-x3d`: glTF and GLB export. https://www.khronos.org/gltf |
+| Khronos glTF 2.0 specification | `kadakas-x3d`: glTF and GLB export. `kadakas-meshio`: glTF and GLB import. https://www.khronos.org/gltf |
 | Chaikin corner cutting, Douglas-Peucker line simplification, Sutherland-Hodgman polygon clipping, centripetal Catmull-Rom splines (textbook algorithms) | `kadakas-site` (contours, checks), `kadakas-core` (sheets, curves), `kadakas-x3d` (section cuts) |
-| Wavefront OBJ and MTL formats | `kadakas-x3d`: OBJ export |
+| Wavefront OBJ and MTL formats | `kadakas-x3d`: OBJ export. `kadakas-meshio`: OBJ and MTL import |
+| STL file format (the public descriptions of the binary and ASCII forms) | `kadakas-meshio`: STL import and export |
 | OGC WMS 1.1.1 and 1.3.0, WMTS 1.0.0, WFS 2.0 (Open Geospatial Consortium) | `kadakas-gis`: map services. https://www.ogc.org |
 | Esri Shapefile technical description, GeoJSON (RFC 7946) | `kadakas-io`: shapefile and GeoJSON import and export |
 | Last-writer-wins register and a central sequencer that orders an operation log (common techniques of replicated data, for example Shapiro et al., "A comprehensive study of Convergent and Commutative Replicated Data Types", 2011). UUID version 7 (RFC 9562) | `kadakas-collab` and `docs/collaboration.md`: merge rules and IDs of the collaboration protocol. No dependency or code is added |

@@ -523,13 +523,7 @@ pub fn read(
                 let (_, data) = u.split_once(',').ok_or_else(|| {
                     MeshError::Malformed(format!("buffer {i}: the data URI has no comma"))
                 })?;
-                let est = data.len() as u64 / 4 * 3;
-                if est > lim.max_bytes {
-                    return Err(MeshError::FileTooLarge {
-                        bytes: est,
-                        limit: lim.max_bytes,
-                    });
-                }
+                // The text is part of the file, so the bytes cannot be more than the file.
                 let d = base64::engine::general_purpose::STANDARD
                     .decode(data.trim())
                     .map_err(|e| {

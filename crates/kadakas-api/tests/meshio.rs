@@ -775,6 +775,214 @@ fn describe_lists_the_formats_and_the_methods_exist() {
     assert!(imp.to_string().contains("gltf"));
 }
 
+#[test]
+fn a_grey_layer_or_class_stops_the_conversion_with_its_own_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let obj = write(dir.path(), "cube.obj", CUBE_OBJ.as_bytes());
+    let mut s = Session::with_sequential_ids();
+    let imp = ok(
+        &mut s,
+        "import.file",
+        json!({"path": obj, "options": {"layer": "Grey"}}),
+    );
+    let id = first_object(&imp);
+    let o = ok(&mut s, "objects.get", json!({"id": id}));
+    let (layer, class) = (o["layer"].clone(), o["class"].clone());
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "layers": [layer], "mode": "grey"}}),
+    );
+    let e = err(&mut s, "mesh.to_surface", json!({"id": id}));
+    assert_eq!(e.details.as_ref().unwrap()["error_id"], "layer_grey");
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "layers": [layer], "mode": "visible"}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "classes": [class], "mode": "grey"}}),
+    );
+    let e = err(&mut s, "mesh.to_surface", json!({"id": id}));
+    assert_eq!(e.details.as_ref().unwrap()["error_id"], "class_grey");
+}
+
+#[test]
+fn the_ifc_import_makes_surface_models_when_asked() {
+    let ifc = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/ifc/faceted_brep_ifc2x3.ifc"
+    );
+    let mut s = Session::with_sequential_ids();
+    // Without the option the import makes meshes and says that nothing softened.
+    let plain = ok(&mut s, "import.file", json!({"path": ifc}));
+    assert_eq!(plain["softened_edges"], 0);
+    assert!(plain["report"].get("to_surface").is_none());
+    ok(&mut s, "undo", json!({}));
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": ifc, "options": {"soften_below_angle": 100}}),
+    );
+    let t = &r["report"]["to_surface"];
+    assert!(t["converted"].as_u64().unwrap() >= 1, "{t}");
+    assert_eq!(t["refused"].as_array().unwrap().len(), 0);
+    assert_eq!(r["softened_edges"], t["softened_edges"]);
+    assert!(r["softened_edges"].as_u64().unwrap() > 0);
+    let kinds = ok(&mut s, "objects.list", json!({"kind": "surface_model"}));
+    assert!(!kinds.as_array().unwrap().is_empty());
+    // One undo step takes it all back.
+    ok(&mut s, "undo", json!({}));
+    assert!(
+        ok(&mut s, "objects.list", json!({}))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // A terrain with 115,200 triangles is over the limits of a surface model: the report lists
+    // the refusal with the counts, and the mesh stays.
+    let dir = tempfile::tempdir().unwrap();
+    let n = 240usize;
+    let head: Vec<String> = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/ifc/polygonal_faceset.ifc"
+    ))
+    .unwrap()
+    .lines()
+    .take_while(|l| !l.starts_with("#100="))
+    .map(String::from)
+    .collect();
+    let mut text = head.join("\n");
+    text += "\n#100=IFCCARTESIANPOINTLIST3D((";
+    let mut points = Vec::new();
+    for j in 0..=n {
+        for i in 0..=n {
+            points.push(format!(
+                "({}.,{}.,{}.)",
+                i * 100,
+                j * 100,
+                ((i * 73_856_093) ^ (j * 19_349_663)) % 1000
+            ));
+        }
+    }
+    text += &points.join(",");
+    text += "));\n#110=IFCTRIANGULATEDFACESET(#100,$,.T.,(";
+    let at = |i: usize, j: usize| j * (n + 1) + i + 1;
+    let mut faces = Vec::new();
+    for j in 0..n {
+        for i in 0..n {
+            faces.push(format!(
+                "({},{},{})",
+                at(i, j),
+                at(i + 1, j),
+                at(i + 1, j + 1)
+            ));
+            faces.push(format!(
+                "({},{},{})",
+                at(i, j),
+                at(i + 1, j + 1),
+                at(i, j + 1)
+            ));
+        }
+    }
+    text += &faces.join(",");
+    text += "),$);\n#111=IFCSHAPEREPRESENTATION(#13,'Body','Tessellation',(#110));\n#112=IFCPRODUCTDEFINITIONSHAPE($,$,(#111));\n#113=IFCCOVERING('0000000000000000000113',$,'Cladding',$,$,#31,#112,$,.CLADDING.);\n#900=IFCRELCONTAINEDINSPATIALSTRUCTURE('0000000000000000000900',$,$,$,(#113),#30);\nENDSEC;\nEND-ISO-10303-21;\n";
+    let big = write(dir.path(), "terrain.ifc", text.as_bytes());
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": big, "options": {"to_surface": true}}),
+    );
+    let refused = r["report"]["to_surface"]["refused"].as_array().unwrap();
+    assert_eq!(refused.len(), 1, "{r}");
+    assert_eq!(refused[0]["data"]["counts"]["faces"], 2 * n * n);
+    assert_eq!(r["report"]["to_surface"]["converted"], 0);
+    assert_eq!(r["softened_edges"], 0);
+    assert!(
+        !ok(&mut s, "objects.list", json!({"kind": "mesh3d"}))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // Bad values are parameter errors.
+    for bad in [
+        json!({"to_surface": "yes"}),
+        json!({"soften_below_angle": "wide"}),
+        json!({"soften_below_angle": 400}),
+        json!({"surface_tolerance": "tiny"}),
+    ] {
+        let e = err(&mut s, "import.file", json!({"path": ifc, "options": bad}));
+        assert_eq!(e.code, -32602, "{bad}");
+    }
+}
+
+#[test]
+fn small_helpers_of_the_import_are_covered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::with_sequential_ids();
+    // Many names: more parts than the objects listed in the report are still all made.
+    let mut text = String::from("v 0 0 0\nv 1 0 0\nv 0 1 0\n");
+    for i in 0..210 {
+        text += &format!("o part{i}\nf 1 2 3\n");
+    }
+    let p = write(dir.path(), "many.obj", text.as_bytes());
+    let r = ok(&mut s, "import.file", json!({"path": p}));
+    assert_eq!(r["imported"], 210);
+    assert_eq!(r["report"]["objects"].as_array().unwrap().len(), 200);
+    assert_eq!(r["report"]["objects_listed"], 200);
+    // A name for several parts, with the part name after it.
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"name": "Set", "join": true}}),
+    );
+    assert_eq!(r["report"]["objects"][0]["name"], "Set");
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"name": "Set"}}),
+    );
+    assert_eq!(r["report"]["objects"][0]["name"], "Set part0");
+    // The preview lists objects too, and a layer that exists is reused (case does not matter).
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"preview": true, "join": true}}),
+    );
+    assert_eq!(r["report"]["objects"][0]["kind"], "mesh3d");
+    ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"layer": "Twice", "join": true}}),
+    );
+    ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"layer": "TWICE", "join": true}}),
+    );
+    let names = ok(&mut s, "document.summary", json!({}))["layers"].to_string();
+    assert_eq!(
+        names.matches("Twice").count() + names.matches("TWICE").count(),
+        1,
+        "{names}"
+    );
+    // A layer that is locked is not used: a new layer is made with the same name is refused or
+    // reused, but the import never writes on a locked layer.
+    let tiny = write(
+        dir.path(),
+        "tiny.obj",
+        b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+    );
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": tiny, "options": {"join": true, "center": true}}),
+    );
+    assert_eq!(r["report"]["bounds_mm"]["min"][2], 0.0);
+}
+
 mod props {
     use super::*;
     use proptest::prelude::*;
