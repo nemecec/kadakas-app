@@ -596,6 +596,12 @@ The headless code is `kadakas_ui_core::scene_panel` (rows, commands, activation 
 - A scene transition in the Vectorworks-like app. It sets the standard view at once.
 - Styles with edge and face settings of their own beyond the 3D-08 fields, and the style mixer.
 
+## Agent API (MOD-11)
+
+An agent drives the same geometry as the tools of the modeler. The methods are `mesh.*`. They work over JSON-RPC, over MCP (the tool `mesh`) and in Python (`doc.api.mesh_*`). Reads give the summary, vertices, edges and faces in pages, the solid report, bounds, faces near a point and a ray pick. Edits are thin wrappers over `edit_surface` and the group and component commands. Each edit is one undo step. `mesh.batch` runs up to 50 edits as one undo step, all or nothing. `mesh.soften_edges {below_angle}` softens every edge under an angle and says how many edges changed. `mesh.render` gives a picture of the result. A refusal has a stable `error_id`. The guide with examples is `docs/mesh-api.md`.
+
+The edits of an agent are marked as agent changes and show in the Activity panel of the person. The modeler has no review window of its own for them.
+
 ## Clean room
 
 The layout, the tool names, the logic of the tools and the default keys follow public documentation of programs of this kind (`docs/research/sketchup-public-features.md`). No program of that kind was downloaded or run. No icon, image or text was copied. SketchUp is a trademark of Trimble Inc. The About window says that Kadakas Modeler is not affiliated with it.

@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     }, total=False)
 
     RenderPngParams = TypedDict("RenderPngParams", {
+        'camera': dict[str, Any] | None,
         'compare': dict[str, Any] | None,
         'height': int | None,
         'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
@@ -734,6 +735,213 @@ if TYPE_CHECKING:
     MassingReportParams = TypedDict("MassingReportParams", {
         'format': str | None,
         'ids': list[str] | None,
+    }, total=False)
+
+    MeshSummaryParams = TypedDict("MeshSummaryParams", {
+        'id': str | None,
+    }, total=False)
+
+    MeshVerticesParams = TypedDict("MeshVerticesParams", {
+        'id': Required[str],
+        'ids': list[int] | None,
+        'limit': int | None,
+        'offset': int | None,
+    }, total=False)
+
+    MeshEdgesParams = TypedDict("MeshEdgesParams", {
+        'id': Required[str],
+        'ids': list[int] | None,
+        'limit': int | None,
+        'offset': int | None,
+    }, total=False)
+
+    MeshFacesParams = TypedDict("MeshFacesParams", {
+        'id': Required[str],
+        'ids': list[int] | None,
+        'limit': int | None,
+        'offset': int | None,
+        'with_points': bool | None,
+    }, total=False)
+
+    MeshSolidReportParams = TypedDict("MeshSolidReportParams", {
+        'id': Required[str],
+    }, total=False)
+
+    MeshBoundsParams = TypedDict("MeshBoundsParams", {
+        'id': Required[str],
+    }, total=False)
+
+    MeshNearParams = TypedDict("MeshNearParams", {
+        'id': str | None,
+        'include_hidden': bool | None,
+        'kinds': list[Literal['faces', 'edges', 'vertices']] | None,
+        'limit': int | None,
+        'point': Required[list[float]],
+        'radius': Required[float],
+    }, total=False)
+
+    MeshPickParams = TypedDict("MeshPickParams", {
+        'all': bool | None,
+        'direction': Required[list[float]],
+        'id': str | None,
+        'include_hidden': bool | None,
+        'origin': Required[list[float]],
+    }, total=False)
+
+    MeshCreateParams = TypedDict("MeshCreateParams", {
+        'class': str | None,
+        'layer': str | None,
+        'name': str | None,
+        'origin': list[float] | None,
+    }, total=False)
+
+    MeshAddEdgesParams = TypedDict("MeshAddEdgesParams", {
+        'edges': Required[list[list[list[float]]]],
+        'id': Required[str],
+    }, total=False)
+
+    MeshAddCurveParams = TypedDict("MeshAddCurveParams", {
+        'closed': bool | None,
+        'faceted': bool | None,
+        'id': Required[str],
+        'points': Required[list[list[float]]],
+    }, total=False)
+
+    MeshEraseParams = TypedDict("MeshEraseParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+    }, total=False)
+
+    MeshReverseFacesParams = TypedDict("MeshReverseFacesParams", {
+        'faces': Required[list[int]],
+        'id': Required[str],
+    }, total=False)
+
+    MeshPushPullParams = TypedDict("MeshPushPullParams", {
+        'distance': Required[float],
+        'face': Required[int],
+        'id': Required[str],
+    }, total=False)
+
+    MeshFollowMeParams = TypedDict("MeshFollowMeParams", {
+        'face': Required[int],
+        'id': Required[str],
+        'path': Required[list[int]],
+    }, total=False)
+
+    MeshOffsetParams = TypedDict("MeshOffsetParams", {
+        'distance': Required[float],
+        'edges': list[int] | None,
+        'face': int | None,
+        'id': Required[str],
+        'outward': bool | None,
+        'toward': list[float] | None,
+    }, total=False)
+
+    MeshIntersectFacesParams = TypedDict("MeshIntersectFacesParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'scope': Literal['model', 'selection'] | None,
+    }, total=False)
+
+    MeshTransformParams = TypedDict("MeshTransformParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'matrix': list[float] | None,
+        'rotate': dict[str, Any] | None,
+        'scale': dict[str, Any] | None,
+        'translate': list[float] | None,
+        'vertices': list[int] | None,
+    }, total=False)
+
+    MeshCopyParams = TypedDict("MeshCopyParams", {
+        'count': int | None,
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'matrix': list[float] | None,
+        'rotate': dict[str, Any] | None,
+        'scale': dict[str, Any] | None,
+        'translate': list[float] | None,
+    }, total=False)
+
+    MeshPaintParams = TypedDict("MeshPaintParams", {
+        'faces': Required[list[int]],
+        'id': Required[str],
+        'material': str | None,
+        'side': Literal['front', 'back', 'both'] | None,
+    }, total=False)
+
+    MeshHideParams = TypedDict("MeshHideParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'hidden': bool | None,
+        'id': Required[str],
+    }, total=False)
+
+    MeshSoftenParams = TypedDict("MeshSoftenParams", {
+        'edges': Required[list[int]],
+        'id': Required[str],
+        'smooth': bool | None,
+        'soft': bool | None,
+    }, total=False)
+
+    MeshSoftenEdgesParams = TypedDict("MeshSoftenEdgesParams", {
+        'below_angle': Required[float],
+        'coplanar': bool | None,
+        'edges': list[int] | None,
+        'id': Required[str],
+        'smooth': bool | None,
+    }, total=False)
+
+    MeshSolidParams = TypedDict("MeshSolidParams", {
+        'first': list[int] | None,
+        'first_face': int | None,
+        'id': Required[str],
+        'op': Required[Literal['union', 'subtract', 'intersect', 'trim', 'split']],
+        'second': list[int] | None,
+        'second_face': int | None,
+    }, total=False)
+
+    MeshMakeGroupParams = TypedDict("MeshMakeGroupParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'name': str | None,
+        'objects': list[str] | None,
+    }, total=False)
+
+    MeshMakeComponentParams = TypedDict("MeshMakeComponentParams", {
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'name': Required[str],
+        'objects': list[str] | None,
+        'replace': bool | None,
+    }, total=False)
+
+    MeshExplodeParams = TypedDict("MeshExplodeParams", {
+        'ids': Required[list[str]],
+    }, total=False)
+
+    MeshBatchParams = TypedDict("MeshBatchParams", {
+        'edits': Required[list[dict[str, Any]]],
+        'id': str | None,
+    }, total=False)
+
+    MeshRenderParams = TypedDict("MeshRenderParams", {
+        'camera': dict[str, Any] | None,
+        'height': int | None,
+        'id': str | None,
+        'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
+        'projection': Literal['ortho', 'perspective'] | None,
+        'render_style': str | None,
+        'samples': int | None,
+        'view': str | None,
+        'width': int | None,
     }, total=False)
 
     ExtrudeAddParams = TypedDict("ExtrudeAddParams", {
@@ -3241,7 +3449,7 @@ class Api:
         return self._call("render.svg", params or None)
 
     def render_png(self, **params: "Unpack[RenderPngParams]") -> Any:
-        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.
+        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.
 
         JSON-RPC method ``render.png``."""
         return self._call("render.png", params or None)
@@ -3839,6 +4047,180 @@ class Api:
 
         JSON-RPC method ``massing.report``."""
         return self._call("massing.report", params or None)
+
+    def mesh_summary(self, **params: "Unpack[MeshSummaryParams]") -> Any:
+        """The surface models of the document. params: {id?} (one model, else all). Returns {models: [{id, name, layer, class, parent?, vertices, edges, faces, curves, revision, problem (null or the first problem of the model), hidden_faces, hidden_edges, soft_edges, transform (12 numbers), bounds: {local, world} ({min, max} in mm or null for an empty model)}]}. Coordinates in the other mesh methods are local to the model. Drawing coordinates are the local ones moved by the transform.
+
+        JSON-RPC method ``mesh.summary``."""
+        return self._call("mesh.summary", params or None)
+
+    def mesh_vertices(self, **params: "Unpack[MeshVerticesParams]") -> Any:
+        """Vertices of a surface model, in id order. params: {id, ids? (only these), offset? (default 0), limit? (default 100, at most 1000)}. Returns {total, offset, items: [{id, p: [x, y, z] (local mm)}], missing? (ids that do not exist)}.
+
+        JSON-RPC method ``mesh.vertices``."""
+        return self._call("mesh.vertices", params or None)
+
+    def mesh_edges(self, **params: "Unpack[MeshEdgesParams]") -> Any:
+        """Edges of a surface model, in id order. params: {id, ids?, offset?, limit?} as in mesh.vertices. Returns {total, offset, items: [{id, v: [vertex, vertex], faces: [face ids], soft, smooth, hidden, curve (id or null), length_mm}], missing?}.
+
+        JSON-RPC method ``mesh.edges``."""
+        return self._call("mesh.edges", params or None)
+
+    def mesh_faces(self, **params: "Unpack[MeshFacesParams]") -> Any:
+        """Faces of a surface model, in id order. params: {id, ids?, offset?, limit?, with_points? (add the coordinates of the loops)}. Returns {total, offset, items: [{id, outer: [vertex ids], holes: [[vertex ids]], normal: [x, y, z] (points to the front), area_mm2, hidden, material (front, or null), back_material, points?: {outer: [[x, y, z]], holes}}], missing?}.
+
+        JSON-RPC method ``mesh.faces``."""
+        return self._call("mesh.faces", params or None)
+
+    def mesh_solid_report(self, **params: "Unpack[MeshSolidReportParams]") -> Any:
+        """Is the model made of closed solids? params: {id}. Returns {id, closed (true when it has faces, every shell is a solid and no edge is loose), shells: [{faces, state (solid | open | self_crossing | inverted | flat), volume_mm3, area_mm2, open_edges: [{edge, kind (border | non_manifold | reversed)}], ...}], wire_edges, crossings}. The open edges say what to fix before a solid operation.
+
+        JSON-RPC method ``mesh.solid_report``."""
+        return self._call("mesh.solid_report", params or None)
+
+    def mesh_bounds(self, **params: "Unpack[MeshBoundsParams]") -> Any:
+        """The box around a surface model. params: {id}. Returns {id, empty, local: {min, max, size} | null, world: {min, max, size} | null} in mm.
+
+        JSON-RPC method ``mesh.bounds``."""
+        return self._call("mesh.bounds", params or None)
+
+    def mesh_near(self, **params: "Unpack[MeshNearParams]") -> Any:
+        """Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?}, nearest first.
+
+        JSON-RPC method ``mesh.near``."""
+        return self._call("mesh.near", params or None)
+
+    def mesh_pick(self, **params: "Unpack[MeshPickParams]") -> Any:
+        """Shoots a ray at the surface models. params: {id?, origin: [x, y, z], direction: [x, y, z] (drawing coordinates), all? (every face the ray meets, nearest first, at most 200), include_hidden?}. Returns {hit: null | {model, face, distance, point: [x, y, z] (drawing coordinates), local: [x, y, z], side (front | back: the side of the face that the ray meets), normal: [x, y, z] (drawing coordinates)}, hits? (with all)}.
+
+        JSON-RPC method ``mesh.pick``."""
+        return self._call("mesh.pick", params or None)
+
+    def mesh_create(self, **params: "Unpack[MeshCreateParams]") -> Any:
+        """Make an empty surface model in one undo step. params: {name?, origin? ([x, y, z] in drawing coordinates, where the local origin is, default [0, 0, 0]), layer?, class?}. Returns {id}. The model is drawn with the edits below.
+
+        JSON-RPC method ``mesh.create``."""
+        return self._call("mesh.create", params or None)
+
+    def mesh_add_edges(self, **params: "Unpack[MeshAddEdgesParams]") -> Any:
+        """Draw straight edges. params: {id, edges: [[[x, y, z], [x, y, z]]]} (local mm, at most 10000). Ends weld to vertices and edges, crossings split, closed coplanar edges make faces, and a new edge splits a face. Returns the change (see describe.mesh.results).
+
+        JSON-RPC method ``mesh.add_edges``."""
+        return self._call("mesh.add_edges", params or None)
+
+    def mesh_add_curve(self, **params: "Unpack[MeshAddCurveParams]") -> Any:
+        """Draw a chain of edges that stays one curve (a circle or an arc) when other edges cut it. params: {id, points: [[x, y, z]], closed? (the last point joins the first), faceted? (a polygon: its corners stay creases)}. Returns the change.
+
+        JSON-RPC method ``mesh.add_curve``."""
+        return self._call("mesh.add_curve", params or None)
+
+    def mesh_erase(self, **params: "Unpack[MeshEraseParams]") -> Any:
+        """Erase edges and faces in one undo step. params: {id, edges?, faces?} (at least one). Erased edges merge coplanar faces on their sides and remove other faces of the edge. Erased faces leave their edges. Returns the change.
+
+        JSON-RPC method ``mesh.erase``."""
+        return self._call("mesh.erase", params or None)
+
+    def mesh_reverse_faces(self, **params: "Unpack[MeshReverseFacesParams]") -> Any:
+        """Turn faces over: front and back change places. params: {id, faces}. Returns the change.
+
+        JSON-RPC method ``mesh.reverse_faces``."""
+        return self._call("mesh.reverse_faces", params or None)
+
+    def mesh_push_pull(self, **params: "Unpack[MeshPushPullParams]") -> Any:
+        """Push or pull a planar face along its normal. params: {id, face, distance (mm, positive toward the front)}. A lone face becomes a solid, a face of a prism moves, and a push can make a hole. Returns the change. The face keeps its id and ends as the cap.
+
+        JSON-RPC method ``mesh.push_pull``."""
+        return self._call("mesh.push_pull", params or None)
+
+    def mesh_follow_me(self, **params: "Unpack[MeshFollowMeParams]") -> Any:
+        """Sweep a face along a chain of edges. params: {id, face, path: [edge ids]}. An open path gives a solid, a closed path a ring. Returns the change.
+
+        JSON-RPC method ``mesh.follow_me``."""
+        return self._call("mesh.follow_me", params or None)
+
+    def mesh_offset(self, **params: "Unpack[MeshOffsetParams]") -> Any:
+        """Offset the loops of a face, or a chain of edges. params: {id, face?, edges?, distance (mm), outward? (face), toward? ([x, y, z] local, required with edges)}. Give face or edges. Returns the change.
+
+        JSON-RPC method ``mesh.offset``."""
+        return self._call("mesh.offset", params or None)
+
+    def mesh_intersect_faces(self, **params: "Unpack[MeshIntersectFacesParams]") -> Any:
+        """Make edges where faces in different planes cross, and split both faces. params: {id, scope? (model | selection, default model), faces?, edges?}. With selection, only the given faces and edges are tested against the model. Returns the change.
+
+        JSON-RPC method ``mesh.intersect_faces``."""
+        return self._call("mesh.intersect_faces", params or None)
+
+    def mesh_transform(self, **params: "Unpack[MeshTransformParams]") -> Any:
+        """Move, rotate or scale vertices, faces and edges. params: {id, vertices?, faces?, edges?, then matrix? (12 numbers) or any of translate? ([x, y, z]), rotate? ({axis, degrees, about?}), scale? ({factor | factors, about?})}. The order is scale, then rotate, then translate. A face that is no longer flat is folded into triangles with soft edges. Returns the change.
+
+        JSON-RPC method ``mesh.transform``."""
+        return self._call("mesh.transform", params or None)
+
+    def mesh_copy(self, **params: "Unpack[MeshCopyParams]") -> Any:
+        """Copy faces and edges inside the model. params: {id, faces?, edges?, count? (default 1), and the map as in mesh.transform}. The first copy is placed by the map, the next by the map applied twice, and so on. Returns the change.
+
+        JSON-RPC method ``mesh.copy``."""
+        return self._call("mesh.copy", params or None)
+
+    def mesh_paint(self, **params: "Unpack[MeshPaintParams]") -> Any:
+        """Put a material on faces. params: {id, faces, side? (front | back | both, default front), material? (ID or name of a material of the document, without it the paint is cleared)}. Returns the change.
+
+        JSON-RPC method ``mesh.paint``."""
+        return self._call("mesh.paint", params or None)
+
+    def mesh_hide(self, **params: "Unpack[MeshHideParams]") -> Any:
+        """Hide or show faces and edges. params: {id, faces?, edges?, hidden? (default true)}. Returns the change.
+
+        JSON-RPC method ``mesh.hide``."""
+        return self._call("mesh.hide", params or None)
+
+    def mesh_soften(self, **params: "Unpack[MeshSoftenParams]") -> Any:
+        """Set the flags of edges. params: {id, edges, soft?, smooth?} (at least one flag). A soft edge is not drawn or picked. The faces on the sides of a smooth edge shade as one surface. A flag that is not given stays as it is. Returns the change.
+
+        JSON-RPC method ``mesh.soften``."""
+        return self._call("mesh.soften", params or None)
+
+    def mesh_soften_edges(self, **params: "Unpack[MeshSoftenEdgesParams]") -> Any:
+        """Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and {changed (how many edges changed their flags), softened (edges that are soft now), considered (edges that were looked at)}.
+
+        JSON-RPC method ``mesh.soften_edges``."""
+        return self._call("mesh.soften_edges", params or None)
+
+    def mesh_solid(self, **params: "Unpack[MeshSolidParams]") -> Any:
+        """A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). Returns the change.
+
+        JSON-RPC method ``mesh.solid``."""
+        return self._call("mesh.solid", params or None)
+
+    def mesh_make_group(self, **params: "Unpack[MeshMakeGroupParams]") -> Any:
+        """Make a group of faces and edges (and other objects). params: {id (the surface model), faces?, edges?, objects?, name?}. The geometry moves into a surface model of its own, so it no longer welds to the rest. Returns the change and {group, created_objects}.
+
+        JSON-RPC method ``mesh.make_group``."""
+        return self._call("mesh.make_group", params or None)
+
+    def mesh_make_component(self, **params: "Unpack[MeshMakeComponentParams]") -> Any:
+        """Make a component definition of faces and edges (and other objects). params: {id, name, faces?, edges?, objects?, replace? (default true: one instance takes their place)}. Returns the change and {created_objects, created_resources}.
+
+        JSON-RPC method ``mesh.make_component``."""
+        return self._call("mesh.make_component", params or None)
+
+    def mesh_explode(self, **params: "Unpack[MeshExplodeParams]") -> Any:
+        """Explode groups and component instances into the surface model of their level. params: {ids}. The geometry welds to its neighbours and faces form again. Returns {created_objects, removed_objects, notes}.
+
+        JSON-RPC method ``mesh.explode``."""
+        return self._call("mesh.explode", params or None)
+
+    def mesh_batch(self, **params: "Unpack[MeshBatchParams]") -> Any:
+        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits and at most 10000 edges in all add_edges edits. method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
+
+        JSON-RPC method ``mesh.batch``."""
+        return self._call("mesh.batch", params or None)
+
+    def mesh_render(self, **params: "Unpack[MeshRenderParams]") -> Any:
+        """A PNG of the model so that you see the result. params: {id? (frame the camera on this surface model), view?, camera? ({target, yaw, pitch, distance, fov, projection}, wins over view), width?, height?, projection?, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), render_style? (a style of the document or a built-in one such as Realistic), samples?}. It is render.png with the camera and the framing of a model. Returns {png_base64, width, height, view, projection, mode, camera, render_style?}. MCP gives the image itself.
+
+        JSON-RPC method ``mesh.render``."""
+        return self._call("mesh.render", params or None)
 
     def extrude_add(self, **params: "Unpack[ExtrudeAddParams]") -> Any:
         """Add an extrude (shape kind 'extrude') in one undo step: a closed 2D profile pushed up by a height. The profile stays editable. params: {profile: [vertices] (a closed outline, curves allowed like in polylines), holes?: [[vertices]] (closed outlines inside the profile), height (mm, not zero; negative extrudes downward), base? (height of the profile above the layer in mm, default 0), name?, layer?, class?, parent? (a group)}. A profile that crosses itself, has no area, or has a hole that touches the outline is refused with the reason. Returns {id, quantities}.
@@ -5762,6 +6144,35 @@ METHOD_NAMES: tuple[str, ...] = (
     "massing.from_shapes",
     "massing.follow_sources",
     "massing.report",
+    "mesh.summary",
+    "mesh.vertices",
+    "mesh.edges",
+    "mesh.faces",
+    "mesh.solid_report",
+    "mesh.bounds",
+    "mesh.near",
+    "mesh.pick",
+    "mesh.create",
+    "mesh.add_edges",
+    "mesh.add_curve",
+    "mesh.erase",
+    "mesh.reverse_faces",
+    "mesh.push_pull",
+    "mesh.follow_me",
+    "mesh.offset",
+    "mesh.intersect_faces",
+    "mesh.transform",
+    "mesh.copy",
+    "mesh.paint",
+    "mesh.hide",
+    "mesh.soften",
+    "mesh.soften_edges",
+    "mesh.solid",
+    "mesh.make_group",
+    "mesh.make_component",
+    "mesh.explode",
+    "mesh.batch",
+    "mesh.render",
     "extrude.add",
     "extrude.set",
     "extrude.get",

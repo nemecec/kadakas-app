@@ -546,7 +546,10 @@ fn mcp_version(requested: Option<&str>) -> &'static str {
 /// The content of a tool result. `render.png` and `view.screenshot` give an image block that a model can look at,
 /// plus the other fields as text. Other methods give their result as text.
 fn tool_content(method: &str, response: &Value, text: String) -> Value {
-    if (method == "render.png" || method == "sheet.render" || method == "view.screenshot")
+    if (method == "render.png"
+        || method == "mesh.render"
+        || method == "sheet.render"
+        || method == "view.screenshot")
         && let Some(data) = response["result"]["png_base64"].as_str()
     {
         let mut meta = response["result"].clone();
@@ -1086,6 +1089,16 @@ mod tests {
         assert_eq!(
             tool_content("view.list", &ok, "x".into()),
             json!([{"type": "text", "text": "x"}])
+        );
+    }
+
+    #[test]
+    fn the_render_of_the_modeler_is_an_image_too() {
+        let ok = json!({"result": {"png_base64": "CCCC", "width": 4}});
+        let c = tool_content("mesh.render", &ok, ok["result"].to_string());
+        assert_eq!(
+            c[0],
+            json!({"type": "image", "data": "CCCC", "mimeType": "image/png"})
         );
     }
 

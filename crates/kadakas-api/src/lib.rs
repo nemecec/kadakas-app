@@ -39,6 +39,7 @@ mod issue_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
 mod massing_api;
+mod mesh_api;
 mod pattern_api;
 mod picture_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -528,7 +529,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.png",
-        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, render_style (not with compare), compare?}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.",
     ),
     (
         "view.list",
@@ -671,6 +672,36 @@ pub const METHODS: &[(&str, &str)] = &[
     massing_api::MASSING_FROM_SHAPES,
     massing_api::MASSING_FOLLOW_SOURCES,
     massing_api::MASSING_REPORT,
+    // The surface model and the modeler (see mesh_api).
+    mesh_api::MESH_SUMMARY,
+    mesh_api::MESH_VERTICES,
+    mesh_api::MESH_EDGES,
+    mesh_api::MESH_FACES,
+    mesh_api::MESH_SOLID_REPORT,
+    mesh_api::MESH_BOUNDS,
+    mesh_api::MESH_NEAR,
+    mesh_api::MESH_PICK,
+    mesh_api::MESH_CREATE,
+    mesh_api::MESH_ADD_EDGES,
+    mesh_api::MESH_ADD_CURVE,
+    mesh_api::MESH_ERASE,
+    mesh_api::MESH_REVERSE_FACES,
+    mesh_api::MESH_PUSH_PULL,
+    mesh_api::MESH_FOLLOW_ME,
+    mesh_api::MESH_OFFSET,
+    mesh_api::MESH_INTERSECT_FACES,
+    mesh_api::MESH_TRANSFORM,
+    mesh_api::MESH_COPY,
+    mesh_api::MESH_PAINT,
+    mesh_api::MESH_HIDE,
+    mesh_api::MESH_SOFTEN,
+    mesh_api::MESH_SOFTEN_EDGES,
+    mesh_api::MESH_SOLID,
+    mesh_api::MESH_MAKE_GROUP,
+    mesh_api::MESH_MAKE_COMPONENT,
+    mesh_api::MESH_EXPLODE,
+    mesh_api::MESH_BATCH,
+    mesh_api::MESH_RENDER,
     // Extrude, sweep and 3D polygon (see solid_api.rs).
     solid_api::EXTRUDE_ADD,
     solid_api::EXTRUDE_SET,
@@ -1556,6 +1587,7 @@ impl Session {
                 "presentation": present_api::describe(),
                 "massing": massing_api::describe(),
                 "solids": solid_api::describe(),
+                "mesh": mesh_api::describe(),
                 "irrigation": irrigation_api::describe(),
                 "grading": grading_api::describe(),
                 "texture_beds": bed_api::describe(),
@@ -1815,6 +1847,9 @@ impl Session {
                     samples: Option<u32>,
                     compare: Option<Value>,
                     region: Option<[f64; 4]>,
+                    camera: Option<kadakas_core::sheets::ViewCamera>,
+                    // Set by mesh.render only: the answer says which camera was used.
+                    with_camera: Option<bool>,
                 }
                 let P {
                     view,
@@ -1826,6 +1861,8 @@ impl Session {
                     samples,
                     compare,
                     region,
+                    camera: free_camera,
+                    with_camera,
                 } = params(p)?;
                 let region = region_param(region)?;
                 let settings =
@@ -1863,7 +1900,11 @@ impl Session {
                     }
                     (None, bounds) => bounds,
                 };
-                camera.fit(framed, width as f32 / height as f32);
+                // A free camera is used as it is; the others frame the model.
+                match &free_camera {
+                    Some(c) => camera = mesh_api::camera_of(c)?,
+                    None => camera.fit(framed, width as f32 / height as f32),
+                }
                 // A named style, else the active style of the document, else none.
                 let style = match render_style.filter(|v| !v.is_null()) {
                     Some(v) => Some(present_api::style_param(doc, &v)?),
@@ -1917,9 +1958,12 @@ impl Session {
                     "width": width,
                     "height": height,
                     "view": settings.view.id(),
-                    "projection": settings.projection.id(),
+                    "projection": camera.projection.id(),
                     "mode": used_mode.id(),
                 });
+                if free_camera.is_some() || with_camera == Some(true) {
+                    out["camera"] = mesh_api::camera_json(&camera);
+                }
                 // The settings of the style are only given when materials or a style were used.
                 if !plain {
                     out["render_style"] = present_api::style_summary(&used_style);
@@ -2047,6 +2091,9 @@ impl Session {
                     return r;
                 }
                 if let Some(r) = solid_api::handle(self, method, p.clone()) {
+                    return r;
+                }
+                if let Some(r) = mesh_api::handle(self, method, p.clone()) {
                     return r;
                 }
                 if let Some(r) = irrigation_api::handle(self, method, p.clone()) {

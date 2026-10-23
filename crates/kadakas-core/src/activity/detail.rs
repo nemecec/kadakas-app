@@ -283,6 +283,9 @@ fn show(v: Option<&Value>, deg: bool, rad: bool) -> Option<String> {
         }
         Some(Value::String(s)) if s.chars().count() <= 40 => Some(s.clone()),
         Some(Value::Bool(b)) => Some(b.to_string()),
+        // An empty list has nothing to show: a list that grew (the edges of a surface model that
+        // got its first face) is "changed", not "cleared (was ())".
+        Some(Value::Array(l)) if l.is_empty() => None,
         Some(Value::Array(l)) if is_short_numbers(l) => Some(format!(
             "({})",
             l.iter()
@@ -714,5 +717,34 @@ mod tests {
         assert_eq!(c(None, Some("3")).text(), "zone 'A' gap set to 3");
         assert_eq!(c(Some("3"), None).text(), "zone 'A' gap cleared (was 3)");
         assert_eq!(c(None, None).text(), "zone 'A' gap changed");
+    }
+
+    #[test]
+    fn a_surface_model_that_got_its_first_face_is_changed_not_cleared() {
+        use crate::surface::{Edit, SurfaceModel};
+        let mut m = SurfaceModel::new();
+        let before = Object::new(
+            ObjectId::default(),
+            FIRST_LAYER,
+            NONE_CLASS,
+            Shape::SurfaceModel(Box::new(m.clone())),
+        );
+        m.apply(&Edit::AddEdges {
+            edges: vec![
+                [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]],
+                [[100.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+                [[100.0, 100.0, 0.0], [0.0, 0.0, 0.0]],
+            ],
+        })
+        .unwrap();
+        let after = Object::new(
+            ObjectId::default(),
+            FIRST_LAYER,
+            NONE_CLASS,
+            Shape::SurfaceModel(Box::new(m)),
+        );
+        let text = of(&before, &after).unwrap().text();
+        assert!(!text.contains("cleared"), "{text}");
+        assert!(text.contains("changed"), "{text}");
     }
 }

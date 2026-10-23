@@ -312,6 +312,108 @@ fn mcp_lists_domain_tools_and_runs_methods() {
     assert_eq!(l[11]["result"]["isError"], false);
 }
 
+/// The modeler is reachable by MCP (MOD-11): the tool `mesh` lists its methods with their schemas,
+/// runs methods, refuses with a stable id, and `mesh.render` gives an image.
+#[test]
+fn mcp_drives_the_modeler_with_the_mesh_tool() {
+    let dir = temp("mcp-mesh");
+    let call = |id: u64, tool: &str, args: Value| {
+        rpc(id, "tools/call", json!({"name": tool, "arguments": args}))
+    };
+    let unknown = "00000000-0000-0000-0000-0000000000ff";
+    let l = mcp_session(
+        &["mcp"],
+        &[
+            rpc(1, "initialize", json!({"protocolVersion": "2025-03-26"})),
+            rpc(2, "tools/list", json!({})),
+            call(
+                3,
+                "mesh",
+                json!({"method": "mesh.create", "params": {"name": "Shed"}}),
+            ),
+            call(4, "mesh", json!({"method": "mesh.summary", "params": {}})),
+            call(
+                5,
+                "mesh",
+                json!({"method": "mesh.render", "params": {"width": 32, "height": 24}}),
+            ),
+            call(
+                6,
+                "mesh",
+                json!({"method": "mesh.soften_edges", "params": {"id": unknown, "below_angle": "wide"}}),
+            ),
+            call(
+                7,
+                "mesh",
+                json!({"method": "mesh.push_pull", "params": {"id": unknown, "face": 1, "distance": 5}}),
+            ),
+        ],
+        &dir,
+    );
+    let tools = l[1]["result"]["tools"].as_array().unwrap();
+    let mesh = tools
+        .iter()
+        .find(|t| t["name"] == "mesh")
+        .expect("a mesh tool");
+    assert_eq!(mesh["annotations"]["readOnlyHint"], false);
+    let text = mesh["description"].as_str().unwrap();
+    for m in [
+        "mesh.push_pull",
+        "mesh.soften_edges",
+        "mesh.batch",
+        "mesh.solid",
+        "mesh.render",
+    ] {
+        assert!(text.contains(m), "{m} is listed");
+    }
+    assert_eq!(l[2]["result"]["isError"], false);
+    let summary = l[3]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(summary.contains("\"Shed\""), "{summary}");
+    let image = &l[4]["result"]["content"];
+    assert_eq!(image[0]["type"], "image", "{image}");
+    assert_eq!(l[5]["result"]["isError"], true);
+    let t = l[5]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("below_angle"), "{t}");
+    let refused = &l[6]["result"];
+    assert_eq!(refused["isError"], true);
+    let t = refused["content"][0]["text"].as_str().unwrap();
+    assert!(t.contains("no_such_object"), "{t}");
+}
+
+#[test]
+fn mcp_flat_has_a_tool_for_every_mesh_method() {
+    let dir = temp("flat-mesh");
+    let l = mcp_session(
+        &["mcp", "--mcp-flat"],
+        &[
+            rpc(1, "initialize", json!({})),
+            rpc(2, "tools/list", json!({})),
+        ],
+        &dir,
+    );
+    let tools = l[1]["result"]["tools"].as_array().unwrap();
+    for m in [
+        "mesh_summary",
+        "mesh_push_pull",
+        "mesh_soften_edges",
+        "mesh_batch",
+        "mesh_solid",
+        "mesh_render",
+        "mesh_pick",
+    ] {
+        let t = tools
+            .iter()
+            .find(|t| t["name"] == m)
+            .unwrap_or_else(|| panic!("{m}"));
+        assert_eq!(t["inputSchema"]["type"], "object", "{m}");
+    }
+    let t = tools
+        .iter()
+        .find(|t| t["name"] == "mesh_soften_edges")
+        .unwrap();
+    assert!(t["inputSchema"]["properties"]["below_angle"].is_object());
+}
+
 #[test]
 fn mcp_flat_lists_every_method_as_a_tool() {
     let dir = temp("flat");

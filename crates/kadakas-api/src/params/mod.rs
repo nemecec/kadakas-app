@@ -63,6 +63,7 @@ mod feedback;
 mod io;
 mod irrigation;
 mod layers;
+pub(crate) mod mesh;
 mod objects;
 mod plants;
 mod plugins;
@@ -301,6 +302,7 @@ const ENTRY_LISTS: &[&[Entry]] = &[
     io::ENTRIES,
     irrigation::ENTRIES,
     layers::ENTRIES,
+    mesh::ENTRIES,
     objects::ENTRIES,
     plants::ENTRIES,
     plugins::ENTRIES,

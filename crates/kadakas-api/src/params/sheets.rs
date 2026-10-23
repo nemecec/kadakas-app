@@ -117,6 +117,9 @@ pub struct RenderPngParams {
     /// {from, to, mode?, hide_unchanged?, ...}: draw the changes since a version
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compare: Option<Obj>,
+    /// {target [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection}: a free camera instead of a standard view and the framing of the model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<super::layers::SavedViewCamera>,
 }
 
 // Parameters of `render.hidden_line`.
