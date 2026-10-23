@@ -530,6 +530,28 @@ fn walk<'a>(
     Ok(())
 }
 
+/// True if a part of a definition is drawn: its class is not switched off. An instance draws the
+/// parts that its definition shows (MOD-13), in the plan, in 3D and on the sheets.
+pub fn leaf_shown(doc: &Document, leaf: &Leaf<'_>) -> bool {
+    leaf.class
+        .and_then(|c| doc.class(c))
+        .is_none_or(|c| c.visible)
+}
+
+/// The colour of the faces of a part that have no material: the fill of the part, else the fill of
+/// its class. `None` when it has neither (the instance gives its own).
+pub fn leaf_fill(doc: &Document, leaf: &Leaf<'_>) -> Option<[u8; 4]> {
+    leaf.attrs
+        .fill
+        .or_else(|| {
+            leaf.class
+                .and_then(|c| doc.class(c))
+                .and_then(|c| c.attrs.fill)
+        })
+        .filter(|c| c.0[3] > 0)
+        .map(|c| c.0)
+}
+
 /// Checks, after the definition `changed` was added or changed, that it and every component
 /// definition that uses it (directly or through others) still expands within the limits: no
 /// missing definition, no cycle, nesting at most [`MAX_COMPONENT_DEPTH`], at most

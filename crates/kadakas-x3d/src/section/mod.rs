@@ -211,6 +211,10 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             .is_some_and(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
     };
     let skipped = |id: ObjectId| doc.object(id).is_none_or(settings::is_section_line);
+    let surface_of = |id: ObjectId| {
+        doc.object(id)
+            .is_some_and(|o| matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }))
+    };
     let mut tris: Vec<Tri> = Vec::with_capacity(mesh.triangle_count().min(MAX_TRIANGLES));
     for t in 0..mesh.triangle_count().min(MAX_TRIANGLES) {
         let object = mesh.tri_object[t];
@@ -237,12 +241,19 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
     }
 
     if spec.mode == Mode::Cut {
-        cut_faces(&tris, &frame, &mut out, &plant_of);
+        cut_faces(&tris, &frame, &mut out, &plant_of, &|id| {
+            open_surface(doc, id)
+        });
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
-        let with_tris: std::collections::BTreeSet<kadakas_core::uid::Uid> =
-            tris.iter().map(|t| t.object.0).collect();
+        // The edges that a surface model shows are lines of the scene, also where it has
+        // triangles: an edge between two faces in one plane is no crease of the mesh.
+        let with_tris: std::collections::BTreeSet<kadakas_core::uid::Uid> = tris
+            .iter()
+            .filter(|t| !surface_of(t.object))
+            .map(|t| t.object.0)
+            .collect();
         let l = &scene.lines;
         for s in 0..l.segment_count() {
             let object = l.objects[s];
@@ -262,14 +273,43 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             len: frame.len,
             depth: spec.depth.unwrap_or(f64::INFINITY),
         };
+        let soft: Vec<[DVec3; 2]> = scene
+            .soft_edges
+            .iter()
+            .map(|[a, b]| [frame.uvw(*a), frame.uvw(*b)])
+            .collect();
         let covers: Vec<&CutFace> = out.faces.iter().collect();
         // Depths closer than this count as equal: a ten thousandth of the section, at least 1 mm.
         let tol = (frame.len * 1e-4).max(1.0);
-        out.edges = beyond::edges(&tris, &segs, &region, &covers, tol, spec.mode == Mode::Cut);
+        out.edges = beyond::edges(
+            &tris,
+            &segs,
+            &soft,
+            &region,
+            &covers,
+            tol,
+            spec.mode == Mode::Cut,
+        );
         out.truncated = out.edges.len() >= beyond::MAX_EDGES;
     }
     out.grow();
     out
+}
+
+/// True for a surface model or an instance that is not a closed solid, so that the cut through it
+/// is an outline and no poche. A model with more faces than the automatic check
+/// (`surface::info::AUTO_CHECK_FACES`) counts as closed: the check takes about a second at the
+/// limits of a model, and a ring that closes is a good sign.
+fn open_surface(doc: &Document, id: ObjectId) -> bool {
+    use kadakas_core::surface::info::SolidState;
+    let Some(o) = doc.object(id) else {
+        return false;
+    };
+    if !matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }) {
+        return false;
+    }
+    kadakas_core::surface::info::of_object(doc, o, kadakas_core::surface::info::Check::Auto)
+        .is_some_and(|i| matches!(i.solid, SolidState::Open { .. }))
 }
 
 /// The cut of every object that the plane crosses.
@@ -278,6 +318,7 @@ fn cut_faces(
     frame: &Frame,
     out: &mut SectionDrawing,
     plant_of: &dyn Fn(ObjectId) -> bool,
+    open_of: &dyn Fn(ObjectId) -> bool,
 ) {
     // The trunk of a plant is cut on its own: it is a solid, the canopy only gives a silhouette.
     let mut by_object: BTreeMap<(kadakas_core::uid::Uid, bool), Vec<(DVec2, DVec2)>> =
@@ -327,6 +368,15 @@ fn cut_faces(
             }
         }
         let rings = cut::orient(rings);
+        // A surface model that is not a closed solid has no inside: its cut is an outline.
+        if !rings.is_empty() && open_of(object) {
+            for r in rings {
+                let mut points = r;
+                points.push(points[0]);
+                out.profiles.push(Profile { object, points });
+            }
+            continue;
+        }
         if !rings.is_empty() {
             let face = CutFace { object, rings };
             if plant_of(object) && !trunk {

@@ -92,15 +92,17 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
             ];
             edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
         }
-        Shape::SurfaceModel(m) => m.bounds().is_some_and(|(lo, hi)| {
-            let corners = [
-                lo.truncate(),
-                DVec2::new(hi.x, lo.y),
-                hi.truncate(),
-                DVec2::new(lo.x, hi.y),
-            ];
-            edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners)
-        }),
+        // The faces seen from above and the edges that are shown, as the plan draws them
+        // (MOD-13). Soft and hidden edges and hidden faces do not pick.
+        Shape::SurfaceModel(m) => kadakas_core::surface::plan::hit(
+            &[kadakas_core::surface::plan::Part {
+                model: m,
+                xf: m.transform,
+                fill: None,
+            }],
+            p,
+            tol,
+        ),
         Shape::Mesh3d(m) => {
             let (lo, hi) = m.bounds3();
             let corners = [
@@ -178,12 +180,22 @@ fn object_hit(pk: Prims, doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool
         return pk.hit(doc, o, p, tol);
     }
     if matches!(o.shape, Shape::Component { .. }) {
-        // The box around the instance (its definition is read from the document).
+        // The box around the instance first (its definition is read from the document), then the
+        // faces and edges of its parts as the plan draws them (MOD-13). An instance that cannot
+        // be drawn is picked at its mark.
         let (lo, hi) = doc.object_bounds(o);
-        let corners = [lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)];
-        return lo.is_finite()
-            && hi.is_finite()
-            && (edge_dist(&corners, true, p) <= tol || point_in_polygon(p, &corners));
+        if !(lo.is_finite() && hi.is_finite())
+            || p.x < lo.x - tol
+            || p.x > hi.x + tol
+            || p.y < lo.y - tol
+            || p.y > hi.y + tol
+        {
+            return false;
+        }
+        return match kadakas_core::surface::plan::parts_of(doc, o) {
+            Some(Ok(parts)) => kadakas_core::surface::plan::hit(&parts, p, tol),
+            _ => true,
+        };
     }
     let filled = doc.resolved_attrs(o).fill.is_some_and(|c| c.0[3] > 0);
     shape_hit(&o.shape, filled, p, tol)

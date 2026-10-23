@@ -149,8 +149,12 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         && let Some(p) = resp.interact_pointer_pos()
     {
         let hit = view3d.pick(&scene, local(p), size);
-        // A ghost is not in the drawing: it cannot be selected.
-        let hit = hit.filter(|id| session.editor.doc().object(*id).is_some());
+        // A ghost is not in the drawing: it cannot be selected. A member of a group selects the
+        // group, as in the plan, unless you are in the group (MOD-13).
+        let context = session.edit_context();
+        let hit = hit
+            .filter(|id| session.editor.doc().object(*id).is_some())
+            .and_then(|id| session.editor.doc().selection_target(id, context));
         session.selection = view3d::click_selection(&session.selection, hit, mods.shift);
     }
 
@@ -430,6 +434,100 @@ mod tests {
         assert_eq!(h.session.selection, vec![id]);
         h.click(egui::pos2(400.0, 300.0), egui::Modifiers::SHIFT);
         assert!(h.session.selection.is_empty());
+    }
+
+    /// A closed box of 2000 x 2000 x 1000 mm around the origin (a square pulled up).
+    fn add_surface_box(h: &mut Harness) -> ObjectId {
+        use kadakas_core::surface::Edit;
+        let id = ObjectId(
+            h.session
+                .editor
+                .execute(&Command::AddObject {
+                    shape: Shape::SurfaceModel(Box::default()),
+                    layer: None,
+                    class: None,
+                    attrs: Default::default(),
+                })
+                .unwrap()
+                .created[0],
+        );
+        let p = [
+            [-1000.0, -1000.0, 0.0],
+            [1000.0, -1000.0, 0.0],
+            [1000.0, 1000.0, 0.0],
+            [-1000.0, 1000.0, 0.0],
+        ];
+        h.session
+            .editor
+            .execute(&Command::EditSurface {
+                id,
+                edit: Edit::AddEdges {
+                    edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+                },
+            })
+            .unwrap();
+        let face = match &h.session.editor.doc().object(id).unwrap().shape {
+            Shape::SurfaceModel(m) => m.faces().next().unwrap().0,
+            _ => unreachable!(),
+        };
+        h.session
+            .editor
+            .execute(&Command::EditSurface {
+                id,
+                edit: Edit::PushPull {
+                    face,
+                    distance: 1000.0,
+                },
+            })
+            .unwrap();
+        id
+    }
+
+    #[test]
+    fn a_click_in_3d_selects_a_surface_model_an_instance_and_a_group() {
+        let mut h = Harness::new();
+        let id = add_surface_box(&mut h);
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        let none = egui::Modifiers::NONE;
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert_eq!(h.session.selection, vec![id]);
+        h.click(egui::pos2(5.0, 5.0), none);
+        assert!(h.session.selection.is_empty());
+        // An instance of a component made from the model is picked in its place.
+        let out = h
+            .session
+            .editor
+            .execute(&Command::MakeComponent {
+                name: "Box".into(),
+                model: None,
+                faces: vec![],
+                edges: vec![],
+                objects: vec![id],
+                replace: true,
+            })
+            .unwrap();
+        let inst = ObjectId(out.created[1]);
+        h.frame(vec![]);
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert_eq!(h.session.selection, vec![inst]);
+        // A model in a group selects the group.
+        let mut h = Harness::new();
+        let a = add_surface_box(&mut h);
+        let g = ObjectId(
+            h.session
+                .editor
+                .execute(&Command::Group {
+                    ids: vec![a],
+                    name: None,
+                })
+                .unwrap()
+                .created[0],
+        );
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert_eq!(h.session.selection, vec![g]);
     }
 
     #[test]

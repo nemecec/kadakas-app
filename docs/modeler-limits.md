@@ -293,3 +293,62 @@ Measured once (release build, Apple M1 Pro, one run each, load average about 5 f
 | Split | 2.5 s | 52,351 |
 
 The same test checks that `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)` hold on this model. Dense meshes show a case that small models do not: the pieces next to the cut can be thin slivers that touch the other surface within the plane tolerance. A piece is placed by the place that holds at least 80 percent of its area, so such a sliver does not refuse the operation. This is one measurement, not a campaign. A campaign that finds which step costs most is not done. No limit value changes.
+
+## D. Drawing of surface models in the app (MOD-13)
+
+This section measures the drawing of a model at the size of the limits (55,000 vertices, 150,000 edges, 100,000 faces). It chooses four new limits, and says how. They are guards for time, like the guards above. They do not change a limit of the model.
+
+Method. Release build, Apple M1 Pro. One run each. The machine was busy with other work (the load average was about 27), so the times are upper bounds. Two models of 100,000 faces: a bumpy terrain (223 x 223 squares cut in two, 50,176 vertices, 149,633 edges, 99,458 faces, open) and a closed ball (160 meridians, 313 parallels, 49,922 vertices, 149,760 edges, 99,840 faces). A terrain of 20,000 faces is the size just under the limit of the plan. The code is `crates/kadakas-print/tests/surface_perf.rs` and `time_of_the_plan_on_the_screen` in `crates/kadakas-app/src/surface_draw.rs` (all `--ignored`).
+
+### D1. Times at 100,000 faces
+
+```text
+What                                            Terrain 100k  Ball 100k  Terrain 20k
+----------------------------------------------  ------------  ---------  -----------
+Plan geometry, the outline (the limit applies)  59 ms         60 ms      10 ms
+Plan geometry, every face and edge              113 ms        92 ms      17 ms
+Plan mesh for the screen, every face (app)      14 ms         .          2.6 ms
+Tessellation of that mesh (egui)                6.4 ms        .          0.8 ms
+Hit test (a click)                              3.1 ms        1.5 ms     0.7 ms
+Snap points near the pointer (400 mm)           21 ms         22 ms      3.8 ms
+Object Info, counts                             23 ms         22 ms      4 ms
+Object Info, closed-solid check                 1.5 s         1.7 s      0.23 s
+3D scene, mesh::build                           150 ms        152 ms     30 ms
+Sheet, plan viewport (compose_page)             56 ms         58 ms      9.7 ms
+Sheet, plan viewport as PDF                     55 ms         57 ms      9.8 ms
+Section drawing (cut and edges beyond)          265 ms        201 ms     70 ms
+```
+
+The geometry of the plan is made once for each revision of the document (the canvas keeps it). A frame then pays for the mesh and the tessellation. Every face and edge at 100,000 faces would cost 20 ms for each frame. At 20,000 faces it is 3.4 ms. The mesh has 675,000 vertices at 100,000 faces.
+
+The check of the closed solid is 1.5 to 3.2 s at the limits (the ball took 3.2 s in an earlier run), as the first report found for the full check. Object Info does not run it by itself above 20,000 faces. It shows a button.
+
+### D2. The hidden-line viewport, before and after the thinning of lines
+
+```text
+Hidden-line viewport    Terrain before  Terrain after  Ball before  Ball after
+----------------------  --------------  -------------  -----------  ----------
+Top                     672 ms          234 ms         469 ms       246 ms
+Right isometric         338 ms          232 ms         468 ms       235 ms
+Front                   2,336 ms        497 ms         856 ms       233 ms
+Section viewport        606 ms          276 ms         242 ms       208 ms
+```
+
+A viewport that takes over 1 s is the front view of the terrain: 150,000 lines, and every triangle covers the others edge-on. The pass cost 1.6 s for the lines and 0.3 s for the covers and the edges of the mesh. The time grows faster than the number of lines (20,000 faces and 30,200 lines took 0.15 s, which is 10.8 times less for 5 times fewer lines). So `kadakas_render::hlr` now leaves out the lines of an object that has triangles and more than 50,000 lines, and draws it by the silhouettes, creases and borders of its mesh (the terrain keeps 3,000 of its 150,000 edges in the front view). That is 0.5 s at most in these measurements. The line list of a pass is also held to 150,000 lines: the objects with most lines go first. `HiddenLines::thinned_objects` counts them. A model of 33,000 faces or fewer keeps all its edges. The sheets and the sections use the same pass.
+
+### D3. The limits that were chosen
+
+| Constant | Value | Why |
+|---|---|---|
+| `surface::plan::MAX_FACES` | 20,000 | The plan draws each face. The frame cost is 3.4 ms at this size and 20 ms at 100,000 faces. The rest of the frame (other objects, the palettes) needs most of the 16 ms of a frame on a slower machine than this one, so the plan keeps to about a fifth. |
+| `surface::plan::MAX_EDGES` | 30,000 | A triangulated mesh has 1.5 edges for each face, so 20,000 faces have 30,000 edges. The edge limit binds first for terrain and curved surfaces. |
+| `surface::plan::MAX_OUTLINE_EDGES` | 20,000 | The outline of a model over the first two limits. A longer outline (many separate pieces) is the box. |
+| `hlr::MAX_OBJECT_LINES`, `hlr::MAX_LINES` | 50,000 and 150,000 | The rule of about 1 s for a viewport (D2). |
+| `surface::info::AUTO_CHECK_FACES` | 20,000 | The closed-solid check of Object Info costs 0.23 s at this size and 1.5 s or more at 100,000 faces. |
+
+The plan limits apply to the screen, the sheets and the SVG alike (AGR-01). A sheet could draw more, because it draws once, but a print that shows more than the screen is a surprise.
+
+### D4. What is not measured
+
+- The first frame of a very big instance count (thousands of instances of one definition). The parts are shared, and the plan of an instance costs the work for its parts.
+- Debug builds. They are about ten times slower. The tests use small models.

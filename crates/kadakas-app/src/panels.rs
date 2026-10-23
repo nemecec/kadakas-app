@@ -1508,7 +1508,8 @@ fn edit_shape(
                 f.count(ui, m.footprint.len());
             }
             Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
-            Shape::SurfaceModel(m) => f.count(ui, m.vertex_count()),
+            // The counts and the rest are in the block of `surface_ui`.
+            Shape::SurfaceModel(_) => {}
             Shape::Extrude(e) => crate::solid_ui::extrude_fields(ui, &mut f, e),
             Shape::Sweep(sw) => crate::solid_ui::sweep_fields(ui, &mut f, sw),
             Shape::Underlay(u) => f.commit |= crate::gis_ui::underlay_fields(ui, u),
@@ -1562,6 +1563,7 @@ pub fn object_info(
     session: &mut Session,
     edit: &mut InfoEdit,
     paving: &mut crate::paving_ui::PavingUi,
+    surface: &mut crate::surface_ui::State,
     status: &mut String,
 ) {
     ui.heading(tr!("panels-object-info"));
@@ -1679,6 +1681,19 @@ pub fn object_info(
             "panels-area-value",
             area = kadakas_units::current().area_text(area)
         ));
+    }
+    if crate::surface_ui::applies(&obj) {
+        let with_modeler = *surface
+            .modeler
+            .get_or_insert_with(crate::surface_ui::modeler_available);
+        crate::surface_ui::object_info(
+            ui,
+            session.editor.doc(),
+            session.editor.revision(),
+            &obj,
+            surface,
+            with_modeler,
+        );
     }
     if matches!(obj.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }) {
         crate::plant_ui::plant_object_info(ui, session, id, status);
@@ -2167,6 +2182,7 @@ mod tests {
                             &mut s,
                             &mut edit,
                             &mut crate::paving_ui::PavingUi::default(),
+                            &mut Default::default(),
                             &mut status,
                         );
                         tool_panel(

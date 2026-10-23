@@ -35,6 +35,14 @@ pub fn set_ghost(ghost: bool) {
     GHOST.with(|g| g.set(ghost));
 }
 
+/// True if `doc` is the document that the canvas draws now and the drawing is not a ghost of a
+/// compare. What is made for an object of the live document can be kept for its revision. A ghost
+/// has the IDs of the live objects but another content.
+pub fn is_live(doc: &Document) -> bool {
+    let live = LIVE_DOC.with(std::cell::Cell::get);
+    (live == 0 || live == std::ptr::from_ref(doc) as usize) && !GHOST.with(std::cell::Cell::get)
+}
+
 /// Tells the drawing cache which document revision is current. The canvas calls it before it draws.
 pub fn set_revision(revision: u64) {
     CACHE.with(|c| c.0.set(revision));

@@ -331,7 +331,7 @@ fn the_windows_and_object_info_draw_in_every_state_without_changing_the_document
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             p.windows(ui.ctx(), s, status);
             let mut e = crate::panels::InfoEdit::default();
-            crate::panels::object_info(ui, s, &mut e, p, status);
+            crate::panels::object_info(ui, s, &mut e, p, &mut Default::default(), status);
         });
     };
     let before = s.editor.revision();
@@ -730,7 +730,14 @@ fn the_jobs_share_one_copy_of_the_document_per_revision() {
     s.selection = vec![id];
     let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
         let mut e = crate::panels::InfoEdit::default();
-        crate::panels::object_info(ui, &mut s, &mut e, &mut p, &mut status);
+        crate::panels::object_info(
+            ui,
+            &mut s,
+            &mut e,
+            &mut p,
+            &mut Default::default(),
+            &mut status,
+        );
     });
     assert_eq!(p.shared.held(), Some(s.editor.revision()));
 }

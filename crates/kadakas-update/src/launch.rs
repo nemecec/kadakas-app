@@ -71,6 +71,80 @@ pub fn sibling_app_command(exe: &Path, files: &[OsString]) -> Option<Command> {
     Some(cmd)
 }
 
+/// The program `program` of the flavors (`kadakas-modeler`) next to the running program `exe`, if the
+/// installation has it.
+pub fn sibling_exists(exe: &Path, program: &str) -> bool {
+    exe.parent()
+        .is_some_and(|dir| crate::flavors::find_exe(dir, program).is_some())
+}
+
+/// The command that starts the program `program` next to the running program `exe` with `files`
+/// (the "Open in modeler" of the app, MOD-13). The run of the sender is not the run of the new
+/// program. `None` if the program is not next to `exe`.
+pub fn sibling_command(exe: &Path, program: &str, files: &[OsString]) -> Option<Command> {
+    let dir = exe.parent()?;
+    let rel = crate::flavors::find_exe(dir, program)?;
+    let flavor = Flavor {
+        id: program.into(),
+        name: program.into(),
+        exe: rel,
+    };
+    let mut cmd = command_with(dir, &flavor, "", files, &[]).ok()?;
+    cmd.env_remove(crate::handshake::ENV_RUN)
+        .env_remove(crate::handshake::ENV_ROOT);
+    Some(cmd)
+}
+
+/// How a file went to a sibling program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sent {
+    /// A new process was started.
+    Spawned,
+    /// The program runs already and was asked to open the file.
+    Asked,
+}
+
+/// Why a file did not go to a sibling program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SiblingError {
+    /// The program is not installed next to this one.
+    Missing,
+    /// The program did not start.
+    Failed(String),
+}
+
+/// Opens `file` in the program `program` next to `exe`. If that program runs (it has an alive stamp
+/// that names it, see `handshake::running_program`), the file goes to it as an open request and no
+/// second process starts. Otherwise the program is started with the file. `root` is the folder of
+/// the launcher and `own` the id of this run.
+pub fn open_in_sibling(
+    root: Option<&Path>,
+    own: &str,
+    exe: &Path,
+    program: &str,
+    file: &Path,
+) -> std::result::Result<Sent, SiblingError> {
+    if !sibling_exists(exe, program) {
+        return Err(SiblingError::Missing);
+    }
+    if let Some(root) = root
+        && let Some(id) = crate::handshake::running_program(root, program, own)
+        && crate::handshake::send_open(root, &id, &[file.to_path_buf()]).is_ok()
+    {
+        return Ok(Sent::Asked);
+    }
+    let mut cmd = sibling_command(exe, program, &[file.as_os_str().to_owned()])
+        .ok_or(SiblingError::Missing)?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| SiblingError::Failed(e.to_string()))?;
+    // Collect the child when it ends, so that it does not stay a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(Sent::Spawned)
+}
+
 /// Starts the app and does not wait for it.
 pub fn launch(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Child> {
     Ok(command(dir, flavor, profile)?.spawn()?)
@@ -174,6 +248,76 @@ mod tests {
         assert!(sibling_app_command(&lone.join("kadakas-modeler"), &files).is_none());
         std::fs::remove_dir_all(&d).unwrap();
         std::fs::remove_dir_all(&lone).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_goes_to_a_sibling_program_or_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmp("sibling-open");
+        let exe = d.join("kadakas-app");
+        let file = d.join("a.kad");
+        // Not installed: refused, nothing starts.
+        assert_eq!(
+            open_in_sibling(None, "", &exe, "kadakas-modeler", &file),
+            Err(SiblingError::Missing)
+        );
+        assert!(!sibling_exists(&exe, "kadakas-modeler"));
+        let modeler = d.join("kadakas-modeler");
+        std::fs::write(&modeler, "#!/bin/sh\necho \"$2\" > out.txt\n").unwrap();
+        std::fs::set_permissions(&modeler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(sibling_exists(&exe, "kadakas-modeler"));
+        let c = sibling_command(&exe, "kadakas-modeler", &[file.as_os_str().to_owned()]).unwrap();
+        let envs: Vec<_> = c.get_envs().collect();
+        assert!(envs.contains(&(OsStr::new("KADAKAS_RUN_ID"), None)));
+        // No program runs: it is started with the file.
+        assert_eq!(
+            open_in_sibling(None, "", &exe, "kadakas-modeler", &file),
+            Ok(Sent::Spawned)
+        );
+        let out = d.join("out.txt");
+        for _ in 0..200 {
+            if out.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap().trim(),
+            file.to_string_lossy()
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sibling_that_runs_gets_the_file_as_an_open_request_and_no_second_process() {
+        use crate::handshake::{AppLink, ENV_ROOT, ENV_RUN};
+        let d = tmp("sibling-ask");
+        // The program that runs is this test binary: it names itself beside its alive stamp.
+        let me = std::env::current_exe()
+            .unwrap()
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(d.join(&me), "x").unwrap();
+        let root = d.to_string_lossy().into_owned();
+        let env = move |k: &str| match k {
+            ENV_ROOT => Some(root.clone()),
+            ENV_RUN => Some("1a-1".to_string()),
+            _ => None,
+        };
+        let link = AppLink::from_env(&env).unwrap();
+        let _beat = link.start_heartbeat();
+        let file = d.join("a.kad");
+        let exe = d.join("kadakas-app");
+        assert_eq!(
+            open_in_sibling(Some(&d), "2b-2", &exe, &me, &file),
+            Ok(Sent::Asked)
+        );
+        assert_eq!(link.take_open(), vec![file]);
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

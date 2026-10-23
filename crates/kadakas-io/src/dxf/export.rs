@@ -359,7 +359,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             let why = match o.shape {
                 Shape::SurfaceModel(_) => "surface model without a visible face",
                 Shape::Component { .. } => {
-                    "component instance of the 3D modeler: DXF export of components is not done, explode the instance first"
+                    "component instance without a visible face, or a definition that cannot be expanded"
                 }
                 Shape::Guide(_) => "guide: construction geometry of the 3D modeler",
                 _ => "unsupported kind",
@@ -1005,6 +1005,74 @@ fn common(w: &mut W, kind: &str, layer: &str, o: &Object, hidden_layer: bool) {
     }
 }
 
+/// A surface model placed by `xf` as one 3D mesh, up at the elevation of the layer. A hidden face is
+/// left out, and a mirror turns the triangles back to face outward. `false` when nothing is left.
+fn surface_model_mesh(
+    w: &mut W,
+    cx: &mut Ctx,
+    o: &Object,
+    layer: &str,
+    hidden: bool,
+    m: &kadakas_core::surface::SurfaceModel,
+    xf: &kadakas_core::DAffine3,
+) -> bool {
+    let Ok(sm) = m.mesh() else {
+        return false;
+    };
+    let lift = cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation);
+    let vertices: Vec<DVec3> = sm
+        .positions
+        .iter()
+        .map(|p| {
+            let q = xf.transform_point3(*p);
+            DVec3::new(q.x, q.y, q.z + lift)
+        })
+        .collect();
+    let flip = xf.matrix3.determinant() < 0.0;
+    // An edge of a triangle is drawn when it is an edge of the model that is not soft or
+    // hidden. The diagonals that cut a face into triangles are not edges of the model.
+    let edge_of: std::collections::HashMap<_, _> = m.edges().map(|(id, e)| (e.key(), id)).collect();
+    let shown = |t: &[u32; 3]| -> [bool; 3] {
+        std::array::from_fn(|k| {
+            let (a, b) = (
+                sm.vertices[t[k] as usize],
+                sm.vertices[t[(k + 1) % 3] as usize],
+            );
+            let key = if a <= b { (a, b) } else { (b, a) };
+            edge_of.get(&key).is_some_and(|e| m.edge_shown(*e))
+        })
+    };
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    let mut visible: Vec<[bool; 3]> = Vec::new();
+    for (t, f) in sm.triangles.iter().zip(&sm.faces) {
+        if m.face_hidden(*f) {
+            continue;
+        }
+        let s = shown(t);
+        if flip {
+            triangles.push([t[0], t[2], t[1]]);
+            visible.push([s[2], s[1], s[0]]);
+        } else {
+            triangles.push(*t);
+            visible.push(s);
+        }
+    }
+    if triangles.is_empty() {
+        return false;
+    }
+    native::mesh(
+        w,
+        cx,
+        o,
+        layer,
+        hidden,
+        &vertices,
+        &triangles,
+        Some(&visible),
+    );
+    true
+}
+
 /// Writes the entities of an object, and the lines of its hatch, tile or line type as plain LINE
 /// entities (exploded: every CAD program shows them the same). False for a kind of shape this writer does not know.
 fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -> bool {
@@ -1164,63 +1232,31 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
         }
         Shape::Mesh3d(m) => native::mesh_object(w, cx, o, layer, hidden, m),
         Shape::SurfaceModel(m) => {
-            // The faces as triangles, in the drawing, up at the elevation of the layer. A hidden
-            // face is left out, and a mirror turns the triangles back to face outward.
-            let Ok(sm) = m.mesh() else {
+            return surface_model_mesh(w, cx, o, layer, hidden, m, &m.transform);
+        }
+        Shape::Component { symbol, transform } => {
+            // The models of the definition through the transform of the instance, one mesh each
+            // (MOD-13). A part whose class is switched off is left out, as in the plan and in 3D.
+            let inst = kadakas_core::component::affine(transform);
+            let Ok(leaves) = kadakas_core::component::leaves(&cx.doc.resources, *symbol) else {
                 return false;
             };
-            let lift = cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation);
-            let vertices: Vec<DVec3> = sm
-                .positions
+            let mut any = false;
+            for leaf in leaves
                 .iter()
-                .map(|p| {
-                    let q = m.transform.transform_point3(*p);
-                    DVec3::new(q.x, q.y, q.z + lift)
-                })
-                .collect();
-            let flip = m.transform.matrix3.determinant() < 0.0;
-            // An edge of a triangle is drawn when it is an edge of the model that is not soft or
-            // hidden. The diagonals that cut a face into triangles are not edges of the model.
-            let edge_of: std::collections::HashMap<_, _> =
-                m.edges().map(|(id, e)| (e.key(), id)).collect();
-            let shown = |t: &[u32; 3]| -> [bool; 3] {
-                std::array::from_fn(|k| {
-                    let (a, b) = (
-                        sm.vertices[t[k] as usize],
-                        sm.vertices[t[(k + 1) % 3] as usize],
-                    );
-                    let key = if a <= b { (a, b) } else { (b, a) };
-                    edge_of.get(&key).is_some_and(|e| m.edge_shown(*e))
-                })
-            };
-            let mut triangles: Vec<[u32; 3]> = Vec::new();
-            let mut visible: Vec<[bool; 3]> = Vec::new();
-            for (t, f) in sm.triangles.iter().zip(&sm.faces) {
-                if m.face_hidden(*f) {
-                    continue;
-                }
-                let s = shown(t);
-                if flip {
-                    triangles.push([t[0], t[2], t[1]]);
-                    visible.push([s[2], s[1], s[0]]);
-                } else {
-                    triangles.push(*t);
-                    visible.push(s);
-                }
+                .filter(|l| kadakas_core::component::leaf_shown(cx.doc, l))
+            {
+                any |= surface_model_mesh(
+                    w,
+                    cx,
+                    o,
+                    layer,
+                    hidden,
+                    leaf.model,
+                    &(inst * leaf.transform),
+                );
             }
-            if triangles.is_empty() {
-                return false;
-            }
-            native::mesh(
-                w,
-                cx,
-                o,
-                layer,
-                hidden,
-                &vertices,
-                &triangles,
-                Some(&visible),
-            );
+            return any;
         }
         Shape::Extrude(_) | Shape::Sweep(_) => {
             // The mesh of the solid, up at the elevation of its layer.

@@ -750,15 +750,22 @@ fn the_plan_mark_is_the_box_that_the_svg_draws() {
         panic!("a box")
     };
     assert_eq!((lo, hi), (DVec2::new(0.0, 0.0), DVec2::new(1000.0, 1000.0)));
+    // The SVG draws the faces and edges of the parts (MOD-13). The box of that drawing is the
+    // plan mark, which stays for bounds and picking.
+    let Some(kadakas_core::surface::plan::Outcome::Drawing(d)) =
+        kadakas_core::surface::plan::plan_of_object(ed.doc(), ed.doc().object(i).unwrap())
+    else {
+        panic!("a drawing")
+    };
+    assert_eq!(d.bounds(), Some((lo, hi)));
     let text = svg::render(ed.doc(), 800);
     assert!(
-        text.contains(&format!(
-            r#"<rect x="{}" y="{}" width="{}" height="{}""#,
-            lo.x,
-            -hi.y,
-            hi.x - lo.x,
-            hi.y - lo.y
-        )) && text.contains(r#"data-kind="component""#),
+        text.contains(r#"data-kind="component""#)
+            && text.contains(&format!(
+                r#"data-faces="{}" data-edges="{}""#,
+                d.faces(),
+                d.edges()
+            )),
         "{text}"
     );
 }

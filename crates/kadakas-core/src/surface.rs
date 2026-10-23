@@ -142,7 +142,9 @@ mod edit;
 mod frommesh;
 mod geom;
 mod index;
+pub mod info;
 mod part;
+pub mod plan;
 mod query;
 mod serial;
 mod solid;
@@ -165,6 +167,8 @@ mod tests_index;
 mod tests_intersect;
 #[cfg(test)]
 mod tests_offset;
+#[cfg(test)]
+mod tests_plan;
 #[cfg(test)]
 mod tests_pushpull;
 #[cfg(test)]

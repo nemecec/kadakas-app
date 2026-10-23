@@ -242,9 +242,11 @@ fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
 /// cut faces that hide what is behind them. `tol` is the distance in mm below which lines count as
 /// lying on the cut outline. `cut_is_drawn` is true when the caller draws the cut (a section); the
 /// lines on the plane and on the far clip are then left out. In an elevation nothing else draws them.
+/// `soft` are the soft and hidden edges of surface models: they are not drawn as creases.
 pub fn edges(
     tris: &[Tri],
     segs: &[Seg],
+    soft: &[[DVec3; 2]],
     region: &Region,
     covers: &[&CutFace],
     tol: f64,
@@ -335,6 +337,11 @@ pub fn edges(
         e.0 += (a.z + b.z) / 2.0;
         e.1 += 1;
     }
+    // The soft and hidden edges of surface models are not creases of the mesh.
+    scene.soft_edges = soft
+        .iter()
+        .map(|s| s.map(|v| Vec3::new(v.x as f32, v.z as f32, v.y as f32)))
+        .collect();
     if scene.is_empty() || lo.x > hi.x {
         return Vec::new();
     }

@@ -361,3 +361,66 @@ fn the_diagonals_of_a_face_and_the_soft_edges_are_not_drawn() {
         .sum();
     assert_eq!(hidden_soft, hidden + 2);
 }
+
+#[test]
+fn an_instance_of_a_component_is_written_as_a_mesh_through_its_transform() {
+    use kadakas_core::model::ObjectId;
+    let (mut ed, id) = cube_document();
+    let out = ed
+        .execute(&Command::MakeComponent {
+            name: "Cube".into(),
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: vec![ObjectId(id)],
+            replace: true,
+        })
+        .unwrap();
+    let inst = ObjectId(out.created[1]);
+    ed.execute(&Command::MoveObjects {
+        ids: vec![inst],
+        delta: DVec2::new(5000.0, 0.0),
+    })
+    .unwrap();
+    let (faces, report) = export(ed.doc(), MeshEntity::Face3d);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert_eq!(count(&faces, "3DFACE"), 12);
+    // The corner of the definition was at x = 0: after the move the cube is at 5000 to 6000,
+    // and it stands on the layer at 2000.
+    let x = values(&faces, "10");
+    let (lo, hi) = x
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+    assert_eq!((lo, hi), (5000.0, 6000.0), "{x:?}");
+    let z = values(&faces, "30");
+    assert!(z.iter().all(|v| *v == 2000.0 || *v == 3000.0), "{z:?}");
+    // A part in a class that is switched off is left out, and then nothing is left to write.
+    let class = kadakas_core::model::ClassId(
+        ed.execute(&Command::AddClass {
+            name: "Parts".into(),
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let mut doc = ed.doc().clone();
+    let Shape::Component { symbol, .. } = doc.object(inst).unwrap().shape.clone() else {
+        panic!()
+    };
+    let res = doc.resources.get_mut(symbol).unwrap();
+    let kadakas_core::resource::ResourceBody::Graphic(g) = &mut res.body else {
+        panic!()
+    };
+    let kadakas_core::graphics::GraphicResource::Symbol(def) = g.as_mut() else {
+        panic!()
+    };
+    def.parts[0].class = Some(class);
+    doc.classes
+        .iter_mut()
+        .find(|c| c.id == class)
+        .unwrap()
+        .visible = false;
+    let (text, report) = export(&doc, MeshEntity::Face3d);
+    assert_eq!(count(&text, "3DFACE"), 0);
+    assert!(report.skipped.iter().any(|s| s.entity == "component"));
+}

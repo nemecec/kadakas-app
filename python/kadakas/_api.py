@@ -3427,13 +3427,13 @@ class Api:
         return self._call("file.open", params or None)
 
     def objects_list(self, **params: "Unpack[ObjectsListParams]") -> Any:
-        """Objects. params: {layer?, class?, kind?}.
+        """Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | unchecked | empty, with volume_mm3 or open_edges), area_mm2, bounds and the materials (the numbers of Object Info). The geometry of a surface model is left out (shape.elided): read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.
 
         JSON-RPC method ``objects.list``."""
         return self._call("objects.list", params or None)
 
     def objects_get(self, **params: "Unpack[ObjectsGetParams]") -> Any:
-        """One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}.
+        """One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}. A surface model, a group of them and a component instance also have the field surface of objects.list; the surface model has its geometry too.
 
         JSON-RPC method ``objects.get``."""
         return self._call("objects.get", params or None)

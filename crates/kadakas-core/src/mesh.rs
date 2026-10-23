@@ -235,6 +235,10 @@ pub struct Scene {
     pub bounds: Option<Bounds3>,
     /// World position (mm) of the local point (0, 0, 0). Positions in the mesh and lines are relative to it.
     pub origin: DVec3,
+    /// The soft and hidden edges of surface models (MOD-13), as pairs of positions relative to
+    /// `origin`. They are not in `lines`. The hidden-line passes do not draw them as creases of
+    /// the mesh (the edges of a curved surface), but a silhouette stays.
+    pub soft_edges: Vec<[Vec3; 2]>,
     /// Geometry of each object, in document order.
     ranges: IndexMap<ObjectId, ObjectRange>,
 }
@@ -1051,12 +1055,15 @@ impl Builder<'_> {
             self.scene.mesh.two_sided_mode = false;
         }
         for (eid, e) in m.edges() {
-            // A hidden edge and a soft edge are not drawn; a smooth edge that is not soft is.
-            if !m.edge_shown(eid) {
+            let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) else {
                 continue;
-            }
-            if let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) {
+            };
+            // A hidden edge and a soft edge are not drawn; a smooth edge that is not soft is.
+            // The others are kept apart, so that no pass draws them as the crease of the mesh.
+            if m.edge_shown(eid) {
                 self.scene.lines.push(at(a), at(b), edge, id);
+            } else {
+                self.scene.soft_edges.push([at(a), at(b)]);
             }
         }
     }
@@ -1299,16 +1306,10 @@ impl Builder<'_> {
                 match leaves {
                     Some(leaves) => {
                         for leaf in leaves {
-                            let own = leaf
-                                .attrs
-                                .fill
-                                .or_else(|| {
-                                    leaf.class
-                                        .and_then(|c| self.doc.class(c))
-                                        .and_then(|c| c.attrs.fill)
-                                })
-                                .filter(|c| c.0[3] > 0)
-                                .map(rgba);
+                            if !crate::component::leaf_shown(self.doc, &leaf) {
+                                continue;
+                            }
+                            let own = crate::component::leaf_fill(self.doc, &leaf);
                             let color = own.or(fill).unwrap_or(SURFACE_FRONT);
                             self.surface_model(
                                 leaf.model,

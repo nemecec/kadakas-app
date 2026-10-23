@@ -137,6 +137,8 @@ pub struct KadakasApp {
     /// The window title must be set in the next frame.
     title_dirty: bool,
     info: InfoEdit,
+    /// Object Info of surface models (MOD-13).
+    surface_info: crate::surface_ui::State,
     nav: NavState,
     plant_ui: PlantUi,
     resource_ui: ResourceUi,
@@ -555,6 +557,7 @@ impl KadakasApp {
             path: None,
             title_dirty: false,
             info: InfoEdit::default(),
+            surface_info: crate::surface_ui::State::default(),
             nav: NavState::default(),
             plant_ui: PlantUi::default(),
             resource_ui: ResourceUi::default(),
@@ -1722,6 +1725,27 @@ impl KadakasApp {
 
     /// Each frame: the question about a big file shows until the person answers.
     ///
+    /// Object Info asked to open the drawing in the 3D modeler (MOD-13). The modeler opens the
+    /// saved file, so the status line tells when a save has to come first.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn modeler_frame(&mut self) {
+        if !std::mem::take(&mut self.surface_info.open_in_modeler) {
+            return;
+        }
+        use kadakas_update::handshake::{ENV_ROOT, ENV_RUN};
+        let root =
+            kadakas_update::settings::launcher_root(crate::app_updates::launch_env(ENV_ROOT));
+        let own = crate::app_updates::launch_env(ENV_RUN).unwrap_or_default();
+        let exe = std::env::current_exe().unwrap_or_default();
+        self.status = crate::surface_ui::open_in_modeler(
+            self.path.as_deref(),
+            self.session.has_unsaved_changes(),
+            &exe,
+            root.as_deref(),
+            &own,
+        );
+    }
+
     /// Open files by drag and drop is not supported yet. It needs a prompt for unsaved changes
     /// first, because a drop replaces the open document.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3425,6 +3449,7 @@ impl KadakasApp {
                         &mut self.session,
                         &mut self.info,
                         &mut self.paving_ui,
+                        &mut self.surface_info,
                         &mut self.status,
                     );
                     self.plugin_ui
@@ -3720,6 +3745,8 @@ impl eframe::App for KadakasApp {
         crate::profiles::customize_window(&ctx, &mut self.profiles);
         self.sync_profile();
         self.open_gate_frame(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.modeler_frame();
         #[cfg(not(target_arch = "wasm32"))]
         resource_ui::question(
             &ctx,

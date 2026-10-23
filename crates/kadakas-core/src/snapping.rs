@@ -374,11 +374,40 @@ impl Geometry {
                     }
                 }
             }
-            g.add_shape(&o.shape);
+            if matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }) {
+                g.add_surface(doc, o, near);
+            } else {
+                g.add_shape(&o.shape);
+            }
         }
         g
     }
+
+    /// The snap points of a surface model or an instance (MOD-13): its vertices, the middles of
+    /// its edges that are shown, the centres of its faces that are seen from above, and the edges.
+    /// Hidden faces and edges and soft edges give nothing. `near` keeps what is close to the pointer.
+    pub fn add_surface(&mut self, doc: &Document, o: &Object, near: Option<(DVec2, f64)>) {
+        let Some(Ok(parts)) = crate::surface::plan::parts_of(doc, o) else {
+            return;
+        };
+        let s = crate::surface::plan::snap_geometry(&parts, near, SURFACE_EDGE_CAP);
+        for p in s.vertices {
+            self.add_point(p, Kind::Endpoint);
+        }
+        for p in s.midpoints {
+            self.add_point(p, Kind::Midpoint);
+        }
+        for p in s.centers {
+            self.add_point(p, Kind::Center);
+        }
+        for [a, b] in s.edges {
+            self.edges.push(Piece::line(a, b));
+        }
+    }
 }
+
+/// Most edges of one surface model that the snap looks at.
+const SURFACE_EDGE_CAP: usize = 20_000;
 
 /// Which objects the pointer snaps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -518,10 +518,13 @@ pub const METHODS: &[(&str, &str)] = &[
     files::FILE_SAVE,
     #[cfg(not(target_arch = "wasm32"))]
     files::FILE_OPEN,
-    ("objects.list", "Objects. params: {layer?, class?, kind?}."),
+    (
+        "objects.list",
+        "Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | unchecked | empty, with volume_mm3 or open_edges), area_mm2, bounds and the materials (the numbers of Object Info). The geometry of a surface model is left out (shape.elided): read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.",
+    ),
     (
         "objects.get",
-        "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}.",
+        "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}. A surface model, a group of them and a component instance also have the field surface of objects.list; the surface model has its geometry too.",
     ),
     ("selection.get", "Selected object IDs."),
     (
@@ -1769,11 +1772,17 @@ impl Session {
                         f.kind.as_deref() == Some("guide") || !kadakas_core::guide::is_guide(o)
                     })
                     .collect();
-                let mut v = serde_json::to_value(list).unwrap();
-                v.as_array_mut().into_iter().flatten().for_each(|o| {
-                    elide_image(o);
-                    elide_sources(o);
-                });
+                let mut v = serde_json::to_value(&list).unwrap();
+                let mut checks = mesh_api::SUMMARY_CHECKS;
+                v.as_array_mut()
+                    .into_iter()
+                    .flatten()
+                    .zip(&list)
+                    .for_each(|(row, o)| {
+                        elide_image(row);
+                        elide_sources(row);
+                        mesh_api::annotate_object(doc, o, row, true, &mut checks);
+                    });
                 v
             }
             "objects.get" => {
@@ -1792,6 +1801,7 @@ impl Session {
                 if !sources {
                     elide_sources(&mut v);
                 }
+                mesh_api::annotate_object(doc, o, &mut v, false, &mut 1);
                 v
             }
             "selection.get" => json!({ "ids": self.selection }),
