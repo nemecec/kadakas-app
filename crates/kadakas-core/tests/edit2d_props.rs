@@ -216,7 +216,12 @@ proptest! {
             ed.execute(&cmd).unwrap();
             prop_assert!(ed.doc().objects.len() >= 2);
             // A circle is flattened to a polygon with the same area (see `boolean::ring_of`).
-            prop_assert!(close(total_area(&ed), before, 1e-6), "{} vs {}", total_area(&ed), before);
+            // Each half is snapped to the grid of the boolean engine on its own. The error
+            // follows the perimeter, not the area, so a thin strip needs an absolute slack.
+            prop_assert!(
+                (total_area(&ed) - before).abs() <= 1e-6 * (1.0 + before) + 3e-3,
+                "{} vs {}", total_area(&ed), before
+            );
             prop_assert!(ed.doc().objects.values().all(|o| finite(&o.shape)));
             // One undo gives the shape back.
             ed.undo();
