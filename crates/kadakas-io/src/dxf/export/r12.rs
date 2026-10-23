@@ -289,16 +289,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     }
     report.note(&format!(
         "release 12 stores no unit: the coordinates are in {} (option unit)",
-        match opts.unit {
-            crate::options::Unit::Mm => "millimeters",
-            crate::options::Unit::Cm => "centimeters",
-            crate::options::Unit::M => "meters",
-            crate::options::Unit::Km => "kilometers",
-            crate::options::Unit::Inch => "inches",
-            crate::options::Unit::Foot => "feet",
-            crate::options::Unit::Yard => "yards",
-            crate::options::Unit::Mile => "miles",
-        }
+        crate::dxf::units::unit_name(opts.unit)
     ));
     let mut out = Out {
         doc,

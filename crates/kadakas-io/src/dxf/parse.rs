@@ -148,8 +148,8 @@ pub struct Dxf {
     pub entities: Vec<Entity>,
     /// The GEODATA object of the file (the georeference), if it has one.
     pub geodata: Option<GeoData>,
-    /// Objects of the OBJECTS section that the importer reads: LAYOUT (paper space layouts) and
-    /// IMAGEDEF (the file of a raster image).
+    /// Objects of the OBJECTS section that the importer reads: LAYOUT (paper space layouts),
+    /// IMAGEDEF (the file of a raster image) and the dictionaries of clipped block references.
     pub objects: Vec<Entity>,
     /// The file ended before `EOF`.
     pub truncated: bool,
@@ -329,7 +329,12 @@ pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
                 });
                 dxf.objects = recs
                     .into_iter()
-                    .filter(|e| matches!(e.kind.as_str(), "LAYOUT" | "IMAGEDEF"))
+                    .filter(|e| match e.kind.as_str() {
+                        "LAYOUT" | "IMAGEDEF" => true,
+                        // The dictionary of a clipped block reference (XCLIP) has the entry ACAD_FILTER.
+                        "DICTIONARY" => e.items.iter().any(|(c, v)| *c == 3 && v == "ACAD_FILTER"),
+                        _ => false,
+                    })
                     .collect();
             }
             _ => {}

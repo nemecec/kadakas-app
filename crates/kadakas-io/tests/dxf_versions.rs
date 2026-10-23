@@ -2,7 +2,7 @@
 
 mod support;
 
-use kadakas_core::curve::Vertex;
+use kadakas_core::curve::{Vertex, corners};
 use kadakas_core::model::Shape;
 use kadakas_core::{DVec2, DVec3};
 use kadakas_io::dxf::DxfFormat;
@@ -445,4 +445,155 @@ fn public_files_of_old_and_new_releases() {
             None => assert!(release.is_empty(), "{name}"),
         }
     }
+}
+
+#[test]
+fn release_12_handles_classes_text_georeference_and_hidden_layers() {
+    use kadakas_core::command::Command;
+    use kadakas_core::model::{Attributes, ClassId, Color};
+    let mut ed = editor_with(vec![]);
+    let class =
+        |ed: &mut kadakas_core::command::Editor, name: &str, visible: bool, pen: Option<Color>| {
+            let id = ClassId(
+                ed.execute(&Command::AddClass {
+                    name: name.into(),
+                    attrs: Attributes {
+                        pen,
+                        ..Attributes::default()
+                    },
+                })
+                .unwrap()
+                .created[0],
+            );
+            if !visible {
+                ed.execute(&Command::ModifyClass {
+                    id,
+                    name: None,
+                    visible: Some(false),
+                    attrs: None,
+                })
+                .unwrap();
+            }
+            id
+        };
+    let walls = class(
+        &mut ed,
+        "Walls & paths",
+        true,
+        Some(Color([0, 0, 255, 255])),
+    );
+    let same = class(&mut ed, "WALLS _ PATHS", true, None);
+    let hidden = class(&mut ed, "Old stuff", false, None);
+    let add = |ed: &mut kadakas_core::command::Editor, shape: Shape, class: ClassId| {
+        ed.execute(&Command::AddObject {
+            shape,
+            layer: None,
+            class: Some(class),
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    };
+    add(
+        &mut ed,
+        Shape::Rect {
+            min: DVec2::ZERO,
+            max: DVec2::new(100.0, 50.0),
+        },
+        walls,
+    );
+    add(
+        &mut ed,
+        Shape::Arc {
+            center: DVec2::ZERO,
+            radius: 10.0,
+            start: 0.0,
+            end: std::f64::consts::TAU,
+        },
+        same,
+    );
+    add(
+        &mut ed,
+        Shape::Plant {
+            at: DVec2::new(5.0, 5.0),
+            species: "Oak".into(),
+            spread: 40.0,
+            height: 100.0,
+        },
+        hidden,
+    );
+    add(
+        &mut ed,
+        Shape::Text {
+            at: DVec2::new(0.0, 0.0),
+            text: format!("one\n\ntwo \u{20ac} \u{4e2d}\n{}", "x".repeat(300)),
+            height: 10.0,
+        },
+        walls,
+    );
+    add(
+        &mut ed,
+        Shape::Hardscape {
+            boundary: corners(&[DVec2::ZERO, DVec2::new(10.0, 0.0), DVec2::new(0.0, 10.0)]),
+            material: "x".into(),
+            thickness: None,
+            elevation: None,
+        },
+        walls,
+    );
+    let mut doc = ed.doc().clone();
+    doc.georef = Some(kadakas_core::georef::Georeference {
+        crs: "EPSG:3067".into(),
+        origin: DVec2::new(385.0, 6672.0),
+        rotation: 0.1,
+        user_origin: DVec2::ZERO,
+    });
+    for mode in [
+        kadakas_io::LayerMode::Classes,
+        kadakas_io::LayerMode::Layers,
+    ] {
+        let r = DxfFormat
+            .export(
+                &doc,
+                &ExportOptions {
+                    version: DxfVersion::R12,
+                    layer_mode: mode,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap();
+        let n = r.report.notes.join("\n");
+        assert!(
+            n.contains("rotation is not applied") && n.contains("no georeference"),
+            "{n}"
+        );
+        assert!(
+            n.contains("cut to 250 characters") && n.contains("have no letter"),
+            "{n}"
+        );
+        if mode == kadakas_io::LayerMode::Classes {
+            assert!(n.contains("share a name"), "{n}");
+        }
+        let t = String::from_utf8_lossy(&r.bytes).into_owned();
+        // The multiline text is three TEXT entities (the empty line is left out), the plant a circle.
+        assert_eq!(t.matches("\nTEXT\n").count(), 3, "{mode:?}");
+        assert!(t.contains("\nCIRCLE\n"));
+        // The hidden class is a layer with a negative color.
+        if mode == kadakas_io::LayerMode::Classes {
+            assert!(t.contains("\n-7\n"), "{t}");
+        }
+        // The file reads again.
+        import(&r.bytes).unwrap();
+    }
+    // Only the visible objects.
+    let r = DxfFormat
+        .export(
+            &doc,
+            &ExportOptions {
+                version: DxfVersion::R12,
+                visible_only: true,
+                ..ExportOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(r.report.objects.get("plant"), None);
 }

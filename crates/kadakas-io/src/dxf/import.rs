@@ -816,6 +816,9 @@ impl Walker<'_> {
         }
         match e.kind.as_str() {
             "INSERT" => {
+                if self.has_clip(e) {
+                    self.tally.xclip += 1;
+                }
                 let ok = self.insert(e, cx);
                 self.count(ok);
                 return;
@@ -847,6 +850,12 @@ impl Walker<'_> {
             }
         }
         self.b.report.entities_imported += 1;
+        // A transparency has the flag 0x02000000 and the opacity in the low byte (255 is opaque).
+        if e.int(440)
+            .is_some_and(|t| t & 0x0300_0000 == 0x0200_0000 && t & 0xFF < 255)
+        {
+            self.tally.transparent += 1;
+        }
         let layer_name = match (&cx.layer, e.layer()) {
             (Some(l), "0") => l.clone(),
             (_, l) => l.to_string(),
@@ -879,6 +888,29 @@ impl Walker<'_> {
             }
             self.b.add(&e.kind, item.shape, layer, class, a, item.data);
         }
+    }
+
+    /// True if the block reference has a clip (XCLIP): its extension dictionary has the entry
+    /// ACAD_FILTER.
+    fn has_clip(&self, e: &Entity) -> bool {
+        let Some(at) = e
+            .items
+            .iter()
+            .position(|(c, v)| *c == 102 && v.trim() == "{ACAD_XDICTIONARY")
+        else {
+            return false;
+        };
+        let Some(handle) = e.items[at + 1..]
+            .iter()
+            .find(|(c, _)| *c == 360)
+            .and_then(|(_, h)| hash::normal_handle(h))
+        else {
+            return false;
+        };
+        self.dxf
+            .objects
+            .iter()
+            .any(|o| o.kind == "DICTIONARY" && o.handle().as_deref() == Some(handle.as_str()))
     }
 
     /// Counts an entity as imported or skipped (the reason is in the report already).
@@ -2135,6 +2167,22 @@ fn refine(
     out.push(a.1);
 }
 
+/// A clamped uniform knot vector for `n` control points of the given degree.
+fn open_uniform_knots(n: usize, degree: usize) -> Vec<f64> {
+    let spans = (n - degree) as f64;
+    (0..n + degree + 1)
+        .map(|i| {
+            if i <= degree {
+                0.0
+            } else if i >= n {
+                spans
+            } else {
+                (i - degree) as f64
+            }
+        })
+        .collect()
+}
+
 fn spline(e: &Entity, xf: &Xf, tol: f64, tally: &mut Tally) -> Result<Shape, Skip> {
     let degree = e.int(71).unwrap_or(3).clamp(1, 16) as usize;
     let point_list = |cx: i32| -> Vec<DVec3> {
@@ -2177,8 +2225,39 @@ fn spline(e: &Entity, xf: &Xf, tol: f64, tally: &mut Tally) -> Result<Shape, Ski
             }
         }
     };
-    if let Some(mut pts) = bspline_points(degree, &ctrl, &knots, &weights, tol) {
+    // Without usable knots a clamped uniform knot vector is made (as the ezdxf reader does), and a
+    // degree that is too high for the points is lowered. A closed periodic spline whose control
+    // points do not close by themselves gets its first points again at the end and uniform knots.
+    let periodic = e.int(70).unwrap_or(0) & 3 == 3;
+    let mut made = false;
+    let mut spline_pts = bspline_points(degree, &ctrl, &knots, &weights, tol);
+    if spline_pts.is_none() && ctrl.len() >= 2 {
+        let used = degree.min(ctrl.len() - 1);
+        let w = if weights.len() == ctrl.len() {
+            &weights[..]
+        } else {
+            &[]
+        };
+        if periodic && ctrl.first() != ctrl.last() && ctrl.len() > used {
+            let mut wrapped = ctrl.clone();
+            wrapped.extend_from_slice(&ctrl[..used]);
+            let ww: Vec<f64> = if w.is_empty() {
+                vec![]
+            } else {
+                w.iter().chain(&w[..used]).copied().collect()
+            };
+            let uniform: Vec<f64> = (0..wrapped.len() + used + 1).map(|i| i as f64).collect();
+            spline_pts = bspline_points(used, &wrapped, &uniform, &ww, tol);
+        } else {
+            spline_pts = bspline_points(used, &ctrl, &open_uniform_knots(ctrl.len(), used), w, tol);
+        }
+        made = spline_pts.is_some();
+    }
+    if let Some(mut pts) = spline_pts {
         tally.splines += 1;
+        if made {
+            tally.spline_knots_made += 1;
+        }
         let end_closed = closed
             && pts
                 .first()

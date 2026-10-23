@@ -11,6 +11,8 @@ pub(super) struct Tally {
     pub spline_fit: usize,
     /// Splines without usable knots: the control polygon was imported.
     pub spline_polygon: usize,
+    /// Splines (counted in `splines` too) whose knots were missing: uniform knots were made.
+    pub spline_knots_made: usize,
     /// Ellipses and elliptical arcs cut into lines within the tolerance.
     pub ellipses: usize,
     /// Circles and arcs under a non-uniform scale, cut into lines within the tolerance.
@@ -49,6 +51,10 @@ pub(super) struct Tally {
     pub viewport_clip_lost: usize,
     /// 3D polylines in paper space that were flattened.
     pub flattened: usize,
+    /// Block references with a clip (XCLIP): the clip is not applied.
+    pub xclip: usize,
+    /// Entities with a transparency (group code 440): drawn opaque.
+    pub transparent: usize,
 }
 
 impl Tally {
@@ -73,6 +79,12 @@ impl Tally {
             out.push(format!(
                 "{} had no usable knots, so the control polygon was imported and the shape is not the curve",
                 plural(self.spline_polygon, "spline", "splines")
+            ));
+        }
+        if self.spline_knots_made > 0 {
+            out.push(format!(
+                "{} had no usable knots, so uniform knots were made from the control points: the shape can differ from the curve of the CAD program",
+                plural(self.spline_knots_made, "spline", "splines")
             ));
         }
         if self.ellipses > 0 {
@@ -212,6 +224,18 @@ impl Tally {
                 plural(self.viewport_clip_lost, "viewport is", "viewports are")
             ));
         }
+        if self.xclip > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) that is not applied: the whole block shows",
+                plural(self.xclip, "block reference has", "block references have")
+            ));
+        }
+        if self.transparent > 0 {
+            out.push(format!(
+                "{} a transparency that is not imported: they are drawn opaque",
+                plural(self.transparent, "entity has", "entities have")
+            ));
+        }
         if self.flattened > 0 {
             out.push(format!(
                 "{} in paper space {} flattened to 2D (a sheet holds 2D shapes)",
@@ -238,6 +262,7 @@ mod tests {
             splines: 2,
             spline_fit: 1,
             spline_polygon: 3,
+            spline_knots_made: 1,
             ellipses: 1,
             scaled_arcs: 4,
             leaders: 2,
@@ -245,6 +270,8 @@ mod tests {
             hatch_islands: 5,
             tilted: 6,
             tilted_hatches: 2,
+            xclip: 2,
+            transparent: 3,
             wipeouts: 1,
             subdivided_meshes: 2,
             ..Tally::default()
@@ -252,12 +279,13 @@ mod tests {
         t.pattern_hatches.insert("ANSI31".into(), 2);
         t.pattern_hatches.insert("NET".into(), 1);
         let notes = t.notes(1.5);
-        assert_eq!(notes.len(), 13);
+        assert_eq!(notes.len(), 16);
         let all = notes.join("\n");
         for needle in [
             "2 splines became polylines within 1.5 mm",
             "1 spline with fit points",
             "3 splines had no usable knots",
+            "1 spline had no usable knots, so uniform knots",
             "1 ellipse or elliptical arc became",
             "4 circles and arcs under a block scale",
             "2 LEADERs were imported as lines",
@@ -267,6 +295,8 @@ mod tests {
             "5 islands of solid hatches are drawn",
             "6 entities in a tilted plane were imported as 3D polylines",
             "2 hatches in a tilted plane were imported as outlines",
+            "2 block references have a clip (XCLIP)",
+            "3 entities have a transparency",
             "1 WIPEOUT became",
             "2 MESHes are subdivided",
         ] {

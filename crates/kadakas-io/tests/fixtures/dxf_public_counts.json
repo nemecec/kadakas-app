@@ -7,7 +7,26 @@
    "Layout2"
   ],
   "model": 71,
+  "mtext": [
+   "edges 1 & 3\nall visible",
+   "edges 1 & 3\nodd visible\neven hidden",
+   "edges 1 & 3\nodd hidden\neven visible",
+   "edges 1 & 3\nall hidden",
+   "edges 2 & 4\nall visible",
+   "edges 2 & 4\nodd visible\neven hidden",
+   "edges 2 & 4\nodd hidden\neven visible",
+   "edges 2 & 4\nall hidden",
+   "edges 1 & 3\nall visible",
+   "edges 1 & 3\nodd visible\neven hidden",
+   "edges 1 & 3\nodd hidden\neven visible",
+   "edges 1 & 3\nall hidden",
+   "edges 2 & 4\nall visible",
+   "edges 2 & 4\nodd visible\neven hidden",
+   "edges 2 & 4\nodd hidden\neven visible",
+   "edges 2 & 4\nall hidden"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -18,7 +37,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -29,7 +50,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -40,7 +63,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1021",
   "viewports": 0
  },
@@ -52,7 +77,9 @@
    "Layout2"
   ],
   "model": 6,
+  "mtext": [],
   "paper": 21,
+  "splines": [],
   "version": "AC1027",
   "viewports": 5
  },
@@ -64,7 +91,9 @@
    "Layout2"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -76,7 +105,9 @@
    "Layout2"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -87,7 +118,71 @@
    "Layout1"
   ],
   "model": 61,
+  "mtext": [
+   "a: abc!def",
+   "b: abc\"def",
+   "c: abc#def",
+   "d: abc$def",
+   "e: abc%def",
+   "f: abc&def",
+   "g: abc'def",
+   "h: abc(def",
+   "i: abc)def",
+   "j: abc*def",
+   "k: abc+def",
+   "l: abc,def",
+   "m: abc-def",
+   "n: abc.def",
+   "o: abc/def",
+   "p: abc0def",
+   "q: abc1def",
+   "r: abc2def",
+   "s: abc3def",
+   "t: abc4def",
+   "u: abc5def",
+   "v: abc6def",
+   "w: abc7def",
+   "x: abc8def",
+   "y: abc9def",
+   "z: abc:def",
+   "A: abc\u0001def",
+   "B: abc\u0002def",
+   "C: abc\u0003def",
+   "D: abc\u0004def",
+   "E: abc\u0005def",
+   "F: abc\u0006def",
+   "G: abc\u0007def",
+   "H: abc\bdef",
+   "I: abc\tdef",
+   "J: abc\ndef",
+   "K: abc\u000bdef",
+   "L: abc\fdef",
+   "M: abc\rdef",
+   "N: abc\u000edef",
+   "O: abc\u000fdef",
+   "P: abc\u0010def",
+   "Q: abc\u0011def",
+   "R: abc\u0012def",
+   "S: abc\u0013def",
+   "T: abc\u0014def",
+   "U: abc\u0015def",
+   "V: abc\u0016def",
+   "W: abc\u0017def",
+   "X: abc\u0018def",
+   "Y: abc\u0019def",
+   "Z: abc\u001adef",
+   "?: abcdef",
+   "@: abc\u0000def",
+   "[: abc\u001bdef",
+   "]: abc\u001ddef",
+   "\\: abc\u001cdef",
+   "_: abc\u001fdef",
+   " : abc^def",
+   "^: abc\u001edef",
+   "^"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -98,7 +193,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -109,7 +206,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -121,7 +220,24 @@
    "Layout2"
   ],
   "model": 28,
+  "mtext": [
+   "BYLAYER",
+   "BYOBJECT",
+   "BYBLOCK",
+   "LAYER\nBLUE",
+   "LAYER\nBLUE",
+   "INSERTED\nBLOCK",
+   "INSERTED\nBLOCK AND CHANGED THE COLOUR OF THE BLOCK TO YELLOW",
+   "LAYER\nRED",
+   "INSERTED\nBLOCK",
+   "INSERTED\nBLOCK AND CHANGED THE COLOUR OF THE BLOCK TO YELLOW",
+   "BYLAYER",
+   "BYOBJECT",
+   "BYBLOCK",
+   "LAYER\nRED"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -133,7 +249,32 @@
    "Layout2"
   ],
   "model": 52,
+  "mtext": [
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "DEFAULT",
+   "Line 1\nLine 2\nLine 3\n",
+   "DYNAMIC COLUMNS WITH MANUAL HEIGHT",
+   "Line 1\nLine 2\nLine 3\n",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND LARGER SPACE BETWEEN COLUMNS",
+   "LongestLineEver1\n",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND OVERLAPPING TEXT",
+   "NO COLUMNS",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "Line 1\nLine 2\nLine 3\n",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT",
+   "Line 1\nLine 2\n",
+   "STATIC COLUMNS\n(3 COLUMNS)",
+   "Line 1\nLine 2\nLine 3\n",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND DIFFERENT COLUMN HEIGHTS",
+   "Line 1 ",
+   "STATIC COLUMNS\n(3 COLUMNS) with column breaks",
+   "Line 1\nLine 2 ",
+   "Line 1\nLine 2 ",
+   "Line 1\nLine 2 ",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND DIFFERENT COLUMN HEIGHTS with column breaks"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1021",
   "viewports": 0
  },
@@ -145,7 +286,32 @@
    "Layout2"
   ],
   "model": 52,
+  "mtext": [
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "DEFAULT",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "DYNAMIC COLUMNS WITH MANUAL HEIGHT",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND LARGER SPACE BETWEEN COLUMNS",
+   "LongestLineEver1\nLongestLineEver2",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND OVERLAPPING TEXT",
+   "NO COLUMNS",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT",
+   "Line 1\nLine 2\nLine 3\nLine 4",
+   "STATIC COLUMNS\n(3 COLUMNS)",
+   "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND DIFFERENT COLUMN HEIGHTS",
+   "Line 1 Line 2\nLine 3\nLine 4",
+   "STATIC COLUMNS\n(3 COLUMNS) with column breaks",
+   "Line 1\nLine 2 \nLine 3\nLine 4",
+   "Line 1\nLine 2   \nLine 3 \nLine 4",
+   "Line 1\nLine 2 Line 3\nLine 4\nLine 5 Line 6",
+   "DYNAMIC COLUMNS WITH AUTO HEIGHT AND DIFFERENT COLUMN HEIGHTS with column breaks"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -157,7 +323,9 @@
    "Layout2"
   ],
   "model": 4,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -169,7 +337,9 @@
    "Layout2"
   ],
   "model": 4,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -181,7 +351,9 @@
    "Layout2"
   ],
   "model": 12,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -193,7 +365,11 @@
    "Layout2"
   ],
   "model": 4,
+  "mtext": [
+   "TEXT TEXT TEXT TEXT TEXT TEXT TEXT TEXT"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -205,7 +381,11 @@
    "Layout2"
   ],
   "model": 4,
+  "mtext": [
+   "TEXT TEXT TEXT TEXT TEXT TEXT TEXT TEXT"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -217,7 +397,11 @@
    "Layout2"
   ],
   "model": 4,
+  "mtext": [
+   "TEXT TEXT TEXT TEXT TEXT TEXT TEXT TEXT"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -229,7 +413,9 @@
    "Layout2"
   ],
   "model": 32,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -241,7 +427,12 @@
    "Layout2"
   ],
   "model": 11,
+  "mtext": [
+   "OUTLINE OF\nSEPARATE ENTITIES",
+   "POLYLINE OUTLINE"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -252,7 +443,18 @@
    "Layout1"
   ],
   "model": 233,
+  "mtext": [
+   "ORIGINAL IMAGE (brightness=50,\ncontrast=50,\nfade=0)",
+   "PROCESSED IMAGE (brightness=100,\ncontrast=100,\nfade=100)",
+   "IMAGE WITH TRANSPARENCY HAVING ENABLED THE TRANSPARENCY OVER THE ORIGINAL IMAGE",
+   "TURN ON \"BACKGROUND TRANSPARENCY\"\n(Four lines become transparent)",
+   "SCALED IMAGE (*0.5)\n- reference_point: lower left image corner",
+   "IMAGE WITH TRANSPARENCY AND FADE=50",
+   "(This is done by changing the SCALE_X and SCALE_Y from object's properties but first it was needed\nto create a block from the original image\nin order to be able to change SCALE_X or SCALE_Y and then it was converted(\"explode\") into raster object again)",
+   "(This is done by changing the SCALE_X and SCALE_Y from object's properties but first it was needed\nto create a block from the original image\nin order to be able to change SCALE_X or SCALE_Y and then it was converted(\"explode\") into raster object again)"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -263,7 +465,15 @@
    "Layout1"
   ],
   "model": 17,
+  "mtext": [
+   "Image Full",
+   "Image Clipped Rect",
+   "Image Clipped Polygonal Convex",
+   "Image Clipped Polygonal Concave",
+   "Image Clipped Rect Outside"
+  ],
   "paper": 19,
+  "splines": [],
   "version": "AC1027",
   "viewports": 12
  },
@@ -275,7 +485,9 @@
    "Layout2"
   ],
   "model": 24,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -286,7 +498,13 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. ",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -297,7 +515,13 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. ",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1021",
   "viewports": 0
  },
@@ -308,7 +532,13 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -320,7 +550,18 @@
    "Layout2"
   ],
   "model": 12,
+  "mtext": [
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n",
+   "Complex MTEXT content:\n\nHEADLINE\n\nLeft aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nRight aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nCenter aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nJustified aligned paragraph:\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. \n\nBullet list:\n\u2022\tfirst item\n\u2022\tsecond item\n\u2022\tthird item\n\nText styling:\nbold: test test test\nitalic: test test test\noverstrike: test test test\nstrike through: test test test\nunderline: test test test\nwidth factor: wide narrow\noblique angle: slanted text 15\u00b0\ntracking: is not supported!\n\nFields are static:\n\nFilename: mtext_complex_inline_codes.dxf\n\n\"static\" means ezdxf does not evaluate fields, only the stored content is shown!\n\nChanging font size:\n\nLorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua\n\nFractions:\n\nIncluding fractions: 1/2 and 1#2 and 1^2\n"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -331,7 +572,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -343,7 +586,40 @@
    "Layout2"
   ],
   "model": 222,
+  "mtext": [
+   "X",
+   "x",
+   "Xxp",
+   "Xxp\nXxp\nXxp",
+   "p",
+   "Xxp\nabc",
+   "bxp\naxp\naxc",
+   "a word wrap example a b c d e",
+   "a\nab\nXpc\nabcdef",
+   "a\nab\nXpc\nabcdef",
+   "a\nab\nXpc\nabcdef",
+   "Xxp\nab\nXpc",
+   "Xxp\nXxp\nXxp",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "vertical\nText",
+   "vertical\nText",
+   "Standard Style",
+   "Xxp     pxX",
+   " abc     def            b",
+   " abc      def                       b",
+   " abc\nabcd",
+   "\nabc  \nabcabcabc\na\n\nb",
+   "Xxp     pxX",
+   "                       spc                       def",
+   "ATTDEF RAW",
+   "ATTDEF IN BLOCK"
+  ],
   "paper": 4,
+  "splines": [],
   "version": "AC1032",
   "viewports": 4
  },
@@ -354,7 +630,9 @@
    "Layout1"
   ],
   "model": 58,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1018",
   "viewports": 0
  },
@@ -365,7 +643,9 @@
    "Layout1"
   ],
   "model": 1344,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -376,7 +656,9 @@
    "Layout1"
   ],
   "model": 8,
+  "mtext": [],
   "paper": 17,
+  "splines": [],
   "version": "AC1027",
   "viewports": 7
  },
@@ -387,7 +669,9 @@
    "Layout1"
   ],
   "model": 672,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -398,7 +682,9 @@
    "Layout1"
   ],
   "model": 672,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -410,7 +696,40 @@
    "Layout2"
   ],
   "model": 222,
+  "mtext": [
+   "X",
+   "x",
+   "Xxp",
+   "Xxp\nXxp\nXxp",
+   "p",
+   "Xxp\nabc",
+   "bxp\naxp\naxc",
+   "a word wrap example a b c d e",
+   "a\nab\nXpc\nabcdef",
+   "a\nab\nXpc\nabcdef",
+   "a\nab\nXpc\nabcdef",
+   "Xxp\nab\nXpc",
+   "Xxp\nXxp\nXxp",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "a\nab\nXpc",
+   "vertical\nText",
+   "vertical\nText",
+   "Standard Style",
+   "Xxp     pxX",
+   " abc     def            b",
+   " abc      def                       b",
+   " abc\nabcd",
+   "\nabc  \nabcabcabc\na\n\nb",
+   "Xxp     pxX",
+   "                       spc                       def",
+   "ATTDEF RAW",
+   "ATTDEF IN BLOCK"
+  ],
   "paper": 4,
+  "splines": [],
   "version": "AC1032",
   "viewports": 4
  },
@@ -421,7 +740,9 @@
    "Layout1"
   ],
   "model": 317,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -432,7 +753,9 @@
    "Layout1"
   ],
   "model": 439,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -443,7 +766,9 @@
    "Layout1"
   ],
   "model": 439,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -454,7 +779,13 @@
    "Layout1"
   ],
   "model": 24,
+  "mtext": [
+   "Scale:2 Rotation: 180",
+   "Scale:2 Rotation: 30",
+   "Exploded"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -466,7 +797,29 @@
    "Layout2"
   ],
   "model": 82,
+  "mtext": [
+   "POINTS",
+   "SPLINE",
+   "DIMENSION",
+   "CIRCLE\nDIMENSION",
+   "ANGLE\nDIMENSION",
+   "ARC\nDIMENSION",
+   "ORDINATE\nDIMENSION",
+   "LEADER",
+   "RAY",
+   "MTEXT",
+   "LINE1\nLINE2\nLINE3",
+   "XLINE",
+   "MESH",
+   "POLYFACE",
+   "SOLID",
+   "POLYLINE",
+   "BLOCK WITH\nATTRIBUTES",
+   "3D SOLID",
+   "POLYLINE WITH BULGE"
+  ],
   "paper": 2,
+  "splines": [],
   "version": "AC1032",
   "viewports": 2
  },
@@ -477,7 +830,9 @@
    "Layout1"
   ],
   "model": 50,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -488,7 +843,9 @@
    "Layout1"
   ],
   "model": 4,
+  "mtext": [],
   "paper": 7,
+  "splines": [],
   "version": "AC1027",
   "viewports": 4
  },
@@ -500,7 +857,14 @@
    "Layout2"
   ],
   "model": 6,
+  "mtext": [
+   "inserted L2",
+   "inserted L0",
+   "visible when:\nL2\n\nL1",
+   "visible when:\nL0\n\nL1"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -512,7 +876,14 @@
    "Layout2"
   ],
   "model": 149,
+  "mtext": [
+   "Block with Wipeout",
+   "Block with Wipeout\nThe block is below the walls to show the wipeout behaviour ",
+   "Exploded the block\nThe Wipeout is still an entity ",
+   "Wipeout exploded "
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -523,7 +894,9 @@
    "Layout1"
   ],
   "model": 31,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -535,7 +908,19 @@
    "Layout2"
   ],
   "model": 18,
+  "mtext": [
+   "Rectangle",
+   "Rectangle",
+   "Rectangle Copy & Rotate",
+   "Polygon",
+   "Polygon Copy & Rotate",
+   "Original (not cropped)",
+   "Inverted Clipping Path",
+   "Concave Clipping Path",
+   "Inverted Concave Clipping Path"
+  ],
   "paper": 9,
+  "splines": [],
   "version": "AC1027",
   "viewports": 9
  },
@@ -546,7 +931,9 @@
    "Layout1"
   ],
   "model": 22,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -557,7 +944,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -568,7 +957,9 @@
    "Layout1"
   ],
   "model": 32,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -579,7 +970,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -590,7 +983,9 @@
    "Layout1"
   ],
   "model": 31,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -601,7 +996,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -612,7 +1009,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -623,7 +1022,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -634,7 +1035,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -645,7 +1048,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -656,7 +1061,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -668,7 +1075,9 @@
    "Layout2"
   ],
   "model": 5,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1024",
   "viewports": 0
  },
@@ -679,7 +1088,9 @@
    "Layout1"
   ],
   "model": 145,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -690,7 +1101,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -701,7 +1114,9 @@
    "Layout1"
   ],
   "model": 8,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -713,7 +1128,9 @@
    "Layout2"
   ],
   "model": 13,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -724,7 +1141,9 @@
    "Layout1"
   ],
   "model": 10,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -736,7 +1155,9 @@
    "Layout2"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -748,7 +1169,9 @@
    "Layout2"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -760,7 +1183,9 @@
    "Layout2"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -772,7 +1197,9 @@
    "Layout2"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -784,7 +1211,9 @@
    "Layout2"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -796,7 +1225,9 @@
    "Layout2"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -807,7 +1238,12 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. ",
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet."
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -818,7 +1254,11 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [
+   "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor \\C1invidunt ut labore et dolore mag\\C3na aliquyam erat, sed \\C5diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.\n\n"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -829,7 +1269,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1021",
   "viewports": 0
  },
@@ -840,7 +1282,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -851,7 +1295,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -862,7 +1308,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -873,7 +1321,9 @@
    "Layout1"
   ],
   "model": 1504,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -885,7 +1335,9 @@
    "Letter Size"
   ],
   "model": 95,
+  "mtext": [],
   "paper": 4,
+  "splines": [],
   "version": "AC1032",
   "viewports": 4
  },
@@ -896,7 +1348,9 @@
    "Layout1"
   ],
   "model": 16,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -907,7 +1361,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -918,7 +1374,9 @@
    "Layout1"
   ],
   "model": 5,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -929,7 +1387,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -940,7 +1400,9 @@
    "AEP 2"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 1,
+  "splines": [],
   "version": "AC1032",
   "viewports": 1
  },
@@ -951,7 +1413,9 @@
    "Layout1"
   ],
   "model": 13,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -962,7 +1426,9 @@
    "Layout1"
   ],
   "model": 9,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -974,7 +1440,11 @@
    "Layout2"
   ],
   "model": 7,
+  "mtext": [
+   "Test"
+  ],
   "paper": 1,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -985,7 +1455,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -996,7 +1468,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1007,7 +1481,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1018,7 +1494,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -1029,7 +1507,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1040,7 +1520,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1051,7 +1533,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1062,7 +1546,9 @@
    "Layout1"
   ],
   "model": 18,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1073,7 +1559,9 @@
    "Layout1"
   ],
   "model": 5,
+  "mtext": [],
   "paper": 1,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1084,7 +1572,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1095,7 +1585,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1108,7 +1600,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1119,7 +1613,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1130,7 +1626,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1142,7 +1640,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1153,7 +1653,9 @@
    "Layout1"
   ],
   "model": 8,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1166,7 +1668,9 @@
    "\u041b\u0438\u0441\u04422"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1032",
   "viewports": 0
  },
@@ -1177,7 +1681,9 @@
    "Layout1"
   ],
   "model": 7,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1018",
   "viewports": 0
  },
@@ -1188,7 +1694,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1018",
   "viewports": 0
  },
@@ -1199,7 +1707,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1211,7 +1721,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1222,7 +1734,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1233,7 +1747,12 @@
    "Layout1"
   ],
   "model": 18,
+  "mtext": [
+   "Classic Leader",
+   "I want to put a really long text in my leader. \nLike, so long that I don't know how I am going\nto cope when I keep typing this much information into the box. A real test of the character limit. \nEven more characters in the box. Even more characters in the box. More and more and more and more and more and more and more"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1244,7 +1763,9 @@
    "Layout1"
   ],
   "model": 4,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1015",
   "viewports": 0
  },
@@ -1256,7 +1777,13 @@
    "Layout1"
   ],
   "model": 6,
+  "mtext": [
+   "MTEXT extrusion omitted",
+   "MTEXT extrusion 0,0,1",
+   "MTEXT extrusion 0.2,0.4,0.894427191"
+  ],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1267,7 +1794,9 @@
    "Layout1"
   ],
   "model": 52,
+  "mtext": [],
   "paper": 2,
+  "splines": [],
   "version": "AC1027",
   "viewports": 2
  },
@@ -1278,7 +1807,9 @@
    "Layout1"
   ],
   "model": 68,
+  "mtext": [],
   "paper": 2,
+  "splines": [],
   "version": "AC1027",
   "viewports": 2
  },
@@ -1289,7 +1820,9 @@
    "Layout1"
   ],
   "model": 10,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1300,7 +1833,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1311,7 +1846,9 @@
    "Layout1"
   ],
   "model": 5,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1322,7 +1859,9 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1333,7 +1872,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1344,7 +1885,278 @@
    "Layout1"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 0,
+  "splines": [
+   [
+    [
+     14.0,
+     2.0
+    ],
+    [
+     13.8445,
+     2.2004
+    ],
+    [
+     13.732,
+     2.4399
+    ],
+    [
+     13.6632,
+     2.706
+    ],
+    [
+     13.6388,
+     2.9862
+    ],
+    [
+     13.6596,
+     3.2682
+    ],
+    [
+     13.7262,
+     3.5394
+    ],
+    [
+     13.8395,
+     3.7875
+    ],
+    [
+     14.0,
+     4.0
+    ],
+    [
+     14.2065,
+     4.1666
+    ],
+    [
+     14.4491,
+     4.2853
+    ],
+    [
+     14.716,
+     4.3562
+    ],
+    [
+     14.9954,
+     4.3796
+    ],
+    [
+     15.2753,
+     4.3555
+    ],
+    [
+     15.544,
+     4.2841
+    ],
+    [
+     15.7895,
+     4.1656
+    ],
+    [
+     16.0,
+     4.0
+    ],
+    [
+     16.1656,
+     3.7895
+    ],
+    [
+     16.2841,
+     3.544
+    ],
+    [
+     16.3555,
+     3.2753
+    ],
+    [
+     16.3796,
+     2.9954
+    ],
+    [
+     16.3562,
+     2.716
+    ],
+    [
+     16.2853,
+     2.4491
+    ],
+    [
+     16.1666,
+     2.2065
+    ],
+    [
+     16.0,
+     2.0
+    ],
+    [
+     15.7875,
+     1.8395
+    ],
+    [
+     15.5394,
+     1.7262
+    ],
+    [
+     15.2682,
+     1.6596
+    ],
+    [
+     14.9862,
+     1.6388
+    ],
+    [
+     14.706,
+     1.6632
+    ],
+    [
+     14.4399,
+     1.732
+    ],
+    [
+     14.2004,
+     1.8445
+    ],
+    [
+     14.0,
+     2.0
+    ]
+   ],
+   [
+    [
+     14.0,
+     2.0
+    ],
+    [
+     13.8445,
+     2.2004
+    ],
+    [
+     13.732,
+     2.4399
+    ],
+    [
+     13.6632,
+     2.706
+    ],
+    [
+     13.6388,
+     2.9862
+    ],
+    [
+     13.6596,
+     3.2682
+    ],
+    [
+     13.7262,
+     3.5394
+    ],
+    [
+     13.8395,
+     3.7875
+    ],
+    [
+     14.0,
+     4.0
+    ],
+    [
+     14.2065,
+     4.1666
+    ],
+    [
+     14.4491,
+     4.2853
+    ],
+    [
+     14.716,
+     4.3562
+    ],
+    [
+     14.9954,
+     4.3796
+    ],
+    [
+     15.2753,
+     4.3555
+    ],
+    [
+     15.544,
+     4.2841
+    ],
+    [
+     15.7895,
+     4.1656
+    ],
+    [
+     16.0,
+     4.0
+    ],
+    [
+     16.1656,
+     3.7895
+    ],
+    [
+     16.2841,
+     3.544
+    ],
+    [
+     16.3555,
+     3.2753
+    ],
+    [
+     16.3796,
+     2.9954
+    ],
+    [
+     16.3562,
+     2.716
+    ],
+    [
+     16.2853,
+     2.4491
+    ],
+    [
+     16.1666,
+     2.2065
+    ],
+    [
+     16.0,
+     2.0
+    ],
+    [
+     15.7875,
+     1.8395
+    ],
+    [
+     15.5394,
+     1.7262
+    ],
+    [
+     15.2682,
+     1.6596
+    ],
+    [
+     14.9862,
+     1.6388
+    ],
+    [
+     14.706,
+     1.6632
+    ],
+    [
+     14.4399,
+     1.732
+    ],
+    [
+     14.2004,
+     1.8445
+    ],
+    [
+     14.0,
+     2.0
+    ]
+   ]
+  ],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1356,7 +2168,712 @@
    "Layout2"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [
+   [
+    [
+     10.75,
+     62.75
+    ],
+    [
+     12.7987,
+     62.9456
+    ],
+    [
+     14.7967,
+     63.1108
+    ],
+    [
+     16.7447,
+     63.2462
+    ],
+    [
+     18.6433,
+     63.3523
+    ],
+    [
+     20.493,
+     63.4299
+    ],
+    [
+     22.2946,
+     63.4794
+    ],
+    [
+     24.0485,
+     63.5014
+    ],
+    [
+     25.7555,
+     63.4965
+    ],
+    [
+     27.4162,
+     63.4652
+    ],
+    [
+     29.0311,
+     63.4082
+    ],
+    [
+     30.6008,
+     63.326
+    ],
+    [
+     32.1261,
+     63.2193
+    ],
+    [
+     33.6075,
+     63.0884
+    ],
+    [
+     35.0455,
+     62.9342
+    ],
+    [
+     36.4409,
+     62.757
+    ],
+    [
+     37.7943,
+     62.5576
+    ],
+    [
+     39.1062,
+     62.3365
+    ],
+    [
+     40.3772,
+     62.0942
+    ],
+    [
+     41.6081,
+     61.8313
+    ],
+    [
+     42.7994,
+     61.5484
+    ],
+    [
+     43.9516,
+     61.2462
+    ],
+    [
+     45.0655,
+     60.9251
+    ],
+    [
+     46.1417,
+     60.5857
+    ],
+    [
+     47.1807,
+     60.2286
+    ],
+    [
+     48.1831,
+     59.8545
+    ],
+    [
+     49.1497,
+     59.4638
+    ],
+    [
+     50.0809,
+     59.0571
+    ],
+    [
+     50.9775,
+     58.6351
+    ],
+    [
+     51.84,
+     58.1982
+    ],
+    [
+     52.669,
+     57.7472
+    ],
+    [
+     53.4652,
+     57.2825
+    ],
+    [
+     54.2292,
+     56.8047
+    ],
+    [
+     54.9615,
+     56.3144
+    ],
+    [
+     55.6628,
+     55.8122
+    ],
+    [
+     56.3338,
+     55.2987
+    ],
+    [
+     56.975,
+     54.7743
+    ],
+    [
+     57.587,
+     54.2398
+    ],
+    [
+     58.1705,
+     53.6957
+    ],
+    [
+     58.726,
+     53.1426
+    ],
+    [
+     59.2542,
+     52.5809
+    ],
+    [
+     59.7558,
+     52.0114
+    ],
+    [
+     60.2312,
+     51.4346
+    ],
+    [
+     60.6811,
+     50.8511
+    ],
+    [
+     61.1062,
+     50.2614
+    ],
+    [
+     61.5071,
+     49.6661
+    ],
+    [
+     61.8843,
+     49.0658
+    ],
+    [
+     62.2385,
+     48.4611
+    ],
+    [
+     62.5703,
+     47.8525
+    ],
+    [
+     62.8803,
+     47.2407
+    ],
+    [
+     63.1692,
+     46.6262
+    ],
+    [
+     63.6858,
+     45.3913
+    ],
+    [
+     64.125,
+     44.1526
+    ],
+    [
+     64.4919,
+     42.9147
+    ],
+    [
+     64.7912,
+     41.6821
+    ],
+    [
+     65.028,
+     40.4594
+    ],
+    [
+     65.207,
+     39.2514
+    ],
+    [
+     65.3333,
+     38.0625
+    ],
+    [
+     65.4115,
+     36.8967
+    ],
+    [
+     65.4454,
+     35.7547
+    ],
+    [
+     65.4382,
+     34.6365
+    ],
+    [
+     65.3936,
+     33.5423
+    ],
+    [
+     65.3148,
+     32.4719
+    ],
+    [
+     65.2055,
+     31.4255
+    ],
+    [
+     65.069,
+     30.4031
+    ],
+    [
+     64.9089,
+     29.4046
+    ],
+    [
+     64.7284,
+     28.4302
+    ],
+    [
+     64.5311,
+     27.4798
+    ],
+    [
+     64.0999,
+     25.6512
+    ],
+    [
+     63.6429,
+     23.9192
+    ],
+    [
+     63.1875,
+     22.2839
+    ],
+    [
+     62.7614,
+     20.7454
+    ],
+    [
+     62.3923,
+     19.3042
+    ],
+    [
+     62.1075,
+     17.9602
+    ],
+    [
+     62.0055,
+     17.3248
+    ],
+    [
+     61.9349,
+     16.7139
+    ],
+    [
+     61.8992,
+     16.1273
+    ],
+    [
+     61.9019,
+     15.5653
+    ],
+    [
+     61.9464,
+     15.0277
+    ],
+    [
+     62.0361,
+     14.5147
+    ],
+    [
+     62.1746,
+     14.0262
+    ],
+    [
+     62.3652,
+     13.5623
+    ],
+    [
+     62.6114,
+     13.123
+    ],
+    [
+     62.9167,
+     12.7083
+    ],
+    [
+     63.2833,
+     12.3182
+    ],
+    [
+     63.7092,
+     11.9519
+    ],
+    [
+     64.1911,
+     11.6088
+    ],
+    [
+     64.7257,
+     11.2881
+    ],
+    [
+     65.3097,
+     10.9889
+    ],
+    [
+     65.94,
+     10.7107
+    ],
+    [
+     66.6132,
+     10.4524
+    ],
+    [
+     67.3262,
+     10.2135
+    ],
+    [
+     68.0755,
+     9.9932
+    ],
+    [
+     68.8581,
+     9.7906
+    ],
+    [
+     69.6706,
+     9.6051
+    ],
+    [
+     70.5097,
+     9.4359
+    ],
+    [
+     72.2549,
+     9.1431
+    ],
+    [
+     74.0677,
+     8.9062
+    ],
+    [
+     75.922,
+     8.7192
+    ],
+    [
+     77.7917,
+     8.5758
+    ],
+    [
+     79.6509,
+     8.4701
+    ],
+    [
+     81.4733,
+     8.3958
+    ],
+    [
+     84.9039,
+     8.3174
+    ],
+    [
+     87.875,
+     8.2917
+    ],
+    [
+     89.1291,
+     8.2878
+    ],
+    [
+     90.2258,
+     8.3059
+    ],
+    [
+     91.175,
+     8.3667
+    ],
+    [
+     91.5973,
+     8.4197
+    ],
+    [
+     91.9863,
+     8.4912
+    ],
+    [
+     92.3433,
+     8.5839
+    ],
+    [
+     92.6695,
+     8.7003
+    ],
+    [
+     92.966,
+     8.8431
+    ],
+    [
+     93.2341,
+     9.0149
+    ],
+    [
+     93.4751,
+     9.2183
+    ],
+    [
+     93.69,
+     9.4559
+    ],
+    [
+     93.8802,
+     9.7304
+    ],
+    [
+     94.0469,
+     10.0443
+    ],
+    [
+     94.1912,
+     10.4002
+    ],
+    [
+     94.3144,
+     10.8008
+    ],
+    [
+     94.4176,
+     11.2487
+    ],
+    [
+     94.5022,
+     11.7465
+    ],
+    [
+     94.5693,
+     12.2967
+    ],
+    [
+     94.6201,
+     12.9021
+    ],
+    [
+     94.6777,
+     14.2887
+    ],
+    [
+     94.6848,
+     15.9272
+    ],
+    [
+     94.6511,
+     17.8383
+    ],
+    [
+     94.5,
+     22.5625
+    ],
+    [
+     94.392,
+     25.4082
+    ],
+    [
+     94.2222,
+     28.5558
+    ],
+    [
+     94.0984,
+     30.2323
+    ],
+    [
+     93.9402,
+     31.9716
+    ],
+    [
+     93.7416,
+     33.7696
+    ],
+    [
+     93.4961,
+     35.6221
+    ],
+    [
+     93.1975,
+     37.5248
+    ],
+    [
+     92.8395,
+     39.4736
+    ],
+    [
+     92.4159,
+     41.4642
+    ],
+    [
+     91.9204,
+     43.4926
+    ],
+    [
+     91.3467,
+     45.5543
+    ],
+    [
+     90.6885,
+     47.6454
+    ],
+    [
+     90.3258,
+     48.7006
+    ],
+    [
+     89.9396,
+     49.7615
+    ],
+    [
+     89.5292,
+     50.8276
+    ],
+    [
+     89.0938,
+     51.8984
+    ],
+    [
+     88.6325,
+     52.9734
+    ],
+    [
+     88.1446,
+     54.0521
+    ],
+    [
+     87.6293,
+     55.1338
+    ],
+    [
+     87.0859,
+     56.2182
+    ],
+    [
+     86.5135,
+     57.3046
+    ],
+    [
+     85.9114,
+     58.3925
+    ],
+    [
+     85.2787,
+     59.4815
+    ],
+    [
+     84.6147,
+     60.5709
+    ],
+    [
+     83.9187,
+     61.6603
+    ],
+    [
+     83.1898,
+     62.7492
+    ],
+    [
+     82.4272,
+     63.837
+    ],
+    [
+     81.6302,
+     64.9231
+    ],
+    [
+     80.7979,
+     66.0072
+    ],
+    [
+     79.9297,
+     67.0885
+    ],
+    [
+     79.0247,
+     68.1667
+    ],
+    [
+     78.082,
+     69.2412
+    ],
+    [
+     77.1011,
+     70.3115
+    ],
+    [
+     76.0809,
+     71.3769
+    ],
+    [
+     75.0209,
+     72.4371
+    ],
+    [
+     73.9201,
+     73.4915
+    ],
+    [
+     72.7778,
+     74.5396
+    ],
+    [
+     71.5933,
+     75.5808
+    ],
+    [
+     70.3657,
+     76.6146
+    ],
+    [
+     69.0942,
+     77.6405
+    ],
+    [
+     67.7782,
+     78.658
+    ],
+    [
+     66.4166,
+     79.6665
+    ],
+    [
+     65.0089,
+     80.6655
+    ],
+    [
+     63.5543,
+     81.6545
+    ],
+    [
+     62.0518,
+     82.633
+    ],
+    [
+     60.5008,
+     83.6004
+    ],
+    [
+     58.9005,
+     84.5563
+    ],
+    [
+     57.25,
+     85.5
+    ]
+   ]
+  ],
   "version": "AC1015",
   "viewports": 0
  },
@@ -1367,7 +2884,196 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [
+   [
+    [
+     2.0,
+     2.0
+    ],
+    [
+     2.5,
+     2.7344
+    ],
+    [
+     2.75,
+     3.0723
+    ],
+    [
+     3.0,
+     3.375
+    ],
+    [
+     3.25,
+     3.6309
+    ],
+    [
+     3.5,
+     3.8281
+    ],
+    [
+     3.75,
+     3.9551
+    ],
+    [
+     3.875,
+     3.9885
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.125,
+     3.9885
+    ],
+    [
+     4.25,
+     3.9551
+    ],
+    [
+     4.5,
+     3.8281
+    ],
+    [
+     4.75,
+     3.6309
+    ],
+    [
+     5.0,
+     3.375
+    ],
+    [
+     5.25,
+     3.0723
+    ],
+    [
+     5.5,
+     2.7344
+    ],
+    [
+     6.0,
+     2.0
+    ]
+   ],
+   [
+    [
+     2.0,
+     2.0
+    ],
+    [
+     2.6087,
+     2.8986
+    ],
+    [
+     3.2,
+     3.7
+    ],
+    [
+     3.441,
+     3.9796
+    ],
+    [
+     3.6484,
+     4.1758
+    ],
+    [
+     3.8309,
+     4.2933
+    ],
+    [
+     4.0,
+     4.3333
+    ],
+    [
+     4.1691,
+     4.2933
+    ],
+    [
+     4.3516,
+     4.1758
+    ],
+    [
+     4.559,
+     3.9796
+    ],
+    [
+     4.8,
+     3.7
+    ],
+    [
+     5.3913,
+     2.8986
+    ],
+    [
+     6.0,
+     2.0
+    ]
+   ],
+   [
+    [
+     2.0,
+     2.0
+    ],
+    [
+     2.439,
+     2.6423
+    ],
+    [
+     2.6426,
+     2.9067
+    ],
+    [
+     2.8571,
+     3.1429
+    ],
+    [
+     3.0954,
+     3.3486
+    ],
+    [
+     3.3663,
+     3.5149
+    ],
+    [
+     3.6714,
+     3.6264
+    ],
+    [
+     4.0,
+     3.6667
+    ],
+    [
+     4.3286,
+     3.6264
+    ],
+    [
+     4.6337,
+     3.5149
+    ],
+    [
+     4.9046,
+     3.3486
+    ],
+    [
+     5.1429,
+     3.1429
+    ],
+    [
+     5.3574,
+     2.9067
+    ],
+    [
+     5.561,
+     2.6423
+    ],
+    [
+     6.0,
+     2.0
+    ]
+   ]
+  ],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1379,7 +3085,9 @@
    "Layout1"
   ],
   "model": 3,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1390,7 +3098,9 @@
    "Layout1"
   ],
   "model": 4,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1027",
   "viewports": 0
  },
@@ -1401,7 +3111,9 @@
    "Layout1"
   ],
   "model": 0,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1009",
   "viewports": 0
  },
@@ -1412,7 +3124,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1018",
   "viewports": 0
  },
@@ -1423,7 +3137,9 @@
    "Layout1"
   ],
   "model": 1,
+  "mtext": [],
   "paper": 0,
+  "splines": [],
   "version": "AC1018",
   "viewports": 0
  },
@@ -1434,7 +3150,9 @@
    "AEP 2"
   ],
   "model": 2,
+  "mtext": [],
   "paper": 1,
+  "splines": [],
   "version": "AC1032",
   "viewports": 1
  }

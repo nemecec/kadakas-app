@@ -134,6 +134,8 @@ pub fn compare(req: &Request<'_>) -> Result<Compared, UpdateError> {
     opts.base = BaseMode::Off;
     opts.layer = None;
     opts.lineage = None;
+    // A comparison is about the model. Paper space makes no object of the list.
+    opts.paper_space = false;
     opts.source_name = Some(req.new.1.to_string());
     let empty = Document::with_sequential_ids();
     let imported = scratch(req.new.1, &new_dxf, &Context::of(&empty), &opts, "new")?;

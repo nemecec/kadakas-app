@@ -388,3 +388,77 @@ fn a_layout_in_inches_is_converted_to_mm() {
     assert!((v.scale - 16.0).abs() < 1e-9, "{}", v.scale);
     assert!(rep.skipped.is_empty(), "{:?}", rep.skipped);
 }
+
+#[test]
+fn layers_mode_old_style_frozen_layers_circle_clips_and_render_modes() {
+    use kadakas_io::LayerMode;
+    // Viewports: render modes, an MVIEW list of frozen layers (releases 13 and 14), a circle clip,
+    // a clip that is an ellipse, and a view direction that is no standard view.
+    let circle = "0\nCIRCLE\n5\n71\n8\nDefpoints\n67\n1\n10\n150\n20\n150\n40\n40\n";
+    let ellipse =
+        "0\nELLIPSE\n5\n72\n8\nDefpoints\n67\n1\n10\n150\n20\n150\n11\n20\n21\n0\n40\n0.5\n";
+    let vps = [
+        viewport("TITLE", 2, (150.0, 150.0), (80.0, 80.0), "45\n20\n17\n0\n27\n0\n37\n0\n281\n1\n1001\nACAD\n1000\nMVIEW\n1002\n{\n1003\nOld\n1002\n}\n340\n71\n"),
+        viewport("TITLE", 3, (150.0, 150.0), (80.0, 80.0), "45\n20\n17\n0\n27\n0\n37\n0\n281\n2\n16\n0.3\n26\n-1\n36\n0.5\n340\n72\n"),
+        viewport("TITLE", 4, (150.0, 150.0), (80.0, 80.0), "45\n20\n17\n0\n27\n0\n37\n0\n281\n4\n"),
+    ]
+    .concat();
+    let text = drawing(&format!("{vps}{circle}{ellipse}"), "");
+    let (ed, rep) = import_with(
+        text.as_bytes(),
+        &ImportOptions {
+            layer_mode: LayerMode::Layers,
+            ..ImportOptions::default()
+        },
+    )
+    .unwrap();
+    let doc = ed.doc();
+    assert_eq!(
+        rep.entities_read,
+        rep.entities_imported + rep.entities_skipped,
+        "{rep:?}"
+    );
+    let a101 = doc.layers.iter().find(|l| l.name == "A101").unwrap();
+    let vps: Vec<_> = doc.viewports_of(a101.id).map(|(_, v)| v.clone()).collect();
+    assert_eq!(vps.len(), 4);
+    // The first viewport of `drawing` is the one at 150, 150 from `drawing`; ours are the last three.
+    let (v1, v2, v3) = (&vps[1], &vps[2], &vps[3]);
+    assert_eq!(
+        (v1.mode.as_str(), v2.mode.as_str(), v3.mode.as_str()),
+        ("wireframe", "hidden_line", "shaded")
+    );
+    // In the mode layers the layers are design layers: Old is hidden in the file and in v1 by name.
+    let old = doc.layers.iter().find(|l| l.name == "Old").unwrap();
+    assert_eq!(v1.layer_overrides.get(&old.id), Some(&false));
+    assert!(v1.layers.contains(&old.id));
+    // The circle crops the first, the ellipse crop is lost and the whole frame shows.
+    assert!(
+        matches!(&v1.crop, Some(kadakas_core::sheets::Crop::Polygon { points }) if points.len() == 64)
+    );
+    assert!(v2.crop.is_none());
+    let n = rep.notes.join("\n");
+    assert!(
+        n.contains("cropped by an outline that is not a polyline or a circle"),
+        "{n}"
+    );
+    assert!(n.contains("not a standard view"), "{n}");
+    assert!(!v2.is_plan());
+}
+
+#[test]
+fn a_layout_without_a_block_takes_its_name_from_the_layout_object() {
+    let objects = format!(
+        "0\nSECTION\n2\nOBJECTS\n{}0\nENDSEC\n",
+        layout_object("50", "99", "Sheet one", 1, 420.0, 297.0, 1)
+    );
+    let text = format!(
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n67\n1\n10\n0\n20\n0\n11\n100\n21\n0\n0\nENDSEC\n{objects}0\nEOF\n"
+    );
+    let (ed, _) = import(text.as_bytes()).unwrap();
+    assert!(
+        ed.doc()
+            .layers
+            .iter()
+            .any(|l| l.kind == LayerKind::Sheet && l.name == "Sheet one")
+    );
+}

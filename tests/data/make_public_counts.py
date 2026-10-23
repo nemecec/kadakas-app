@@ -57,6 +57,14 @@ def main():
             "paper": paper,
             "layouts": layouts,
             "viewports": sum(1 for lay in doc.layouts if lay.name != "Model" for e in lay if e.dxftype() == "VIEWPORT"),
+            # The plain text of every MTEXT of the model space, as the ezdxf reader finds it.
+            "mtext": [e.plain_text(split=False) for e in msp if e.dxftype() == "MTEXT"],
+            # Points on the splines of the model space (ezdxf flattens them within 0.01 units).
+            "splines": [
+                [[round(p.x, 4), round(p.y, 4)] for p in e.construction_tool().flattening(0.01)]
+                for e in msp
+                if e.dxftype() == "SPLINE" and "spline" in rel
+            ],
         }
     OUT.write_text(json.dumps(counts, indent=1, sort_keys=True) + "\n")
     print(f"{len(counts)} files, {sum(1 for v in counts.values() if v is None)} unreadable", file=sys.stderr)

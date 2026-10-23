@@ -471,3 +471,184 @@ fn frozen_layers_stay_hidden_in_their_viewports() {
     );
     assert!(vps.iter().all(|v| v.is_plan()));
 }
+
+/// Words of a text, so that the comparison ignores the line breaks and the spaces. The control
+/// characters that a caret code makes are left out: a drawing text has no place for them.
+fn words(s: &str) -> Vec<String> {
+    let clean: String = s
+        .chars()
+        .filter(|c| {
+            c.is_whitespace() && *c != '\u{b}' && *c != '\u{c}' && *c != '\r' || !c.is_control()
+        })
+        .collect();
+    clean.split_whitespace().map(str::to_string).collect()
+}
+
+/// The plain text of the MTEXT entities equals the plain text that the ezdxf reader makes
+/// (`MText.plain_text`), for the files with inline codes, escapes and caret codes.
+#[test]
+fn mtext_codes_give_the_text_that_the_ezdxf_reader_gives() {
+    let counts: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dxf_public_counts.json")).unwrap();
+    let files = corpus::all();
+    let wanted: Vec<_> = files.iter().map(|(_, r, p)| (*r, p.as_str())).collect();
+    corpus::prefetch(&wanted);
+    let (mut checked, mut bad) = (0, Vec::new());
+    for (label, repo, path) in &files {
+        // Columns: ezdxf joins the entities of the columns, we read them one by one.
+        if label.contains("column") || label.contains("mtext_framed") {
+            continue;
+        }
+        let key = if repo.name == "gdal" {
+            format!(
+                "gdal:autotest/ogr/data/dxf/{}",
+                path.rsplit('/').next().unwrap()
+            )
+        } else {
+            format!("{}:{}", repo.name, path)
+        };
+        let Some(expected) = counts.get(&key).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let Some(data) = corpus::fetch(*repo, path) else {
+            continue;
+        };
+        let Ok(dxf) = kadakas_io::dxf::parse::parse(&data) else {
+            continue;
+        };
+        let ours: Vec<String> = dxf
+            .entities
+            .iter()
+            .filter(|e| e.kind == "MTEXT" && e.int(67) != Some(1))
+            .map(|e| {
+                let raw: String = e
+                    .items
+                    .iter()
+                    .filter(|(c, _)| *c == 3)
+                    .map(|(_, v)| v.as_str())
+                    .chain(e.get(1))
+                    .collect();
+                kadakas_io::dxf::text::clean_mtext(&raw)
+            })
+            .collect();
+        let want: Vec<String> = expected["mtext"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t.as_str().unwrap().to_string())
+            .collect();
+        if ours.len() != want.len() {
+            bad.push(format!(
+                "{label}: {} MTEXT entities, ezdxf {}",
+                ours.len(),
+                want.len()
+            ));
+            continue;
+        }
+        checked += 1;
+        for (i, (a, b)) in ours.iter().zip(&want).enumerate() {
+            // ezdxf keeps the # of a diagonal fraction, we write a slash.
+            let (wa, wb) = (words(&a.replace('#', "/")), words(&b.replace('#', "/")));
+            if wa != wb {
+                let at = wa
+                    .iter()
+                    .zip(&wb)
+                    .position(|(x, y)| x != y)
+                    .unwrap_or(wa.len().min(wb.len()));
+                bad.push(format!(
+                    "{label} #{i}: word {at}: ours {:?} ezdxf {:?}",
+                    &wa[at.saturating_sub(1)..(at + 3).min(wa.len())],
+                    &wb[at.saturating_sub(1)..(at + 3).min(wb.len())]
+                ));
+            }
+        }
+    }
+    eprintln!("{checked} files with MTEXT compared with the ezdxf reader");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The cut splines of the GDAL files stay within the tolerance of the curve that the ezdxf
+/// reader makes (it flattens within 0.01), and a closed spline stays closed.
+#[test]
+fn splines_stay_within_the_tolerance_of_the_ezdxf_curve() {
+    use kadakas_core::model::Shape;
+    let counts: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dxf_public_counts.json")).unwrap();
+    let tol = 0.05;
+    for name in ["spline_closed.dxf", "spline_qcad.dxf", "spline_weight.dxf"] {
+        let Some(data) = corpus::gdal(name) else {
+            continue;
+        };
+        let key = format!("gdal:autotest/ogr/data/dxf/{name}");
+        let want = counts[&key]["splines"].as_array().unwrap();
+        let (ed, rep) = support::import_with(
+            &data,
+            &ImportOptions {
+                origin: kadakas_io::OriginMode::File,
+                unit: Some(kadakas_io::Unit::Mm),
+                tolerance: tol,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        let ours: Vec<(Vec<kadakas_core::DVec2>, bool)> = ed
+            .doc()
+            .objects
+            .values()
+            .filter_map(|o| match &o.shape {
+                Shape::Polyline { points, closed } => {
+                    Some((kadakas_core::curve::flatten(points, *closed, tol), *closed))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ours.len(), want.len(), "{name}: {:?}", rep.skipped);
+        for (i, (pts, closed)) in ours.iter().enumerate() {
+            let dense: Vec<[f64; 2]> = serde_json::from_value(want[i].clone()).unwrap();
+            let worst = dense
+                .iter()
+                .map(|c| {
+                    let c = kadakas_core::DVec2::new(c[0], c[1]);
+                    let ring = pts.len();
+                    (0..ring - 1 + usize::from(*closed))
+                        .map(|k| {
+                            let (a, b) = (pts[k], pts[(k + 1) % ring]);
+                            let ab = b - a;
+                            let t = if ab.length_squared() < 1e-300 {
+                                0.0
+                            } else {
+                                ((c - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0)
+                            };
+                            (c - (a + ab * t)).length()
+                        })
+                        .fold(f64::MAX, f64::min)
+                })
+                .fold(0.0, f64::max);
+            assert!(worst <= tol + 0.02, "{name} #{i}: deviation {worst}");
+            if name == "spline_closed.dxf" {
+                assert!(*closed, "{name} #{i} is closed in the file");
+            }
+        }
+    }
+}
+
+/// Block clips and transparencies are named in the notes, never silent.
+#[test]
+fn clips_and_transparencies_are_named() {
+    if let Some(d) = corpus::ezdxf("xclip.dxf") {
+        let rep = support::import(&d).unwrap().1;
+        assert!(
+            rep.notes.iter().any(|n| n.contains("clip (XCLIP)")),
+            "{:?}",
+            rep.notes
+        );
+    }
+    if let Some(d) = corpus::gdal("transparency.dxf") {
+        let rep = support::import(&d).unwrap().1;
+        assert!(
+            rep.notes.iter().any(|n| n.contains("transparency")),
+            "{:?}",
+            rep.notes
+        );
+    }
+}

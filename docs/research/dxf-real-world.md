@@ -1,6 +1,6 @@
 # Real-world DXF: what Vectorworks writes and reads (IOP-15)
 
-Scope: public sources only. We did not download or run anything. We did not use Vectorworks, AutoCAD or SketchUp. Every claim has a source. A claim marked unverified rests on one forum post or on a search excerpt. We did not open that source in full.
+Scope: public sources only. We did not use Vectorworks, AutoCAD or SketchUp. The research step downloaded nothing. The tests of IOP-15 fetch the public sample files of section 8 at run time (see `docs/interop.md`). Every claim has a source. A claim marked unverified rests on one forum post or on a search excerpt. We did not open that source in full.
 
 Pages of app-help.vectorworks.net are public help pages.
 
@@ -112,7 +112,7 @@ Not exported either: perspective design layers, oblique projections, object name
 
 ## 8. Public sample files with a clear licence
 
-Checked on 2026-10-23 with the GitHub API. We did not download the files.
+Checked on 2026-10-23 with the GitHub API. The tests fetch the files from a fixed commit and keep them out of the repository.
 
 | Corpus | URL | Licence | What it covers |
 |---|---|---|---|
@@ -125,41 +125,98 @@ We found no public Vectorworks written DXF with a clear licence. Our test corpus
 
 Other sources seen and not used: Burkardt DXF examples (https://people.math.sc.edu/Burkardt/data/dxf/dxf.html) say GNU LGPL, dated 2003, old R12 style.
 
-## 9. Our code today
+## 9. Our code before and after IOP-15 and IOP-16
 
-From `docs/interop.md`, rows IOP-01 and IOP-09 of `docs/feature-spec.md`, and `crates/kadakas-io/src/dxf`.
+From `docs/interop.md`, rows IOP-01, IOP-09, IOP-15 and IOP-16 of `docs/feature-spec.md`, and `crates/kadakas-io/src/dxf`.
 
-- Export: ASCII, release 2004 (`AC1018`), `$INSUNITS`, `$DWGCODEPAGE`, true colour (420), `\U+` escapes, blocks, GEODATA, POLYFACE, 3DFACE and MESH.
-- Import: LINE, LWPOLYLINE, POLYLINE (2D and 3D), ARC, CIRCLE, ELLIPSE, SPLINE, TEXT, MTEXT, POINT, 3DFACE, HATCH, INSERT.
-- Binary DXF is refused with a message.
-- Paper space entities are skipped and counted.
-- A tilted extrusion direction is skipped.
-- ATTRIB, ATTDEF and VIEWPORT are skipped.
-- `$INSUNITS` and `$DWGCODEPAGE` are read.
-- Text is UTF-8 when valid. Otherwise it uses the code page, or else Latin-1.
-- The import report counts skipped entities by kind.
+Before this work (state of the research):
 
-## 10. Gaps, ranked
+- Export: text DXF, release 2004 (`AC1018`), `$INSUNITS`, `$DWGCODEPAGE`, true colour (420), `\U+` escapes, blocks, GEODATA, POLYFACE, 3DFACE and MESH.
+- Import: LINE, LWPOLYLINE, POLYLINE (2D and 3D), ARC, CIRCLE, ELLIPSE, SPLINE, TEXT, MTEXT, POINT, 3DFACE, HATCH and INSERT.
+- Binary DXF was refused with a message.
+- Paper space entities were skipped and counted.
+- A tilted extrusion direction was skipped.
+- ATTRIB, ATTDEF and VIEWPORT were skipped.
+- `$INSUNITS` and `$DWGCODEPAGE` were read.
+- Text was UTF-8 when valid. Otherwise it used the code page, or else Latin-1.
+- The import report counted skipped entities by kind.
 
-Rank = chance that a real Vectorworks or AutoCAD file hits it, times the harm.
+After this work:
 
-1. Binary DXF import is refused. Vectorworks can write binary DXF and users can do so by mistake. Test: convert `bin_dxf_r12.dxf` and `bin_dxf_r2000.dxf` (GDAL data, MIT) and check that import reads them. Until then, check the refusal text names "save as text DXF".
-2. Releases R12 to 2000 to 2007 to 2018 are only known from the ezdxf rules. Test: read `Minimal_DXF_AC1006`, `AC1009`, `AC1021` and the MTEXT R2018 file from ezdxf. The result must have the same entity counts as the ezdxf reader.
-3. Entities that are likely in a Vectorworks export and not imported: 3DSOLID and BODY (ACIS), MESH, DIMENSION, IMAGE, WIPEOUT, LEADER and MLEADER, SOLID and TRACE, XLINE and RAY. Test: one file with each entity (from GDAL data: `wipeout`, `dimension`, `leader-mleader`, `solid`). Each must give a report line with the entity name, never a silent loss. Add MESH import (ezdxf can write one).
-4. Wipeout and solid hatch are the way Vectorworks writes fills. We read HATCH and skip WIPEOUT. Test: import `hatches_1.dxf`, `hatches_2.dxf`, `hatch_as_multipolygon.dxf` and check filled areas against the expected area. Add a test where a wipeout covers a hatch.
-5. Unitless files and wrong units. A file without `$INSUNITS` (R12 files, AC1006 and AC1009) needs a clear default and an option. Test: import `Minimal_DXF_AC1009.dxf` without options and with `unit: mm`, then check the box size in both cases. Also test a metre file in a feet document.
-6. Tilted extrusion (OCS) is refused. Real files have 3D rotated blocks and arcs from other programs. Test: GDAL `ocs2wcs1.dxf`, `ocs2wcs2.dxf`, `ocs2wcs3.dxf`, `LWPOLYLINE-OCS.dxf`, `ellipse_z_extrusion_minus_1.dxf`. Import must place geometry at the right 3D position.
-7. Paper space and viewports are skipped. Vectorworks puts sheet layers in paper space and the plan in model space, so model space data survives. Annotations and title blocks are lost. Test: `VP4.dxf` and `viewport_frozen_layers.dxf` (ezdxf). The report must say how many entities were in paper space and the layout names. Also test frozen layers: the layer must stay hidden.
-8. Block handling: anonymous blocks (`*U12`), nested inserts, rotated and scaled inserts, MINSERT, block base point, ATTRIB text, `xclip`. Test: `insert-recursive-pair.dxf`, `block-basepoint.dxf`, `block-insert-order.dxf`, `multi_insert_with_attribs.dxf`, `xclip.dxf`. Recursion must stop with a report line. Insert counts must match ezdxf.
-9. Colours and weights: ACI (including 0 ByBlock and 256 ByLayer), true colour, layer colour, the lineweight table of Vectorworks (nearest value). Test: `colors.dxf`, `valid_lineweights.dxf`, `byblock-bylayer.dxf`, `transparency.dxf`. Check colour per entity and the 0.40 mm mapping.
-10. Text: MTEXT inline codes, `%%c` `%%d` `%%p` codes, `\U+` escapes, columns, fonts that are SHX. Test: `mtext_complex_inline_codes.dxf`, `caret_encoding.dxf`, `text_fonts.dxf`, GDAL `utf-8.dxf`, and a CP1250 and CP1251 file made with ezdxf. Check the text equals the expected Unicode string.
-11. Export version: we write only `AC1018`. Some tools (old LibreCAD, laser software) read R12 or R2000 only. A version option is cheap for plain geometry. Test: export R12 and R2000 variants, read with ezdxf audit, and open in LibreCAD by hand.
-12. Splines and ellipses become polylines. This is right for most uses and loses exactness. Test: `spline_closed.dxf`, `spline_weight.dxf`, `spline_qcad.dxf`, `spline_with_very_close_neg_to_zero_knot.dxf`. Check the deviation is under the tolerance and a closed spline stays closed.
-13. Xref and external references. Vectorworks binds xrefs on import. We do not read them. Test: file with an XREF block. The report must name the missing file.
-14. Hostile and damaged files. Real-world files have errors. Test: both GDAL `clusterfuzz-*` files and `insert-too-many-errors.dxf`. No panic, a bounded run time and a report.
+- Import reads binary DXF and the releases 12 to 2018. The report names the release.
+- A file without a unit gets a guess (inches if `$MEASUREMENT` is 0, else millimetres). The report says so.
+- The export has the option `version` for the releases 12, 2000, 2004, 2013 and 2018.
+- WIPEOUT, SOLID, TRACE, MESH, LEADER, ATTRIB and DIMENSION blocks are imported. IMAGE, ACIS solids and multileaders are reported by name.
+- Circles, arcs, polylines and ellipses in a tilted plane become 3D polylines.
+- A paper space layout becomes a sheet layer, and a sheet layer becomes a layout.
+- The report accounts for every entity: `entities_read` equals `entities_imported` plus `entities_skipped`.
+- The corpus of public files and our own files test all of it. See `docs/interop.md`.
 
-## 11. Recommended next steps
+## 10. Gaps, ranked, with the state of each
 
-1. Fetch the ezdxf and GDAL files into `tests/data/dxf-public/` with a `README` that keeps the licence text. Keep only MIT files. Do not copy the LibreCAD files.
-2. Write the import tests in the order of the ranked list. Items 1, 3, 4 and 6 are the most likely to hit a user.
-3. When a Vectorworks forum page becomes readable, re-check this note. The unverified items in sections 2, 5 and 7 are the first to confirm.
+Rank = chance that a real Vectorworks or AutoCAD file hits it, times the harm. Each item has its test and its state.
+
+1. Binary DXF import was refused. Vectorworks can write binary DXF, and users can do so by mistake.
+   - Test: convert `bin_dxf_r12.dxf` and `bin_dxf_r2000.dxf` (GDAL data, MIT) and check that import reads them.
+   - Until then, the refusal text must name "save as text DXF".
+   - Done. The reader handles one-byte and two-byte codes. Six public binary files and our own two give the objects of the ezdxf reader. A damaged file is refused with the byte.
+2. Releases R12 to 2000 to 2007 to 2018 were only known from the ezdxf rules.
+   - Test: read `Minimal_DXF_AC1006`, `AC1009`, `AC1021` and the MTEXT R2018 file from ezdxf.
+   - The result must have the same entity counts as the ezdxf reader.
+   - Done. The counts of 118 public files equal those of the ezdxf reader.
+3. Entities that are likely in a Vectorworks export and were not imported: 3DSOLID and BODY (ACIS), MESH, DIMENSION, IMAGE, WIPEOUT, LEADER, MLEADER, SOLID, TRACE, XLINE and RAY.
+   - Test: one file with each entity (GDAL data: `wipeout`, `dimension`, `leader-mleader`, `solid`).
+   - Each must give a report line with the entity name, never a silent loss.
+   - Add MESH import (ezdxf can write one).
+   - Done. MESH, SOLID, TRACE, WIPEOUT, LEADER and the dimension blocks are imported. IMAGE (with its file), ACIS solids, MLEADER, XLINE and RAY are reported by name.
+4. Wipeout and solid hatch are the way Vectorworks writes fills. We read HATCH and skipped WIPEOUT.
+   - Test: import `hatches_1.dxf`, `hatches_2.dxf` and `hatch_as_multipolygon.dxf`. Check the filled areas against the expected area.
+   - Add a test where a wipeout covers a hatch.
+   - Done. A solid hatch is filled, and an island is a white filled outline. The areas equal the ezdxf reader. A wipeout is a white polygon above the hatch.
+5. Unitless files and wrong units. A file without `$INSUNITS` (R12 files, AC1006 and AC1009) needs a clear default and an option.
+   - Test: import a file without a unit with and without `unit: mm`, and check the box size in both cases.
+   - Test: import a metre file as feet.
+   - Done. The default is millimetres, or inches when `$MEASUREMENT` is 0. The report gives the reason. `Minimal_DXF_AC1009.dxf` has no entities, so our own files `r12_unitless.dxf` and `r2018_meters.dxf` carry the size checks.
+6. Tilted extrusion (OCS) was refused. Real files have 3D rotated blocks and arcs from other programs.
+   - Test: GDAL `ocs2wcs1.dxf`, `ocs2wcs2.dxf`, `ocs2wcs3.dxf`, `LWPOLYLINE-OCS.dxf` and `ellipse_z_extrusion_minus_1.dxf`.
+   - Import must place geometry at the right 3D position.
+   - Done for circles, arcs, polylines, SOLID, ELLIPSE and the paths of a HATCH, with the arbitrary axis algorithm. TEXT, MTEXT and a block in a tilted plane are reported and not placed.
+7. Paper space and viewports were skipped. Vectorworks puts sheet layers in paper space and the plan in model space, so the model space data survived. Annotations and title blocks were lost.
+   - Test: `VP4.dxf` and `viewport_frozen_layers.dxf` (ezdxf).
+   - The report must say how many entities were in paper space and the layout names.
+   - Test frozen layers: the layer must stay hidden.
+   - Done (IOP-16). A layout is a sheet layer with its viewports. The entity counts of the sheets equal the ezdxf reader. A frozen layer stays hidden in its viewport.
+8. Block handling: anonymous blocks (`*U12`), nested inserts, rotated and scaled inserts, MINSERT, block base point, ATTRIB text and `xclip`.
+   - Test: `insert-recursive-pair.dxf`, `block-basepoint.dxf`, `block-insert-order.dxf`, `multi_insert_with_attribs.dxf` and `xclip.dxf`.
+   - Recursion must stop with a report line.
+   - Insert counts must match ezdxf.
+   - Done, except that a block clip (XCLIP) is not applied. A note counts the clipped references. The INSERT counts equal the ezdxf reader. The recursion stops with the line `blocks are nested too deep`.
+9. Colours and weights: ACI (including 0 ByBlock and 256 ByLayer), true colour, layer colour, and the lineweight table of Vectorworks (nearest value).
+   - Test: `colors.dxf`, `valid_lineweights.dxf`, `byblock-bylayer.dxf` and `transparency.dxf`.
+   - Check the colour per entity and the 0.40 mm mapping.
+   - Done. The palette is the table of ezdxf (1 to 248), so every index equals the ezdxf colour. The weight 40 gives 0.40 mm. A transparency is not imported, and a note counts it.
+10. Text: MTEXT inline codes, `%%c` `%%d` `%%p` codes, `\U+` escapes, columns, and fonts that are SHX.
+    - Test: `mtext_complex_inline_codes.dxf`, `caret_encoding.dxf`, `text_fonts.dxf`, GDAL `utf-8.dxf`, and a CP1250 and CP1251 file made with ezdxf.
+    - Check that the text equals the expected Unicode string.
+    - Done. The plain text of 121 public files equals the plain text of the ezdxf reader. The code pages work for ANSI, DOS and ISO names. Columns are separate MTEXT entities, and empty ones are reported.
+11. Export version: we wrote only `AC1018`. Some tools (old LibreCAD, laser software) read R12 or R2000 only.
+    - Test: export R12 and R2000 variants, read them with the ezdxf audit, and open them in LibreCAD by hand.
+    - Done for the ezdxf audit in AC1009, AC1015, AC1018, AC1027 and AC1032. The check in LibreCAD by hand is not done.
+12. Splines and ellipses become polylines. This is right for most uses and loses exactness.
+    - Test: `spline_closed.dxf`, `spline_weight.dxf`, `spline_qcad.dxf` and `spline_with_very_close_neg_to_zero_knot.dxf`.
+    - Check that the deviation is under the tolerance and that a closed spline stays closed.
+    - Done. The cut is now adaptive within the tolerance. The curves stay within 0.05 of the ezdxf curve at that tolerance. A note counts splines and ellipses. Missing knots get uniform knots.
+13. Xref and external references. Vectorworks binds xrefs on import. We do not read them.
+    - Test: a file with an XREF block. The report must name the missing file.
+    - Done. The report line has the block name and the path.
+14. Hostile and damaged files. Real-world files have errors.
+    - Test: both GDAL `clusterfuzz-*` files and `insert-too-many-errors.dxf`.
+    - No panic, a bounded run time and a report.
+    - Done. These files, huge counts, nesting without end, long lines and damaged binary files have tests.
+
+## 11. Next steps
+
+1. Check the exports of the releases 12, 2013 and 2018 by hand in a CAD program or a laser program.
+2. Apply the block clip (XCLIP) and read the hatch patterns.
+3. Place text and blocks that lie in a tilted plane.
+4. When a Vectorworks forum page becomes readable, re-check this note. The unverified items in sections 2, 5 and 7 are the first to confirm.

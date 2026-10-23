@@ -255,9 +255,12 @@ fn splines_and_ellipses_say_how_exact_they_stay() {
     let (ed, rep) = import(doc(&format!("{spline}{fit}{polygon}{ellipse}")).as_bytes()).unwrap();
     accounted(&rep);
     let n = rep.notes.join("\n");
-    assert!(n.contains("1 spline became polylines within 2 mm"), "{n}");
+    assert!(n.contains("2 splines became polylines within 2 mm"), "{n}");
     assert!(n.contains("1 spline with fit points only"), "{n}");
-    assert!(n.contains("1 spline had no usable knots"), "{n}");
+    assert!(
+        n.contains("1 spline had no usable knots, so uniform knots were made"),
+        "{n}"
+    );
     assert!(n.contains("1 ellipse or elliptical arc became"), "{n}");
     // The cubic Bezier through (0,0) (3000,5000) (7000,5000) (10000,0) is within the tolerance.
     let Shape::Polyline { points, .. } = &shapes_of(&ed)[0] else {

@@ -81,9 +81,11 @@ pub fn decode_percent(s: &str) -> String {
     out
 }
 
-/// Replaces the caret codes: `^J` is a line feed, `^I` a tab, `^M` a carriage return (dropped),
-/// and a caret and a space is a caret. Only a caret before `@`, a capital letter, `[`, `\`, `]`,
-/// `^` or `_` is a code, so a text like `x^2` stays as it is.
+/// Replaces the caret codes: a caret and a character stand for the character with the code of
+/// that character XOR 64. So `^J` is a line feed, `^I` a tab, `^M` a carriage return (dropped),
+/// `^a` is `!`, and a caret and a space is a caret. This is what the ezdxf reader does with the
+/// file `caret_encoding.dxf`. Only a caret before `@`, a letter, `[`, `\`, `]`, `^` or `_` is a
+/// code, so a text like `x^2` stays as it is.
 pub fn decode_caret(s: &str) -> String {
     if !s.contains('^') {
         return s.to_string();
@@ -100,13 +102,14 @@ pub fn decode_caret(s: &str) -> String {
                 it.next();
                 out.push('^');
             }
-            Some(n @ ('@'..='_')) => {
+            Some(n @ ('?'..='_' | 'a'..='z')) => {
                 it.next();
                 match (n as u8) ^ 0x40 {
                     10 => out.push('\n'),
                     9 => out.push(' '),
                     // The other control characters have no place in a drawing text.
-                    _ => {}
+                    0..=31 | 0x7f => {}
+                    code => out.push(code as char),
                 }
             }
             _ => out.push('^'),
@@ -120,40 +123,60 @@ pub fn decode_text(s: &str) -> String {
     decode_percent(&decode_caret(s))
 }
 
-/// Plain text of MTEXT: line breaks kept, formatting codes removed.
+/// Plain text of MTEXT: line breaks kept, formatting codes removed. A code that needs arguments
+/// (`\\f`, `\\H`, `\\C` and the like) ends at the next semicolon. Without a semicolon it is not a
+/// code, and it stays in the text as it is, like the ezdxf reader does. So does a backslash
+/// before a character that is not a code.
 pub fn clean_mtext(s: &str) -> String {
     let s = decode_text(s);
+    let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
         match c {
             '{' | '}' => {}
-            '\\' => match it.next() {
-                Some('P') | Some('X') | Some('N') => out.push('\n'),
-                Some('~') => out.push(' '),
-                Some(c @ ('\\' | '{' | '}')) => out.push(c),
-                Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
-                Some('S') => {
-                    // Stacked text: keep the numerator and denominator.
-                    let mut body = String::new();
-                    for c in it.by_ref() {
-                        if c == ';' {
-                            break;
+            '\\' => {
+                let Some(&code) = chars.get(i) else {
+                    break;
+                };
+                i += 1;
+                // The text up to the next semicolon, if there is one.
+                let end = chars[i..].iter().position(|c| *c == ';').map(|p| i + p);
+                match code {
+                    'P' | 'X' | 'N' => out.push('\n'),
+                    '~' => out.push(' '),
+                    '\\' | '{' | '}' => out.push(code),
+                    'L' | 'l' | 'O' | 'o' | 'K' | 'k' => {}
+                    // Stacked text: keep the numerator and the denominator. A diagonal fraction
+                    // (`#`) is written with a slash, and a stack without a bar (`^`) keeps its sign.
+                    'S' => match end {
+                        Some(e) => {
+                            let body: String = chars[i..e].iter().collect();
+                            out.push_str(&body.replace('#', "/"));
+                            i = e + 1;
                         }
-                        body.push(c);
-                    }
-                    out.push_str(&body.replace(['^', '#'], "/"));
-                }
-                Some(_) => {
-                    // A code with arguments, such as \fArial|b0; or \H2.5x; or \pxqc;
-                    for c in it.by_ref() {
-                        if c == ';' {
-                            break;
+                        None => {
+                            out.push('\\');
+                            out.push(code);
                         }
+                    },
+                    // Codes with arguments: alignment, color, true color, font, height, paragraph,
+                    // oblique angle, tracking and width.
+                    'A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'p' | 'Q' | 'T' | 'W' => match end {
+                        Some(e) => i = e + 1,
+                        None => {
+                            out.push('\\');
+                            out.push(code);
+                        }
+                    },
+                    other => {
+                        out.push('\\');
+                        out.push(other);
                     }
                 }
-                None => {}
-            },
+            }
             c => out.push(c),
         }
     }
@@ -200,14 +223,21 @@ mod tests {
         assert_eq!(decode_caret("a^Mb"), "ab");
         assert_eq!(decode_caret("a^ b"), "a^b");
         assert_eq!(decode_caret("x^2"), "x^2");
+        assert_eq!(decode_caret("abc^adef^b"), "abc!def\"");
+        assert_eq!(decode_caret("^z"), ":");
         assert_eq!(decode_caret("end^"), "end^");
-        assert_eq!(decode_caret("^@^[^_"), "");
+        assert_eq!(decode_caret("^@^[^_^?"), "");
         assert_eq!(decode_text("1^J%%c5"), "1\n\u{d8}5");
     }
 
     #[test]
     fn mtext_codes() {
         assert_eq!(clean_mtext("a\\"), "a");
+        // A code that has no semicolon, or that is no code, stays in the text.
+        assert_eq!(clean_mtext("a\\C1invidunt b"), "a\\C1invidunt b");
+        assert_eq!(clean_mtext("\\: abc"), "\\: abc");
+        assert_eq!(clean_mtext("\\S1/2"), "\\S1/2");
+        assert_eq!(clean_mtext("x\\C1;y"), "xy");
         assert_eq!(clean_mtext("\\PA\\Xb"), "\nA\nb");
         assert_eq!(
             clean_mtext("{\\fArial|b0;Hello}\\Psecond \\S1/2; line\\~x\\L\\\\"),
@@ -218,7 +248,7 @@ mod tests {
             clean_mtext("\\pxqc,i1;A\\H2.5x;B\\W0.8;C\\T1.2;D\\C3;E\\c255;F\\Q15;G\\A1;H"),
             "ABCDEFGH"
         );
-        assert_eq!(clean_mtext("\\S+0.1^-0.1;"), "+0.1/-0.1");
+        assert_eq!(clean_mtext("\\S+0.1^-0.1;"), "+0.1^-0.1");
         assert_eq!(clean_mtext("\\S1#4;"), "1/4");
         assert_eq!(clean_mtext("a\\Nb"), "a\nb");
         assert_eq!(

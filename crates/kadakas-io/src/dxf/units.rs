@@ -46,7 +46,8 @@ pub struct Resolved {
     pub note: Option<String>,
 }
 
-fn option_name(u: Unit) -> &'static str {
+/// The name of a unit of the options, for the notes.
+pub fn unit_name(u: Unit) -> &'static str {
     match u {
         Unit::Mm => "millimeters",
         Unit::Cm => "centimeters",
@@ -70,7 +71,7 @@ pub fn resolve(option: Option<Unit>, dxf: &Dxf, release: Option<&Release>) -> Re
             .map(|(_, name)| {
                 format!(
                     "the option unit ({}) replaces the unit of the file ($INSUNITS says {name})",
-                    option_name(u)
+                    unit_name(u)
                 )
             });
         return Resolved {
@@ -118,6 +119,24 @@ mod tests {
             d.header.insert((*k).into(), vec![(70, (*v).into())]);
         }
         d
+    }
+
+    #[test]
+    fn every_unit_has_a_name_that_matches_its_size() {
+        for u in [
+            Unit::Mm,
+            Unit::Cm,
+            Unit::M,
+            Unit::Km,
+            Unit::Inch,
+            Unit::Foot,
+            Unit::Yard,
+            Unit::Mile,
+        ] {
+            let (mm, name) = insunits_mm(u.insunits()).unwrap();
+            assert_eq!(mm, u.mm_per_unit());
+            assert_eq!(unit_name(u), name);
+        }
     }
 
     #[test]

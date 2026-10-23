@@ -126,7 +126,94 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 ### DXF
 
-A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file stays release 2004 (`AC1018`) with its code page, and the audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas does not read the MESH entity.
+A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file is release 2004 (`AC1018`) with its code page, unless the option `version` says another one (see the DXF files section). The audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas reads the MESH entity too (IOP-15): it becomes a `mesh3d` object with the control mesh.
+
+## DXF files (IOP-01, IOP-15, IOP-16)
+
+This section is about real-world DXF files. The research with its sources is `docs/research/dxf-real-world.md`. The code is in `crates/kadakas-io/src/dxf`.
+
+### What is read
+
+- Text DXF and binary DXF, from release 12 (`AC1009`) to 2018 (`AC1032`). `report.release` names the release of the file.
+- A binary file starts with `AutoCAD Binary DXF`. Release 12 writes group codes in one byte, newer releases in two. The reader finds the width from the first pair. A damaged binary file is refused with the byte where it is damaged and the advice to save a text DXF.
+- Limits that protect the import: the file size (`max_bytes`), 100 million pairs, 20 million records, 1 MiB for one value, 12 levels of blocks, 5 million visits and `max_exploded` objects from blocks. Each limit gives a refusal or a line in the report.
+- Text is UTF-8 when it is valid. Else the code page of `$DWGCODEPAGE` is used (`ANSI_1250` to `ANSI_1258`, `ANSI_932`, `ANSI_936`, `ANSI_949`, `ANSI_950`, `DOS437` and the other DOS pages, `ISO8859-n`, `MAC-ROMAN`). Else the text is Latin-1.
+
+### Units
+
+The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before 2000 have no `$INSUNITS`. A file with `$INSUNITS` 0 has no unit.
+
+- The guess is inches when `$MEASUREMENT` is 0 (English). Else it is millimeters.
+- The note names the reason and the guess, for example `the drawing has no unit (DXF release 12 stores none): assuming millimeters`.
+- The option `unit` replaces the unit of the file. A note says so when the two differ.
+- All codes of length of `$INSUNITS` work, also the US survey units (21 to 24). The astronomical units (17 to 20) are not known.
+
+### Entities
+
+| Entity | What the import does |
+|---|---|
+| LINE, ARC, CIRCLE, LWPOLYLINE, POLYLINE, POINT, TEXT, 3DFACE, INSERT | As before (IOP-01, IOP-09). |
+| ATTRIB | Visible text. An invisible attribute and an ATTDEF are reported. |
+| MTEXT, TEXT | The codes `%%c`, `%%d`, `%%p`, `%%nnn`, `\U+XXXX`, the caret codes (`^J`) and the MTEXT codes for fonts, heights, colors, stacks and paragraphs. The text equals the plain text of the ezdxf reader. |
+| SOLID, TRACE | A filled polygon (fill = pen color). The corners are in the order 1, 2, 4, 3. |
+| HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch is an outline, and a note counts the pattern names. |
+| WIPEOUT | A white polygon with no line and `data.wipeout`, above what was drawn before it. |
+| MESH | A `mesh3d` object (the control mesh). |
+| LEADER | An open polyline. The arrowhead is not drawn. |
+| DIMENSION, ARC_DIMENSION, ACAD_TABLE | The lines and text of the anonymous block. Without the block the entity is reported. The definition points on the layer `Defpoints` are reported. |
+| SPLINE, ELLIPSE | Polylines within the tolerance. A note counts them. A spline without knots gets uniform knots, as in the ezdxf reader. |
+| Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). TEXT, MTEXT and INSERT in a tilted plane are reported. |
+| IMAGE, 3DSOLID, BODY, REGION, SURFACE, MLEADER, XLINE, RAY, MLINE, OLE2FRAME, XREF | Reported by name with the reason. An IMAGE names its file, an XREF its path. |
+| XCLIP of a block reference, transparency | Not applied. A note counts them. |
+
+### The report
+
+- `report.entities_read` is the number of entities that the import visited. Each copy of an exploded block counts.
+- `report.entities_imported` and `report.entities_skipped` add up to it. A field with 0 is left out of the JSON.
+- Each skipped entity has a line in `report.skipped` with its kind, the reason and a count.
+- `report.notes` says what was approximated or guessed.
+
+### Paper space (IOP-16)
+
+| DXF | Kadakas |
+|---|---|
+| A layout of paper space with content | A sheet layer (mm, 1:1) named like the layout. The paper size comes from the layout (`A3` and so on, else a custom size). A layout with only the viewport of the paper is not imported. |
+| VIEWPORT | A viewport: frame, scale (view height over paper height), standard view (plan, front, isometric and so on), frozen layers, crop (a polyline or a circle that the viewport names), render mode. |
+| Entities of the layout, blocks, title block, attributes | Objects on the sheet layer, in the order of the file, so what lies under a viewport stays under it. |
+| 3D polyline in paper space | Flattened to 2D, and a note counts it. Other shapes that a sheet cannot hold are reported. |
+
+A viewport that is off, has no size or is not valid is reported. A twist and a perspective view are not kept, and a note counts them. A view direction that is not a standard view uses the nearest standard view, and a note says which.
+
+The export writes the reverse. A sheet layer is a layout with the paper, the viewport of the paper, the viewports, the annotations of the viewports, the title block (lines and text) and the objects of the sheet. The first layout is in the section ENTITIES with the flag `67 1`, the others in their blocks `*Paper_Space0` and so on. The option `sheets` is `false` to leave sheets out. Release 12 has no layouts. The update of a drawing (IOP-23) does not import paper space.
+
+### Export releases
+
+The option `version` of `export.file`:
+
+| Value | Release | Notes |
+|---|---|---|
+| `AC1018` (default) | 2004 | The reference form. |
+| `AC1015` | 2000 | No true colors (the nearest indexed color), the polyface mesh instead of the MESH entity. |
+| `AC1027`, `AC1032` | 2013, 2018 | The same layout as 2004. Checked with the ezdxf reader and its audit. Not opened in AutoCAD. |
+| `AC1009` | 12 | Only LINE, CIRCLE, ARC, POINT, TEXT and POLYLINE. No handles, unit, layouts or Unicode. The code page is `ANSI_1252`. Names are capital letters. Every object that it cannot hold is counted in `report.skipped`. |
+
+The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window has a list for it.
+
+### Test files
+
+- Public sample files of ezdxf (MIT licence) and GDAL (MIT style licence) are fetched with `curl` from a fixed commit into `tests/data/dxf-public/`. Git ignores that folder. The tests skip when there is no network, or when `KADAKAS_CORPUS=off` is set. No LibreCAD file (GPL) is used.
+- Every corpus file goes through the import. It must not panic, it must end in time, and its report must account for every entity. The counts of entities, layouts, viewports and MTEXT texts are compared with the ezdxf reader (`crates/kadakas-io/tests/fixtures/dxf_public_counts.json`, made by `tests/data/make_public_counts.py`).
+- Our own small files are in `tests/data/dxf-own/` (made by `tests/data/make_own_files.py`). They run offline.
+- The tests for damaged and hostile files are in `crates/kadakas-io/tests/dxf_hostile.rs`.
+
+### Not done
+
+- Block clips (XCLIP) and transparency are not applied.
+- Pattern hatches are outlines. The pattern is not drawn.
+- A viewport with a twist keeps no twist.
+- TEXT, MTEXT and INSERT in a tilted plane are reported and not placed.
+- The releases 2013 and 2018 of the export are not opened in a CAD program. Release 12 is not opened in LibreCAD or a laser program by hand.
+- An import of a very large drawing is slow in the editor, because the batch of a few hundred thousand commands runs in quadratic time. The import itself is linear.
 
 ## Code
 
@@ -157,5 +244,5 @@ The parsers are written for Kadakas. No new third-party crate was added, so the 
 - Textures and materials of OBJ and glTF are not read. Only the base color is kept.
 - Colors of single triangles of an STL file, vertex colors and normals are not read.
 - glTF with Draco, Meshopt or quantized data, and sparse accessors, are refused.
-- The DXF MESH entity is written and not read.
+- A DXF MESH entity with a subdivision level above 0 is read as its control mesh.
 - Component instances are not exported to IFC. Explode them first. DXF writes them (MOD-13).

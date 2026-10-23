@@ -309,7 +309,7 @@ fn viewport(
     // The annotations of the viewport are entities of the sheet, in paper millimeters from the
     // lower left corner of the frame.
     for a in &v.annotations {
-        annotation(w, cx, env, o, v, a, hidden, report);
+        annotation(w, cx, o, v, a, hidden, report);
     }
     true
 }
@@ -319,7 +319,6 @@ fn viewport(
 fn annotation(
     w: &mut W,
     cx: &mut Ctx,
-    env: &Env,
     o: &Object,
     v: &Viewport,
     a: &kadakas_core::sheets::Annotation,
@@ -394,7 +393,6 @@ fn annotation(
             write_object(w, cx, &t, &name, hidden);
         }
     }
-    let _ = env;
 }
 
 /// Writes one sheet layer: the viewport of the paper itself, then every object of the sheet in

@@ -76,3 +76,30 @@ def test_entities_are_imported_or_reported(cad, entities_file):
     # The MTEXT lost its codes.
     text = [o for o in cad.result("objects.list", {"class": classes["NOTES"]}) if o["shape"]["kind"] == "text"]
     assert text[0]["shape"]["text"].startswith("Bold\nline \u00d820 1/2")
+
+
+def test_the_indexed_colors_equal_the_palette_of_ezdxf(cad, tmp_path):
+    from ezdxf import colors
+
+    doc = ezdxf.new("R2018")
+    doc.units = 4
+    msp = doc.modelspace()
+    for i in range(1, 256):
+        msp.add_line((i, 0), (i, 1), dxfattribs={"color": i, "layer": "C"})
+    # True color, ByLayer (the layer color) and a lineweight of 0.40 mm.
+    msp.add_line((300, 0), (300, 1), dxfattribs={"true_color": 0x336699, "layer": "C", "lineweight": 40})
+    path = tmp_path / "colors.dxf"
+    doc.saveas(path)
+    cad.result("import.file", {"path": str(path), "options": {"track_source": False, "origin": "file"}})
+    got = {round(o["shape"]["a"][0]): o for o in cad.result("objects.list", {"kind": "line"})}
+    # The greys 249 to 255 are not compared: ezdxf has other numbers there than the usual ones.
+    for i in range(1, 249):
+        rgb = list(colors.int2rgb(colors.DXF_DEFAULT_COLORS[i]))
+        pen = got[i]["attrs"]["pen"]
+        if i == 7:
+            # The color 7 is white or black, whichever shows on the paper: black.
+            assert pen[:3] == [0, 0, 0]
+        else:
+            assert pen[:3] == rgb, (i, pen, rgb)
+    assert got[300]["attrs"]["pen"] == [0x33, 0x66, 0x99, 255]
+    assert got[300]["attrs"]["line_weight"] == approx(0.40)
