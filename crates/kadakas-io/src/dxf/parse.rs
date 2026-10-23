@@ -150,6 +150,11 @@ pub struct Dxf {
 }
 
 impl Dxf {
+    /// The release of the file (`$ACADVER`), if the header names one.
+    pub fn release(&self) -> Option<super::version::Release> {
+        super::version::Release::parse(self.header_value("$ACADVER")?)
+    }
+
     /// The first value of a header variable, for example `$INSUNITS`.
     pub fn header_value(&self, var: &str) -> Option<&str> {
         self.header.get(var)?.first().map(|(_, v)| v.as_str())
@@ -157,14 +162,14 @@ impl Dxf {
 }
 
 /// The code page that `$DWGCODEPAGE` names, found in the raw bytes of the header.
-fn header_code_page(bytes: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+fn header_code_page(bytes: &[u8]) -> Option<crate::encoding::Codec> {
     const KEY: &[u8] = b"$DWGCODEPAGE";
     let at = bytes.windows(KEY.len()).position(|w| w == KEY)?;
     let rest = &bytes[at + KEY.len()..bytes.len().min(at + KEY.len() + 64)];
     let text: String = rest.iter().map(|&b| b as char).collect();
     // After the name come the group code (3) and the value, one per line.
     let value = text.lines().filter(|l| !l.trim().is_empty()).nth(1)?;
-    crate::encoding::from_dwg_code_page(value)
+    crate::encoding::codec_from_dwg_code_page(value)
 }
 
 /// Text of the file. UTF-8 when valid. Older files use the code page of `$DWGCODEPAGE`, else Latin-1.
@@ -173,7 +178,7 @@ fn decode(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
         Err(_) => match header_code_page(bytes) {
-            Some(enc) => enc.decode_without_bom_handling(bytes).0.into_owned(),
+            Some(enc) => enc.decode(bytes),
             None => bytes.iter().map(|&b| b as char).collect(),
         },
     }
@@ -474,10 +479,16 @@ mod tests {
         assert_eq!(d.entities[0].get(1), Some("\u{160}\u{f5}\u{f5}"));
         // An unknown code page falls back to Latin-1.
         let mut b2 = Vec::new();
-        b2.extend_from_slice(b"0\nSECTION\n2\nHEADER\n9\n$DWGCODEPAGE\n3\nDOS437\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\n");
+        b2.extend_from_slice(b"0\nSECTION\n2\nHEADER\n9\n$DWGCODEPAGE\n3\nUNDEFINED\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\n");
         b2.push(0xE4);
         b2.extend_from_slice(b"\n0\nENDSEC\n0\nEOF\n");
         assert_eq!(parse(&b2).unwrap().entities[0].get(1), Some("\u{e4}"));
+        // A DOS code page reads the byte as the character of that page.
+        let mut b3 = Vec::new();
+        b3.extend_from_slice(b"0\nSECTION\n2\nHEADER\n9\n$DWGCODEPAGE\n3\nDOS437\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nTEXT\n1\n");
+        b3.push(0x84);
+        b3.extend_from_slice(b"\n0\nENDSEC\n0\nEOF\n");
+        assert_eq!(parse(&b3).unwrap().entities[0].get(1), Some("\u{e4}"));
     }
 
     #[test]

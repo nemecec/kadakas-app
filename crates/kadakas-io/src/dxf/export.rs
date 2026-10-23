@@ -1,4 +1,5 @@
-//! Document to ASCII DXF (release 2004, `AC1018`; the layout is the same as release 2000 plus true colors).
+//! Document to ASCII DXF (release 2004, `AC1018`, by default; the layout is the same as release 2000 plus true colors).
+//! The option `version` also writes 2000, 2013 and 2018 with the same layout, and release 12 with the writer in `r12`.
 //!
 //! The file has all sections and tables that AutoCAD expects: HEADER, CLASSES, TABLES (VPORT, LTYPE, LAYER,
 //! STYLE, VIEW, UCS, APPID, DIMSTYLE, BLOCK_RECORD), BLOCKS, ENTITIES and OBJECTS (root dictionary, layouts,
@@ -19,12 +20,13 @@ use kadakas_core::model::{Attributes, Color, Document, Object, Shape, arc_sweep}
 use kadakas_core::{DVec2, DVec3};
 
 use super::nearest_aci;
-use crate::options::{ExportOrigin, LayerMode};
+use crate::options::{DxfVersion, ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
 mod kinds;
 mod native;
 pub mod patterns;
+mod r12;
 
 /// Longest text that one TEXT entity holds. Longer text becomes MTEXT.
 const TEXT_LIMIT: usize = 250;
@@ -34,6 +36,8 @@ struct W {
     next: u64,
     /// Handle of the owner (block record) that new entities get as group 330. Empty: none is written.
     owner: String,
+    /// Write group code 420 (true color) next to the indexed color. Release 2004 and newer.
+    true_color: bool,
 }
 
 impl W {
@@ -42,7 +46,13 @@ impl W {
             buf: String::new(),
             next,
             owner: String::new(),
+            true_color: true,
         }
+    }
+
+    fn with_true_color(mut self, on: bool) -> W {
+        self.true_color = on;
+        self
     }
 
     /// A new handle, as hex text.
@@ -173,7 +183,9 @@ fn write_look(w: &mut W, attrs: &Attributes, hidden: bool) {
     if let Some(pen) = attrs.pen.filter(|p| p.0[3] > 0) {
         let (aci, tc) = aci_and_true(pen);
         w.pair(62, if hidden { -(aci as i32) } else { aci as i32 });
-        w.pair(420, tc);
+        if w.true_color {
+            w.pair(420, tc);
+        }
     } else if hidden {
         w.pair(62, -7);
     }
@@ -277,8 +289,27 @@ const H_GEO_XDICT: &str = "2C";
 const FIRST_HANDLE: u64 = 0x100;
 
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    if opts.version == DxfVersion::R12 {
+        return r12::export(doc, opts);
+    }
     let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
+    let version = opts.version;
+    report.release = Some(format!("{} (release {})", version.code(), version.name()));
+    let mut mesh_entity = opts.mesh_entity;
+    if mesh_entity == crate::options::MeshEntity::Mesh && !version.allows_mesh_entity() {
+        mesh_entity = crate::options::MeshEntity::Polyface;
+        report.note(&format!(
+            "release {} has no MESH entity: meshes are written as polyface meshes",
+            version.name()
+        ));
+    }
+    if !version.has_true_color() {
+        report.note(&format!(
+            "release {} has no true colors: the nearest indexed color is written",
+            version.name()
+        ));
+    }
     let site_cache = kadakas_site::SiteCache::default();
     let mut cx = Ctx {
         unit: opts.unit.mm_per_unit(),
@@ -290,7 +321,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         pattern_blocks: Default::default(),
         native_annotations: opts.native_annotations,
         site_mesh: opts.site_mesh,
-        mesh_entity: opts.mesh_entity,
+        mesh_entity,
         visible_only: opts.visible_only,
         shift: DVec2::ZERO,
         site_cache: &site_cache,
@@ -315,7 +346,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         .as_ref()
         .filter(|g| !g.crs.trim().is_empty())
         .and_then(native::epsg_of);
-    let mut ents = W::new(FIRST_HANDLE);
+    let mut ents = W::new(FIRST_HANDLE).with_true_color(version.has_true_color());
     ents.owner = H_MODEL_RECORD.into();
     // The entities of unit patterns come last and are not scanned for layer names: they are many.
     let mut pattern_text = String::new();
@@ -423,7 +454,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             .or_insert((l.clone(), Attributes::default(), false));
     }
 
-    let mut tables = W::new(ents.next);
+    let mut tables = W::new(ents.next).with_true_color(version.has_true_color());
     // VPORT
     tables.table("VPORT", H_VPORT_TABLE, 1);
     tables.record("VPORT", H_VPORT_ACTIVE, H_VPORT_TABLE);
@@ -683,7 +714,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.pair(0, "ENDTAB");
 
     // Blocks. Each block and its end marker belong to the block record.
-    let mut blocks = W::new(tables.next);
+    let mut blocks = W::new(tables.next).with_true_color(version.has_true_color());
     // (name, block record handle, fixed handles of the block and its end marker)
     type BlockDef = (String, String, Option<(String, String)>);
     let mut block_list: Vec<BlockDef> = vec![
@@ -936,7 +967,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     hdr.pair(0, "SECTION");
     hdr.pair(2, "HEADER");
     hdr.pair(9, "$ACADVER");
-    hdr.pair(1, "AC1018");
+    hdr.pair(1, version.code());
     hdr.pair(9, "$DWGCODEPAGE");
     hdr.pair(3, "ANSI_1252");
     hdr.pair(9, "$HANDSEED");

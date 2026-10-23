@@ -256,6 +256,8 @@ pub struct ExportForm {
     pub visible_only: bool,
     /// DXF: the unit pattern of hardscapes. 0 nothing, 1 gap lines, 2 units.
     pub patterns: usize,
+    /// DXF: the release of the file, an index in `VERSIONS` (0 is 2004, the default).
+    pub version: usize,
     /// IFC: one presentation layer per class.
     pub ifc_classes_as_layers: bool,
     /// IFC: write 2D objects as annotations.
@@ -309,6 +311,7 @@ impl ExportForm {
             unit: 0,
             visible_only: false,
             patterns: 0,
+            version: 0,
             ifc_classes_as_layers: true,
             ifc_include_2d: false,
             ifc_storeys: false,
@@ -344,12 +347,29 @@ impl ExportForm {
         if let Some(p) = PATTERNS.get(self.patterns).filter(|p| **p != "none") {
             o.insert("patterns".into(), json!(p));
         }
+        // The release is sent only when it is not the default.
+        if let Some(v) = VERSIONS.get(self.version).filter(|v| **v != VERSIONS[0]) {
+            o.insert("version".into(), json!(v));
+        }
         json!({"path": self.path, "options": o})
     }
 }
 
 /// The choices of the DXF option `patterns`, in the order of the dialog.
 const PATTERNS: [&str; 3] = ["none", "gaps", "units"];
+
+/// The choices of the DXF option `version`, in the order of the dialog. The first is the default.
+const VERSIONS: [&str; 5] = ["AC1018", "AC1015", "AC1027", "AC1032", "AC1009"];
+
+fn version_name(i: usize) -> String {
+    match i {
+        1 => tr!("io-dialog-version-2000"),
+        2 => tr!("io-dialog-version-2013"),
+        3 => tr!("io-dialog-version-2018"),
+        4 => tr!("io-dialog-version-r12"),
+        _ => tr!("io-dialog-version-2004"),
+    }
+}
 
 /// The dialogs that are open.
 #[derive(Default)]
@@ -729,6 +749,18 @@ impl IoUi {
                         })
                         .response
                         .on_hover_text(tr!("io-dialog-patterns-hint"));
+                        ui.horizontal(|ui| {
+                            ui.label(tr!("io-dialog-version"));
+                            egui::ComboBox::from_id_salt("export_version")
+                                .selected_text(version_name(form.version))
+                                .show_ui(ui, |ui| {
+                                    for i in 0..VERSIONS.len() {
+                                        ui.selectable_value(&mut form.version, i, version_name(i));
+                                    }
+                                });
+                        })
+                        .response
+                        .on_hover_text(tr!("io-dialog-version-hint"));
                     }
                     if mesh_export_format(&form.path).is_none() {
                         ui.checkbox(
@@ -984,6 +1016,17 @@ mod tests {
         assert_eq!(f.params()["options"]["patterns"], "gaps");
         f.patterns = 0;
         assert!(f.params()["options"].get("patterns").is_none());
+        // The release is sent only when it is not the default.
+        assert!(f.params()["options"].get("version").is_none());
+        f.version = 1;
+        assert_eq!(f.params()["options"]["version"], "AC1015");
+        f.version = 4;
+        assert_eq!(f.params()["options"]["version"], "AC1009");
+        f.version = 99;
+        assert!(f.params()["options"].get("version").is_none());
+        for i in 0..VERSIONS.len() {
+            assert!(!version_name(i).is_empty());
+        }
         // Without open dialogs, nothing happens.
         let ctx = egui::Context::default();
         let mut ui = IoUi::default();

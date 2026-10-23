@@ -61,3 +61,24 @@ pub fn refusal(data: &[u8]) -> String {
         Err(e) => e.to_string(),
     }
 }
+
+use kadakas_core::command::Command;
+use kadakas_core::model::{Attributes, Color, Shape};
+
+/// An editor whose document holds the shapes, each with a red pen.
+pub fn editor_with(shapes: Vec<Shape>) -> Editor {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    for shape in shapes {
+        ed.execute(&Command::AddObject {
+            shape,
+            layer: None,
+            class: None,
+            attrs: Attributes {
+                pen: Some(Color([255, 0, 0, 255])),
+                ..Attributes::default()
+            },
+        })
+        .unwrap();
+    }
+    ed
+}

@@ -15,7 +15,9 @@ pub mod link;
 pub mod parse;
 pub mod revision;
 mod source;
+pub mod units;
 pub mod update;
+pub mod version;
 
 use kadakas_core::model::{Color, Document};
 

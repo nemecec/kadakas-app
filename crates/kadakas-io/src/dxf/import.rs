@@ -21,7 +21,7 @@ use super::{aci_rgb, true_color};
 use super::{hash, revision};
 use crate::BaseMode;
 use crate::builder::Builder;
-use crate::options::{LayerMode, OriginMode, PointMode, Unit};
+use crate::options::{LayerMode, OriginMode, PointMode};
 use crate::{Context, ImportOptions, ImportResult, IoError, Source};
 use kadakas_core::provenance::{self, FileLink};
 use kadakas_core::resource::ResourceBody;
@@ -60,30 +60,17 @@ pub(super) fn import_parsed(
     link: Option<&FileLink>,
 ) -> Result<ImportResult, IoError> {
     let mut b = Builder::new(ctx, "dxf", opts.max_objects);
-    let unit = match (
-        opts.unit,
-        dxf.header_value("$INSUNITS").and_then(parse::parse_int),
-    ) {
-        (Some(u), _) => u,
-        (None, Some(code)) => match Unit::from_insunits(code) {
-            Some(u) => u,
-            None => {
-                b.report
-                    .note("the drawing has no unit: assuming millimeters");
-                Unit::Mm
-            }
-        },
-        (None, None) => {
-            b.report
-                .note("the drawing has no unit: assuming millimeters");
-            Unit::Mm
-        }
-    };
+    let release = dxf.release();
+    b.report.release = release.as_ref().map(super::version::Release::label);
+    let resolved = super::units::resolve(opts.unit, dxf, release.as_ref());
+    if let Some(note) = &resolved.note {
+        b.report.note(note);
+    }
     if dxf.truncated {
         b.report
             .note("the file ends early: imported what could be read");
     }
-    let scale = unit.mm_per_unit();
+    let scale = resolved.mm_per_unit;
     let mut tracking = opts.track_source.then(|| {
         let mut t = Tracking::new(opts.source_name.as_deref().unwrap_or(name), dxf);
         // An update names the drawing and the revision of the tags itself (IOP-23).
@@ -2600,7 +2587,7 @@ mod tests {
         );
         assert_eq!(report.notes.len(), 1);
         let opts = ImportOptions {
-            unit: Some(Unit::Foot),
+            unit: Some(crate::options::Unit::Foot),
             ..Default::default()
         };
         let (doc, _) = run(&dxf_text("9\n$INSUNITS\n70\n6\n", "", "", ents), &opts);

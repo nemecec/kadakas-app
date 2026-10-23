@@ -200,12 +200,14 @@ fn is_end_of_file(last: Option<&(i32, Raw)>) -> bool {
 }
 
 /// The code page that the header names (`$DWGCODEPAGE`), from the raw pairs.
-fn code_page(pairs: &[(i32, Raw)]) -> Option<&'static encoding_rs::Encoding> {
+fn code_page(pairs: &[(i32, Raw)]) -> Option<crate::encoding::Codec> {
     let at = pairs.iter().position(|(c, v)| {
         *c == 9 && matches!(v, Raw::Text(t) if t.trim_ascii() == b"$DWGCODEPAGE")
     })?;
     match pairs.get(at + 1) {
-        Some((3, Raw::Text(t))) => crate::encoding::from_dwg_code_page(&String::from_utf8_lossy(t)),
+        Some((3, Raw::Text(t))) => {
+            crate::encoding::codec_from_dwg_code_page(&String::from_utf8_lossy(t))
+        }
         _ => None,
     }
 }
@@ -219,7 +221,7 @@ pub fn read_pairs(data: &[u8]) -> Result<(Vec<(i32, String)>, bool), IoError> {
         match std::str::from_utf8(bytes) {
             Ok(s) => s.to_string(),
             Err(_) => match page {
-                Some(enc) => enc.decode_without_bom_handling(bytes).0.into_owned(),
+                Some(enc) => enc.decode(bytes),
                 None => bytes.iter().map(|&b| b as char).collect(),
             },
         }

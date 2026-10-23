@@ -357,6 +357,65 @@ impl PatternExport {
     }
 }
 
+/// The release of the DXF file that an export writes (IOP-15).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DxfVersion {
+    /// Release 12 (`AC1009`): 2D plain entities only (LINE, CIRCLE, ARC, POINT, TEXT, POLYLINE).
+    /// What it cannot hold is dropped, and the report counts it. Old CAD, CAM and laser programs
+    /// read this release. It has no unit, no layouts and no Unicode.
+    #[serde(rename = "AC1009", alias = "R12", alias = "12")]
+    R12,
+    /// AutoCAD 2000 (`AC1015`): the same entities as 2004, with no true colors (the nearest
+    /// indexed color is written) and no MESH entity (the polyface mesh is written instead).
+    #[serde(rename = "AC1015", alias = "2000")]
+    R2000,
+    /// AutoCAD 2004 (`AC1018`): the default.
+    #[default]
+    #[serde(rename = "AC1018", alias = "2004")]
+    R2004,
+    /// AutoCAD 2013 (`AC1027`). Checked with the ezdxf reader and its audit. Not opened in AutoCAD.
+    #[serde(rename = "AC1027", alias = "2013")]
+    R2013,
+    /// AutoCAD 2018 (`AC1032`). Checked with the ezdxf reader and its audit. Not opened in AutoCAD.
+    #[serde(rename = "AC1032", alias = "2018")]
+    R2018,
+}
+
+impl DxfVersion {
+    /// The value of `$ACADVER`.
+    pub fn code(self) -> &'static str {
+        match self {
+            DxfVersion::R12 => "AC1009",
+            DxfVersion::R2000 => "AC1015",
+            DxfVersion::R2004 => "AC1018",
+            DxfVersion::R2013 => "AC1027",
+            DxfVersion::R2018 => "AC1032",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DxfVersion::R12 => "12",
+            DxfVersion::R2000 => "2000",
+            DxfVersion::R2004 => "2004",
+            DxfVersion::R2013 => "2013",
+            DxfVersion::R2018 => "2018",
+        }
+    }
+
+    /// True from release 2004 on: group code 420 (true color) exists.
+    pub fn has_true_color(self) -> bool {
+        !matches!(self, DxfVersion::R12 | DxfVersion::R2000)
+    }
+
+    /// True when a MESH entity may be written (`mesh_entity: mesh`). The entity is from release
+    /// 2010. The 2004 file keeps it as it always did, and CAD programs of 2010 and newer show
+    /// it. Release 2000 gets the polyface mesh instead.
+    pub fn allows_mesh_entity(self) -> bool {
+        !matches!(self, DxfVersion::R12 | DxfVersion::R2000)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportOptions {
@@ -370,6 +429,13 @@ pub struct ExportOptions {
     pub visible_only: bool,
     /// Largest distance of an approximated curve from the true curve, in mm.
     pub tolerance: f64,
+    /// DXF: the release of the file: `AC1018` (2004, the default), `AC1015` (2000), `AC1027`
+    /// (2013), `AC1032` (2018) or `AC1009` (release 12, 2D plain entities only). The names
+    /// `2000`, `2004`, `2013`, `2018` and `R12` work too.
+    pub version: DxfVersion,
+    /// DXF: sheet layers become layouts of paper space, with their viewports and annotations
+    /// (default). False: sheets are left out of the file.
+    pub sheets: bool,
     /// DXF: dimensions, callouts and text annotations become native DIMENSION, LEADER and MTEXT
     /// entities where they can (default). False: all annotations are lines and text.
     pub native_annotations: bool,
@@ -393,6 +459,8 @@ impl Default for ExportOptions {
             origin: ExportOrigin::File,
             layer_mode: LayerMode::Classes,
             unit: Unit::Mm,
+            version: DxfVersion::R2004,
+            sheets: true,
             visible_only: false,
             tolerance: 1.0,
             native_annotations: true,
@@ -450,6 +518,32 @@ mod tests {
         assert!(e.visible_only);
         assert!(ExportOptions::from_json(&json!({"tolerance": -1})).is_err());
         assert!(ExportOptions::from_json(&json!({"layer_mode": 3})).is_err());
+    }
+
+    #[test]
+    fn the_dxf_release_has_names_and_aliases() {
+        let v = |x: serde_json::Value| ExportOptions::from_json(&json!({"version": x}));
+        assert_eq!(ExportOptions::default().version, DxfVersion::R2004);
+        assert_eq!(v(json!("AC1015")).unwrap().version, DxfVersion::R2000);
+        assert_eq!(v(json!("2000")).unwrap().version, DxfVersion::R2000);
+        assert_eq!(v(json!("AC1018")).unwrap().version, DxfVersion::R2004);
+        assert_eq!(v(json!("2013")).unwrap().version, DxfVersion::R2013);
+        assert_eq!(v(json!("AC1032")).unwrap().version, DxfVersion::R2018);
+        assert_eq!(v(json!("R12")).unwrap().version, DxfVersion::R12);
+        assert_eq!(v(json!("AC1009")).unwrap().version, DxfVersion::R12);
+        assert!(v(json!("AC9999")).is_err());
+        for x in [
+            DxfVersion::R12,
+            DxfVersion::R2000,
+            DxfVersion::R2004,
+            DxfVersion::R2013,
+            DxfVersion::R2018,
+        ] {
+            assert_eq!(v(json!(x.code())).unwrap().version, x);
+            assert!(!x.name().is_empty());
+        }
+        assert!(!DxfVersion::R2000.has_true_color() && DxfVersion::R2004.has_true_color());
+        assert!(!DxfVersion::R2000.allows_mesh_entity() && DxfVersion::R2004.allows_mesh_entity());
     }
 
     #[test]

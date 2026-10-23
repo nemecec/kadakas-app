@@ -56,12 +56,12 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 /// Formats, options and examples, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)", "obj, stl, gltf, glb (triangle meshes, see describe.io.mesh_files)"],
-        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "stl (3D, binary or ASCII, see describe.io.mesh_files)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "import_formats": ["dxf (text and binary, releases 12 to 2018)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)", "obj, stl, gltf, glb (triangle meshes, see describe.io.mesh_files)"],
+        "export_formats": ["dxf (text; option version: 12, 2000, 2004, 2013 or 2018)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "stl (3D, binary or ASCII, see describe.io.mesh_files)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed). Default: for DXF and DWG with track_source (the default) a new layer named after the file, else the active layer; for GIS files the active layer",
-            "unit": "mm | cm | m | km | inch | foot | yard | mile. DXF only. Default: $INSUNITS of the file, else mm",
+            "unit": "mm | cm | m | km | inch | foot | yard | mile. DXF only. Default: $INSUNITS of the file. A file with no unit (release 12 and older, or $INSUNITS 0) is read as inches when $MEASUREMENT says English (0), else as millimeters, and report.notes says so: set unit if that is wrong",
             "explode_blocks": "true (default). DXF INSERT becomes objects",
             "points": "all (default) | with_z. DXF POINT becomes locus3d",
             "hatches": "true (default). DXF HATCH boundaries become closed polylines",
@@ -81,6 +81,7 @@ pub(crate) fn describe() -> Value {
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",
             "unit": "mm (default) | cm | m | km | inch | foot | yard | mile. DXF only",
+            "version": "DXF: AC1018 (2004, default) | AC1015 (2000: no true colors, no MESH entity) | AC1027 (2013) | AC1032 (2018) | AC1009 (release 12: LINE, CIRCLE, ARC, POINT, TEXT and POLYLINE only, no unit, code page ANSI_1252; every object it cannot hold is counted in report.skipped). The names 2000, 2004, 2013, 2018 and R12 work too. 2013 and 2018 are checked with the ezdxf reader only. report.release names the release",
             "origin": "file (default): real-world coordinates, the origin shift of the georeference is added back (a rotation is not applied in DXF). document: model coordinates",
             "visible_only": "false (default)",
             "native_annotations": "DXF: true (default). Linear, radial and diameter dimensions become DIMENSION entities (each with its block), callouts become LEADER and MTEXT, text becomes MTEXT. Other annotations are lines and text. false: all annotations are lines and text",

@@ -9,6 +9,7 @@
 //! entities with a reason in the report.
 
 pub mod builder;
+mod dos_pages;
 pub mod dwg;
 pub mod dxf;
 mod encoding;
@@ -27,8 +28,8 @@ use kadakas_core::model::{ClassId, Document, Layer, LayerId};
 use kadakas_core::provenance::FileLink;
 
 pub use options::{
-    BaseCaps, BaseMode, ExportOptions, ExportOrigin, FaceMode, ImportOptions, LayerMode, Lineage,
-    MeshEntity, OriginMode, PatternExport, SiteMesh, Unit,
+    BaseCaps, BaseMode, DxfVersion, ExportOptions, ExportOrigin, FaceMode, ImportOptions,
+    LayerMode, Lineage, MeshEntity, OriginMode, PatternExport, SiteMesh, Unit,
 };
 pub use report::{Report, Skipped};
 

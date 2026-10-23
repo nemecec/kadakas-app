@@ -26,6 +26,9 @@ pub struct Report {
     /// with a hole (units missing). Left out when there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// DXF: the release of the file that was read, for example `AC1015 (release 2000)`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     /// True if the import set or used a georeference.
     pub georeferenced: bool,
     /// DXF and DWG: the drawing and revision that the objects carry in `data.import` (IOP-22).
