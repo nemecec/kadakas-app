@@ -207,6 +207,9 @@ pub struct ImportOptions {
     pub faces: FaceMode,
     /// DXF: import HATCH boundaries as closed polylines.
     pub hatches: bool,
+    /// DXF: a layout of paper space becomes a sheet layer with its viewports and annotations
+    /// (default). False: the entities of paper space are skipped and counted.
+    pub paper_space: bool,
     /// Largest distance of an approximated curve from the true curve, in mm.
     pub tolerance: f64,
     /// DXF: text height in mm for text that has none.
@@ -251,6 +254,7 @@ impl Default for ImportOptions {
             points: PointMode::All,
             faces: FaceMode::Polygons,
             hatches: true,
+            paper_space: true,
             tolerance: 2.0,
             default_text_height: 250.0,
             source_crs: None,

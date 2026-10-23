@@ -124,6 +124,8 @@ pub struct ImportForm {
     pub explode_blocks: bool,
     pub only_points_with_z: bool,
     pub hatches: bool,
+    /// DXF and DWG: the layouts of paper space become sheet layers (IOP-16).
+    pub paper_space: bool,
     /// DXF and DWG: keep the source of each object, for updates (IOP-22).
     pub track_source: bool,
     /// DXF and DWG: the answer to the question about a drawing with too many entities for an
@@ -156,6 +158,7 @@ impl ImportForm {
             explode_blocks: true,
             only_points_with_z: false,
             hatches: true,
+            paper_space: true,
             track_source: true,
             base: None,
             source_crs: String::new(),
@@ -225,7 +228,10 @@ impl ImportForm {
                 }
                 o.insert("explode_blocks".into(), json!(self.explode_blocks));
                 o.insert("hatches".into(), json!(self.hatches));
-                // The default is on, so the option is only sent to turn it off.
+                // The defaults are on, so these options are only sent to turn them off.
+                if !self.paper_space {
+                    o.insert("paper_space".into(), json!(false));
+                }
                 if !self.track_source {
                     o.insert("track_source".into(), json!(false));
                 }
@@ -258,6 +264,8 @@ pub struct ExportForm {
     pub patterns: usize,
     /// DXF: the release of the file, an index in `VERSIONS` (0 is 2004, the default).
     pub version: usize,
+    /// DXF: sheet layers become layouts of paper space (IOP-16).
+    pub sheets: bool,
     /// IFC: one presentation layer per class.
     pub ifc_classes_as_layers: bool,
     /// IFC: write 2D objects as annotations.
@@ -312,6 +320,7 @@ impl ExportForm {
             visible_only: false,
             patterns: 0,
             version: 0,
+            sheets: true,
             ifc_classes_as_layers: true,
             ifc_include_2d: false,
             ifc_storeys: false,
@@ -346,6 +355,9 @@ impl ExportForm {
         o.insert("visible_only".into(), json!(self.visible_only));
         if let Some(p) = PATTERNS.get(self.patterns).filter(|p| **p != "none") {
             o.insert("patterns".into(), json!(p));
+        }
+        if !self.sheets {
+            o.insert("sheets".into(), json!(false));
         }
         // The release is sent only when it is not the default.
         if let Some(v) = VERSIONS.get(self.version).filter(|v| **v != VERSIONS[0]) {
@@ -562,6 +574,8 @@ impl IoUi {
                                 &mut form.only_points_with_z,
                                 tr!("io-dialog-only-points-with-a-z-value"),
                             );
+                            ui.checkbox(&mut form.paper_space, tr!("io-dialog-paper-space"))
+                                .on_hover_text(tr!("io-dialog-paper-space-hint"));
                             ui.checkbox(
                                 &mut form.track_source,
                                 tr!("io-dialog-keep-the-source-for-updates"),
@@ -761,6 +775,8 @@ impl IoUi {
                         })
                         .response
                         .on_hover_text(tr!("io-dialog-version-hint"));
+                        ui.checkbox(&mut form.sheets, tr!("io-dialog-sheets"))
+                            .on_hover_text(tr!("io-dialog-sheets-hint"));
                     }
                     if mesh_export_format(&form.path).is_none() {
                         ui.checkbox(
@@ -808,6 +824,9 @@ mod tests {
             f.params()["options"],
             json!({"explode_blocks": true, "hatches": true, "track_source": false})
         );
+        f.paper_space = false;
+        assert_eq!(f.params()["options"]["paper_space"], false);
+        f.paper_space = true;
         f.track_source = true;
         f.layers_as_layers = true;
         f.unit = Some(2);
@@ -1024,6 +1043,10 @@ mod tests {
         assert_eq!(f.params()["options"]["version"], "AC1009");
         f.version = 99;
         assert!(f.params()["options"].get("version").is_none());
+        // Sheet layers become layouts unless the person says no.
+        assert!(f.params()["options"].get("sheets").is_none());
+        f.sheets = false;
+        assert_eq!(f.params()["options"]["sheets"], false);
         for i in 0..VERSIONS.len() {
             assert!(!version_name(i).is_empty());
         }

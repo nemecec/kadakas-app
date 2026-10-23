@@ -66,11 +66,12 @@ fn doc_with_sheet() -> Document {
 }
 
 #[test]
-fn exporters_skip_sheet_layers_and_their_objects() {
+fn dxf_writes_sheet_layers_as_layouts_unless_told_not_to_and_geojson_skips_them() {
     let doc = doc_with_sheet();
     let dir = std::env::temp_dir().join(format!("kadakas-io-sheets-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for mode in [LayerMode::Classes, LayerMode::Layers] {
+        // The default: the sheet is a layout with its line, its text and its viewport.
         let opts = ExportOptions {
             layer_mode: mode,
             ..Default::default()
@@ -79,14 +80,32 @@ fn exporters_skip_sheet_layers_and_their_objects() {
         let report = export_file(&dxf, Some(Format::Dxf), &opts, &doc).unwrap();
         let text = std::fs::read_to_string(&dxf).unwrap();
         assert!(
-            !text.contains("PAPERTEXT") && !text.contains("PAPER-SHEET"),
-            "{mode:?}: paper space in the DXF"
+            text.contains("PAPERTEXT"),
+            "{mode:?}: the text of the sheet"
         );
+        assert!(text.contains("4321.5"), "{mode:?}: the line of the sheet");
+        assert!(text.contains("\nVIEWPORT\n"), "{mode:?}: the viewport");
+        assert_eq!(report.total(), 4, "{mode:?}: {:?}", report.objects);
+        assert!(report.skipped.is_empty(), "{mode:?}: {:?}", report.skipped);
+        // With the option off, paper space is left out and the report says so.
+        let off = ExportOptions {
+            layer_mode: mode,
+            sheets: false,
+            ..Default::default()
+        };
+        let report = export_file(&dxf, Some(Format::Dxf), &off, &doc).unwrap();
+        let text = std::fs::read_to_string(&dxf).unwrap();
         assert!(
-            !text.contains("4321.5"),
-            "{mode:?}: the paper line is not written"
+            !text.contains("PAPERTEXT") && !text.contains("4321.5"),
+            "{mode:?}"
         );
         assert_eq!(report.total(), 1);
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("sheet layers were left out"))
+        );
     }
     let gj = dir.join("a.geojson");
     let report = export_file(&gj, Some(Format::GeoJson), &ExportOptions::default(), &doc).unwrap();

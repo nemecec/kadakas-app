@@ -91,6 +91,9 @@ pub fn parse_int(s: &str) -> Option<i64> {
 #[derive(Clone, Debug, Default)]
 pub struct LayerDef {
     pub name: String,
+    /// The handle of the layer record (group code 5), in normal form. A viewport names the layers
+    /// that it freezes by these handles.
+    pub handle: Option<String>,
     /// ACI color. Negative means the layer is off.
     pub color: i64,
     pub true_color: Option<u32>,
@@ -362,6 +365,7 @@ fn read_tables(dxf: &mut Dxf, body: &[(i32, String)]) {
         let Some(name) = r.get(2) else { continue };
         dxf.layers.push(LayerDef {
             name: name.to_string(),
+            handle: r.handle(),
             color: r.int(62).unwrap_or(7),
             true_color: r.int(420).and_then(|v| u32::try_from(v).ok()),
             frozen: r.int(70).unwrap_or(0) & 1 != 0,

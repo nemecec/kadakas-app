@@ -255,6 +255,42 @@ impl Builder {
         id
     }
 
+    /// A new sheet layer (a page of paper space, mm, 1:1) with its page settings. Its name is
+    /// `name`, or `name (2)`, `name (3)` and so on when the name is taken. The sheet always
+    /// is a new layer: an import never puts its pages on a sheet that the document has.
+    pub fn sheet(
+        &mut self,
+        name: &str,
+        paper: kadakas_core::sheets::PaperSize,
+        orientation: kadakas_core::sheets::Orientation,
+    ) -> LayerId {
+        let mut unique = name.to_string();
+        let mut n = 2;
+        while self.names.contains(&unique) {
+            unique = format!("{name} ({n})");
+            n += 1;
+        }
+        let id = LayerId(self.take_id());
+        self.cmds.push(Command::AddSheet {
+            name: unique.clone(),
+            paper: Some(paper),
+            orientation: Some(orientation),
+            number: None,
+            title: Some(name.into()),
+        });
+        self.names.insert(unique.clone());
+        self.report.layers_created.push(unique);
+        id
+    }
+
+    /// The class with this name, if there is one (the document has it, or this import made it).
+    pub fn class_id(&self, name: &str) -> Option<ClassId> {
+        self.classes
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, id)| *id)
+    }
+
     /// True if the document had a layer of this drawing before the import.
     pub fn knows_drawing(&self, drawing: &str) -> bool {
         self.known.iter().any(|s| s.drawing == drawing)

@@ -349,3 +349,125 @@ fn the_entities_of_research_gap_3_are_imported_or_named() {
         );
     }
 }
+
+/// Paper space: the entities and the viewports that the sheets get are the ones that the ezdxf
+/// reader finds in the layouts. A layout that holds only the viewport of the paper itself is not
+/// imported, so the totals differ by at most that one entity for each layout.
+#[test]
+fn the_sheets_hold_the_paper_space_entities_that_the_ezdxf_reader_finds() {
+    let counts: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dxf_public_counts.json")).unwrap();
+    let files = corpus::all();
+    let wanted: Vec<_> = files.iter().map(|(_, r, p)| (*r, p.as_str())).collect();
+    corpus::prefetch(&wanted);
+    let (mut checked, mut bad) = (0, Vec::new());
+    for (label, repo, path) in &files {
+        let key = if repo.name == "gdal" {
+            format!(
+                "gdal:autotest/ogr/data/dxf/{}",
+                path.rsplit('/').next().unwrap()
+            )
+        } else {
+            format!("{}:{}", repo.name, path)
+        };
+        let Some(expected) = counts.get(&key).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let Some(data) = corpus::fetch(*repo, path) else {
+            continue;
+        };
+        let Ok((_, rep)) = support::import(&data) else {
+            continue;
+        };
+        let (mut entities, mut viewports, mut sheets) = (0usize, 0usize, 0usize);
+        for n in &rep.notes {
+            let Some(rest) = n.strip_prefix("layout '") else {
+                continue;
+            };
+            let Some((_, tail)) = rest.split_once("sheet layer with ") else {
+                continue;
+            };
+            let nums: Vec<usize> = tail
+                .split(|c: char| !c.is_ascii_digit())
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            sheets += 1;
+            entities += nums[0];
+            viewports += nums[1];
+        }
+        let paper = expected["paper"].as_u64().unwrap() as usize;
+        let layouts = expected["layouts"].as_array().unwrap().len();
+        if sheets > 0 || paper > 0 {
+            checked += 1;
+            if entities > paper || paper - entities > layouts {
+                bad.push(format!("{label}: sheets hold {entities} entities, ezdxf finds {paper} in {layouts} layouts"));
+            }
+            let vp = expected["viewports"].as_u64().unwrap() as usize;
+            // A viewport that is turned off, or has no size, is named in `skipped`.
+            let named: usize = rep
+                .skipped
+                .iter()
+                .filter(|s| s.entity == "VIEWPORT")
+                .map(|s| s.count)
+                .sum();
+            let viewports = viewports + named;
+            if viewports > vp || vp - viewports > layouts {
+                bad.push(format!(
+                    "{label}: sheets hold {viewports} viewports, ezdxf finds {vp}"
+                ));
+            }
+        }
+    }
+    eprintln!("{checked} files with paper space compared with the ezdxf reader");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// `viewport_frozen_layers.dxf` (ezdxf): one viewport freezes Layer1, another Layer2, and the
+/// layer Layer3 is frozen in the drawing. The layers stay hidden in the viewports that freeze
+/// them and nowhere else. The scale is the ratio of the view height to the paper height.
+#[test]
+fn frozen_layers_stay_hidden_in_their_viewports() {
+    let Some(data) = corpus::ezdxf("viewport_frozen_layers.dxf") else {
+        return;
+    };
+    let (ed, rep) = support::import_with(
+        &data,
+        &ImportOptions {
+            unit: Some(kadakas_io::Unit::Mm),
+            ..ImportOptions::default()
+        },
+    )
+    .unwrap();
+    let doc = ed.doc();
+    let sheet = doc
+        .layers
+        .iter()
+        .find(|l| l.kind == kadakas_core::model::LayerKind::Sheet)
+        .expect("a sheet layer");
+    let vps: Vec<_> = doc.viewports_of(sheet.id).map(|(_, v)| v).collect();
+    assert_eq!(vps.len(), 3, "{:?} {:?}", rep.notes, rep.skipped);
+    let class = |n: &str| doc.classes.iter().find(|c| c.name == n).map(|c| c.id);
+    let hidden = |v: &kadakas_core::sheets::Viewport, n: &str| {
+        class(n).is_some_and(|c| {
+            v.class_overrides
+                .get(&c)
+                .is_some_and(|o| o.visible == Some(false))
+        })
+    };
+    // The viewports in the file are 2, 4 and 5 (the paper itself is 1).
+    assert!(!hidden(vps[0], "Layer1") && !hidden(vps[0], "Layer2"));
+    assert!(hidden(vps[1], "Layer1") && !hidden(vps[1], "Layer2"));
+    assert!(hidden(vps[2], "Layer2") && !hidden(vps[2], "Layer1"));
+    // Layer3 is frozen in the drawing: its class is off, and every viewport hides it.
+    if let Some(c) = doc.classes.iter().find(|c| c.name == "Layer3") {
+        assert!(!c.visible);
+        assert!(vps.iter().all(|v| hidden(v, "Layer3")));
+    }
+    // 486.29 / 45.72 = 10.63 (ezdxf: the scale is 0.0940).
+    assert!(
+        (vps[1].scale - 1.0 / 0.0940248363471966).abs() < 1e-6,
+        "{}",
+        vps[1].scale
+    );
+    assert!(vps.iter().all(|v| v.is_plan()));
+}

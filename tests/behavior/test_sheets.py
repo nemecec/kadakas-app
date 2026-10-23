@@ -286,6 +286,11 @@ def test_plants_and_exports_leave_paper_space_alone(garden, tmp_path):
     cad.execute({"op": "add_object", "layer": garden["sheet"], "shape": {"kind": "text", "at": [11, 11], "text": "PAPER-ONLY", "height": 5}})
     cad.result("viewport.create", {"sheet": "Planting plan"})
     dxf = tmp_path / "model.dxf"
-    cad.result("export.file", {"format": "dxf", "path": str(dxf)})
+    cad.result("export.file", {"format": "dxf", "path": str(dxf), "options": {"sheets": False}})
     text = dxf.read_text()
     assert "PAPER-ONLY" not in text and "Planting plan" not in text
+    # By default the sheet is a layout of paper space (IOP-16).
+    with_sheets = tmp_path / "with_sheets.dxf"
+    cad.result("export.file", {"format": "dxf", "path": str(with_sheets)})
+    text = with_sheets.read_text()
+    assert "PAPER-ONLY" in text and "Planting plan" in text

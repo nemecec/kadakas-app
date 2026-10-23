@@ -19,6 +19,7 @@ use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 mod approx;
 mod extra;
+mod paper;
 mod tilted;
 
 use approx::Tally;
@@ -412,6 +413,8 @@ fn walk(
         repeated_closed: 0,
         repeated_gap_mm: 0.0,
         tally: Tally::default(),
+        sheet: None,
+        class_vis: HashMap::new(),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -421,7 +424,12 @@ fn walk(
         depth: 0,
         path: Path::default(),
     };
+    // Paper space has its own pass; with the option off, or in an update, it is skipped and counted.
+    let paper = opts.paper_space && opts.lineage.is_none() && !w.b.is_probe();
     for e in &dxf.entities {
+        if paper && e.int(67) == Some(1) {
+            continue;
+        }
         w.entity(e, &root);
     }
     w.flush_faces();
@@ -432,21 +440,14 @@ fn walk(
         );
         w.b.report.note(&note);
     }
+    // The layouts of paper space: sheet layers. Without the pass, their entities are counted.
+    if paper {
+        w.paper_space();
+    } else {
+        w.skip_paper_space();
+    }
     for note in w.tally.notes(opts.tolerance) {
         w.b.report.note(&note);
-    }
-    // The layouts of paper space are not part of the model: the sheets of the drawing. Their
-    // entities are counted in the report.
-    let mut sheets: Vec<&String> = dxf
-        .blocks
-        .keys()
-        .filter(|n| n.to_ascii_lowercase().starts_with("*paper_space"))
-        .collect();
-    sheets.sort();
-    for n in sheets {
-        for e in &dxf.blocks[n].entities {
-            w.b.report.skip(&e.kind, "in paper space");
-        }
     }
     if w.overflow {
         return Err(IoError::Format(format!(
@@ -580,6 +581,10 @@ struct Walker<'a> {
     repeated_gap_mm: f64,
     /// What was approximated or changed, for the notes of the report.
     tally: Tally,
+    /// The sheet layer that receives the objects, while a layout of paper space is imported.
+    sheet: Option<LayerId>,
+    /// The classes that the import made, by DXF layer name, and whether the layer shows.
+    class_vis: HashMap<String, (ClassId, bool)>,
 }
 
 /// Vertices and triangles of the 3D faces of one layer.
@@ -730,14 +735,8 @@ impl Walker<'_> {
         let weight = def.and_then(|d| weight_mm(d.lineweight));
         let result = match self.opts.layer_mode {
             LayerMode::Classes => {
-                let attrs = Attributes {
-                    pen: Some(pen.unwrap_or(Color::BLACK)),
-                    fill: Some(Color::NONE),
-                    line_weight: Some(weight.unwrap_or(0.25)),
-                    ..Default::default()
-                };
-                let class = self.b.class(&decode_percent(name), &attrs, visible);
-                (self.target_layer, class, Attributes::default())
+                let (class, defaults) = self.class_for(name);
+                (self.target_layer, class, defaults)
             }
             LayerMode::Layers => {
                 let shown = decode_percent(name);
@@ -799,7 +798,7 @@ impl Walker<'_> {
             }
         }
         self.b.report.entities_read += 1;
-        if e.int(67) == Some(1) {
+        if e.int(67) == Some(1) && self.sheet.is_none() {
             self.skip_entity(e, "in paper space");
             return;
         }
@@ -840,12 +839,25 @@ impl Walker<'_> {
             self.skip_entity(e, why);
             return;
         }
+        if self.sheet.is_some() {
+            items = self.sheet_items(items);
+            if items.is_empty() {
+                self.skip_entity(e, "has no 2D shape that a sheet layer can hold");
+                return;
+            }
+        }
         self.b.report.entities_imported += 1;
         let layer_name = match (&cx.layer, e.layer()) {
             (Some(l), "0") => l.clone(),
             (_, l) => l.to_string(),
         };
-        let (layer, class, defaults) = self.target(&layer_name);
+        let (layer, class, defaults) = match self.sheet {
+            Some(sheet) => {
+                let (class, defaults) = self.class_for(&layer_name);
+                (sheet, class, defaults)
+            }
+            None => self.target(&layer_name),
+        };
         let attrs = self.attrs(e, cx, &defaults);
         let parts = items.len();
         for (n, mut item) in items.into_iter().enumerate() {
@@ -2635,7 +2647,12 @@ mod tests {
 0\nBLOCK\n2\nXR2\n70\n8\n10\n0\n20\n0\n0\nENDBLK\n\
 0\nBLOCK\n2\n*Paper_Space\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n";
         let ents = "0\nINSERT\n2\nXR\n8\n0\n10\n0\n20\n0\n0\nINSERT\n2\nXR2\n8\n0\n10\n0\n20\n0\n";
-        let (doc, report) = run(&dxf_text("", "", blocks, ents), &ImportOptions::default());
+        // With the option off, paper space is counted and skipped.
+        let off = ImportOptions {
+            paper_space: false,
+            ..ImportOptions::default()
+        };
+        let (doc, report) = run(&dxf_text("", "", blocks, ents), &off);
         assert!(doc.objects.is_empty());
         let why: Vec<&str> = report.skipped.iter().map(|s| s.reason.as_str()).collect();
         assert!(
@@ -2851,7 +2868,21 @@ mod tests {
         assert_eq!(o[2].attrs.pen, None);
         assert_eq!(o[3].attrs.pen, Some(Color([0, 0, 255, 255])));
         assert_eq!(o[4].attrs.pen, None);
-        assert_eq!(report.skipped_total(), 2);
+        // The invisible line is skipped. The line in paper space is on a sheet layer.
+        assert_eq!(report.skipped_total(), 1);
+        assert_eq!(
+            report
+                .notes
+                .iter()
+                .filter(|n| n.contains("became a sheet layer"))
+                .count(),
+            1
+        );
+        let sheet = doc
+            .layers
+            .iter()
+            .find(|l| l.kind == kadakas_core::model::LayerKind::Sheet);
+        assert!(sheet.is_some_and(|l| doc.objects.values().any(|o| o.layer == l.id)));
     }
 
     #[test]

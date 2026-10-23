@@ -172,6 +172,7 @@ fn block_for(cx: &mut Ctx, type_name: &str, c: &Canon) -> String {
             fill: kadakas_core::annot::draw::Fill::None,
             color: None,
         }],
+        unit: cx.unit,
     });
     name
 }

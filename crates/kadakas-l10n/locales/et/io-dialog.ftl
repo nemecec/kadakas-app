@@ -59,3 +59,7 @@ io-dialog-version-2000 = Versioon 2000 (AC1015)
 io-dialog-version-2013 = Versioon 2013 (AC1027)
 io-dialog-version-2018 = Versioon 2018 (AC1032)
 io-dialog-version-r12 = Versioon 12 (AC1009, 2D lihtobjektid)
+io-dialog-paper-space = Impordi paberiruumi küljendused lehekihtidena
+io-dialog-paper-space-hint = Iga sisuga paberiruumi küljendus muutub lehekihiks koos vaadete, märkuste ja tiitliplokiga. Väljas: paberiruum jäetakse vahele ja aruanne loendab selle.
+io-dialog-sheets = Kirjuta lehekihid küljendustena
+io-dialog-sheets-hint = Iga lehekiht muutub paberiruumi küljenduseks koos vaadete ja märkustega. Väljas: lehekihid jäetakse failist välja.

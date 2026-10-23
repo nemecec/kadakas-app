@@ -31,6 +31,24 @@ pub(super) struct Tally {
     pub wipeouts: usize,
     /// MESH entities with a subdivision level above 0 (imported as the control mesh).
     pub subdivided_meshes: usize,
+    /// Layouts of paper space that became sheet layers: (name, entities, viewports).
+    pub sheets: Vec<(String, usize, usize)>,
+    /// Layouts without content (not imported).
+    pub empty_layouts: Vec<String>,
+    /// Layouts with no usable paper size (the sheet is A3).
+    pub default_page: Vec<String>,
+    /// Viewports that became viewports of a sheet.
+    pub viewports: usize,
+    /// Viewports with a twist (a turned view): the view is not turned.
+    pub viewport_twist: usize,
+    /// Viewports with a perspective view: shown with a parallel projection.
+    pub viewport_perspective: usize,
+    /// Viewports whose view direction is not a standard view, by the standard view that was used.
+    pub viewport_views: BTreeMap<String, usize>,
+    /// Viewports whose clipping outline is not a polyline or a circle: the frame is the crop.
+    pub viewport_clip_lost: usize,
+    /// 3D polylines in paper space that were flattened.
+    pub flattened: usize,
 }
 
 impl Tally {
@@ -143,6 +161,62 @@ impl Tally {
             out.push(format!(
                 "{} subdivided: only the control mesh was imported",
                 plural(self.subdivided_meshes, "MESH is", "MESHes are")
+            ));
+        }
+        for (name, entities, viewports) in &self.sheets {
+            out.push(format!(
+                "layout '{name}' of paper space became a sheet layer with {} and {}",
+                plural(*entities, "entity", "entities"),
+                plural(*viewports, "viewport", "viewports")
+            ));
+        }
+        if !self.sheets.is_empty() && !self.empty_layouts.is_empty() {
+            out.push(format!(
+                "{} of paper space without content {} not imported: {}",
+                plural(self.empty_layouts.len(), "layout", "layouts"),
+                if self.empty_layouts.len() == 1 {
+                    "was"
+                } else {
+                    "were"
+                },
+                self.empty_layouts.join(", ")
+            ));
+        }
+        if !self.default_page.is_empty() {
+            out.push(format!(
+                "the layouts {} have no paper size: their sheets are A3",
+                self.default_page.join(", ")
+            ));
+        }
+        if self.viewport_twist > 0 {
+            out.push(format!(
+                "{} a twist, which a viewport of a sheet does not have: the view is not turned",
+                plural(self.viewport_twist, "viewport has", "viewports have")
+            ));
+        }
+        if self.viewport_perspective > 0 {
+            out.push(format!(
+                "{} a perspective view: it shows a parallel projection",
+                plural(self.viewport_perspective, "viewport has", "viewports have")
+            ));
+        }
+        for (view, n) in &self.viewport_views {
+            out.push(format!(
+                "{} of a view direction that is not a standard view: the nearest, {view}, is used",
+                plural(*n, "viewport", "viewports")
+            ));
+        }
+        if self.viewport_clip_lost > 0 {
+            out.push(format!(
+                "{} cropped by an outline that is not a polyline or a circle: the whole frame shows",
+                plural(self.viewport_clip_lost, "viewport is", "viewports are")
+            ));
+        }
+        if self.flattened > 0 {
+            out.push(format!(
+                "{} in paper space {} flattened to 2D (a sheet holds 2D shapes)",
+                plural(self.flattened, "3D polyline", "3D polylines"),
+                if self.flattened == 1 { "was" } else { "were" }
             ));
         }
         out

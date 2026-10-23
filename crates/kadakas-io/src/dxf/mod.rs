@@ -19,6 +19,7 @@ pub mod text;
 pub mod units;
 pub mod update;
 pub mod version;
+pub mod views;
 
 use kadakas_core::model::{Color, Document};
 

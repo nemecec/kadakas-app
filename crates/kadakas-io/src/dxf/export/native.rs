@@ -21,6 +21,8 @@ use kadakas_core::model::Object;
 pub(super) struct AnonBlock {
     pub name: String,
     pub prims: Vec<Prim>,
+    /// Millimeters per unit of the coordinates of the block (the unit of the model, or 1 on a sheet).
+    pub unit: f64,
 }
 
 /// The most faces of one polyface mesh (the file format counts them with 16 bits).
@@ -321,6 +323,7 @@ fn dimension(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -> 
     cx.anon_blocks.push(AnonBlock {
         name: name.clone(),
         prims,
+        unit: cx.unit,
     });
     let kind = match d.mode {
         DimMode::Linear { .. } => 32,

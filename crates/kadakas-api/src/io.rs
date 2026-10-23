@@ -64,7 +64,8 @@ pub(crate) fn describe() -> Value {
             "unit": "mm | cm | m | km | inch | foot | yard | mile. DXF only. Default: $INSUNITS of the file. A file with no unit (release 12 and older, or $INSUNITS 0) is read as inches when $MEASUREMENT says English (0), else as millimeters, and report.notes says so: set unit if that is wrong",
             "explode_blocks": "true (default). DXF INSERT becomes objects",
             "points": "all (default) | with_z. DXF POINT becomes locus3d",
-            "hatches": "true (default). DXF HATCH boundaries become closed polylines",
+            "hatches": "true (default). DXF HATCH boundaries become closed polylines. A solid hatch is filled (its islands are white filled polylines with data.hatch_island), a gradient has the flat fill of its first color, and a pattern hatch is an outline: a note counts the patterns",
+            "paper_space": "true (default). DXF and DWG: each layout of paper space with content becomes a sheet layer (mm, 1:1, paper size from the layout). Its VIEWPORT entities become viewports with the scale, the standard view (a note names the nearest one when the direction is not a standard view), the frozen layers and the crop, and its annotations and title block entities stay on the sheet in the order of the file. A layout without content is not imported. false: paper space is skipped and counted. An update of a drawing (IOP-23) does not import paper space",
             "tolerance": "mm, curve approximation for ellipses and splines. Default 2",
             "source_crs": "GIS: CRS of the file if it does not say. EPSG:n, PROJ string or WKT",
             "target_crs": "GIS: CRS of a new georeference. Default: UTM zone for lon/lat data, else the file CRS",
@@ -81,6 +82,7 @@ pub(crate) fn describe() -> Value {
         "export_options": {
             "layer_mode": "classes (default: one DXF layer per class) | layers (one per design layer)",
             "unit": "mm (default) | cm | m | km | inch | foot | yard | mile. DXF only",
+            "sheets": "DXF: true (default). Each sheet layer becomes a layout of paper space (named with the title of the sheet) with its viewports (scale, standard view, frozen layers, crop), annotations and title block, in the order of the document. false: sheet layers are left out and a note says so. Release 12 has no layouts",
             "version": "DXF: AC1018 (2004, default) | AC1015 (2000: no true colors, no MESH entity) | AC1027 (2013) | AC1032 (2018) | AC1009 (release 12: LINE, CIRCLE, ARC, POINT, TEXT and POLYLINE only, no unit, code page ANSI_1252; every object it cannot hold is counted in report.skipped). The names 2000, 2004, 2013, 2018 and R12 work too. 2013 and 2018 are checked with the ezdxf reader only. report.release names the release",
             "origin": "file (default): real-world coordinates, the origin shift of the georeference is added back (a rotation is not applied in DXF). document: model coordinates",
             "visible_only": "false (default)",

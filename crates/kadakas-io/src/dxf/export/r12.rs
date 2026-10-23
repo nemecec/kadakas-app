@@ -266,9 +266,15 @@ fn to_ansi_1252(text: &str) -> (Vec<u8>, usize) {
 }
 
 pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    let sheets = doc.sheet_layers().count();
     let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
     report.release = Some("AC1009 (release 12)".into());
+    if sheets > 0 {
+        report.note(&format!(
+            "release 12 has no layouts: the {sheets} sheet layers and their objects are not written"
+        ));
+    }
     let mut shift = DVec2::ZERO;
     if let (Some(g), ExportOrigin::File) = (&doc.georef, opts.origin) {
         shift = g.origin * 1000.0;

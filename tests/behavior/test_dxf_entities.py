@@ -43,7 +43,7 @@ def entities_file(tmp_path):
 def test_entities_are_imported_or_reported(cad, entities_file):
     r = cad.result("import.file", {"path": str(entities_file), "options": {"track_source": False}})
     rep = r["report"]
-    assert rep["entities_read"] == rep["entities_imported"] + rep["entities_skipped"], rep
+    assert rep["entities_read"] == rep.get("entities_imported", 0) + rep.get("entities_skipped", 0), rep
     skipped = {s["entity"]: s["reason"] for s in rep["skipped"]}
     assert "'photos/site.png'" in skipped["IMAGE"]
     kinds = rep["objects"]

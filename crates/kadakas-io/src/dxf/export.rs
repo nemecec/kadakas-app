@@ -27,6 +27,7 @@ mod kinds;
 mod native;
 pub mod patterns;
 mod r12;
+mod sheets;
 
 /// Longest text that one TEXT entity holds. Longer text becomes MTEXT.
 const TEXT_LIMIT: usize = 250;
@@ -38,6 +39,8 @@ struct W {
     owner: String,
     /// Write group code 420 (true color) next to the indexed color. Release 2004 and newer.
     true_color: bool,
+    /// The entities are in paper space: each one gets the flag `67 1` after its `AcDbEntity` marker.
+    paper: bool,
 }
 
 impl W {
@@ -47,6 +50,7 @@ impl W {
             next,
             owner: String::new(),
             true_color: true,
+            paper: false,
         }
     }
 
@@ -64,6 +68,9 @@ impl W {
 
     fn pair(&mut self, code: i32, v: impl Display) {
         let _ = write!(self.buf, "{code}\n{v}\n");
+        if self.paper && code == 100 && self.buf.ends_with("100\nAcDbEntity\n") {
+            self.buf.push_str("67\n1\n");
+        }
     }
 
     fn num(&mut self, code: i32, v: f64) {
@@ -292,6 +299,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     if opts.version == DxfVersion::R12 {
         return r12::export(doc, opts);
     }
+    let full = doc;
     let doc = &*crate::model_only(doc);
     let mut report = Report::new("dxf");
     let version = opts.version;
@@ -348,6 +356,44 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         .and_then(native::epsg_of);
     let mut ents = W::new(FIRST_HANDLE).with_true_color(version.has_true_color());
     ents.owner = H_MODEL_RECORD.into();
+    // The sheet layers become layouts. The handles of their records are made now, because the
+    // entities of a sheet name their owner.
+    let sheet_ids = if opts.sheets {
+        sheets::sheet_layers(full)
+    } else {
+        Vec::new()
+    };
+    if !opts.sheets && full.sheet_layers().next().is_some() {
+        report.note(&format!(
+            "{} sheet layers were left out of the file (option sheets is false)",
+            full.sheet_layers().count()
+        ));
+    }
+    let layout_names = sheets::layout_names(full, &sheet_ids);
+    let mut sheet_outs: Vec<sheets::SheetOut> = Vec::new();
+    for (i, id) in sheet_ids.iter().enumerate() {
+        let (record, layout, block, endblk) = if i == 0 {
+            sheets::first_handles()
+        } else {
+            (ents.handle(), ents.handle(), ents.handle(), ents.handle())
+        };
+        sheet_outs.push(sheets::SheetOut {
+            name: layout_names[i].clone(),
+            block_name: if i == 0 {
+                "*Paper_Space".into()
+            } else {
+                format!("*Paper_Space{}", i - 1)
+            },
+            record,
+            layout,
+            block,
+            endblk,
+            page: full
+                .sheet(*id)
+                .map_or(DVec2::new(420.0, 297.0), |s| s.size_mm()),
+            text: String::new(),
+        });
+    }
     // The entities of unit patterns come last and are not scanned for layer names: they are many.
     let mut pattern_text = String::new();
     let mut pattern_layers: BTreeSet<String> = BTreeSet::new();
@@ -402,6 +448,38 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
     }
 
+    // The sheets: paper space is in millimeters and is not shifted by the georeference.
+    let mut frozen = sheets::Frozen::new();
+    for (i, id) in sheet_ids.iter().enumerate() {
+        let env = sheets::Env {
+            full,
+            opts,
+            model_unit: opts.unit.mm_per_unit(),
+            shift,
+        };
+        let mut sw = W::new(ents.next).with_true_color(version.has_true_color());
+        sw.owner = sheet_outs[i].record.clone();
+        sw.paper = true;
+        let saved = (cx.unit, cx.doc, cx.shift);
+        (cx.unit, cx.doc, cx.shift) = (1.0, full, DVec2::ZERO);
+        sheets::write_sheet(
+            &mut sw,
+            &mut cx,
+            &env,
+            *id,
+            sheet_outs[i].page,
+            &mut frozen,
+            &mut report,
+        );
+        (cx.unit, cx.doc, cx.shift) = saved;
+        ents.next = sw.next;
+        if i == 0 {
+            ents.buf.push_str(&sw.buf);
+        } else {
+            sheet_outs[i].text = sw.buf;
+        }
+    }
+
     // Layers. Names are unique without regard to case.
     let mut layers: BTreeMap<String, (String, Attributes, bool)> = BTreeMap::new();
     let mut add_layer = |name: String, attrs: Attributes, hidden: bool| {
@@ -435,8 +513,10 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
     }
     // Entities use layers by name. A layer that no table entry names would make the file invalid.
-    for l in ents
-        .buf
+    let scanned: String = std::iter::once(ents.buf.as_str())
+        .chain(sheet_outs.iter().map(|s| s.text.as_str()))
+        .collect();
+    for l in scanned
         .lines()
         .collect::<Vec<_>>()
         .chunks(2)
@@ -533,7 +613,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         let handle = if name == "0" {
             H_LAYER_ZERO.to_string()
         } else {
-            tables.handle()
+            // A viewport that freezes the layer named its handle already.
+            frozen
+                .get(&name.to_uppercase())
+                .cloned()
+                .unwrap_or_else(|| tables.handle())
         };
         tables.record("LAYER", &handle, H_LAYER_TABLE);
         tables.pair(100, "AcDbLayerTableRecord");
@@ -678,7 +762,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.table(
         "BLOCK_RECORD",
         H_BLOCK_RECORD_TABLE,
-        2 + plant_names.len() + cx.anon_blocks.len(),
+        2 + sheet_outs.len().saturating_sub(1) + plant_names.len() + cx.anon_blocks.len(),
     );
     if geo_epsg.is_some() {
         // Readers find the GEODATA object through the extension dictionary of the model space.
@@ -699,6 +783,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     tables.pair(100, "AcDbBlockTableRecord");
     tables.pair(2, "*Paper_Space");
     tables.pair(340, H_PAPER_LAYOUT);
+    // The other layouts have a block record each.
+    for so in sheet_outs.iter().skip(1) {
+        tables.record("BLOCK_RECORD", &so.record, H_BLOCK_RECORD_TABLE);
+        tables.pair(100, "AcDbBlockTableRecord");
+        tables.pair(2, &so.block_name);
+        tables.pair(340, &so.layout);
+    }
     let mut plant_blocks: Vec<(String, String)> = Vec::new();
     for n in plant_names
         .iter()
@@ -729,6 +820,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             Some((H_PAPER_BLOCK.into(), H_PAPER_ENDBLK.into())),
         ),
     ];
+    block_list.extend(sheet_outs.iter().skip(1).map(|so| {
+        (
+            so.block_name.clone(),
+            so.record.clone(),
+            Some((so.block.clone(), so.endblk.clone())),
+        )
+    }));
     block_list.extend(
         plant_blocks
             .iter()
@@ -754,7 +852,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         blocks.pair(3, n);
         blocks.pair(1, "");
         if let Some(b) = cx.anon_blocks.iter().find(|b| &b.name == n) {
-            native::write_block_prims(&mut blocks, cx.unit, &b.prims);
+            native::write_block_prims(&mut blocks, b.unit, &b.prims);
+        }
+        // The entities of a layout that is not the first one.
+        if let Some(so) = sheet_outs.iter().skip(1).find(|s| &s.block_name == n) {
+            blocks.buf.push_str(&so.text);
         }
         if n.starts_with("PLANT") {
             for (a, b) in [((-1.0, 0.0), (1.0, 0.0)), ((0.0, -1.0), (0.0, 1.0))] {
@@ -805,11 +907,42 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
     };
     dict(&mut objects, H_GROUP_DICT, &[]);
-    dict(
-        &mut objects,
-        H_LAYOUT_DICT,
-        &[("Model", H_MODEL_LAYOUT), ("Layout1", H_PAPER_LAYOUT)],
-    );
+    // The layouts: the model, and a sheet each (or the empty "Layout1" when there is no sheet).
+    // (handle, name, block record, flags, tab order, paper in mm with the orientation applied)
+    type LayoutRow = (String, String, String, i32, usize, DVec2);
+    let mut layout_rows: Vec<LayoutRow> = vec![(
+        H_MODEL_LAYOUT.into(),
+        "Model".into(),
+        H_MODEL_RECORD.into(),
+        1024,
+        0,
+        DVec2::new(420.0, 297.0),
+    )];
+    if sheet_outs.is_empty() {
+        layout_rows.push((
+            H_PAPER_LAYOUT.into(),
+            "Layout1".into(),
+            H_PAPER_RECORD.into(),
+            0,
+            1,
+            DVec2::new(420.0, 297.0),
+        ));
+    }
+    for (i, so) in sheet_outs.iter().enumerate() {
+        layout_rows.push((
+            so.layout.clone(),
+            so.name.clone(),
+            so.record.clone(),
+            0,
+            i + 1,
+            so.page,
+        ));
+    }
+    let layout_entries: Vec<(&str, &str)> = layout_rows
+        .iter()
+        .map(|r| (r.1.as_str(), r.0.as_str()))
+        .collect();
+    dict(&mut objects, H_LAYOUT_DICT, &layout_entries);
     dict(
         &mut objects,
         H_MLINE_DICT,
@@ -827,10 +960,17 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
     objects.pair(0, "ACDBPLACEHOLDER");
     objects.pair(5, H_PLOTSTYLE_NORMAL);
     objects.pair(330, H_PLOTSTYLE_DICT);
-    for (handle, name, tab, owner, flags) in [
-        (H_MODEL_LAYOUT, "Model", 1, H_MODEL_RECORD, 1024),
-        (H_PAPER_LAYOUT, "Layout1", 1, H_PAPER_RECORD, 0),
-    ] {
+    for (handle, name, owner, flags, tab_order, page) in &layout_rows {
+        let (handle, name, owner, flags, tab_order) = (handle, name, owner, *flags, *tab_order);
+        // The plot paper size is the paper as it is made (the short side first). A landscape sheet
+        // is turned by 90 degrees (code 73 is 1).
+        let landscape = page.x >= page.y && name != "Model";
+        let (paper_w, paper_h) = (page.x.min(page.y), page.x.max(page.y));
+        let (paper_w, paper_h) = if name == "Model" || sheet_outs.is_empty() {
+            (page.x, page.y)
+        } else {
+            (paper_w, paper_h)
+        };
         objects.pair(0, "LAYOUT");
         objects.pair(5, handle);
         objects.pair(330, H_LAYOUT_DICT);
@@ -843,8 +983,8 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             (41, 20.0),
             (42, 7.5),
             (43, 20.0),
-            (44, 420.0),
-            (45, 297.0),
+            (44, paper_w),
+            (45, paper_h),
             (46, 0.0),
             (47, 0.0),
             (48, 0.0),
@@ -856,7 +996,8 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         ] {
             objects.num(c, v);
         }
-        for (c, v) in [(70, flags), (72, 1), (73, 0), (74, 5)] {
+        let rotation = i32::from(landscape && !sheet_outs.is_empty());
+        for (c, v) in [(70, flags), (72, 1), (73, rotation), (74, 5)] {
             objects.pair(c, v);
         }
         objects.pair(7, "");
@@ -868,13 +1009,13 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         }
         objects.pair(100, "AcDbLayout");
         objects.pair(1, name);
-        objects.pair(70, tab);
-        objects.pair(71, i32::from(name != "Model"));
+        objects.pair(70, 1);
+        objects.pair(71, tab_order);
         for (c, v) in [
             (10, 0.0),
             (20, 0.0),
-            (11, 420.0),
-            (21, 297.0),
+            (11, page.x),
+            (21, page.y),
             (12, 0.0),
             (22, 0.0),
             (32, 0.0),
