@@ -591,6 +591,32 @@ pub fn material(doc: &Document, id: ResourceId) -> Option<&Material> {
 }
 
 /// The render style resource with this ID.
+/// A render style by name (case does not count): a style of the document first, then a built-in
+/// style. This is how a scene (a saved view) finds its style.
+pub fn style_by_name(doc: &Document, name: &str) -> Option<RenderStyle> {
+    let name = name.trim();
+    doc.resources
+        .iter()
+        .find(|r| r.name.eq_ignore_ascii_case(name))
+        .and_then(|r| render_style(doc, r.id).cloned())
+        .or_else(|| {
+            RenderStyle::presets()
+                .into_iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, s)| s)
+        })
+}
+
+/// The built-in style that draws in this mode, for a saved view that has a mode and no style.
+pub fn builtin_for_mode(mode: RenderMode) -> &'static str {
+    match mode {
+        RenderMode::Shaded => "Shaded",
+        RenderMode::Wireframe => "Wireframe",
+        RenderMode::HiddenLine => "Hidden Line",
+        RenderMode::DashedHiddenLine => "Dashed Hidden Line",
+    }
+}
+
 pub fn render_style(doc: &Document, id: ResourceId) -> Option<&RenderStyle> {
     match &doc.resources.get(id)?.body {
         ResourceBody::Render(r) => match r.as_ref() {

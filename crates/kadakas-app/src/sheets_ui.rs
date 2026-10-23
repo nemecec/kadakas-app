@@ -495,7 +495,22 @@ pub fn capture(session: &Session, name: &str, zoom: f64, pan: DVec2) -> SavedVie
         mode: Some(session.view.mode.id().to_string()),
         // A scene of the modeler keeps its free camera when the app stores the view again under
         // the same name (MOD-10). The app has no such camera of its own.
-        camera: doc.drawing.saved_view(name).and_then(|v| v.camera.clone()),
+        // It is dropped when the view now differs from that camera.
+        camera: doc
+            .drawing
+            .saved_view(name)
+            .and_then(|v| v.camera.clone())
+            .filter(|c| {
+                let near = kadakas_ui_core::scene_panel::nearest_standard(
+                    &kadakas_ui_core::scene_panel::camera_from_saved(c),
+                );
+                near.id() == session.view.view.id()
+            }),
+        extra: doc
+            .drawing
+            .saved_view(name)
+            .map(|v| v.extra.clone())
+            .unwrap_or_default(),
         render_style: doc
             .drawing
             .presentation
@@ -538,6 +553,10 @@ mod tests {
             })
             .unwrap();
         // The app stores the view again under the name of a scene of the modeler.
+        let near = kadakas_ui_core::scene_panel::nearest_standard(
+            &kadakas_ui_core::scene_panel::camera_from_saved(&cam),
+        );
+        session.view.view = near;
         let v = capture(&session, "scene 1", 0.5, DVec2::ZERO);
         assert_eq!(v.camera, Some(cam));
         assert_eq!(v.render_style.as_deref(), Some("Realistic"));

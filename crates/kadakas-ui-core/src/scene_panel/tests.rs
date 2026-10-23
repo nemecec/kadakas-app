@@ -294,6 +294,53 @@ fn the_transition_runs_from_start_to_goal_the_short_way() {
     assert!(t.at(f64::NAN).1);
 }
 
+#[test]
+fn a_camera_that_looks_straight_down_gets_the_top_view_whatever_its_turn() {
+    for yaw in [0.0f32, 1.0, 2.5, -2.0, 3.1] {
+        let mut c = Camera::standard(StandardView::Top, Projection::Perspective);
+        c.yaw = yaw;
+        assert_eq!(nearest_standard(&c), StandardView::Top, "yaw {yaw}");
+    }
+}
+
+#[test]
+fn the_fov_comes_back_exactly_from_degrees() {
+    let mut c = cam();
+    c.fov_y = 108.02393_f32.to_radians();
+    c.projection = Projection::Orthographic;
+    assert_eq!(camera_from_saved(&camera_to_saved(&c)), c);
+    // Many laps of turning give a valid number.
+    c.yaw = 5.0e6;
+    assert!(camera_to_saved(&c).is_valid());
+}
+
+#[test]
+fn a_scene_stores_the_mode_of_its_style_and_marks_a_missing_style() {
+    let (mut ed, _) = editor();
+    run!(ed, add(ed.doc(), "A", &cam()));
+    assert_eq!(find(ed.doc(), "A").unwrap().mode.as_deref(), Some("shaded"));
+    ed.execute(&Command::UseRenderStyle {
+        name: "Wireframe".into(),
+    })
+    .unwrap();
+    run!(ed, update(ed.doc(), "A", &cam()));
+    assert_eq!(
+        find(ed.doc(), "A").unwrap().mode.as_deref(),
+        Some("wireframe")
+    );
+    assert_eq!(active_mode(ed.doc()).id(), "wireframe");
+    ed.execute(&Command::SaveView {
+        view: Box::new(SavedView {
+            name: "Lost".into(),
+            render_style: Some("Nowhere".into()),
+            ..SavedView::default()
+        }),
+    })
+    .unwrap();
+    let r = rows(ed.doc(), None);
+    assert!(!r[0].style_missing && r[1].style_missing);
+}
+
 proptest! {
     #[test]
     fn the_transition_stays_finite_and_between_the_ends(

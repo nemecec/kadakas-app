@@ -539,7 +539,7 @@ A scene is a saved view of the document. It keeps the camera, which tags and lay
 
 | Button | What it does |
 |---|---|
-| Add | Stores the present camera, tags, layers and style as a new scene. The name is `Scene 1`, `Scene 2` and so on. The name is ready to type over. |
+| Add | Stores the present camera, tags, layers and style as a new scene. The name is `Scene 1`, `Scene 2` and so on. The name field opens for typing. |
 | Update | Stores the present camera, tags, layers and style in the chosen scene. The scene keeps its place in the list. |
 | Rename | Changes the name. A double click on a scene does the same. The name must be free (case does not count) and not empty. |
 | Delete | Deletes the chosen scene. Undo brings it back. |
@@ -560,7 +560,11 @@ A scene is a `SavedView` of `drawing.saved_views`. MOD-10 added two optional fie
 - `camera`: the free orbit camera `{target [x, y, z], yaw, pitch, distance, fov, projection}`. Angles are radians. Lengths are mm. `fov` is degrees. The projection is `perspective` or `ortho`. The app has no free camera. It uses `view` and `projection`. The modeler stores the nearest standard view in `view`. The camera is checked: finite numbers, a distance above 0, a field of view from 1 to 170 degrees.
 - `render_style`: the name of a render style. A restore finds it by name among the styles of the document, then among the built-in styles, which it adds. A name that does not exist any more (the style was deleted or renamed) leaves the style as it is and the rest of the view applies.
 
-A scene of the modeler has no `zoom` and no `pan`, which belong to the 2D plan. When the modeler shows a saved view that the app made, it uses the standard view and the projection of that view, and the plan view becomes the Top view. A saved view with no 3D part only sets the tags, layers and style, and the status line says so. When the app stores a view again under the name of a scene, it keeps the `camera` of that scene and stores the active style.
+A scene also stores `mode`, the render mode of its style, because the app draws with the mode. A restore in the app takes the mode from the style when a view has no mode. A view with a mode and no style (a view of the app) gets the built-in style of that mode, unless the active style draws in that mode already. Unknown fields of a saved view are kept when the file is saved again. `saved_view.save` without `camera` keeps the camera of the scene with that name, and `camera: null` clears it.
+
+A render style is found by name. A rename of a render style changes the name in the scenes. A delete of a style with another name than a built-in one clears the name in the scenes. A scene that names a style that does not exist shows "style ... is missing" in its row. A camera is valid with a yaw up to 1000 radians (a larger turn is wrapped when the modeler stores it), a pitch within 90 degrees and a distance of at least 0.001 mm.
+
+A scene of the modeler has no `zoom` and no `pan`, which belong to the 2D plan. When the modeler shows a saved view that the app made, it uses the standard view and the projection of that view, and the plan view becomes the Top view. A saved view with no 3D part only sets the tags, layers and style, and the status line says so. When the app stores a view again under the name of a scene, it keeps the `camera` of that scene only if the view is still the nearest standard view of that camera. It also stores the active style.
 
 ### Commands and the API
 
@@ -573,7 +577,7 @@ Every action is one command and one undo step, so agents and the JSON-RPC API do
 | `saved_view.rename` {name, new_name} | Command `RenameView`. |
 | `saved_view.move` {name, to} | Command `MoveView`. 0 is first, a place past the end means last. |
 
-The command `UseRenderStyle {name}` makes a style the active one and adds a built-in style to the document when needed (`execute`). `render_style.*` works as before. The command schema (`crates/kadakas-core/tests/command_schema.json`) has the new commands.
+The command `UseRenderStyle {name}` makes a style the active one and adds a built-in style to the document when needed (`execute`). The ID of an added style is in `created`. `render_style.*` works as before. The command schema (`crates/kadakas-core/tests/command_schema.json`) has the new commands.
 
 The headless code is `kadakas_ui_core::scene_panel` (rows, commands, activation goal, styles, the camera transition) and the drawing is `kadakas-modeler/src/scenes_panel.rs`. The window runs the actions in `ModelerApp::scene_action`.
 

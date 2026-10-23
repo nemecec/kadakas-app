@@ -836,6 +836,7 @@ fn saved_view_save(s: &mut Session, p: &Value) -> Res {
     let doc = s.editor.doc();
     let layers: BTreeMap<LayerId, bool> = doc.layers.iter().map(|l| (l.id, l.visible)).collect();
     let classes: BTreeMap<ClassId, bool> = doc.classes.iter().map(|c| (c.id, c.visible)).collect();
+    let name_for_lookup = name.clone();
     let view = SavedView {
         name,
         layers,
@@ -850,11 +851,20 @@ fn saved_view_save(s: &mut Session, p: &Value) -> Res {
         view: Some(s.view.view.id().to_string()),
         projection: Some(s.view.projection.id().to_string()),
         mode: Some(s.view.mode.id().to_string()),
-        camera: p
-            .get("camera")
-            .filter(|v| !v.is_null())
-            .map(|v| parse::<ViewCamera>(v.clone()))
-            .transpose()?,
+        extra: doc
+            .drawing
+            .saved_view(&name_for_lookup)
+            .map(|v| v.extra.clone())
+            .unwrap_or_default(),
+        // No `camera` keeps the camera of the scene that has the name. null clears it.
+        camera: match p.get("camera") {
+            None => doc
+                .drawing
+                .saved_view(&name_for_lookup)
+                .and_then(|v| v.camera.clone()),
+            Some(Value::Null) => None,
+            Some(v) => Some(parse::<ViewCamera>(v.clone())?),
+        },
         render_style: match p.get("render_style") {
             None => doc
                 .drawing
@@ -912,7 +922,20 @@ impl Session {
         if let Some(x) = v.projection.as_deref().and_then(Projection::from_name) {
             next.projection = x;
         }
-        if let Some(x) = v.mode.as_deref().and_then(RenderMode::from_name) {
+        // The mode of the view, else the mode of its render style: a scene of the modeler has a
+        // style, and the app draws with the mode.
+        let from_style = || {
+            v.render_style
+                .as_deref()
+                .and_then(|n| kadakas_core::present::style_by_name(self.editor.doc(), n))
+                .map(|s| s.mode)
+        };
+        if let Some(x) = v
+            .mode
+            .as_deref()
+            .and_then(RenderMode::from_name)
+            .or_else(from_style)
+        {
             next.mode = x;
         }
         if next != self.view {

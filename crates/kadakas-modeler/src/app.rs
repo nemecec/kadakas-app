@@ -1695,7 +1695,10 @@ impl ModelerApp {
                 let name = n.clone();
                 Ok((
                     scene_panel::use_style(doc, n),
-                    tr!("modeler-style-changed", name = name),
+                    tr!(
+                        "modeler-style-changed",
+                        name = scenes_panel::style_name_label(&name)
+                    ),
                 ))
             }
             Action::Activate(n) => {
@@ -1718,10 +1721,10 @@ impl ModelerApp {
             }
         };
         if let Some(c) = command {
-            if let Err(e) = self.session.editor.execute(&c) {
+            if self.session.editor.execute(&c).is_err() {
                 self.status = match a {
-                    Action::Style(_) => tr!("modeler-style-failed", reason = e.to_string()),
-                    _ => tr!("modeler-scenes-failed", reason = e.to_string()),
+                    Action::Style(_) => tr!("modeler-style-failed"),
+                    _ => tr!("modeler-scenes-failed"),
                 };
                 return;
             }
@@ -1772,8 +1775,8 @@ impl ModelerApp {
                 return;
             }
         };
-        if let Err(e) = self.session.editor.execute(&act.command) {
-            self.status = tr!("modeler-scenes-failed", reason = e.to_string());
+        if self.session.editor.execute(&act.command).is_err() {
+            self.status = tr!("modeler-scenes-failed");
             return;
         }
         self.scenes.active = Some(name.to_string());

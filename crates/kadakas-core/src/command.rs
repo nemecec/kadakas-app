@@ -443,7 +443,7 @@ pub enum Command {
     },
     /// Make the render style with this name the active one (3D-08). A style of the document wins.
     /// A built-in style (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) that the
-    /// document does not hold yet is added to it. One undo step.
+    /// document does not hold yet is added to it, and its ID is in `created`. One undo step.
     UseRenderStyle {
         name: String,
     },

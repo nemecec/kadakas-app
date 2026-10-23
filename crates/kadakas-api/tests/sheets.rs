@@ -1291,3 +1291,55 @@ fn saved_views_work_as_scenes_with_camera_style_order_and_names() {
     }
     assert_eq!(names(&mut s).len(), 4);
 }
+
+#[test]
+fn saving_a_view_keeps_its_camera_unless_null_and_restore_follows_the_style_mode() {
+    let mut s = model();
+    let cam = json!({"target": [1.0, 2.0, 3.0], "yaw": 0.5, "pitch": 0.4, "distance": 9000.0, "fov": 40.0, "projection": "ortho"});
+    call(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "S", "camera": cam}),
+    );
+    // No camera in the call: the scene keeps the one it has.
+    call(&mut s, "saved_view.save", json!({"name": "s"}));
+    assert_eq!(
+        call(&mut s, "saved_view.list", json!({}))["views"][0]["camera"],
+        cam
+    );
+    call(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "S", "camera": null}),
+    );
+    assert!(
+        call(&mut s, "saved_view.list", json!({}))["views"][0]
+            .get("camera")
+            .is_none()
+    );
+    // A scene with a style and no mode sets the view mode from the style.
+    exec(
+        &mut s,
+        json!({"op": "save_view", "view": {"name": "Wire", "render_style": "Wireframe"}}),
+    );
+    call(&mut s, "saved_view.restore", json!({"name": "Wire"}));
+    assert_eq!(
+        call(&mut s, "view.list", json!({}))["current"]["mode"],
+        "wireframe"
+    );
+    // A view with a mode and no style sets the style that draws in that mode.
+    exec(
+        &mut s,
+        json!({"op": "save_view", "view": {"name": "Hid", "mode": "hidden_line"}}),
+    );
+    call(&mut s, "saved_view.restore", json!({"name": "Hid"}));
+    assert!(
+        call(&mut s, "render_style.list", json!({}))
+            .to_string()
+            .contains("Hidden Line")
+    );
+    assert_eq!(
+        call(&mut s, "view.list", json!({}))["current"]["mode"],
+        "hidden_line"
+    );
+}

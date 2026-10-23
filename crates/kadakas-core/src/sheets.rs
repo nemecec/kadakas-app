@@ -226,6 +226,9 @@ pub struct SavedView {
     /// style. `None`: a restore leaves the style as it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_style: Option<String>,
+    /// Fields that this version does not know. They are saved again unchanged.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl SavedView {
@@ -260,9 +263,11 @@ impl ViewCamera {
             .iter()
             .all(|v| v.is_finite() && v.abs() <= 1.0e9)
             && self.yaw.is_finite()
+            && self.yaw.abs() <= 1.0e3
             && self.pitch.is_finite()
+            && self.pitch.abs() <= std::f64::consts::FRAC_PI_2 + 1e-6
             && self.distance.is_finite()
-            && self.distance > 0.0
+            && self.distance >= 1.0e-3
             && self.distance <= 1.0e9
             && self.fov.is_finite()
             && (1.0..=170.0).contains(&self.fov)

@@ -186,7 +186,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut ScenesState, view: &SceneView) -> Vec
                 );
             }
             if let Some(s) = &row.style {
-                ui.label(egui::RichText::new(s).weak());
+                if row.style_missing {
+                    ui.label(
+                        egui::RichText::new(tr!("modeler-scenes-style-missing", name = s.clone()))
+                            .weak()
+                            .italics(),
+                    );
+                } else {
+                    ui.label(egui::RichText::new(style_name_label(s)).weak());
+                }
             }
         });
     }
@@ -205,7 +213,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut ScenesState, view: &SceneView) -> Vec
 /// person gave.
 pub fn style_label(row: &StyleRow) -> String {
     if row.builtin {
-        match row.name.as_str() {
+        style_name_label(&row.name)
+    } else {
+        row.name.clone()
+    }
+}
+
+/// The name of a style in the language of the window if it is a built-in one, else as it is.
+pub fn style_name_label(name: &str) -> String {
+    {
+        match name {
             "Wireframe" => tr!("modeler-style-wireframe"),
             "Shaded" => tr!("modeler-style-shaded"),
             "Realistic" => tr!("modeler-style-realistic"),
@@ -213,8 +230,6 @@ pub fn style_label(row: &StyleRow) -> String {
             "Dashed Hidden Line" => tr!("modeler-style-dashed-hidden-line"),
             other => other.to_string(),
         }
-    } else {
-        row.name.clone()
     }
 }
 

@@ -22,7 +22,12 @@ impl Tx<'_> {
     /// document wins. A built-in style that the document does not hold yet is added to it, as the
     /// view bar does. An unknown name changes nothing and gives false: the style may have been
     /// deleted.
-    fn restore_style(&mut self, name: &str, out: &mut Outcome) -> Result<bool, CommandError> {
+    fn restore_style(
+        &mut self,
+        name: &str,
+        out: &mut Outcome,
+        report: bool,
+    ) -> Result<bool, CommandError> {
         let name = name.trim();
         let found = self
             .doc
@@ -52,10 +57,13 @@ impl Tx<'_> {
                     },
                     out,
                 )?;
-                // The scene restore creates the style, so the list of created IDs keeps it out.
+                // A scene restore keeps the new style out of the list of created IDs. UseRenderStyle
+                // reports it, so the caller learns the ID.
                 match out.created.get(before).copied() {
                     Some(id) => {
-                        out.created.truncate(before);
+                        if !report {
+                            out.created.truncate(before);
+                        }
                         ResourceId(id)
                     }
                     None => return Ok(false),
@@ -311,7 +319,7 @@ impl Tx<'_> {
                 views.remove(i);
             }
             Command::UseRenderStyle { name } => {
-                if !self.restore_style(name, out)? {
+                if !self.restore_style(name, out, true)? {
                     return Err(invalid(format!("no render style named '{name}'")));
                 }
             }
@@ -368,7 +376,24 @@ impl Tx<'_> {
                 }
                 if let Some(style) = view.render_style.as_deref() {
                     // A style that was deleted since is skipped: the rest of the view applies.
-                    self.restore_style(style, out)?;
+                    self.restore_style(style, out, false)?;
+                } else if let Some(mode) = view
+                    .mode
+                    .as_deref()
+                    .and_then(crate::present::RenderMode::from_name)
+                {
+                    // A view of the app has a mode and no style. The style that draws in that
+                    // mode is the one to use, unless the active style does that already.
+                    let active_mode = self
+                        .doc
+                        .drawing
+                        .presentation
+                        .active_style
+                        .and_then(|id| crate::present::render_style(self.doc, id))
+                        .map_or(crate::present::RenderMode::Shaded, |s| s.mode);
+                    if active_mode != mode {
+                        self.restore_style(crate::present::builtin_for_mode(mode), out, false)?;
+                    }
                 }
             }
             _ => unreachable!("run_drawing gets drawing commands only"),

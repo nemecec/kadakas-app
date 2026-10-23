@@ -148,7 +148,7 @@ fn showing_a_scene_restores_tags_style_and_moves_the_camera_in_an_animation() {
     assert!((app.nav.camera.yaw - start.yaw).abs() < 1e-4);
     assert!((app.nav.camera.distance - start.distance).abs() < 1.0);
     assert!(t >= 10.0 + TRANSITION_SECONDS - 0.1);
-    // The view of the person is a change of the scene: the panel marks it.
+    // The camera is where the scene put it, so the panel shows no change mark.
     assert!(!scene_panel::is_modified(
         app.session.editor.doc(),
         "Scene 1",
@@ -352,4 +352,76 @@ fn a_camera_that_is_not_finite_never_becomes_a_scene() {
     app.scene_action(Action::Add, 0.0, SIZE);
     assert!(views(&app).is_empty());
     assert_eq!(app.status, tr!("modeler-scenes-bad-camera"));
+}
+
+#[test]
+fn a_scene_looks_the_same_in_the_app_and_in_the_modeler() {
+    use kadakas_core::present::RenderMode;
+    // Modeler to app: the scene stores the mode, and an API restore sets the view mode.
+    let mut a = app();
+    a.scene_action(Action::Style("Hidden Line".into()), 0.0, SIZE);
+    a.scene_action(Action::Add, 0.0, SIZE);
+    let v = &a.session.editor.doc().drawing.saved_views[0];
+    assert_eq!(v.mode.as_deref(), Some("hidden_line"));
+    a.scene_action(Action::Style("Shaded".into()), 0.0, SIZE);
+    a.session.view.mode = RenderMode::Shaded;
+    a.session
+        .handle("saved_view.restore", json!({"name": "Scene 1"}))
+        .unwrap();
+    assert_eq!(a.session.view.mode, RenderMode::HiddenLine);
+    // A scene without a mode (an older or foreign file) gets the mode from its style.
+    a.session
+        .editor
+        .execute(&Command::SaveView {
+            view: Box::new(kadakas_core::sheets::SavedView {
+                name: "Styled".into(),
+                render_style: Some("Wireframe".into()),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+    a.session
+        .handle("saved_view.restore", json!({"name": "Styled"}))
+        .unwrap();
+    assert_eq!(a.session.view.mode, RenderMode::Wireframe);
+
+    // App to modeler: a view with a mode and no style shows with the style of that mode.
+    let mut b = app();
+    b.session
+        .editor
+        .execute(&Command::SaveView {
+            view: Box::new(kadakas_core::sheets::SavedView {
+                name: "Lines".into(),
+                mode: Some("wireframe".into()),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+    b.scene_action(Action::Animate(false), 0.0, SIZE);
+    b.scene_action(Action::Activate("Lines".into()), 0.0, SIZE);
+    assert_eq!(
+        scene_panel::active_style_name(b.session.editor.doc()).as_deref(),
+        Some("Wireframe")
+    );
+}
+
+#[test]
+fn a_scene_with_a_missing_style_is_marked_in_the_panel() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.session
+        .editor
+        .execute(&Command::SaveView {
+            view: Box::new(kadakas_core::sheets::SavedView {
+                name: "Lost".into(),
+                render_style: Some("Nowhere".into()),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+    let mut all = String::new();
+    for i in 0..3 {
+        all = texts(&frame(&ctx, &mut app, vec![], f64::from(i) * 0.1)).join("\n");
+    }
+    assert!(all.contains(&tr!("modeler-scenes-style-missing", name = "Nowhere")));
 }

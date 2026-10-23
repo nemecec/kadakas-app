@@ -67,6 +67,18 @@ fn a_camera_must_be_usable() {
     let mut ed = Editor::with_sequential_ids();
     for bad in [
         ViewCamera {
+            yaw: 1e39,
+            ..camera()
+        },
+        ViewCamera {
+            distance: 1e-50,
+            ..camera()
+        },
+        ViewCamera {
+            pitch: 3.0,
+            ..camera()
+        },
+        ViewCamera {
             distance: 0.0,
             ..camera()
         },
@@ -272,6 +284,139 @@ fn commands_are_json_for_agents() {
             serde_json::from_str::<serde_json::Value>(text).unwrap()
         );
     }
+}
+
+#[test]
+fn unknown_fields_of_a_scene_survive_a_save_and_a_load() {
+    let v: SavedView = serde_json::from_str(r#"{"name": "A", "future": {"x": 1}}"#).unwrap();
+    assert_eq!(v.extra["future"]["x"], 1);
+    let back = serde_json::to_value(&v).unwrap();
+    assert_eq!(back["future"]["x"], 1);
+}
+
+#[test]
+fn a_renamed_style_is_followed_by_its_scenes_and_a_deleted_one_is_cleared() {
+    let mut ed = Editor::with_sequential_ids();
+    let add = |ed: &mut Editor, n: &str| {
+        let r = ed
+            .execute(&Command::UseRenderStyle { name: n.into() })
+            .unwrap();
+        kadakas_core::resource::ResourceId(r.created[0])
+    };
+    let mine = ed
+        .execute(&Command::AddResource {
+            name: "Mine".into(),
+            body: kadakas_core::resource::ResourceBody::Render(Box::new(
+                present::RenderResource::RenderStyle(present::RenderStyle::default()),
+            )),
+        })
+        .unwrap();
+    let mine = kadakas_core::resource::ResourceId(mine.created[0]);
+    save(&mut ed, "A", Some("Mine"), None);
+    save(&mut ed, "B", Some("Wireframe"), None);
+    ed.execute(&Command::ModifyResource {
+        id: mine,
+        name: Some("Yours".into()),
+        body: None,
+    })
+    .unwrap();
+    assert_eq!(
+        ed.doc()
+            .drawing
+            .saved_view("A")
+            .unwrap()
+            .render_style
+            .as_deref(),
+        Some("Yours")
+    );
+    // The restore of a renamed style does not add a built-in style of the old name.
+    let before = ed.doc().resources.len();
+    ed.execute(&Command::RestoreView { name: "A".into() })
+        .unwrap();
+    assert_eq!(ed.doc().resources.len(), before);
+    // A built-in name stays when its resource goes (a restore adds it again).
+    let wire = add(&mut ed, "Wireframe");
+    ed.execute(&Command::DeleteResource {
+        id: wire,
+        reassign: None,
+    })
+    .unwrap();
+    assert_eq!(
+        ed.doc()
+            .drawing
+            .saved_view("B")
+            .unwrap()
+            .render_style
+            .as_deref(),
+        Some("Wireframe")
+    );
+    ed.execute(&Command::DeleteResource {
+        id: mine,
+        reassign: None,
+    })
+    .unwrap();
+    assert_eq!(ed.doc().drawing.saved_view("A").unwrap().render_style, None);
+    // Undo brings the name back.
+    assert!(ed.undo());
+    assert_eq!(
+        ed.doc()
+            .drawing
+            .saved_view("A")
+            .unwrap()
+            .render_style
+            .as_deref(),
+        Some("Yours")
+    );
+}
+
+#[test]
+fn a_view_with_a_mode_and_no_style_uses_the_style_of_that_mode() {
+    let mut ed = Editor::with_sequential_ids();
+    ed.execute(&Command::SaveView {
+        view: Box::new(SavedView {
+            name: "Lines".into(),
+            mode: Some("hidden_line".into()),
+            ..SavedView::default()
+        }),
+    })
+    .unwrap();
+    ed.execute(&Command::RestoreView {
+        name: "Lines".into(),
+    })
+    .unwrap();
+    assert_eq!(style_mode(&ed), Some(RenderMode::HiddenLine));
+    // The active style draws in the mode already: it stays.
+    let id = ed.doc().drawing.presentation.active_style;
+    ed.execute(&Command::RestoreView {
+        name: "Lines".into(),
+    })
+    .unwrap();
+    assert_eq!(ed.doc().drawing.presentation.active_style, id);
+    assert_eq!(ed.doc().resources.len(), 1);
+    assert_eq!(present::builtin_for_mode(RenderMode::Shaded), "Shaded");
+}
+
+#[test]
+fn use_render_style_reports_the_id_of_a_style_it_added() {
+    let mut ed = Editor::with_sequential_ids();
+    let r = ed
+        .execute(&Command::UseRenderStyle {
+            name: "Realistic".into(),
+        })
+        .unwrap();
+    assert_eq!(r.created.len(), 1);
+    let r = ed
+        .execute(&Command::UseRenderStyle {
+            name: "Shaded".into(),
+        })
+        .unwrap();
+    assert_eq!(r.created.len(), 1);
+    let r = ed
+        .execute(&Command::UseRenderStyle {
+            name: "Realistic".into(),
+        })
+        .unwrap();
+    assert!(r.created.is_empty());
 }
 
 proptest! {

@@ -208,6 +208,18 @@ impl Tx<'_> {
                 let r = self.doc.resources.get_mut(*id).expect("checked");
                 r.name = new_name.trim().to_string();
                 r.body = new_body;
+                if r.name != old_name && matches!(r.body, ResourceBody::Render(_)) {
+                    // Scenes find their render style by name: they follow the rename.
+                    let new = r.name.clone();
+                    for v in &mut self.doc.drawing.saved_views {
+                        if v.render_style
+                            .as_deref()
+                            .is_some_and(|s| s.eq_ignore_ascii_case(old_name.trim()))
+                        {
+                            v.render_style = Some(new.clone());
+                        }
+                    }
+                }
                 // This definition and every definition that uses it must still expand within
                 // the limits (a nested component changed).
                 self.check_component_expansion(*id)?;

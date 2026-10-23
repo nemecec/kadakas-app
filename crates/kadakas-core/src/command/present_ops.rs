@@ -133,8 +133,25 @@ impl Tx<'_> {
         if faces > 0 {
             return Err(CommandError::ResourceInUse(id, faces));
         }
+        let name = self.doc.resources.get(id).map(|r| r.name.clone());
         self.doc.resources.remove(id);
         self.doc.drawing.presentation.forget(id);
+        // A scene that named the style keeps a built-in name (a restore adds the style again).
+        // Another name is cleared, so the scene does not point at a style that is gone.
+        if let Some(name) = name.filter(|n| {
+            !crate::present::RenderStyle::presets()
+                .iter()
+                .any(|(b, _)| b.eq_ignore_ascii_case(n))
+        }) {
+            for v in &mut self.doc.drawing.saved_views {
+                if v.render_style
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(&name))
+                {
+                    v.render_style = None;
+                }
+            }
+        }
         Ok(true)
     }
 }

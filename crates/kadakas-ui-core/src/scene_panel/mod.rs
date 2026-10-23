@@ -46,6 +46,8 @@ pub struct Row {
     pub has_camera: bool,
     /// The name of the render style of the scene, if it has one.
     pub style: Option<String>,
+    /// The scene names a style that neither the document nor the built-in styles have.
+    pub style_missing: bool,
     /// How many tags and layers the scene hides.
     pub hidden: usize,
 }
@@ -63,6 +65,10 @@ pub fn rows(doc: &Document, active: Option<&str>) -> Vec<Row> {
             active: active.is_some_and(|a| a.eq_ignore_ascii_case(&v.name)),
             has_camera: v.camera.is_some(),
             style: v.render_style.clone(),
+            style_missing: v
+                .render_style
+                .as_deref()
+                .is_some_and(|s| kadakas_core::present::style_by_name(doc, s).is_none()),
             hidden: v.layers.values().filter(|on| !**on).count()
                 + v.classes.values().filter(|on| !**on).count(),
         })
@@ -101,12 +107,19 @@ fn check_name(doc: &Document, name: &str, except: Option<&str>) -> Result<String
 
 /// The saved camera of an orbit camera.
 pub fn camera_to_saved(c: &Camera) -> ViewCamera {
+    // A turn of many laps is the same view: keep the number small enough to be valid.
+    let yaw = if c.yaw.abs() > 1.0e3 {
+        c.yaw.rem_euclid(std::f32::consts::TAU)
+    } else {
+        c.yaw
+    };
     ViewCamera {
         target: [c.target.x as f64, c.target.y as f64, c.target.z as f64],
-        yaw: c.yaw as f64,
+        yaw: yaw as f64,
         pitch: c.pitch as f64,
         distance: c.distance as f64,
-        fov: c.fov_y.to_degrees() as f64,
+        // The conversion runs in f64, so f32 radians come back to the same f32.
+        fov: f64::from(c.fov_y).to_degrees(),
         projection: c.projection.id().to_string(),
     }
 }
@@ -119,7 +132,7 @@ pub fn camera_from_saved(v: &ViewCamera) -> Camera {
         pitch: v.pitch as f32,
         distance: v.distance as f32,
         projection: Projection::from_name(&v.projection).unwrap_or(Projection::Perspective),
-        fov_y: (v.fov as f32).to_radians(),
+        fov_y: v.fov.to_radians() as f32,
     }
 }
 
@@ -137,10 +150,22 @@ pub fn capture(doc: &Document, name: &str, camera: &Camera) -> SavedView {
         pan: None,
         view: Some(nearest_standard(camera).id().to_string()),
         projection: Some(camera.projection.id().to_string()),
-        mode: None,
+        // The app draws with the mode, so the mode of the style goes with the scene.
+        mode: Some(active_mode(doc).id().to_string()),
         camera: Some(camera_to_saved(camera)),
         render_style: active_style_name(doc),
+        // Fields of a later version stay when a scene is updated.
+        extra: find(doc, name).map(|v| v.extra.clone()).unwrap_or_default(),
     }
+}
+
+/// The render mode of the active style of the document (shaded when there is none).
+pub fn active_mode(doc: &Document) -> kadakas_core::present::RenderMode {
+    doc.drawing
+        .presentation
+        .active_style
+        .and_then(|id| kadakas_core::present::render_style(doc, id))
+        .map_or(kadakas_core::present::RenderMode::Shaded, |s| s.mode)
 }
 
 /// The name of the active render style of the document. `None`: the built-in shaded style is
@@ -166,7 +191,8 @@ pub fn nearest_standard(camera: &Camera) -> StandardView {
         .min_by(|a, b| {
             let cost = |v: &StandardView| {
                 let (yaw, pitch) = v.yaw_pitch();
-                angle(camera.yaw, yaw) + (camera.pitch - pitch).abs()
+                // Looking down, a turn about the vertical axis changes little: weight it.
+                angle(camera.yaw, yaw) * camera.pitch.cos().abs() + (camera.pitch - pitch).abs()
             };
             cost(a).total_cmp(&cost(b))
         })
@@ -205,7 +231,7 @@ pub fn rename(doc: &Document, name: &str, new_name: &str) -> Result<Command, Pro
     })
 }
 
-/// Delete. The panel asks first when the person wants a question.
+/// Delete. It needs no question, since Undo brings the scene back.
 pub fn delete(doc: &Document, name: &str) -> Result<Command, Problem> {
     let found = find(doc, name).ok_or(Problem::NoSuchScene)?;
     Ok(Command::DeleteView {

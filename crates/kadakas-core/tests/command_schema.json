@@ -3690,7 +3690,7 @@
       "type": "object"
     },
     {
-      "description": "Make the render style with this name the active one (3D-08). A style of the document wins.\nA built-in style (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) that the\ndocument does not hold yet is added to it. One undo step.",
+      "description": "Make the render style with this name the active one (3D-08). A style of the document wins.\nA built-in style (Wireframe, Shaded, Realistic, Hidden Line, Dashed Hidden Line) that the\ndocument does not hold yet is added to it, and its ID is in `created`. One undo step.",
       "properties": {
         "name": {
           "type": "string"
