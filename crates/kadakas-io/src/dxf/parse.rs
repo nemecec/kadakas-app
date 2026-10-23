@@ -9,8 +9,13 @@ use std::collections::HashMap;
 
 use crate::IoError;
 
-/// Marker at the start of a binary DXF file.
-const BINARY_SENTINEL: &[u8] = b"AutoCAD Binary DXF";
+/// Most pairs (group code and value) of one file, text or binary.
+pub const MAX_PAIRS: usize = 100_000_000;
+/// Longest value of one pair, in bytes. A real value is under 2,100 bytes. Long XML text of a
+/// GEODATA object is the largest.
+pub const MAX_STRING: usize = 1 << 20;
+/// Most records (lines starting with a code 0, so entities, table rows and objects) of one file.
+pub const MAX_RECORDS: usize = 20_000_000;
 
 /// One record: `0 TYPE` followed by its pairs.
 #[derive(Clone, Debug, Default)]
@@ -174,24 +179,40 @@ fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// Splits text into (code, value) pairs. Stops at a line that is not a code.
-fn pairs(text: &str) -> (Vec<(i32, String)>, bool) {
+/// Splits text into (code, value) pairs. Stops at a line that is not a code. A line longer than
+/// [`MAX_STRING`] or more than [`MAX_PAIRS`] pairs make the file refused, with the line number.
+fn pairs(text: &str) -> Result<(Vec<(i32, String)>, bool), IoError> {
     let mut out = Vec::new();
-    let mut lines = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l));
+    let mut lines = text
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .enumerate();
     loop {
-        let Some(code_line) = lines.next() else {
-            return (out, false);
+        let Some((_, code_line)) = lines.next() else {
+            return Ok((out, false));
         };
         if code_line.trim().is_empty() && out.is_empty() {
             continue;
         }
         let Ok(code) = code_line.trim().parse::<i32>() else {
             // A blank line at the very end is fine. Anything else is not a pair.
-            return (out, !code_line.trim().is_empty());
+            return Ok((out, !code_line.trim().is_empty()));
         };
-        let Some(value) = lines.next() else {
-            return (out, true);
+        let Some((n, value)) = lines.next() else {
+            return Ok((out, true));
         };
+        if value.len() > MAX_STRING {
+            return Err(IoError::Format(format!(
+                "the DXF file is damaged at line {}: a value is longer than {MAX_STRING} bytes",
+                n + 1
+            )));
+        }
+        if out.len() >= MAX_PAIRS {
+            return Err(IoError::Format(format!(
+                "the DXF file has more than {MAX_PAIRS} pairs (line {}): a file of this size is refused",
+                n + 1
+            )));
+        }
         out.push((code, value.to_string()));
     }
 }
@@ -234,16 +255,21 @@ fn nest_polylines(records: Vec<Entity>) -> Vec<Entity> {
     out
 }
 
-/// Parses an ASCII DXF file.
+/// Parses a DXF file, text or binary.
 pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
-    if bytes.starts_with(BINARY_SENTINEL) {
-        return Err(IoError::Format(
-            "binary DXF files are not supported: save the drawing as ASCII DXF".into(),
-        ));
-    }
-    let (items, bad_line) = pairs(&decode(bytes));
+    let (items, bad_line) = if super::binary::is_binary(bytes) {
+        super::binary::read_pairs(bytes)?
+    } else {
+        pairs(&decode(bytes))?
+    };
     if !items.iter().any(|(c, v)| *c == 0 && v.trim() == "SECTION") {
         return Err(IoError::Format("not a DXF file: no SECTION found".into()));
+    }
+    let record_count = items.iter().filter(|(c, _)| *c == 0).count();
+    if record_count > MAX_RECORDS {
+        return Err(IoError::Format(format!(
+            "the DXF file has {record_count} records, more than the limit of {MAX_RECORDS}"
+        )));
     }
     let mut dxf = Dxf {
         truncated: bad_line,
@@ -422,6 +448,7 @@ mod tests {
         assert!(parse(b"hello").is_err());
         assert!(parse(b"").is_err());
         assert!(parse(b"AutoCAD Binary DXF\r\n\x1a\0").is_err());
+        assert!(parse(b"AutoCAD Binary DXF").is_err());
         assert!(parse(&[0xff, 0xfe, 0x00]).is_err());
     }
 

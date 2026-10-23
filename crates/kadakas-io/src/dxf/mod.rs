@@ -1,7 +1,8 @@
-//! DXF import and export (ASCII).
+//! DXF import and export (text and binary DXF).
 
 #[cfg(test)]
 mod base_tests;
+pub mod binary;
 pub mod block;
 pub mod compare;
 mod export;
