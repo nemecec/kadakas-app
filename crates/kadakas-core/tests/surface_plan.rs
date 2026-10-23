@@ -82,7 +82,7 @@ fn drawing(ed: &Editor, id: ObjectId) -> plan::PlanDrawing {
 fn component(ed: &mut Editor, m: ObjectId) -> (kadakas_core::resource::ResourceId, ObjectId) {
     let out = ed
         .execute(&Command::MakeComponent {
-            name: "Block".into(),
+            name: format!("Block {}", ed.doc().resources.len()),
             model: None,
             faces: vec![],
             edges: vec![],
@@ -495,4 +495,92 @@ fn a_small_model_is_drawn_in_full_and_the_numbers_say_so() {
         })
         .collect();
     assert_eq!(colors, [SURFACE_BACK, SURFACE_FRONT]);
+}
+
+#[test]
+fn the_parts_of_an_instance_follow_the_view_of_the_classes_that_is_given() {
+    let mut ed = Editor::default();
+    let part_class = ClassId(
+        ed.execute(&Command::AddClass {
+            name: "Parts".into(),
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let m = add(
+        &mut ed,
+        Shape::SurfaceModel(Box::default()),
+        Some(part_class),
+        None,
+    );
+    fill_cube(&mut ed, m, 0.0, 0.0);
+    let (_, inst) = component(&mut ed, m);
+    ed.execute(&Command::ModifyObject {
+        id: inst,
+        shape: None,
+        layer: None,
+        class: Some(ed.doc().active_class),
+        attrs: None,
+    })
+    .unwrap();
+    let doc = ed.doc();
+    let o = doc.object(inst).unwrap();
+    // The document shows the class; a viewport or an export that does not, hides the part.
+    let items = |visible: &dyn Fn(ClassId) -> bool| match plan::plan_of_object_with(doc, o, visible)
+    {
+        Some(Outcome::Drawing(d)) => d.items.len(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(items(&|_| true), 2 + 8);
+    assert_eq!(items(&|c| c != part_class), 0);
+    // The design view of the document is still the default.
+    assert_eq!(
+        plan::plan_of_object(doc, o)
+            .map(|p| matches!(p, Outcome::Drawing(d) if d.items.len() == 10)),
+        Some(true)
+    );
+    // And the same through the parts.
+    let parts = plan::parts_of_with(doc, o, &|c| c != part_class)
+        .unwrap()
+        .unwrap();
+    assert!(parts.is_empty());
+}
+
+#[test]
+fn a_turned_instance_of_an_instance_draws_the_box_where_the_transform_puts_it() {
+    let mut ed = Editor::default();
+    let m = cube(&mut ed, 0.0, 0.0);
+    let (_, inner) = component(&mut ed, m);
+    // A component made of the instance: an instance of an instance.
+    let (_, outer) = component(&mut ed, inner);
+    ed.execute(&Command::RotateObjects {
+        ids: vec![outer],
+        center: DVec2::ZERO,
+        angle: std::f64::consts::FRAC_PI_2,
+    })
+    .unwrap();
+    ed.execute(&Command::MoveObjects {
+        ids: vec![outer],
+        delta: v(3000.0, 200.0),
+    })
+    .unwrap();
+    let d = drawing(&ed, outer);
+    // The box 0..1000 turned a quarter about the origin is -1000..0 in x, then moved.
+    let (lo, hi) = d.bounds().unwrap();
+    assert!((lo - v(2000.0, 200.0)).length() < 1e-6, "{lo}");
+    assert!((hi - v(3000.0, 1200.0)).length() < 1e-6, "{hi}");
+    assert_eq!((d.faces(), d.edges()), (2, 8));
+    // Snapping and picking follow it.
+    let g = geometry(&ed, None);
+    assert!(
+        g.points
+            .iter()
+            .any(|p| p.p == v(2500.0, 700.0) && p.kind == Kind::Center)
+    );
+    let parts = plan::parts_of(ed.doc(), ed.doc().object(outer).unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(plan::hit(&parts, v(2500.0, 700.0), 5.0));
+    assert!(!plan::hit(&parts, v(500.0, 500.0), 5.0));
 }

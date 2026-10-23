@@ -34,9 +34,47 @@ pub struct Tables {
     site: kadakas_site::SiteCache,
     /// The section drawings, shared with whoever else draws sections, and the revision of the page.
     sections: Option<(kadakas_x3d::section::SharedSections, u64)>,
+    /// What the page says about how it was made (a big model drawn as an outline), once each.
+    notes: std::sync::Mutex<Vec<String>>,
+    /// The classes that the plan viewport that is drawn now hides. The parts of a component
+    /// instance follow them, not the classes of the document.
+    hidden_classes: std::sync::Mutex<std::collections::HashSet<kadakas_core::model::ClassId>>,
 }
 
 impl Tables {
+    /// Adds a note to the page, if it is not there already.
+    pub fn note(&self, text: String) {
+        let mut n = self.notes.lock().unwrap_or_else(|e| e.into_inner());
+        if !n.contains(&text) {
+            n.push(text);
+        }
+    }
+
+    /// The notes so far.
+    pub fn notes(&self) -> Vec<String> {
+        self.notes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Sets the classes that the viewport that is drawn now hides.
+    pub fn set_hidden_classes(
+        &self,
+        hidden: std::collections::HashSet<kadakas_core::model::ClassId>,
+    ) {
+        *self
+            .hidden_classes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = hidden;
+    }
+
+    /// True if the viewport that is drawn now does not hide the class.
+    pub fn class_shown(&self, class: kadakas_core::model::ClassId) -> bool {
+        !self
+            .hidden_classes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&class)
+    }
+
     /// Calculates the worksheets of all table objects in the document.
     pub fn build(doc: &Document, ground: &dyn GroundSource) -> Tables {
         let mut map = HashMap::new();
@@ -72,6 +110,8 @@ impl Tables {
             pictures,
             site: Default::default(),
             sections: None,
+            notes: Default::default(),
+            hidden_classes: Default::default(),
         }
     }
 

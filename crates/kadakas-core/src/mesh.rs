@@ -239,6 +239,10 @@ pub struct Scene {
     /// `origin`. They are not in `lines`. The hidden-line passes do not draw them as creases of
     /// the mesh (the edges of a curved surface), but a silhouette stays.
     pub soft_edges: Vec<[Vec3; 2]>,
+    /// The triangles of surface models whose faces do not close a volume (`surface::info::
+    /// is_watertight`), as ranges of triangle numbers in order. A section cuts such a model to a
+    /// line, not to a filled shape.
+    pub open_tris: Vec<Range<usize>>,
     /// Geometry of each object, in document order.
     ranges: IndexMap<ObjectId, ObjectRange>,
 }
@@ -266,6 +270,12 @@ impl Scene {
         self.ranges
             .get(&id)
             .map(|r| (r.tris.clone(), r.segs.clone()))
+    }
+
+    /// True if triangle `t` belongs to a surface model whose faces do not close a volume.
+    pub fn triangle_is_open(&self, t: usize) -> bool {
+        let i = self.open_tris.partition_point(|r| r.end <= t);
+        self.open_tris.get(i).is_some_and(|r| r.start <= t)
     }
 
     /// Objects that have geometry, in document order.
@@ -1015,6 +1025,7 @@ impl Builder<'_> {
         id: ObjectId,
     ) {
         let o = self.origin;
+        let first_triangle = self.scene.mesh.triangle_count();
         let at = |p: DVec3| {
             let q = tf.transform_point3(p);
             Vec3::new(
@@ -1053,6 +1064,10 @@ impl Builder<'_> {
             self.scene.mesh.two_sided_mode = true;
             self.painted_faces(m, &faces, &pts, &tris, &groups, color, id);
             self.scene.mesh.two_sided_mode = false;
+        }
+        let last_triangle = self.scene.mesh.triangle_count();
+        if last_triangle > first_triangle && !crate::surface::info::is_watertight(m) {
+            self.scene.open_tris.push(first_triangle..last_triangle);
         }
         for (eid, e) in m.edges() {
             let (Some(a), Some(b)) = (m.vertex(e.v[0]), m.vertex(e.v[1])) else {

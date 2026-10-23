@@ -3427,7 +3427,7 @@ class Api:
         return self._call("file.open", params or None)
 
     def objects_list(self, **params: "Unpack[ObjectsListParams]") -> Any:
-        """Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | unchecked | empty, with volume_mm3 or open_edges), area_mm2, bounds and the materials (the numbers of Object Info). The geometry of a surface model is left out (shape.elided): read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.
+        """Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | crossing | inward | flat | unchecked | empty, with volume_mm3 or open_edges; one answer checks at most 60,000 faces and a model that was checked once is not checked again until it changes), area_mm2, bounds, the materials (the numbers of Object Info) and, when the plan draws it as an outline or a box because it is big, plan {detail, note, ...}. The geometry of a surface model is left out (shape.elided), and nothing else of any object: read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.
 
         JSON-RPC method ``objects.list``."""
         return self._call("objects.list", params or None)

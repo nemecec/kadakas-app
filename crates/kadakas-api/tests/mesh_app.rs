@@ -275,7 +275,7 @@ fn the_documentation_of_the_methods_and_describe_mention_the_app() {
 }
 
 #[test]
-fn an_empty_model_is_empty_and_a_long_list_checks_only_the_first_hundred() {
+fn an_empty_model_is_empty_and_a_long_list_of_small_models_is_checked_by_faces() {
     let mut s = Session::with_sequential_ids();
     let empty = ok(&mut s, "mesh.create", json!({"name": "Nothing"}))["id"]
         .as_str()
@@ -284,7 +284,7 @@ fn an_empty_model_is_empty_and_a_long_list_checks_only_the_first_hundred() {
     let o = ok(&mut s, "objects.get", json!({"id": empty}));
     assert_eq!(o["surface"]["solid"], json!({"state": "empty"}));
     assert_eq!(o["surface"]["bounds"], Value::Null);
-    // 101 flat rectangles: the list runs the closed-solid check for the first 100 only.
+    // 101 flat rectangles of one face each: far under the budget of faces of a list.
     let ids: Vec<String> = (0..101)
         .map(|i| {
             let id = ok(&mut s, "mesh.create", json!({}))["id"].as_str().unwrap().to_string();
@@ -300,8 +300,189 @@ fn an_empty_model_is_empty_and_a_long_list_checks_only_the_first_hundred() {
     let state = |id: &str| row(&list, id)["surface"]["solid"]["state"].clone();
     assert_eq!(state(&ids[0]), "open");
     assert_eq!(state(&ids[99]), "open");
-    assert_eq!(state(&ids[100]), "unchecked");
+    assert_eq!(state(&ids[100]), "open");
     // One object alone is always checked.
     let one = ok(&mut s, "objects.get", json!({"id": ids[100]}));
     assert_eq!(one["surface"]["solid"]["state"], "open");
+}
+
+/// A flat grid of `n` x `n` squares of 10 mm cut in two, as a file has it (ids from one counter).
+fn flat_grid(n: usize) -> kadakas_core::surface::SurfaceModel {
+    use kadakas_core::surface::{Edge, EdgeId, Face, FaceId, Plane, SurfaceModel, VertexId};
+    use std::collections::{BTreeMap, HashSet};
+    let id_of = |x: usize, y: usize| VertexId((y * (n + 1) + x) as u32 + 1);
+    let mut vertices = BTreeMap::new();
+    for y in 0..=n {
+        for x in 0..=n {
+            vertices.insert(
+                id_of(x, y),
+                glam::DVec3::new(x as f64 * 10.0, y as f64 * 10.0, 0.0),
+            );
+        }
+    }
+    let (mut edges, mut faces) = (BTreeMap::new(), BTreeMap::new());
+    let (mut seen, mut e, mut f) = (HashSet::new(), 0u32, 0u32);
+    let up = Plane::new(glam::DVec3::ZERO, glam::DVec3::Z).unwrap();
+    for y in 0..n {
+        for x in 0..n {
+            let (a, b, c, d) = (
+                id_of(x, y),
+                id_of(x + 1, y),
+                id_of(x + 1, y + 1),
+                id_of(x, y + 1),
+            );
+            for tri in [[a, b, c], [a, c, d]] {
+                for k in 0..3 {
+                    let (p, q) = (tri[k], tri[(k + 1) % 3]);
+                    if seen.insert((p.min(q), p.max(q))) {
+                        e += 1;
+                        edges.insert(EdgeId(1_000_000 + e), Edge { v: [p, q] });
+                    }
+                }
+                f += 1;
+                faces.insert(FaceId(2_000_000 + f), Face::new(up, tri.to_vec(), vec![]));
+            }
+        }
+    }
+    SurfaceModel::from_parts(vertices, edges, faces, 3_000_000)
+}
+
+fn add_grid(s: &mut Session, n: usize) -> String {
+    let out = s
+        .editor
+        .execute(&kadakas_core::command::Command::AddObject {
+            shape: kadakas_core::model::Shape::SurfaceModel(Box::new(flat_grid(n))),
+            layer: None,
+            class: None,
+            attrs: Default::default(),
+        })
+        .unwrap();
+    out.created[0].to_string()
+}
+
+#[test]
+fn the_list_keeps_the_symbol_of_an_instance_and_the_members_of_a_group() {
+    let mut s = Session::with_sequential_ids();
+    let a = shed(&mut s, "A", 0.0);
+    let b = shed(&mut s, "B", 10_000.0);
+    let faces: Vec<Value> = ok(&mut s, "mesh.faces", json!({"id": a, "limit": 100}))["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect();
+    ok(
+        &mut s,
+        "mesh.make_component",
+        json!({"id": a, "faces": faces, "name": "Shed", "replace": true}),
+    );
+    let inst = ok(&mut s, "objects.list", json!({"kind": "component"}))[0].clone();
+    let id = inst["id"].as_str().unwrap().to_string();
+    // The instance keeps what it is made of: the definition and the transform.
+    assert!(inst["shape"]["symbol"].is_string(), "{inst}");
+    assert_eq!(inst["shape"]["kind"], "component");
+    assert_eq!(inst["shape"]["transform"].as_array().unwrap().len(), 12);
+    assert!(inst["shape"].get("elided").is_none());
+    // objects.get is the same for the instance.
+    let got = ok(&mut s, "objects.get", json!({"id": id}));
+    assert_eq!(got["shape"], inst["shape"]);
+    // A group keeps its shape and gets no note about elided geometry.
+    let g = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "group", "ids": [id, b]}}),
+    );
+    let gid = g["created"][0].as_str().unwrap().to_string();
+    let list = ok(&mut s, "objects.list", json!({}));
+    let group = row(&list, &gid);
+    assert_eq!(group["shape"]["kind"], "group");
+    assert!(group["shape"].get("elided").is_none(), "{group}");
+    assert_eq!(group["surface"]["kind"], "group");
+    // A surface model in the list is elided, and objects.get has the geometry.
+    let model = row(&list, &b);
+    assert!(model["shape"]["elided"].is_string());
+    assert!(ok(&mut s, "objects.get", json!({"id": b}))["shape"]["vertices"].is_array());
+}
+
+#[test]
+fn a_big_model_says_that_it_is_drawn_as_its_outline_in_the_api() {
+    let mut s = Session::with_sequential_ids();
+    // 101 x 101 squares: 20,402 faces and 30,603 edges, over the limits of the plan.
+    let id = add_grid(&mut s, 101);
+    let o = ok(&mut s, "objects.get", json!({"id": id}));
+    let plan = &o["surface"]["plan"];
+    assert_eq!(plan["detail"], "outline");
+    assert_eq!(plan["faces"], 20_402);
+    assert_eq!(plan["limit_faces"], 20_000);
+    assert!(
+        plan["note"]
+            .as_str()
+            .unwrap()
+            .starts_with("Drawn as outline"),
+        "{plan}"
+    );
+    // The state of the solid is not checked for this size by itself.
+    assert_eq!(o["surface"]["solid"]["state"], "unchecked");
+    // The list says it too, and a small model has no plan field.
+    let small = shed(&mut s, "Shed", 5000.0);
+    let list = ok(&mut s, "objects.list", json!({"kind": "surface_model"}));
+    assert_eq!(row(&list, &id)["surface"]["plan"]["detail"], "outline");
+    assert!(row(&list, &small)["surface"].get("plan").is_none());
+    // The plan in render.svg says it, and so does the data of the group in the SVG.
+    let svg = ok(&mut s, "render.svg", json!({}));
+    assert_eq!(svg["notes"].as_array().unwrap().len(), 1, "{svg}");
+    assert!(svg["notes"][0].as_str().unwrap().contains("outline"));
+    assert_eq!(svg["simplified"][0]["object"], id);
+    assert!(
+        svg["svg"]
+            .as_str()
+            .unwrap()
+            .contains(r#"data-detail="outline""#)
+    );
+    // Without a big model there are no notes.
+    let mut t = Session::with_sequential_ids();
+    shed(&mut t, "Shed", 0.0);
+    assert!(ok(&mut t, "render.svg", json!({})).get("notes").is_none());
+}
+
+#[test]
+fn a_hidden_line_picture_says_when_it_leaves_edges_out() {
+    let mut s = Session::with_sequential_ids();
+    // 130 x 130 squares: 50,960 lines, over the 50,000 lines of one object.
+    add_grid(&mut s, 130);
+    let r = ok(
+        &mut s,
+        "render.png",
+        json!({"view": "top", "mode": "hidden_line", "width": 64, "height": 64}),
+    );
+    let notes = r["notes"].as_array().expect("a note");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("hidden-line limit")),
+        "{r}"
+    );
+    // A shaded picture has no such note.
+    let r = ok(
+        &mut s,
+        "render.png",
+        json!({"view": "top", "mode": "shaded", "width": 64, "height": 64}),
+    );
+    assert!(r.get("notes").is_none(), "{r}");
+}
+
+#[test]
+fn the_solid_check_of_a_list_is_kept_for_the_model_and_not_run_again() {
+    let mut s = Session::with_sequential_ids();
+    let id = shed(&mut s, "Shed", 0.0);
+    let list = ok(&mut s, "objects.list", json!({"kind": "surface_model"}));
+    assert_eq!(row(&list, &id)["surface"]["solid"]["state"], "closed");
+    // An edit of another object does not make it unchecked: a list with no budget still knows.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "circle", "center": [0, 0], "radius": 10}}}),
+    );
+    let list = ok(&mut s, "objects.list", json!({"kind": "surface_model"}));
+    assert_eq!(row(&list, &id)["surface"]["solid"]["state"], "closed");
 }

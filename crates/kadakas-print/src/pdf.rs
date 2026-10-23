@@ -124,9 +124,23 @@ pub fn write_pdf(pages: &[&Page], title: &str) -> Vec<u8> {
     pdf.type1_font(font)
         .base_font(Name(b"Helvetica"))
         .encoding_predefined(Name(b"WinAnsiEncoding"));
-    pdf.document_info(info)
-        .title(TextStr(title))
-        .producer(TextStr("Kadakas"));
+    // What the pages say about how they were made (a big model drawn as an outline).
+    let subject: String = pages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, p)| {
+            p.notes
+                .iter()
+                .map(move |n| format!("Page {}: {}", i + 1, n))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut doc_info = pdf.document_info(info);
+    doc_info.title(TextStr(title)).producer(TextStr("Kadakas"));
+    if !subject.is_empty() {
+        doc_info.subject(TextStr(&subject));
+    }
+    doc_info.finish();
     let page_ids: Vec<Ref> = pages.iter().map(|_| ids.alloc()).collect();
     pdf.pages(tree)
         .kids(page_ids.iter().copied())

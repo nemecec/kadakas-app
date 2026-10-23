@@ -152,8 +152,13 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         // A ghost is not in the drawing: it cannot be selected. A member of a group selects the
         // group, as in the plan, unless you are in the group (MOD-13).
         let context = session.edit_context();
+        // The same rule as in the plan: grey and locked things cannot be picked.
         let hit = hit
-            .filter(|id| session.editor.doc().object(*id).is_some())
+            .filter(|id| {
+                let doc = session.editor.doc();
+                doc.object(*id)
+                    .is_some_and(|o| kadakas_ui_core::hit::pickable(doc, o))
+            })
             .and_then(|id| session.editor.doc().selection_target(id, context));
         session.selection = view3d::click_selection(&session.selection, hit, mods.shift);
     }
@@ -528,6 +533,78 @@ mod tests {
         h.frame(vec![]);
         h.click(egui::pos2(400.0, 300.0), none);
         assert_eq!(h.session.selection, vec![g]);
+    }
+
+    #[test]
+    fn a_click_in_3d_cannot_pick_a_grey_class_or_a_locked_layer() {
+        use kadakas_core::visibility::VisMode;
+        let mut h = Harness::new();
+        let class = kadakas_core::model::ClassId(
+            h.session
+                .editor
+                .execute(&Command::AddClass {
+                    name: "Sheds".into(),
+                    attrs: Default::default(),
+                })
+                .unwrap()
+                .created[0],
+        );
+        let id = add_surface_box(&mut h);
+        h.session
+            .editor
+            .execute(&Command::ModifyObject {
+                id,
+                shape: None,
+                layer: None,
+                class: Some(class),
+                attrs: None,
+            })
+            .unwrap();
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        let none = egui::Modifiers::NONE;
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert_eq!(h.session.selection, vec![id]);
+        h.click(egui::pos2(5.0, 5.0), none);
+        // Grey: drawn, not picked.
+        h.session
+            .editor
+            .execute(&Command::SetVisibility {
+                layers: vec![],
+                classes: vec![class],
+                mode: VisMode::Grey,
+            })
+            .unwrap();
+        h.frame(vec![]);
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert!(h.session.selection.is_empty(), "a grey class is not picked");
+        h.session
+            .editor
+            .execute(&Command::SetVisibility {
+                layers: vec![],
+                classes: vec![class],
+                mode: VisMode::Visible,
+            })
+            .unwrap();
+        // A locked layer is not picked either.
+        let layer = h.session.editor.doc().object(id).unwrap().layer;
+        h.session
+            .editor
+            .execute(&Command::ModifyLayer {
+                id: layer,
+                name: None,
+                visible: None,
+                locked: Some(true),
+                elevation: None,
+                scale: None,
+            })
+            .unwrap();
+        h.frame(vec![]);
+        h.click(egui::pos2(400.0, 300.0), none);
+        assert!(
+            h.session.selection.is_empty(),
+            "a locked layer is not picked"
+        );
     }
 
     #[test]

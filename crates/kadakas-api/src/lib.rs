@@ -520,7 +520,7 @@ pub const METHODS: &[(&str, &str)] = &[
     files::FILE_OPEN,
     (
         "objects.list",
-        "Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | unchecked | empty, with volume_mm3 or open_edges), area_mm2, bounds and the materials (the numbers of Object Info). The geometry of a surface model is left out (shape.elided): read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.",
+        "Objects. params: {layer?, class?, kind?}. A surface model, a group of surface models and a component instance have a field surface with the counts of vertices, edges and faces, the closed-solid state (solid.state: closed | open | crossing | inward | flat | unchecked | empty, with volume_mm3 or open_edges; one answer checks at most 60,000 faces and a model that was checked once is not checked again until it changes), area_mm2, bounds, the materials (the numbers of Object Info) and, when the plan draws it as an outline or a box because it is big, plan {detail, note, ...}. The geometry of a surface model is left out (shape.elided), and nothing else of any object: read it with mesh.vertices, mesh.edges and mesh.faces, or objects.get.",
     ),
     (
         "objects.get",
@@ -1773,7 +1773,9 @@ impl Session {
                     })
                     .collect();
                 let mut v = serde_json::to_value(&list).unwrap();
-                let mut checks = mesh_api::SUMMARY_CHECKS;
+                let mut budget = kadakas_core::surface::info::Budget(
+                    kadakas_core::surface::info::LIST_CHECK_FACES,
+                );
                 v.as_array_mut()
                     .into_iter()
                     .flatten()
@@ -1781,7 +1783,7 @@ impl Session {
                     .for_each(|(row, o)| {
                         elide_image(row);
                         elide_sources(row);
-                        mesh_api::annotate_object(doc, o, row, true, &mut checks);
+                        mesh_api::annotate_object(doc, o, row, true, &mut budget);
                     });
                 v
             }
@@ -1801,7 +1803,13 @@ impl Session {
                 if !sources {
                     elide_sources(&mut v);
                 }
-                mesh_api::annotate_object(doc, o, &mut v, false, &mut 1);
+                mesh_api::annotate_object(
+                    doc,
+                    o,
+                    &mut v,
+                    false,
+                    &mut kadakas_core::surface::info::Budget::auto(),
+                );
                 v
             }
             "selection.get" => json!({ "ids": self.selection }),
@@ -1842,14 +1850,24 @@ impl Session {
                 let region = region_param(region)?;
                 match compare_api::CompareSpec::parse(compare.as_ref())? {
                     Some(spec) => self.render_svg_compare(width.unwrap_or(800), &spec)?,
-                    None => json!({ "svg": self.render_svg_with(
-                        width.unwrap_or(800),
-                        &kadakas_core::svg::RenderOptions {
-                            region,
-                            show_check: show_check.unwrap_or(false),
-                            max_units: Some(self.limits.pattern_units),
-                        },
-                    ) }),
+                    None => {
+                        let mut out = json!({ "svg": self.render_svg_with(
+                            width.unwrap_or(800),
+                            &kadakas_core::svg::RenderOptions {
+                                region,
+                                show_check: show_check.unwrap_or(false),
+                                max_units: Some(self.limits.pattern_units),
+                            },
+                        ) });
+                        // A big model is drawn as its outline or its box: say so.
+                        let notes = mesh_api::plan_notes(self.editor.doc());
+                        if !notes.is_empty() {
+                            out["notes"] =
+                                json!(notes.iter().map(|n| n["note"].clone()).collect::<Vec<_>>());
+                            out["simplified"] = json!(notes);
+                        }
+                        out
+                    }
                 }
             }
             "render.png" => {
@@ -1988,6 +2006,21 @@ impl Session {
                 let n = kadakas_render::look::patterned_untextured(doc);
                 if n > 0 && !plain {
                     out["notes"] = json!([kadakas_render::look::pattern_not_in_3d_note(n)]);
+                }
+                // A hidden-line picture draws an object with too many edges by its mesh edges.
+                if used_mode.is_hidden_line() {
+                    let crowded = kadakas_render::hlr::crowded_count(&scene);
+                    if crowded > 0 {
+                        let text = format!(
+                            "{crowded} object(s) with more than {} edges are drawn by their outline, creases and borders only (hidden-line limit, {} edges in all)",
+                            kadakas_render::hlr::MAX_OBJECT_LINES,
+                            kadakas_render::hlr::MAX_LINES
+                        );
+                        match out.get_mut("notes").and_then(Value::as_array_mut) {
+                            Some(a) => a.push(json!(text)),
+                            None => out["notes"] = json!([text]),
+                        }
+                    }
                 }
                 out
             }

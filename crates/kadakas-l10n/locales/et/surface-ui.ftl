@@ -3,9 +3,9 @@
 surface-ui-kind-surface-model = Pindmudel
 surface-ui-kind-component = Komponendi koopia
 surface-ui-kind-group = Pindmudelite rühm
-surface-ui-models = Mudeleid
-surface-ui-edges = Servi
-surface-ui-faces = Tahke
+surface-ui-models = Mudelid
+surface-ui-edges = Servad
+surface-ui-faces = Tahud
 surface-ui-solid = Keha
 surface-ui-solid-empty = Tahke pole
 surface-ui-solid-unchecked = Kontrollimata (suur mudel)
@@ -19,9 +19,21 @@ surface-ui-solid-open =
         [one] Pole suletud (1 lahtine serv)
        *[other] Pole suletud ({ $count } lahtist serva)
     }
+surface-ui-solid-crossing =
+    { $count ->
+        [one] Tahud lõikuvad (1 koht)
+       *[other] Tahud lõikuvad ({ $count } kohta)
+    }
+surface-ui-solid-inward = Suletud, aga tahud vaatavad sissepoole
+surface-ui-solid-flat = Suletud, aga ruumala puudub
+surface-ui-plan = Plaan
+surface-ui-note-outline-faces = Joonistatud kontuurina: { $count } tahku, piir { $limit }
+surface-ui-note-outline-edges = Joonistatud kontuurina: { $count } serva, piir { $limit }
+surface-ui-note-box = Joonistatud karbina: kontuuris on üle { $limit } joone
+surface-ui-note-budget = Joonistatud karbina: kaadri eelarve on otsas
 surface-ui-volume = Maht
 surface-ui-area = Pindala
-surface-ui-size = Mõõt
+surface-ui-size = Mõõtmed
 surface-ui-bounds-min = Madalaim nurk
 surface-ui-bounds-max = Kõrgeim nurk
 surface-ui-hidden = Peidetud
@@ -33,7 +45,7 @@ surface-ui-hidden-value =
         [one] { $edges } serv
        *[other] { $edges } serva
     }
-surface-ui-soft = Pehmeid servi
+surface-ui-soft = Pehmed servad
 surface-ui-material = Materjal
 surface-ui-material-value =
     { $count ->

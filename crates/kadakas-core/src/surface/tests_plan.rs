@@ -487,3 +487,271 @@ fn a_loose_edge_has_vertices_a_middle_and_no_face_centre() {
     let d = plan::drawing(&[part(&m)], None);
     assert_eq!((d.faces(), d.edges()), (0, 1));
 }
+
+/// A model of one flat polygon in a vertical plane (x, z), at `y`.
+fn wall(x0: f64, x1: f64, z0: f64, z1: f64, y: f64) -> SurfaceModel {
+    let mut m = SurfaceModel::new();
+    let p = [[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]];
+    m.apply(&Edit::AddEdges {
+        edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+    })
+    .unwrap();
+    m
+}
+
+/// A model of one square face at height `z`.
+fn plate(x: f64, y: f64, s: f64, z: f64) -> SurfaceModel {
+    let mut m = SurfaceModel::new();
+    let p = [[x, y, z], [x + s, y, z], [x + s, y + s, z], [x, y + s, z]];
+    m.apply(&Edit::AddEdges {
+        edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+    })
+    .unwrap();
+    m
+}
+
+fn first_face(d: &plan::PlanDrawing) -> usize {
+    d.items
+        .iter()
+        .position(|i| matches!(i, PlanItem::Face(_)))
+        .unwrap()
+}
+
+#[test]
+fn a_roof_covers_the_edges_of_a_wall_under_it_and_not_the_edges_above_it() {
+    // A free wall 2,000 mm high under a roof at 3,000 mm: its edges come before the roof.
+    let roof = plate(0.0, 0.0, 1000.0, 3000.0);
+    let low = wall(0.0, 1000.0, 0.0, 2000.0, 500.0);
+    let d = plan::drawing(&[part(&roof), part(&low)], None);
+    assert_eq!((d.faces(), d.edges()), (1, 4 + 2));
+    let at = first_face(&d);
+    assert_eq!(
+        at, 2,
+        "the two edges of the wall, then the roof: {:?}",
+        d.items
+    );
+    assert!(matches!(d.items[0], PlanItem::Edge(..)) && matches!(d.items[1], PlanItem::Edge(..)));
+    // A wall that stands out above the roof: the edge at 4,000 mm is drawn over it, the edge at the
+    // ground is under it.
+    let high = wall(0.0, 1000.0, 0.0, 4000.0, 500.0);
+    let d = plan::drawing(&[part(&roof), part(&high)], None);
+    let at = first_face(&d);
+    let before = d.items[..at].len();
+    let after = d.items[at + 1..]
+        .iter()
+        .filter(|i| matches!(i, PlanItem::Edge(..)))
+        .count();
+    // Four edges of the roof follow it. The wall: the bottom edge before the roof, the top after.
+    assert_eq!((before, after), (1, 4 + 1), "{:?}", d.items);
+}
+
+#[test]
+fn a_slope_runs_over_a_plate_where_it_is_above_it_and_under_it_where_it_is_below() {
+    let mut slope = SurfaceModel::new();
+    let p = [
+        [0.0, 0.0, 0.0],
+        [10000.0, 0.0, 10000.0],
+        [10000.0, 1000.0, 10000.0],
+        [0.0, 1000.0, 0.0],
+    ];
+    slope
+        .apply(&Edit::AddEdges {
+            edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+        })
+        .unwrap();
+    let red = Some([255, 0, 0, 255]);
+    let green = Some([0, 255, 0, 255]);
+    let colors = |d: &plan::PlanDrawing| -> Vec<[u8; 4]> {
+        d.items
+            .iter()
+            .filter_map(|i| match i {
+                PlanItem::Face(f) => Some(f.color),
+                _ => None,
+            })
+            .collect()
+    };
+    let slope_part = Part {
+        fill: red,
+        ..part(&slope)
+    };
+    // The plate at 1,000 mm is over the foot of the slope (the slope is at 0 to 500 mm there).
+    // The average height of the slope is 5,000 mm, which would put it on top.
+    let above = plate(0.0, 100.0, 500.0, 1000.0);
+    let plate_part = Part {
+        fill: green,
+        ..part(&above)
+    };
+    let d = plan::drawing(&[slope_part, plate_part], None);
+    assert_eq!(
+        colors(&d),
+        [[255, 0, 0, 255], [0, 255, 0, 255]],
+        "the plate is on top"
+    );
+    // A plate under the slope is covered by it.
+    let under = plate(0.0, 100.0, 500.0, -1000.0);
+    let under_part = Part {
+        fill: green,
+        ..part(&under)
+    };
+    let d = plan::drawing(&[slope_part, under_part], None);
+    assert_eq!(
+        colors(&d),
+        [[0, 255, 0, 255], [255, 0, 0, 255]],
+        "the slope is on top"
+    );
+    // The order does not depend on the order of the parts.
+    let d = plan::drawing(&[under_part, slope_part], None);
+    assert_eq!(colors(&d), [[0, 255, 0, 255], [255, 0, 0, 255]]);
+}
+
+#[test]
+fn a_big_model_offers_only_the_points_that_are_drawn_and_a_cap_stops_the_count() {
+    let m = grid(10);
+    // 200 faces and 320 edges: over these limits, so the plan draws the border only.
+    let lim = plan::Limits {
+        faces: 100,
+        edges: 100,
+        outline: 1000,
+    };
+    let g = plan::snap_geometry_with(&[part(&m)], None, 1000, lim);
+    assert_eq!(g.vertices.len(), 40, "the vertices of the border");
+    assert!(g.centers.is_empty());
+    assert!(!g.vertices.contains(&DVec2::new(50.0, 50.0)));
+    assert_eq!(g.edges.len(), 40);
+    // Asked again, the drawing comes from the cache and the answer is the same.
+    assert_eq!(plan::snap_geometry_with(&[part(&m)], None, 1000, lim), g);
+    // Too long an outline is the box: its four corners.
+    let box_lim = plan::Limits { outline: 10, ..lim };
+    let g = plan::snap_geometry_with(&[part(&m)], None, 1000, box_lim);
+    assert_eq!((g.vertices.len(), g.edges.len()), (4, 4));
+    // The full drawing offers everything, and the cap counts edges and centres.
+    let g = plan::snap_geometry(&[part(&m)], None, 5);
+    assert!(g.edges.len() <= 5 && g.centers.len() <= 5);
+    let all = plan::snap_geometry(&[part(&m)], None, 1000);
+    assert_eq!((all.vertices.len(), all.centers.len()), (121, 200));
+}
+
+#[test]
+fn a_material_on_both_sides_counts_the_face_once() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    let mat = ed
+        .execute(&Command::AddResource {
+            name: "Brick".into(),
+            body: crate::resource::ResourceBody::Render(Box::new(
+                crate::present::RenderResource::Material(crate::present::Material::default()),
+            )),
+        })
+        .unwrap()
+        .created[0];
+    let id = ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::new(box_model())),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let faces: Vec<FaceId> = match &ed.doc().object(id).unwrap().shape {
+        Shape::SurfaceModel(m) => m.faces().map(|(f, _)| f).collect(),
+        _ => unreachable!(),
+    };
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::SetFaceMaterial {
+            faces,
+            side: PaintSide::Both,
+            material: Some(mat.to_string()),
+        },
+    })
+    .unwrap();
+    let doc = ed.doc();
+    let i = info::of_object(doc, doc.object(id).unwrap(), Check::Auto).unwrap();
+    assert_eq!(
+        i.materials,
+        [info::MaterialCount {
+            name: "Brick".into(),
+            faces: 6
+        }]
+    );
+    assert_eq!(i.unpainted_faces, 0);
+}
+
+#[test]
+fn a_closed_model_with_its_faces_turned_in_is_inward_and_the_state_is_kept_by_content() {
+    let doc = Document::with_sequential_ids();
+    let mut m = box_model();
+    let all: Vec<FaceId> = m.faces().map(|(f, _)| f).collect();
+    m.apply(&Edit::ReverseFaces { faces: all }).unwrap();
+    assert_eq!(
+        info::of_parts(&doc, &[part(&m)], Check::Always).solid,
+        SolidState::Inward
+    );
+    // Once checked, the model is not checked again, whatever the budget says.
+    assert_eq!(
+        info::of_parts(&doc, &[part(&m)], Check::Never).solid,
+        SolidState::Inward
+    );
+    // A model that is made differently is not in the cache.
+    let other = plate(0.0, 0.0, 10.0, 0.0);
+    assert_eq!(
+        info::of_parts(&doc, &[part(&other)], Check::Never).solid,
+        SolidState::Unchecked
+    );
+}
+
+#[test]
+fn the_budget_counts_the_faces_of_all_the_models_of_an_answer() {
+    let doc = Document::with_sequential_ids();
+    let (a, mut b) = (box_model(), SurfaceModel::new());
+    square(&mut b, 0.0, 0.0, 2000.0);
+    let f = b.faces().next().unwrap().0;
+    b.apply(&Edit::PushPull {
+        face: f,
+        distance: 300.0,
+    })
+    .unwrap();
+    // Room for one box of six faces.
+    let mut budget = info::Budget(6);
+    let i = info::of_parts_with(&doc, &[part(&a), part(&b)], &mut budget);
+    assert_eq!(i.solid, SolidState::Unchecked);
+    assert_eq!(budget, info::Budget(0));
+    // The box that was checked costs nothing the next time, the other one is checked now.
+    let mut budget = info::Budget(6);
+    let i = info::of_parts_with(&doc, &[part(&a), part(&b)], &mut budget);
+    assert!(
+        matches!(i.solid, SolidState::Closed { solids: 2, .. }),
+        "{:?}",
+        i.solid
+    );
+}
+
+#[test]
+fn the_cheap_test_for_a_volume_sees_a_missing_wall_and_a_hidden_face() {
+    let m = box_model();
+    assert!(info::is_watertight(&m));
+    let mut open = box_model();
+    let side = open
+        .faces()
+        .find(|(_, f)| f.plane.normal.y > 0.9)
+        .map(|(f, _)| f)
+        .unwrap();
+    open.apply(&Edit::EraseFaces { faces: vec![side] }).unwrap();
+    assert!(!info::is_watertight(&open));
+    let mut hidden = box_model();
+    let top = hidden
+        .faces()
+        .find(|(_, f)| f.plane.normal.z > 0.9)
+        .map(|(f, _)| f)
+        .unwrap();
+    hidden
+        .apply(&Edit::SetHidden {
+            faces: vec![top],
+            edges: vec![],
+            hidden: true,
+        })
+        .unwrap();
+    assert!(!info::is_watertight(&hidden));
+    assert!(!info::is_watertight(&SurfaceModel::new()));
+}

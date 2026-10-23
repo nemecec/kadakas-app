@@ -119,6 +119,9 @@ pub struct SectionDrawing {
     pub cut_triangles: usize,
     /// True if the edges hit the limit and some are missing.
     pub truncated: bool,
+    /// How many objects were drawn by the edges of their mesh only, because they have too many
+    /// lines (`kadakas_render::hlr::MAX_OBJECT_LINES`).
+    pub thinned_objects: usize,
 }
 
 impl SectionDrawing {
@@ -237,13 +240,12 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             key: [bits(pos[0]), bits(pos[1]), bits(pos[2])],
             plant: plant_of(object),
             trunk: mesh.tri_part.get(t).copied() == Some(kadakas_core::present::PART_TRUNK),
+            open: scene.triangle_is_open(t),
         });
     }
 
     if spec.mode == Mode::Cut {
-        cut_faces(&tris, &frame, &mut out, &plant_of, &|id| {
-            open_surface(doc, id)
-        });
+        cut_faces(&tris, &frame, &mut out, &plant_of);
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
@@ -289,27 +291,12 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             &covers,
             tol,
             spec.mode == Mode::Cut,
+            &mut out.thinned_objects,
         );
         out.truncated = out.edges.len() >= beyond::MAX_EDGES;
     }
     out.grow();
     out
-}
-
-/// True for a surface model or an instance that is not a closed solid, so that the cut through it
-/// is an outline and no poche. A model with more faces than the automatic check
-/// (`surface::info::AUTO_CHECK_FACES`) counts as closed: the check takes about a second at the
-/// limits of a model, and a ring that closes is a good sign.
-fn open_surface(doc: &Document, id: ObjectId) -> bool {
-    use kadakas_core::surface::info::SolidState;
-    let Some(o) = doc.object(id) else {
-        return false;
-    };
-    if !matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }) {
-        return false;
-    }
-    kadakas_core::surface::info::of_object(doc, o, kadakas_core::surface::info::Check::Auto)
-        .is_some_and(|i| matches!(i.solid, SolidState::Open { .. }))
 }
 
 /// The cut of every object that the plane crosses.
@@ -318,10 +305,9 @@ fn cut_faces(
     frame: &Frame,
     out: &mut SectionDrawing,
     plant_of: &dyn Fn(ObjectId) -> bool,
-    open_of: &dyn Fn(ObjectId) -> bool,
 ) {
     // The trunk of a plant is cut on its own: it is a solid, the canopy only gives a silhouette.
-    let mut by_object: BTreeMap<(kadakas_core::uid::Uid, bool), Vec<(DVec2, DVec2)>> =
+    let mut by_object: BTreeMap<(kadakas_core::uid::Uid, bool, bool), Vec<(DVec2, DVec2)>> =
         BTreeMap::new();
     for t in tris {
         let w = [t.p[0].z, t.p[1].z, t.p[2].z];
@@ -342,13 +328,13 @@ fn cut_faces(
         }
         if let [a, b] = pts[..] {
             by_object
-                .entry((t.object.0, t.trunk))
+                .entry((t.object.0, t.trunk, t.open))
                 .or_default()
                 .push((a, b));
             out.cut_triangles += 1;
         }
     }
-    for ((id, trunk), segs) in by_object {
+    for ((id, trunk, open), segs) in by_object {
         let object = ObjectId(id);
         let mut rings: Vec<Vec<DVec2>> = Vec::new();
         for c in cut::chain(&segs) {
@@ -368,8 +354,9 @@ fn cut_faces(
             }
         }
         let rings = cut::orient(rings);
-        // A surface model that is not a closed solid has no inside: its cut is an outline.
-        if !rings.is_empty() && open_of(object) {
+        // The faces of a surface model that do not close a volume have no inside: the cut is an
+        // outline. Each part of an instance is judged by its own faces.
+        if !rings.is_empty() && open {
             for r in rings {
                 let mut points = r;
                 points.push(points[0]);

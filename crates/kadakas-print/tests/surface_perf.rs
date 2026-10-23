@@ -435,3 +435,10 @@ fn hidden_line_breakdown() {
     breakdown("terrain 100k", terrain(223), StandardView::Top);
     breakdown("ball 100k", sphere(160, 313), StandardView::Front);
 }
+
+#[test]
+#[ignore = "a measurement"]
+fn ball_of_20k_faces() {
+    let m = time("build the ball", || sphere(100, 100));
+    report("ball", m, DVec2::new(0.0, 0.0), 100.0, 0.0);
+}

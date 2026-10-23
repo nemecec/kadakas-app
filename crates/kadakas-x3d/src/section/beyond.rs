@@ -35,6 +35,8 @@ pub struct Tri {
     pub plant: bool,
     /// The trunk part of a plant: it is cut like a solid, the canopy only gives a silhouette.
     pub trunk: bool,
+    /// A triangle of a surface model whose faces do not close a volume: the cut is a line.
+    pub open: bool,
 }
 
 /// A line of the scene in section space.
@@ -242,7 +244,9 @@ fn distance_to_segment(p: DVec2, a: DVec2, b: DVec2) -> f64 {
 /// cut faces that hide what is behind them. `tol` is the distance in mm below which lines count as
 /// lying on the cut outline. `cut_is_drawn` is true when the caller draws the cut (a section); the
 /// lines on the plane and on the far clip are then left out. In an elevation nothing else draws them.
-/// `soft` are the soft and hidden edges of surface models: they are not drawn as creases.
+/// `soft` are the soft and hidden edges of surface models: they are not drawn as creases. `thinned`
+/// gets the number of objects that were drawn by their mesh edges only (too many lines).
+#[allow(clippy::too_many_arguments)]
 pub fn edges(
     tris: &[Tri],
     segs: &[Seg],
@@ -251,6 +255,7 @@ pub fn edges(
     covers: &[&CutFace],
     tol: f64,
     cut_is_drawn: bool,
+    thinned: &mut usize,
 ) -> Vec<Edge> {
     // Triangles at or behind the plane, and not wholly beyond the far clip. Section space is
     // (u, v, w); the scene is (u, w, v), which keeps the winding.
@@ -377,6 +382,7 @@ pub fn edges(
             mesh_edges: true,
         },
     );
+    *thinned = lines.thinned_objects;
     let px = f64::from(IMAGE);
     let to_uv = |p: [f32; 2]| {
         DVec2::new(

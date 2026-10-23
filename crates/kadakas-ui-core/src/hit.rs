@@ -166,8 +166,9 @@ pub fn shape_hit(shape: &Shape, filled: bool, p: DVec2, tol: f64) -> bool {
     }
 }
 
-/// Visible objects on unlocked layers can be picked.
-fn pickable(doc: &Document, o: &Object) -> bool {
+/// Visible objects on unlocked layers can be picked. A grey layer or class, and a locked layer,
+/// cannot. The plan and the 3D view use the same rule.
+pub fn pickable(doc: &Document, o: &Object) -> bool {
     doc.is_pickable(o) && doc.layer(o.layer).is_some_and(|l| !l.locked)
 }
 

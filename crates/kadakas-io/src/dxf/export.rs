@@ -195,6 +195,8 @@ struct Ctx<'a> {
     native_annotations: bool,
     site_mesh: crate::options::SiteMesh,
     mesh_entity: crate::options::MeshEntity,
+    /// Only the visible objects (and parts of instances) are exported.
+    visible_only: bool,
     /// Shift (mm) that was added to the shapes for real-world coordinates. Derived data (contours) needs it too.
     shift: DVec2,
     /// The site models, for the base of massing models.
@@ -289,6 +291,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         native_annotations: opts.native_annotations,
         site_mesh: opts.site_mesh,
         mesh_entity: opts.mesh_entity,
+        visible_only: opts.visible_only,
         shift: DVec2::ZERO,
         site_cache: &site_cache,
         terrain: kadakas_site::SiteTerrain::new(&site_cache, 0, doc),
@@ -1242,16 +1245,20 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 return false;
             };
             let mut any = false;
-            for leaf in leaves
-                .iter()
-                .filter(|l| kadakas_core::component::leaf_shown(cx.doc, l))
-            {
+            for leaf in &leaves {
+                // A part on a class that is switched off is left out when the export is of the
+                // visible objects only. Otherwise it is written with the flag of an invisible
+                // entity, as an object on a hidden layer is: nothing is dropped silently.
+                let shown = kadakas_core::component::leaf_shown(cx.doc, leaf);
+                if !shown && cx.visible_only {
+                    continue;
+                }
                 any |= surface_model_mesh(
                     w,
                     cx,
                     o,
                     layer,
-                    hidden,
+                    hidden || !shown,
                     leaf.model,
                     &(inst * leaf.transform),
                 );

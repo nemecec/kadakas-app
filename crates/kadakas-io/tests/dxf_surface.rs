@@ -420,7 +420,24 @@ fn an_instance_of_a_component_is_written_as_a_mesh_through_its_transform() {
         .find(|c| c.id == class)
         .unwrap()
         .visible = false;
+    // Everything is written, as an object on a hidden layer is: the part is flagged invisible and
+    // nothing is dropped without a word.
     let (text, report) = export(&doc, MeshEntity::Face3d);
+    assert_eq!(count(&text, "3DFACE"), 12);
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert!(values(&text, "60").contains(&1.0), "flagged invisible");
+    // Only the visible objects: the part is left out, and the instance says why it gave nothing.
+    let r = DxfFormat
+        .export(
+            &doc,
+            &ExportOptions {
+                mesh_entity: MeshEntity::Face3d,
+                visible_only: true,
+                ..ExportOptions::default()
+            },
+        )
+        .unwrap();
+    let text = String::from_utf8(r.bytes).unwrap();
     assert_eq!(count(&text, "3DFACE"), 0);
-    assert!(report.skipped.iter().any(|s| s.entity == "component"));
+    assert!(r.report.skipped.iter().any(|s| s.entity == "component"));
 }

@@ -540,7 +540,9 @@ fn shape_core(
                 out.push(Prim::Image(img));
             }
         }
-        Shape::SurfaceModel(_) | Shape::Component { .. } => surface_prims(doc, obj, &st, xf, out),
+        Shape::SurfaceModel(_) | Shape::Component { .. } => {
+            surface_prims(doc, obj, &st, xf, tables, out)
+        }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh.
             let (lo, hi) = m.bounds3();
@@ -670,13 +672,42 @@ fn attrs_set(obj: &Object) -> bool {
     obj.attrs.fill.is_some() || obj.attrs.pen.is_some()
 }
 
+/// The note of a page for a model that is drawn as an outline or a box, because it is big.
+pub fn simplified_note(obj: &Object, d: &kadakas_core::surface::plan::PlanDrawing) -> String {
+    use kadakas_core::surface::plan::Detail;
+    format!(
+        "Object {} is drawn as {}: {} faces and {} edges, the limits are {} faces and {} edges",
+        obj.id,
+        if d.detail == Detail::Box {
+            "its box"
+        } else {
+            "its outline"
+        },
+        d.faces_total,
+        d.edges_total,
+        d.limits.faces,
+        d.limits.edges
+    )
+}
+
 /// The plan of a surface model or an instance (MOD-13): the faces in the colours of their
 /// materials and the edges that are shown, the same as the screen and the SVG
 /// (`surface::plan`). An instance that cannot be drawn gets a cross in the warning colour.
-fn surface_prims(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<Prim>) {
-    use kadakas_core::surface::plan::{Outcome, PlanItem, plan_of_object};
-    match plan_of_object(doc, obj) {
+fn surface_prims(
+    doc: &Document,
+    obj: &Object,
+    st: &Style,
+    xf: &Xf,
+    tables: &crate::table::Tables,
+    out: &mut Vec<Prim>,
+) {
+    use kadakas_core::surface::plan::{Outcome, PlanItem, plan_of_object_with};
+    // The parts of an instance follow the classes that the viewport shows.
+    match plan_of_object_with(doc, obj, &|c| tables.class_shown(c)) {
         Some(Outcome::Drawing(d)) => {
+            if d.simplified() {
+                tables.note(simplified_note(obj, &d));
+            }
             // The edges that follow each other are one path.
             let mut run: Vec<PSeg> = Vec::new();
             let flush = |run: &mut Vec<PSeg>, out: &mut Vec<Prim>| {

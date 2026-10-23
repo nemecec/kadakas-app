@@ -571,6 +571,12 @@ fn crowded_objects(
     out
 }
 
+/// How many objects a hidden-line pass of this scene draws by their mesh edges only
+/// (`HiddenLines::thinned_objects`), without making the pass.
+pub fn crowded_count(scene: &Scene) -> usize {
+    crowded_objects(scene, MAX_OBJECT_LINES, MAX_LINES).len()
+}
+
 /// Computes the visible edges of the scene.
 pub fn hidden_lines(
     scene: &Scene,
@@ -1315,6 +1321,7 @@ mod tests {
         cam.target = Vec3::new(650.0, 650.0, 0.0);
         let hl = hidden_lines(&scene, &cam, 600, 600, &HlOptions::default());
         assert_eq!(hl.thinned_objects, 1);
+        assert_eq!(crowded_count(&scene), 1, "the same count without the pass");
         // The border of the flat grid is what the mesh gives: 4 sides of 130 edges.
         assert_eq!(hl.visible_edge_count(), 4 * 130);
         // A grid that fits keeps every edge: 3 n^2 + 2 n.
@@ -1325,6 +1332,7 @@ mod tests {
         cam.target = Vec3::new(100.0, 100.0, 0.0);
         let hl = hidden_lines(&scene, &cam, 600, 600, &HlOptions::default());
         assert_eq!(hl.thinned_objects, 0);
+        assert_eq!(crowded_count(&scene), 0);
         assert_eq!(hl.visible_edge_count(), 3 * 20 * 20 + 2 * 20);
     }
 

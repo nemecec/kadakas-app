@@ -193,35 +193,25 @@ pub const ERROR_IDS: &[&str] = &[
 /// The id of the first model in a fresh session with sequential ids, for the examples.
 const EXAMPLE_MODEL: &str = "00000000-0000-0000-0000-000000000002";
 
-/// Most objects of one answer that get the closed-solid check in their `surface` summary
-/// (`objects.list`). The check of a model takes up to a second at the limits of a model, so a long
-/// list does not run it for every object.
-pub(crate) const SUMMARY_CHECKS: usize = 100;
-
 /// What `objects.list` and `objects.get` tell about a surface model, a group of them and a
 /// component instance (MOD-13): the object gets a field `surface` with the counts, the
-/// closed-solid state with volume and area, the box and the materials (the numbers of Object Info).
-/// With `elide` the geometry of a surface model is left out of the answer (a list of many models
-/// would be huge); `mesh.vertices`, `mesh.edges`, `mesh.faces` and `objects.get` read it.
+/// closed-solid state with volume and area, the box and the materials (the numbers of Object Info),
+/// and `plan`, which says whether the plan draws it as less than it is. With `elide` the geometry of
+/// a surface model is left out of the answer (a list of many models would be huge);
+/// `mesh.vertices`, `mesh.edges`, `mesh.faces` and `objects.get` read it. `budget` is what is left
+/// of the faces that the answer may check for a closed solid: models that were checked before and
+/// have not changed cost nothing.
 pub(crate) fn annotate_object(
     doc: &Document,
     o: &kadakas_core::model::Object,
     v: &mut Value,
     elide: bool,
-    checks: &mut usize,
+    budget: &mut kadakas_core::surface::info::Budget,
 ) {
-    use kadakas_core::surface::info::{Check, SolidState};
-    let check = if *checks > 0 {
-        Check::Auto
-    } else {
-        Check::Never
-    };
-    let Some(i) = kadakas_core::surface::info::of_object(doc, o, check) else {
+    use kadakas_core::surface::info::SolidState;
+    let Some(i) = kadakas_core::surface::info::of_object_with(doc, o, budget) else {
         return;
     };
-    if check == Check::Auto && i.faces > 0 {
-        *checks = checks.saturating_sub(1);
-    }
     let solid = match &i.solid {
         SolidState::Empty => json!({"state": "empty"}),
         SolidState::Unchecked => json!({"state": "unchecked"}),
@@ -229,6 +219,9 @@ pub(crate) fn annotate_object(
             json!({"state": "closed", "solids": solids, "volume_mm3": volume})
         }
         SolidState::Open { open_edges } => json!({"state": "open", "open_edges": open_edges}),
+        SolidState::Crossing { crossings } => json!({"state": "crossing", "crossings": crossings}),
+        SolidState::Inward => json!({"state": "inward"}),
+        SolidState::Flat => json!({"state": "flat"}),
     };
     let bounds = i.bounds.map(|(lo, hi)| {
         json!({"min": lo, "max": hi, "size": [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]})
@@ -248,7 +241,13 @@ pub(crate) fn annotate_object(
         "materials": i.materials.iter().map(|m| json!({"name": m.name, "faces": m.faces})).collect::<Vec<_>>(),
         "unpainted_faces": i.unpainted_faces,
     });
-    if elide && let Some(Value::Object(shape)) = v.get_mut("shape") {
+    if let Some(p) = plan_note(doc, o) {
+        v["surface"]["plan"] = p;
+    }
+    if elide
+        && matches!(o.shape, Shape::SurfaceModel(_))
+        && let Some(Value::Object(shape)) = v.get_mut("shape")
+    {
         shape.retain(|k, _| matches!(k.as_str(), "kind" | "name" | "transform" | "v"));
         shape.insert(
             "elided".into(),
@@ -257,12 +256,74 @@ pub(crate) fn annotate_object(
     }
 }
 
+/// How the plan draws an object that it simplifies (a big model): `{detail, faces, edges,
+/// limit_faces, limit_edges, limit_outline, note}`. `None` for the full drawing. Nothing is
+/// simplified silently: `render.svg` says it in `notes` and the app in Object Info and on the canvas.
+pub(crate) fn plan_note(doc: &Document, o: &kadakas_core::model::Object) -> Option<Value> {
+    use kadakas_core::surface::plan::{self, Detail, Limits};
+    let ids = match o.shape {
+        Shape::Group { .. } => doc.leaves(&[o.id]),
+        Shape::SurfaceModel(_) | Shape::Component { .. } => vec![o.id],
+        _ => return None,
+    };
+    let lim = Limits::DEFAULT;
+    for id in ids {
+        let Some(Ok(parts)) = doc.object(id).and_then(|m| plan::parts_of(doc, m)) else {
+            continue;
+        };
+        let (detail, faces, edges) = plan::detail_of(&parts);
+        let (name, note) = match detail {
+            Detail::Full => continue,
+            Detail::Outline if faces > lim.faces => (
+                "outline",
+                format!("Drawn as outline: {faces} faces, limit {}", lim.faces),
+            ),
+            Detail::Outline => (
+                "outline",
+                format!("Drawn as outline: {edges} edges, limit {}", lim.edges),
+            ),
+            Detail::Box => (
+                "box",
+                format!(
+                    "Drawn as box: the outline has more than {} lines",
+                    lim.outline
+                ),
+            ),
+        };
+        return Some(json!({
+            "detail": name,
+            "faces": faces,
+            "edges": edges,
+            "limit_faces": lim.faces,
+            "limit_edges": lim.edges,
+            "limit_outline": lim.outline,
+            "note": note,
+        }));
+    }
+    None
+}
+
+/// The notes of the plan of a document: one for each surface model, group and instance that is
+/// drawn as less than it is, with its id.
+pub(crate) fn plan_notes(doc: &Document) -> Vec<Value> {
+    doc.objects
+        .values()
+        .filter(|o| doc.is_visible(o))
+        .filter(|o| matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }))
+        .filter_map(|o| {
+            let mut n = plan_note(doc, o)?;
+            n["object"] = json!(o.id);
+            Some(n)
+        })
+        .collect()
+}
+
 /// Extra text for `describe`.
 pub fn describe() -> Value {
     let m = EXAMPLE_MODEL;
     json!({
         "model": "A surface model (shape kind 'surface_model') is made of vertices, edges and faces. Coordinates are local, in mm, and the transform of the model places them in the drawing. Vertices, edges and faces have whole-number ids that come from one counter of the model and are never reused. Faces are planar and may have holes. Closed coplanar edges make a face, a new edge splits a face, and geometry of one model sticks together. A group or a component keeps its geometry apart.",
-        "in_the_app": "The app shows surface models, groups of them and component instances like other objects (MOD-13): in the plan with their faces in the colours of their materials and the edges that are shown (not the hidden ones and not the soft ones), in 3D and in renders, on sheets (plan, top, elevation, 3D and section viewports) and in the exports. They are selected, moved, turned, copied and deleted with the same methods as other objects (execute move_objects, rotate_objects and the others, transform_objects3d), and visibility by layer and class works. objects.list and objects.get give each of them a field surface with the counts of vertices, edges and faces, the closed-solid state with volume_mm3, area_mm2, bounds and the materials; objects.list leaves the geometry of a surface model out (shape.elided), objects.get has it. objects.query reads Kind = \"surface_model\" or Kind = \"component\". Object Info of the app shows the same numbers, and the plan of a large model is simplified: over 20,000 faces or 30,000 edges only the outline is drawn, and over 20,000 outline lines only the box. render.svg says which one in data-detail (full, outline or box). A hidden-line drawing of a model with more than 50,000 lines uses the silhouettes, creases and borders of its mesh instead of every edge.",
+        "in_the_app": "The app shows surface models, groups of them and component instances like other objects (MOD-13): in the plan with their faces in the colours of their materials and the edges that are shown (not the hidden ones and not the soft ones), in 3D and in renders, on sheets (plan, top, elevation, 3D and section viewports) and in the exports. They are selected, moved, turned, copied and deleted with the same methods as other objects (execute move_objects, rotate_objects and the others, transform_objects3d), and visibility by layer and class works. objects.list and objects.get give each of them a field surface with the counts of vertices, edges and faces, the closed-solid state with volume_mm3, area_mm2, bounds and the materials; objects.list leaves the geometry of a surface model out (shape.elided), objects.get has it. objects.query reads Kind = \"surface_model\" or Kind = \"component\". Object Info of the app shows the same numbers, and the plan of a large model is simplified: over 20,000 faces or 30,000 edges only the outline is drawn, and over 20,000 outline lines only the box. render.svg says which one in data-detail (full, outline or box). A hidden-line drawing of a model with more than 50,000 lines uses the silhouettes, creases and borders of its mesh instead of every edge, and render.png says so in notes. Nothing is simplified without a word: surface.plan in objects.get and objects.list, and notes and simplified in render.svg.",
         "scope": "The mesh methods read and edit the surface model objects of the document, also the ones inside groups. Component instances show their definition in renders, but their geometry is not listed by the reads: edit the definition with mesh.explode or work on the model before mesh.make_component. mesh.summary counts the instances (component_instances). mesh.near and mesh.pick leave out the models on a hidden layer or class unless you name the model with id.",
         "workflow": "Make a model with mesh.create. Draw edges with mesh.add_edges and read the ids of the new faces from the answer. Pull a face with mesh.push_pull. Check with mesh.solid_report. Look at it with mesh.render. Use mesh.batch for a long run of edits that must succeed together.",
         "results": "An edit answers {op, id, counts: {vertices, edges, faces}, revision, created: {vertices, edges, faces}, removed: {vertices, edges, faces}, truncated?, notes?}. The lists in created and removed have at most 1000 ids each. Notes tell what the edit changed that you did not ask for, such as a material that a merged face dropped. model_gone is true when the edit moved the whole model away (mesh.make_group of every face), so there are no counts.",

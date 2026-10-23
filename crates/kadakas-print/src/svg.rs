@@ -46,6 +46,9 @@ pub fn page_svg(page: &Page) -> String {
         page.size.x, page.size.y, page.size.x, page.size.y
     );
     let _ = writeln!(s, "<title>{}</title>", esc(&page.title));
+    if !page.notes.is_empty() {
+        let _ = writeln!(s, "<desc>{}</desc>", esc(&page.notes.join("\n")));
+    }
     let _ = writeln!(
         s,
         r#"<rect width="{}" height="{}" fill="white"/>"#,

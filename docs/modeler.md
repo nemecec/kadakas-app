@@ -618,64 +618,81 @@ The plan is the view from above.
 
 - A face that looks up, or down, is drawn as its polygon with its holes. It is filled with the color of its material. A face without a material takes the fill of the object (or of its class). If there is none, the front is `SURFACE_FRONT` and the back is `SURFACE_BACK`, the same colors as in 3D. A face is seen from its back when its front looks down.
 - A vertical face has no area in the plan and is left out. A vertical edge is a point and is left out.
-- The faces are drawn from the lowest to the highest. Each face is followed by the edges that it is the highest face of. So a roof covers what is under it, and the edges of a wall show at the top and at the bottom.
-- A hidden face, a hidden edge and a soft edge are not drawn. A loose edge (no face) is drawn last.
-- The part of an instance whose class is switched off is not drawn, not shown in 3D and not snapped to.
+- The faces are drawn from the lowest to the highest. Two faces whose footprints overlap are put in the order of their height at a point of the overlap, so a slope runs over a plate where it is above the plate and under it where it is below. A face is not cut, so where the heights cross inside the overlap, the point decides. That is a known limit. The whole plan of 20,000 faces costs 29 ms for a terrain and 41 ms for a ball, with the order in it (`docs/modeler-limits.md`, D1). A cycle is broken at the face that is lowest by its average height.
+- Each face is followed by the edges that it is the highest face of. An edge that no face seen from above uses (a loose edge, the edge of a wall) is put in the order of its height: it comes before the first face whose average height is above it. So a roof over a wall covers the edges of the wall, and the top edge of a wall that stands out above the roof is drawn over the roof.
+- A hidden face, a hidden edge and a soft edge are not drawn.
+- The part of an instance whose class is switched off is not drawn, not shown in 3D and not snapped to. Which classes are off is the view of the thing that draws: the design view of the document on the screen, the classes of the viewport on a sheet, and for an export the option `visible_only` (a part on a class that is off is left out of the DXF with it, else it is written with the flag of an invisible entity).
 - An instance that cannot be expanded (a missing or cyclic definition) is a cross in the warning color at its origin, with the reason in the SVG (`data-problem`).
 
-A big model is simplified. The limits are `MAX_FACES` (20,000), `MAX_EDGES` (30,000) and `MAX_OUTLINE_EDGES` (20,000) of `surface::plan`. A model over the first two is drawn as its outline: the border, the silhouette (an edge where a face that looks up meets one that looks down or is vertical) and the loose edges, with no fills. If the outline is longer than 20,000 lines, the box is drawn. The SVG says which one in `data-detail` (`full`, `outline` or `box`) and gives `data-faces` and `data-edges`. A triangulated mesh has 1.5 edges for each face, so the edge limit binds first: a terrain of 20,000 faces already has 30,200 edges. The numbers that these limits come from are in `docs/modeler-limits.md`, section D.
+A big model is simplified. The limits are `MAX_FACES` (20,000), `MAX_EDGES` (30,000) and `MAX_OUTLINE_EDGES` (20,000) of `surface::plan`. A model over the first two is drawn as its outline: the border, the silhouette (an edge where a face that looks up meets one that looks down or is vertical) and the loose edges, with no fills. If the outline is longer than 20,000 lines, the box is drawn. A triangulated mesh has 1.5 edges for each face, so the edge limit binds first: a terrain of 20,000 faces already has 30,200 edges. The numbers that these limits come from are in `docs/modeler-limits.md`, section D.
 
-On the screen the plan of an object is made once for each revision of the document (`surface_draw.rs`) and becomes one mesh of the painter: the faces as triangles and the edges as thin quads, in the order of the drawing. What is outside the window is not added. A ghost during a drag is the same drawing at an offset.
+Nothing is simplified without a word. The same text is in every place that the person looks at:
+
+- On the canvas: a note at the lower left corner of the object, like the notes of a pattern, for example "Drawn as outline: 34,000 faces, limit 20,000".
+- In Object Info: the row Plan with the same text.
+- In the SVG of the plan: `data-detail` (`full`, `outline` or `box`), `data-faces` and `data-edges`.
+- On a sheet: `Page::notes`. The SVG writes them in `<desc>` and the PDF in the Subject of the document info, with the number of the page.
+- In the API: `objects.get` and `objects.list` have `surface.plan` (`detail`, the counts, the limits and the `note`), and `render.svg` has `notes` and `simplified`. `render.png` in a hidden-line mode has `notes` when it left edges out.
+- In a hidden-line viewport and in the edges beyond a section: a note of the page, "N object(s) with more than 50000 edges are drawn by their outline, creases and borders only".
+
+On the screen the plan of an object is made once for each revision of the document (`surface_draw.rs`), with the faces already cut into triangles, and a frame only moves them to the screen. The cache keeps at most 8,192 plans. When it is full the plans of older revisions go first, then the quarter that was used least recently. What is outside the window is not added. A frame has a budget of 400,000 mesh vertices. An object that would pass it is drawn as its box, with the note "Drawn as box: the frame budget is used up". A ghost during a drag is the same drawing at an offset, and a ghost of a compare is not kept.
 
 ### 3D view, renders and the look
 
-The 3D view, the renders and the modeler build the scene with the same function, so the look is the same: the front and the back colors, the materials, the render styles, the smooth shading across smooth edges and the edge lines. An instance draws the parts of its definition. A part with a class that is switched off is left out, and a part gives its own fill (or the fill of its class) to its faces.
+The 3D view, the renders and the modeler build the scene with the same function, so the look is the same: the front and the back colors, the materials, the render styles, the smooth shading across smooth edges and the edge lines. An instance draws the parts of its definition. A part with a class that is switched off is left out, and a part gives its own fill (or the fill of its class) to its faces. In a viewport the classes are those of the viewport.
 
 The soft and the hidden edges are kept in `Scene::soft_edges`. They are not lines. A pass that finds creases in the mesh (the hidden-line passes and the GPU hidden-line mode) does not make a crease of them, so the sides of a softened cylinder are not drawn. A silhouette is still drawn, so the outline of the cylinder stays.
 
 ### Select, move, snap
 
-- A click picks the footprint: inside a face that is seen from above, or within the pick distance of an edge that is shown. A model that is an L is not picked in the notch of the L. A window and a crossing use the box of the object. A hidden class, a grey class and a locked layer cannot be picked.
+- A click picks the footprint: inside a face that is seen from above, or within the pick distance of an edge that is shown. A model that is an L is not picked in the notch of the L. A model that the plan draws as an outline is picked in all its footprint. A window and a crossing use the box of the object.
+- A hidden class, a grey class and a locked layer cannot be picked. This is the rule `kadakas_ui_core::hit::pickable`. The plan and the 3D view use it both. A click in the 3D view on a thing that cannot be picked selects nothing.
 - A click in the 3D view picks the object under the pointer. A member of a group selects the group, as in the plan, unless you are inside the group.
 - Move, Rotate, copy and delete are the commands of any object (`move_objects`, `rotate_objects`, `copy_objects`, `delete_objects`, `transform_objects`) and one undo step each. A model changes its `transform`. An instance changes its `transform`. A group moves as one. A copy of an instance shares the definition.
-- The snap finds the vertices (endpoint), the middles of the edges that are shown (midpoint) and the centers of the faces that are seen from above (center). An edge snaps as an edge. Hidden and soft edges give nothing. Only what is near the pointer is made.
+- The snap finds the vertices (endpoint), the middles of the edges that are shown (midpoint) and the centers of the faces that are seen from above (center). An edge snaps as an edge. Hidden and soft edges give nothing. Only what is near the pointer is made, and no more than 20,000 edges and 20,000 centers of one model. A model that the plan draws as an outline or a box offers the points of that drawing only, so the pointer is never offered a vertex that is not on the screen.
 
 ### Object Info
 
-The palette shows, for a surface model, a group of them and an instance: the kind, the name of the model, the numbers of models (more than one), vertices, edges and faces, the solid state, the volume and the area, the size and the lowest and the highest corner, the hidden faces and edges, the soft edges, and the materials with the number of faces of each. The numbers come from `kadakas_core::surface::info`. They are in the units of the person and in the drawing: the transform of a model scales the volume and the area. The solid state is one of `Closed solid` (every shell is a solid and no edge is loose), `Not closed` (with the number of open edges), `No faces` and `Not checked`. The check of a model with more than 20,000 faces costs up to 3 s, so the palette does not run it by itself. It shows a button, Check Solid.
+The palette shows, for a surface model, a group of them and an instance: the kind, the name of the model, the numbers of models (more than one), vertices, edges and faces, the solid state, the volume and the area, the size and the lowest and the highest corner, the hidden faces and edges, the soft edges, the Plan row when the plan simplifies the model, and the materials with the number of faces of each (a material on both sides of a face counts the face once). The numbers come from `kadakas_core::surface::info`. They are in the units of the person and in the drawing: the transform of a model scales the volume and the area. The volume of a group is the sum of the volumes of its solids, so solids that overlap count twice.
 
-The fields are read only. A line says that the geometry is edited in the 3D modeler. The button "Open in the 3D Modeler" is shown when the program `kadakas-modeler` is next to the app. The modeler opens the saved file, so the status line asks for a save first when the drawing is new or has changes. If a modeler runs, the file goes to it as an open request, as in the other direction (`kadakas_update::launch::open_in_sibling`).
+The solid state is one of `Closed solid` (every shell is a solid and no edge is loose), `Not closed` (with the number of open edges), `Faces cross each other`, `Closed, but the faces look inward`, `Closed, but it holds no volume`, `No faces` and `Not checked`. The check takes up to 3 s for a model at the limits (`docs/modeler-limits.md`, D1), so it has a budget. One answer checks at most 20,000 faces in all (a list of objects 60,000), and the models that do not fit are `Not checked`. The palette then shows a button, Check Solid. The verdict is kept for the content of the model (its vertices, edges and faces), not for the revision of the document. So an edit of something else does not check the model again, and a copy of the model costs nothing.
+
+The fields are read only. A line says that the geometry is edited in the 3D modeler. The button "Open in the 3D Modeler" is shown when the program `kadakas-modeler` is next to the app. The modeler opens the saved file, so the status line asks for a save first when the drawing is new or has changes. The path is made whole first (`std::path::absolute`), because the modeler has a working folder of its own. If a modeler runs, the file goes to it as an open request, as in the other direction (`kadakas_update::launch::open_in_sibling`).
 
 ### Sheets, hidden-line output and sections
 
-- A plan viewport draws the plan above, with the colors and the pens of the viewport. A class or a layer that the viewport hides hides the model.
-- A 3D viewport (top, elevation, isometric) draws the scene. In a hidden-line mode the soft edges are not creases. An object with triangles and more than 50,000 lines (`hlr::MAX_OBJECT_LINES`) is drawn by the silhouettes, the creases and the borders of its mesh, not by every edge. The line list of a pass is held to 150,000 lines (`hlr::MAX_LINES`) the same way. `HiddenLines::thinned_objects` says how many objects it concerned.
-- A section cuts a closed solid to a ring and fills it with the poche, with the outline of the cut. A surface that is not a closed solid is cut to a line and is not filled. A model with more than 20,000 faces is taken as closed when the cut closes, because the check takes about a second. The edges beyond the cut are the edges of the model that are shown, with hidden parts removed. Soft edges are left out.
-- PDF, SVG and PNG of a sheet carry all of it. DXF export of the model writes a surface model as one 3D mesh and, now, an instance as one mesh for each part, through the transform of the instance.
+- A plan viewport draws the plan above, with the colors and the pens of the viewport. A class or a layer that the viewport hides hides the model, and the parts of an instance follow the classes of the viewport.
+- A 3D viewport (top, elevation, isometric) draws the scene. In a hidden-line mode the soft edges are not creases. An object with triangles and more than 50,000 lines (`hlr::MAX_OBJECT_LINES`) is drawn by the silhouettes, the creases and the borders of its mesh, not by every edge. The line list of a pass is held to 150,000 lines (`hlr::MAX_LINES`) the same way. `HiddenLines::thinned_objects` and `SectionDrawing::thinned_objects` say how many objects it concerned, and the page says it.
+- A section cuts the faces of a model that close a volume to a ring and fills it with the poche, with the outline of the cut. The test is cheap and is made for every model, whatever its size: every edge of the faces that are not hidden is used twice, once in each direction (`surface::info::is_watertight`). The faces of a model that fail it are cut to a line and are not filled, also when the ring closes (a box without a wall that is parallel to the cut). The scene marks the triangles of such a model (`Scene::open_tris`), so each part of an instance is cut by its own state: a closed box and an open box in one instance give a filled ring and a line. The edges beyond the cut are the edges of the model that are shown, with hidden parts removed. Soft edges are left out.
+- PDF, SVG and PNG of a sheet carry all of it. DXF export of the model writes a surface model as one 3D mesh and an instance as one mesh for each part, through the transform of the instance.
 
 ### Agent API
 
-`objects.list` and `objects.get` give every surface model, group of them and instance the field `surface`: the counts, `solid` (`closed` with `volume_mm3`, `open` with `open_edges`, `unchecked` or `empty`), `area_mm2`, `bounds`, the materials and `unpainted_faces`. The list leaves the geometry of a surface model out (`shape.elided`). `objects.get` has it. The list checks at most 100 objects for a closed solid. `describe` has the text in `mesh.in_the_app`.
+`objects.list` and `objects.get` give every surface model, group of them and instance the field `surface`: the counts, `solid` (`closed` with `volume_mm3`, `open` with `open_edges`, `crossing`, `inward`, `flat`, `unchecked` or `empty`), `area_mm2`, `bounds`, the materials, `unpainted_faces` and, when the plan simplifies it, `plan`. The list leaves the geometry of a surface model out (`shape.elided`) and nothing else: an instance keeps its `symbol` and a group its shape. `objects.get` has the geometry. A list checks at most 60,000 faces for a closed solid in all, and a model that was checked before and has not changed costs nothing. `describe` has the text in `mesh.in_the_app`.
 
 ### Tests
 
 | What | Where |
 |---|---|
-| The plan: faces, colors, order, hidden and soft, holes, mirror, the limits, picking, snapping, the numbers of Object Info | `crates/kadakas-core/src/surface/tests_plan.rs` |
-| SVG, snapping, visibility, move, turn, copy, delete and undo of models, instances and groups, the 3D scene | `crates/kadakas-core/tests/surface_plan.rs` |
+| The plan: faces, colors, order of overlapping faces, wall edges under a roof, hidden and soft, holes, mirror, the limits, picking, snapping (also of a big model), the numbers and states of Object Info, the budget and the cache of the solid check | `crates/kadakas-core/src/surface/tests_plan.rs` |
+| SVG, snapping, visibility, the view of the classes, nested and turned instances, move, turn, copy, delete and undo of models, instances and groups, the 3D scene | `crates/kadakas-core/tests/surface_plan.rs` |
 | Select tool, footprint, window, classes, snap | `crates/kadakas-ui-core/tests/surface_objects.rs` |
-| The canvas: the colors at points of the mesh, soft edges, ghosts, cache, outline, broken instance | `crates/kadakas-app/src/surface_draw.rs` |
-| Object Info: rows, panel, the check button, Open in the 3D Modeler | `crates/kadakas-app/src/surface_ui.rs` |
-| Sheets: plan viewport, material, hidden class, instance, section area and poche, open surface, soft edges in hidden line, PDF, SVG and PNG | `crates/kadakas-print/tests/surface_sheets.rs` |
+| The canvas: the colors at points of the mesh, soft edges, ghosts, the cache and its eviction, outline and its note, the budget of a frame, broken instance | `crates/kadakas-app/src/surface_draw.rs` |
+| Object Info: rows, states, the Plan row, the panel, the check button, Open in the 3D Modeler (also a relative path), Estonian notes | `crates/kadakas-app/src/surface_ui.rs` |
+| Picking in the 3D view: groups, instances, grey and locked | `crates/kadakas-app/src/canvas3d.rs` |
+| Sheets: plan viewport, material, hidden class and the classes of a viewport (plan, 3D and section), instance, section area, poche, a hole through a box, a missing wall, the parts of an instance, soft edges in hidden line, the notes on the page, in the SVG and in the PDF | `crates/kadakas-print/tests/surface_sheets.rs` |
 | The thinning of lines in a hidden-line pass | `crates/kadakas-render/src/hlr.rs` (tests) |
-| The API | `crates/kadakas-api/tests/mesh_app.rs`, `python/tests/test_mesh.py` |
-| Timing of the drawing at 100,000 faces | `crates/kadakas-print/tests/surface_perf.rs`, `time_of_the_plan_on_the_screen` in `surface_draw.rs` (both `--ignored`) |
+| DXF of instances, both modes of `visible_only` | `crates/kadakas-io/tests/dxf_surface.rs` |
+| The API: the list, the symbol of an instance, the notes, the budget | `crates/kadakas-api/tests/mesh_app.rs`, `python/tests/test_mesh.py` |
+| Timing of the drawing at 100,000 faces and of 5,000 instances | `crates/kadakas-print/tests/surface_perf.rs`, `time_of_the_plan_on_the_screen` and `time_of_5000_instances` in `surface_draw.rs` (all `--ignored`) |
 
 ### Not done
 
 - A dashed or ghosted display of hidden geometry in the plan.
-- A section does not check a model of more than 20,000 faces for being closed. It takes a ring that closes as a solid.
+- A face is not cut where heights cross inside an overlap of two faces of the plan (see "The plan").
+- A section does not look at a hole in a hidden face: hidden faces make a model open, as in the scene.
 - A part of an instance on a grey class is drawn and snapped to as if the class were visible.
+- A plan of a big model is the outline at every zoom. It does not show more when you zoom in.
 - Editing geometry in the app. The modeler does it.
 
 ## Clean room

@@ -188,6 +188,7 @@ pub fn compose_page_limited(
             title
         },
         prims,
+        notes: tables.notes(),
     })
 }
 
@@ -217,7 +218,10 @@ pub fn viewport_prims(
         } else if vp.is_plan() {
             plan_view(doc, vp, counts, tables, out);
         } else if let Some(style) = viewport_style(doc, vp).filter(|s| s.mode.is_hidden_line()) {
-            hidden_line_prims(doc, vp, &style, MAX_HL_SEGMENTS, out);
+            let thinned = hidden_line_prims_noted(doc, vp, &style, MAX_HL_SEGMENTS, out);
+            if thinned > 0 {
+                tables.note(thinned_note(&vp.name, thinned));
+            }
         } else if let Some(img) = raster_view(doc, vp, budget) {
             out.push(Prim::Image(img));
         }
@@ -245,6 +249,14 @@ fn plan_view(
 ) {
     let xf = Xf::of(vp);
     let (lo, hi) = vp.model_window();
+    // The parts of a component instance follow the classes that this viewport hides.
+    tables.set_hidden_classes(
+        doc.classes
+            .iter()
+            .filter(|c| !vp.class_visible(doc, c.id))
+            .map(|c| c.id)
+            .collect(),
+    );
     // Map underlays go below the vector objects.
     let under = |o: &&kadakas_core::model::Object| matches!(o.shape, Shape::Underlay(_));
     let shown = || doc.objects.values().filter(|o| vp.shows(doc, o));
@@ -277,7 +289,11 @@ pub fn viewport_document(doc: &Document, vp: &Viewport) -> Document {
         .classes
         .iter()
         .cloned()
-        .map(|c| Class { visible: true, ..c })
+        .map(|c| Class {
+            // The viewport decides which classes show. The parts of a component instance follow.
+            visible: vp.class_visible(doc, c.id),
+            ..c
+        })
         .collect();
     d.resources = doc.resources.clone();
     d.drawing.presentation = doc.drawing.presentation.clone();
@@ -411,6 +427,34 @@ pub fn hidden_line_prims(
     max_segments: usize,
     out: &mut Vec<Prim>,
 ) {
+    hidden_line_prims_noted(doc, vp, style, max_segments, out);
+}
+
+/// The note of a page for a hidden-line drawing that left out edges: the objects with more than
+/// `hlr::MAX_OBJECT_LINES` lines are drawn by the silhouettes, creases and borders of their mesh.
+pub fn thinned_note(viewport: &str, objects: usize) -> String {
+    format!(
+        "Viewport {}: {} object(s) with more than {} edges are drawn by their outline, creases and borders only (hidden-line limit, {} edges in all)",
+        if viewport.is_empty() {
+            "(unnamed)"
+        } else {
+            viewport
+        },
+        objects,
+        kadakas_render::hlr::MAX_OBJECT_LINES,
+        kadakas_render::hlr::MAX_LINES
+    )
+}
+
+/// Like [`hidden_line_prims`]. Returns how many objects were drawn by their mesh edges only,
+/// because they have too many lines (`HiddenLines::thinned_objects`).
+pub fn hidden_line_prims_noted(
+    doc: &Document,
+    vp: &Viewport,
+    style: &RenderStyle,
+    max_segments: usize,
+    out: &mut Vec<Prim>,
+) -> usize {
     let size = vp.max - vp.min;
     // One scale for both sides, so a large viewport keeps its proportions.
     let k = HL_PX_PER_MM
@@ -423,10 +467,10 @@ pub fn hidden_line_prims(
     let d = viewport_document(doc, vp);
     let scene = viewport_scene(&d);
     let Some(cam) = viewport_camera(vp, &scene) else {
-        return;
+        return 0;
     };
     let Some(lines) = kadakas_render::styled::vector_lines(&scene, &cam, style, w, h) else {
-        return;
+        return 0;
     };
     // Image pixels (y down) to paper mm (y up).
     let to_paper = |p: [f32; 2]| {
@@ -477,6 +521,7 @@ pub fn hidden_line_prims(
         }
         budget = budget.saturating_sub(used);
     }
+    lines.thinned_objects
 }
 
 /// Border, grid reference and title block.

@@ -533,9 +533,13 @@ fn walk<'a>(
 /// True if a part of a definition is drawn: its class is not switched off. An instance draws the
 /// parts that its definition shows (MOD-13), in the plan, in 3D and on the sheets.
 pub fn leaf_shown(doc: &Document, leaf: &Leaf<'_>) -> bool {
-    leaf.class
-        .and_then(|c| doc.class(c))
-        .is_none_or(|c| c.visible)
+    leaf_shown_by(leaf, &|c| doc.class(c).is_none_or(|k| k.visible))
+}
+
+/// Like [`leaf_shown`], with another view of the classes: a viewport or an export says which
+/// classes show, and the design view of the document is not theirs.
+pub fn leaf_shown_by(leaf: &Leaf<'_>, visible: &dyn Fn(ClassId) -> bool) -> bool {
+    leaf.class.is_none_or(visible)
 }
 
 /// The colour of the faces of a part that have no material: the fill of the part, else the fill of

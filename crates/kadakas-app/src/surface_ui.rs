@@ -60,8 +60,12 @@ pub fn kind_name(shape: &Shape) -> String {
 }
 
 /// The lines of the panel for the numbers of an object, in the units of the person.
-pub fn rows(info: &SurfaceInfo, units: &Units) -> Vec<Row> {
+pub fn rows(info: &SurfaceInfo, units: &Units, plan: Option<&str>) -> Vec<Row> {
     let mut out = Vec::new();
+    // The plan shows less than the model has: say so, where the person looks at the numbers.
+    if let Some(text) = plan {
+        out.push(row(tr!("surface-ui-plan"), text.to_string()));
+    }
     if info.models > 1 {
         out.push(row(tr!("surface-ui-models"), info.models.to_string()));
     }
@@ -75,6 +79,11 @@ pub fn rows(info: &SurfaceInfo, units: &Units) -> Vec<Row> {
             SolidState::Unchecked => tr!("surface-ui-solid-unchecked"),
             SolidState::Closed { solids, .. } => tr!("surface-ui-solid-closed", count = *solids),
             SolidState::Open { open_edges } => tr!("surface-ui-solid-open", count = *open_edges),
+            SolidState::Crossing { crossings } => {
+                tr!("surface-ui-solid-crossing", count = *crossings)
+            }
+            SolidState::Inward => tr!("surface-ui-solid-inward"),
+            SolidState::Flat => tr!("surface-ui-solid-flat"),
         },
     ));
     if let SolidState::Closed { volume, .. } = &info.solid {
@@ -126,6 +135,44 @@ pub fn rows(info: &SurfaceInfo, units: &Units) -> Vec<Row> {
         ));
     }
     out
+}
+
+/// What the plan says when it draws a model as less than it is, or `None` for the full drawing.
+/// The canvas and Object Info say the same thing.
+pub fn simplified_text(d: &kadakas_core::surface::plan::PlanDrawing) -> Option<String> {
+    use kadakas_core::component::grouped;
+    use kadakas_core::surface::plan::Detail;
+    match d.detail {
+        Detail::Full => None,
+        Detail::Outline if d.faces_total > d.limits.faces => Some(tr!(
+            "surface-ui-note-outline-faces",
+            count = grouped(d.faces_total),
+            limit = grouped(d.limits.faces)
+        )),
+        Detail::Outline => Some(tr!(
+            "surface-ui-note-outline-edges",
+            count = grouped(d.edges_total),
+            limit = grouped(d.limits.edges)
+        )),
+        Detail::Box => Some(tr!(
+            "surface-ui-note-box",
+            limit = grouped(d.limits.outline)
+        )),
+    }
+}
+
+/// What the plan says about an object: the first member (the object itself, or the models of a
+/// group) that is drawn as less than it is.
+pub fn plan_text(doc: &Document, obj: &Object) -> Option<String> {
+    let ids = match obj.shape {
+        Shape::Group { .. } => doc.leaves(&[obj.id]),
+        _ => vec![obj.id],
+    };
+    ids.into_iter().find_map(|id| {
+        let o = doc.object(id)?;
+        let b = crate::surface_draw::built(doc, o, true)?;
+        simplified_text(b.drawing()?)
+    })
 }
 
 /// True for the objects that have this panel.
@@ -204,7 +251,7 @@ pub fn object_info(
     egui::Grid::new(("surface-info", obj.id.0.as_u128()))
         .num_columns(2)
         .show(ui, |ui| {
-            for r in rows(&info, &units) {
+            for r in rows(&info, &units, plan_text(doc, obj).as_deref()) {
                 ui.label(r.label);
                 ui.label(r.value);
                 ui.end_row();
@@ -234,6 +281,9 @@ pub fn open_in_modeler(
     let Some(path) = path else {
         return tr!("surface-ui-save-first");
     };
+    // The modeler is another process, with its own working folder: it needs the whole path.
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = absolute.as_path();
     if unsaved {
         return tr!("surface-ui-save-changes-first");
     }
@@ -301,7 +351,7 @@ mod tests {
         let doc = ed.doc();
         let info = info::of_object(doc, doc.object(id).unwrap(), info::Check::Auto).unwrap();
         let units = kadakas_units::current();
-        let rows = rows(&info, &units);
+        let rows = rows(&info, &units, None);
         assert_eq!(value(&rows, "Vertices"), "8");
         assert_eq!(value(&rows, "Edges"), "12");
         assert_eq!(value(&rows, "Faces"), "6");
@@ -355,7 +405,7 @@ mod tests {
         let id = add(&mut ed, m);
         let doc = ed.doc();
         let info = info::of_object(doc, doc.object(id).unwrap(), info::Check::Auto).unwrap();
-        let rows = rows(&info, &kadakas_units::current());
+        let rows = rows(&info, &kadakas_units::current(), None);
         assert_eq!(value(&rows, "Faces"), "5");
         assert_eq!(value(&rows, "Solid"), "Not closed (4 open edges)");
         assert!(rows.iter().all(|r| r.label != "Volume"));
@@ -415,7 +465,7 @@ mod tests {
         let first = numbers(doc, 1, obj, &mut st).unwrap();
         assert_eq!(first.solid, SolidState::Unchecked);
         assert_eq!(
-            value(&rows(&first, &kadakas_units::current()), "Solid"),
+            value(&rows(&first, &kadakas_units::current(), None), "Solid"),
             "Not checked (large model)"
         );
         // The same numbers come back for the same revision.
@@ -502,7 +552,7 @@ mod tests {
             kind_name(&doc.object(inst).unwrap().shape),
             "Component instance"
         );
-        let rows = rows(&i, &kadakas_units::current());
+        let rows = rows(&i, &kadakas_units::current(), None);
         assert_eq!(value(&rows, "Solid"), "Closed solid");
         // Other objects have no such panel.
         let circle = ObjectId(
@@ -527,6 +577,95 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_model_turned_in_and_a_model_drawn_as_less_than_it_is_say_so_in_the_rows() {
+        let mut ed = Editor::default();
+        let mut m = box_model();
+        let all: Vec<kadakas_core::surface::FaceId> = m.faces().map(|(f, _)| f).collect();
+        m.apply(&Edit::ReverseFaces { faces: all }).unwrap();
+        let id = add(&mut ed, m);
+        let doc = ed.doc();
+        let info = info::of_object(doc, doc.object(id).unwrap(), info::Check::Auto).unwrap();
+        let rows = rows(&info, &kadakas_units::current(), None);
+        assert_eq!(value(&rows, "Solid"), "Closed, but the faces look inward");
+        assert!(
+            rows.iter()
+                .all(|r| r.label != "Plan" && r.label != "Volume")
+        );
+        // A model that the plan draws as an outline says it in a row, the same words as the canvas.
+        let big = crate::surface_draw::tests_support::big_model();
+        let big = add(&mut ed, big);
+        let doc = ed.doc();
+        crate::area_ui::set_revision(None);
+        let text = plan_text(doc, doc.object(big).unwrap()).expect("a note");
+        assert_eq!(text, "Drawn as outline: 20,402 faces, limit 20,000");
+        let info = info::of_object(doc, doc.object(big).unwrap(), info::Check::Never).unwrap();
+        let rows = rows_with(&info, Some(&text));
+        assert_eq!(value(&rows, "Plan"), text);
+        assert_eq!(plan_text(doc, doc.object(id).unwrap()), None);
+        // The note of a group is the note of its first member that is simplified.
+        let g = ObjectId(
+            ed.execute(&Command::Group {
+                ids: vec![id, big],
+                name: None,
+            })
+            .unwrap()
+            .created[0],
+        );
+        let doc = ed.doc();
+        assert_eq!(
+            plan_text(doc, doc.object(g).unwrap()).as_deref(),
+            Some(text.as_str())
+        );
+    }
+
+    fn rows_with(info: &SurfaceInfo, plan: Option<&str>) -> Vec<Row> {
+        rows(info, &kadakas_units::current(), plan)
+    }
+
+    #[test]
+    fn the_texts_of_the_notes_are_in_estonian_too() {
+        let d = |detail, faces, edges| kadakas_core::surface::plan::PlanDrawing {
+            items: Vec::new(),
+            detail,
+            faces_total: faces,
+            edges_total: edges,
+            limits: kadakas_core::surface::plan::Limits::DEFAULT,
+        };
+        use kadakas_core::surface::plan::Detail;
+        let said = |lang: &str| {
+            kadakas_l10n::with_language(lang, || {
+                [
+                    simplified_text(&d(Detail::Outline, 34_000, 100)),
+                    simplified_text(&d(Detail::Outline, 100, 40_000)),
+                    simplified_text(&d(Detail::Box, 100, 100)),
+                    simplified_text(&d(Detail::Full, 100, 100)),
+                ]
+            })
+        };
+        let en = said("en-US");
+        assert_eq!(
+            en[0].as_deref(),
+            Some("Drawn as outline: 34,000 faces, limit 20,000")
+        );
+        assert_eq!(
+            en[1].as_deref(),
+            Some("Drawn as outline: 40,000 edges, limit 30,000")
+        );
+        assert_eq!(
+            en[2].as_deref(),
+            Some("Drawn as box: the outline has more than 20,000 lines")
+        );
+        assert_eq!(en[3], None);
+        let et = said("et");
+        assert_eq!(
+            et[0].as_deref(),
+            Some("Joonistatud kontuurina: 34,000 tahku, piir 20,000")
+        );
+        assert!(et[1].as_deref().unwrap().contains("serva"));
+        assert!(et[2].as_deref().unwrap().starts_with("Joonistatud karbina"));
     }
 
     #[cfg(unix)]
@@ -569,6 +708,23 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&opened).unwrap().trim(),
             file.to_string_lossy()
+        );
+        // A relative path is made whole first: the modeler has a working folder of its own.
+        let rel = std::path::Path::new("relative-drawing.kad");
+        assert_eq!(
+            open_in_modeler(Some(rel), false, &exe, None, ""),
+            "Opening the drawing in the 3D modeler."
+        );
+        let want = std::env::current_dir().unwrap().join(rel);
+        for _ in 0..300 {
+            if std::fs::read_to_string(&opened).is_ok_and(|t| t.trim() == want.to_string_lossy()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&opened).unwrap().trim(),
+            want.to_string_lossy()
         );
         // A modeler that cannot run.
         std::fs::write(&modeler, "not a program").unwrap();

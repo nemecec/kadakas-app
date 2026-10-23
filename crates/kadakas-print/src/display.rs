@@ -73,6 +73,9 @@ pub struct Page {
     /// "L-101 Planting plan".
     pub title: String,
     pub prims: Vec<Prim>,
+    /// Things the person should know about how the page was made: a model drawn as an outline
+    /// because it is big, hidden-line edges left out. They go to the metadata of the PDF and the SVG.
+    pub notes: Vec<String>,
 }
 
 impl PathPrim {
@@ -268,6 +271,7 @@ impl Page {
             size,
             title: format!("{} | {}", labels[0], labels[1]),
             prims,
+            notes: self.notes.iter().chain(&other.notes).cloned().collect(),
         }
     }
 }
@@ -281,6 +285,7 @@ mod beside_tests {
         Page {
             size: DVec2::new(w, h),
             title: "A".into(),
+            notes: Vec::new(),
             prims: vec![
                 Prim::PushClip(clip),
                 Prim::Path(PathPrim::stroked(

@@ -19,6 +19,18 @@ surface-ui-solid-open =
         [one] Not closed (1 open edge)
        *[other] Not closed ({ $count } open edges)
     }
+surface-ui-solid-crossing =
+    { $count ->
+        [one] Faces cross each other (1 place)
+       *[other] Faces cross each other ({ $count } places)
+    }
+surface-ui-solid-inward = Closed, but the faces look inward
+surface-ui-solid-flat = Closed, but it holds no volume
+surface-ui-plan = Plan
+surface-ui-note-outline-faces = Drawn as outline: { $count } faces, limit { $limit }
+surface-ui-note-outline-edges = Drawn as outline: { $count } edges, limit { $limit }
+surface-ui-note-box = Drawn as box: the outline has more than { $limit } lines
+surface-ui-note-budget = Drawn as box: the frame budget is used up
 surface-ui-volume = Volume
 surface-ui-area = Area
 surface-ui-size = Size

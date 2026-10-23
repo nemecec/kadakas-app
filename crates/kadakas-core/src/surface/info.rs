@@ -13,9 +13,34 @@ use crate::model::{Document, Object, Shape};
 use crate::present::PaintResolver;
 use crate::surface::plan::{self, Part};
 
-/// A model with more faces than this is not checked for a closed solid unless the caller asks (the
-/// check takes about a second at the limits of a model, see `docs/modeler-limits.md`).
+/// The faces that one answer checks for a closed solid by itself (the check takes about a second at
+/// the limits of a model, see `docs/modeler-limits.md`). The budget counts the faces of all the
+/// models of the answer, and a model that was checked before and has not changed costs nothing.
 pub const AUTO_CHECK_FACES: usize = 20_000;
+
+/// The faces that a list of objects (`objects.list`) checks in one answer.
+pub const LIST_CHECK_FACES: usize = 60_000;
+
+/// How many faces may still be checked for a closed solid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget(pub usize);
+
+impl Budget {
+    /// [`AUTO_CHECK_FACES`].
+    pub fn auto() -> Budget {
+        Budget(AUTO_CHECK_FACES)
+    }
+
+    /// No check.
+    pub fn never() -> Budget {
+        Budget(0)
+    }
+
+    /// Every model.
+    pub fn always() -> Budget {
+        Budget(usize::MAX)
+    }
+}
 
 /// When the closed-solid check runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,9 +63,15 @@ pub enum SolidState {
     Empty,
     /// Every shell is a closed solid and no edge is loose. The volume is in mm3.
     Closed { solids: usize, volume: f64 },
-    /// At least one shell is open, crosses itself, looks inward or has no volume, or an edge is
-    /// loose. `open_edges` counts the edges that make a shell open and the loose edges.
+    /// At least one shell has open edges, or an edge is loose. `open_edges` counts the edges that
+    /// make a shell open and the loose edges.
     Open { open_edges: usize },
+    /// Closed, but an edge of a shell passes through a face of it with no edge there.
+    Crossing { crossings: usize },
+    /// Closed, but the fronts of the faces look in (a negative volume).
+    Inward,
+    /// Closed, but it holds no volume (two faces back to back).
+    Flat,
 }
 
 /// The numbers of a surface model, a group of them or an instance.
@@ -81,8 +112,134 @@ fn area_factor(m: &DMat3, n: DVec3) -> f64 {
     (m.inverse().transpose() * n).length() * det.abs()
 }
 
+/// A cheap test that the faces of a model that are not hidden close a volume: every edge is used
+/// by exactly two of them, once in each direction. It takes time in proportion to the number of
+/// corners, far less than the closed-solid check. A model without faces is not watertight. The
+/// section drawing uses it to tell a cut with an inside from a cut of a surface.
+pub fn is_watertight(m: &crate::surface::SurfaceModel) -> bool {
+    use std::collections::HashMap;
+    let mut uses: HashMap<(u32, u32), (u8, u8)> = HashMap::new();
+    let mut any = false;
+    for (id, f) in m.faces() {
+        if m.face_hidden(id) {
+            continue;
+        }
+        any = true;
+        for (a, b) in f.uses() {
+            let e = uses.entry((a.0.min(b.0), a.0.max(b.0))).or_default();
+            if a.0 <= b.0 {
+                e.0 = e.0.saturating_add(1);
+            } else {
+                e.1 = e.1.saturating_add(1);
+            }
+        }
+    }
+    any && uses.values().all(|u| *u == (1, 1))
+}
+
+/// What the closed-solid check found for one model, in the local coordinates of the model.
+#[derive(Clone, Copy, Debug)]
+enum Verdict {
+    Closed { solids: usize, volume: f64 },
+    Open { edges: usize },
+    Crossing { crossings: usize },
+    Inward,
+    Flat,
+}
+
+thread_local! {
+    /// The verdicts of the models that were checked, by what the model is made of. A model that
+    /// has not changed is not checked again, whatever else changed in the document.
+    static VERDICTS: std::cell::RefCell<std::collections::HashMap<u64, Verdict>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Most verdicts that are kept.
+const MAX_VERDICTS: usize = 512;
+
+/// What the model is made of, as a number: its vertices, edges and faces (not its placement, which
+/// does not change a solid). It takes time in proportion to the size of the model, far less than
+/// the check.
+fn content_key(m: &crate::surface::SurfaceModel) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (id, v) in m.vertices() {
+        (id.0, v.x.to_bits(), v.y.to_bits(), v.z.to_bits()).hash(&mut h);
+    }
+    for (id, e) in m.edges() {
+        (id.0, e.v[0].0, e.v[1].0).hash(&mut h);
+    }
+    for (id, f) in m.faces() {
+        id.0.hash(&mut h);
+        for l in f.loops() {
+            l.len().hash(&mut h);
+            for v in l {
+                v.0.hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+fn verdict_of(m: &crate::surface::SurfaceModel) -> Verdict {
+    use crate::surface::ShellState;
+    let report = m.solid_report();
+    if report.is_closed() {
+        return Verdict::Closed {
+            solids: report.solids().count(),
+            volume: report.solids().map(|s| s.volume).sum(),
+        };
+    }
+    let open = report.open_edges().len() + report.wire_edges.len();
+    if open > 0 {
+        return Verdict::Open { edges: open };
+    }
+    let has = |st: ShellState| report.shells.iter().any(|s| s.state == st);
+    if has(ShellState::SelfCrossing) {
+        Verdict::Crossing {
+            crossings: report.crossings.max(1),
+        }
+    } else if has(ShellState::Flat) {
+        Verdict::Flat
+    } else {
+        Verdict::Inward
+    }
+}
+
+/// The verdict for a model, from the cache or by the check. `None` when the budget does not allow
+/// the check.
+fn verdict(m: &crate::surface::SurfaceModel, budget: &mut Budget) -> Option<Verdict> {
+    let key = content_key(m);
+    if let Some(v) = VERDICTS.with(|c| c.borrow().get(&key).copied()) {
+        return Some(v);
+    }
+    if m.face_count() > budget.0 {
+        return None;
+    }
+    budget.0 = budget.0.saturating_sub(m.face_count());
+    let v = verdict_of(m);
+    VERDICTS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= MAX_VERDICTS {
+            c.clear();
+        }
+        c.insert(key, v);
+    });
+    Some(v)
+}
+
 /// The numbers of the parts. `check` says when the closed-solid check runs.
 pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
+    let mut budget = match check {
+        Check::Never => Budget::never(),
+        Check::Auto => Budget::auto(),
+        Check::Always => Budget::always(),
+    };
+    of_parts_with(doc, parts, &mut budget)
+}
+
+/// Like [`of_parts`], with a budget of faces for the check that several answers share.
+pub fn of_parts_with(doc: &Document, parts: &[Part], budget: &mut Budget) -> SurfaceInfo {
     let resolver = PaintResolver::new(doc);
     let mut info = SurfaceInfo {
         models: parts.len(),
@@ -99,7 +256,8 @@ pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
         unpainted_faces: 0,
     };
     let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
-    let (mut solids, mut volume, mut open) = (0usize, 0.0f64, 0usize);
+    let (mut solids, mut volume) = (0usize, 0.0f64);
+    let (mut open, mut crossings, mut flat, mut inward) = (0usize, 0usize, false, false);
     let mut unchecked = false;
     let mut bounds: Option<(DVec3, DVec3)> = None;
     for p in parts {
@@ -114,14 +272,19 @@ pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
         for (id, f) in m.faces() {
             info.area += m.face_area(id).unwrap_or(0.0) * area_factor(&mx, f.plane.normal);
             let (front, back) = resolver.faces(&f.attrs);
-            let mut named = false;
+            // A material that paints both sides of a face counts the face once.
+            let mut named: Vec<crate::resource::ResourceId> = Vec::new();
             for r in [front, back].into_iter().flatten() {
-                if let Some(res) = doc.resources.get(r) {
-                    *by_name.entry(res.name.clone()).or_default() += 1;
-                    named = true;
+                if doc.resources.get(r).is_some() && !named.contains(&r) {
+                    named.push(r);
                 }
             }
-            if !named {
+            for r in &named {
+                if let Some(res) = doc.resources.get(*r) {
+                    *by_name.entry(res.name.clone()).or_default() += 1;
+                }
+            }
+            if named.is_empty() {
                 info.unpainted_faces += 1;
             }
         }
@@ -139,25 +302,23 @@ pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
         if m.face_count() == 0 {
             continue;
         }
-        let skip = match check {
-            Check::Never => true,
-            Check::Auto => m.face_count() > AUTO_CHECK_FACES,
-            Check::Always => false,
-        };
-        if skip {
+        let Some(v) = verdict(m, budget) else {
             unchecked = true;
             continue;
-        }
-        let report = m.solid_report();
+        };
         let det = mx.determinant().abs();
-        if report.is_closed() {
-            solids += report.solids().count();
-            volume += report.solids().map(|s| s.volume).sum::<f64>() * det;
-        } else {
-            open += report.open_edges().len() + report.wire_edges.len();
-            // A shell that is open for another reason (it crosses itself, looks inward or is
-            // flat) counts as one.
-            open = open.max(1);
+        match v {
+            Verdict::Closed {
+                solids: n,
+                volume: v,
+            } => {
+                solids += n;
+                volume += v * det;
+            }
+            Verdict::Open { edges } => open += edges,
+            Verdict::Crossing { crossings: n } => crossings += n,
+            Verdict::Flat => flat = true,
+            Verdict::Inward => inward = true,
         }
     }
     info.bounds = bounds.map(|(a, b)| (a.to_array(), b.to_array()));
@@ -169,9 +330,16 @@ pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
         SolidState::Empty
     } else if open > 0 {
         SolidState::Open { open_edges: open }
+    } else if crossings > 0 {
+        SolidState::Crossing { crossings }
+    } else if flat {
+        SolidState::Flat
+    } else if inward {
+        SolidState::Inward
     } else if unchecked {
         SolidState::Unchecked
     } else {
+        // The volumes of the solids of a group are added. Solids that overlap count twice.
         SolidState::Closed { solids, volume }
     };
     info
@@ -181,6 +349,16 @@ pub fn of_parts(doc: &Document, parts: &[Part], check: Check) -> SurfaceInfo {
 /// members that draw as surface models). `None` for any other object, and for a group with no
 /// such member.
 pub fn of_object(doc: &Document, obj: &Object, check: Check) -> Option<SurfaceInfo> {
+    let mut budget = match check {
+        Check::Never => Budget::never(),
+        Check::Auto => Budget::auto(),
+        Check::Always => Budget::always(),
+    };
+    of_object_with(doc, obj, &mut budget)
+}
+
+/// Like [`of_object`], with a budget of faces for the check that several objects share (a list).
+pub fn of_object_with(doc: &Document, obj: &Object, budget: &mut Budget) -> Option<SurfaceInfo> {
     let ids = match obj.shape {
         Shape::Group { .. } => doc.leaves(&[obj.id]),
         Shape::SurfaceModel(_) | Shape::Component { .. } => vec![obj.id],
@@ -193,5 +371,5 @@ pub fn of_object(doc: &Document, obj: &Object, check: Check) -> Option<SurfaceIn
             parts.extend(p);
         }
     }
-    (!parts.is_empty()).then(|| of_parts(doc, &parts, check))
+    (!parts.is_empty()).then(|| of_parts_with(doc, &parts, budget))
 }

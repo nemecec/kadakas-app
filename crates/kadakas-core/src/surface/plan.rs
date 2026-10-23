@@ -4,9 +4,13 @@
 //! The plan is the view from above. A face that looks up (or down) shows as its polygon, filled with
 //! the colour of its material. A vertical face has no area in the plan and is left out. The faces
 //! are drawn from the lowest to the highest, each followed by the edges that it is the top face of,
-//! so a roof covers what is under it. Hidden faces and hidden edges are not drawn, and neither are
-//! soft edges (the edges of a curved surface). One function makes the drawing, so the screen, the
-//! print and the SVG show the same (AGR-01).
+//! so a roof covers what is under it. Two faces whose footprints overlap are ordered by their
+//! height at the overlap, not by their average height, so a slope runs over a plate where it is
+//! above it and under it where it is below. An edge that no face seen from above uses (a loose
+//! edge, the edge of a wall) is drawn in the order of its height, so a roof covers it. Hidden
+//! faces and hidden edges are not drawn, and neither are soft edges (the edges of a curved
+//! surface). One function makes the drawing, so the screen, the print and the SVG show the same
+//! (AGR-01).
 //!
 //! A model with more than [`MAX_FACES`] faces, or more than [`MAX_EDGES`] edges, is drawn as its
 //! outline (the border, the silhouette and the loose edges, [`Detail::Outline`]), and if even that
@@ -82,9 +86,16 @@ pub struct PlanDrawing {
     /// The faces and the edges of the parts, hidden ones not counted.
     pub faces_total: usize,
     pub edges_total: usize,
+    /// The limits that decided the detail.
+    pub limits: Limits,
 }
 
 impl PlanDrawing {
+    /// True when the drawing is not the full one: the person sees an outline or a box.
+    pub fn simplified(&self) -> bool {
+        self.detail != Detail::Full
+    }
+
     /// The faces drawn.
     pub fn faces(&self) -> usize {
         self.items
@@ -160,10 +171,20 @@ pub enum Outcome {
 
 /// The parts of an object that draws as surface models: the model itself, or the models of the
 /// definition of an instance. `None` for any other object. `Err` for an instance that cannot be
-/// expanded.
+/// expanded. A part of a definition whose class is switched off in the document is left out.
 pub fn parts_of<'a>(
     doc: &'a Document,
     obj: &'a Object,
+) -> Option<Result<Vec<Part<'a>>, (DVec2, String)>> {
+    parts_of_with(doc, obj, &|c| doc.class(c).is_none_or(|k| k.visible))
+}
+
+/// Like [`parts_of`], with another view of the classes: `visible` says whether a class shows. A
+/// viewport and an export have their own (the design view of the document is not theirs).
+pub fn parts_of_with<'a>(
+    doc: &'a Document,
+    obj: &'a Object,
+    visible: &dyn Fn(crate::model::ClassId) -> bool,
 ) -> Option<Result<Vec<Part<'a>>, (DVec2, String)>> {
     let fill = || {
         crate::hardscape::styled_attrs(doc, obj, doc.resolved_attrs(obj))
@@ -196,7 +217,7 @@ pub fn parts_of<'a>(
             };
             Some(Ok(leaves
                 .into_iter()
-                .filter(|l| component::leaf_shown(doc, l))
+                .filter(|l| component::leaf_shown_by(l, visible))
                 .map(|l: Leaf<'a>| Part {
                     model: l.model,
                     xf: inst * l.transform,
@@ -210,7 +231,16 @@ pub fn parts_of<'a>(
 
 /// The plan of an object, or `None` when the object is not a surface model or an instance.
 pub fn plan_of_object(doc: &Document, obj: &Object) -> Option<Outcome> {
-    Some(match parts_of(doc, obj)? {
+    plan_of_object_with(doc, obj, &|c| doc.class(c).is_none_or(|k| k.visible))
+}
+
+/// Like [`plan_of_object`], with the view of the classes of a viewport or an export.
+pub fn plan_of_object_with(
+    doc: &Document,
+    obj: &Object,
+    visible: &dyn Fn(crate::model::ClassId) -> bool,
+) -> Option<Outcome> {
+    Some(match parts_of_with(doc, obj, visible)? {
         Ok(parts) => Outcome::Drawing(drawing(&parts, Some(&Paint::new(doc)))),
         Err((p, why)) => Outcome::Broken(p, why),
     })
@@ -236,10 +266,31 @@ struct Seen {
     part: usize,
     id: FaceId,
     rings: Vec<Vec<DVec2>>,
-    /// The height used to order the faces.
+    /// The average height, the first key to order the faces.
     z: f64,
+    /// The plane of the face in the drawing: a normal that is not vertical, and `normal . p = d`.
+    plane: (DVec3, f64),
+    /// The box of the outer ring.
+    lo: DVec2,
+    hi: DVec2,
     /// True when the front looks up.
     up: bool,
+}
+
+impl Seen {
+    /// The height of the plane of the face over a point of the plan.
+    fn z_at(&self, p: DVec2) -> f64 {
+        let (n, d) = self.plane;
+        (d - n.x * p.x - n.y * p.y) / n.z
+    }
+
+    /// True if the point is inside the face: in the outer ring and in no hole.
+    fn contains(&self, p: DVec2) -> bool {
+        crate::geom::point_in_polygon(p, &self.rings[0])
+            && !self.rings[1..]
+                .iter()
+                .any(|h| crate::geom::point_in_polygon(p, h))
+    }
 }
 
 /// What the faces on the two sides of an edge look like from above.
@@ -308,6 +359,23 @@ fn seen_faces(index: usize, p: &Part, w: &HashMap<VertexId, DVec3>) -> Vec<(Face
             out.push((id, None));
             continue;
         }
+        // The plane in the drawing, from the loop (Newell), for the order of overlapping faces.
+        let pts3: Vec<DVec3> = f.outer.iter().filter_map(|v| w.get(v).copied()).collect();
+        let mut normal = DVec3::ZERO;
+        for k in 0..pts3.len() {
+            let (a, b) = (pts3[k], pts3[(k + 1) % pts3.len()]);
+            normal += DVec3::new(
+                (a.y - b.y) * (a.z + b.z),
+                (a.z - b.z) * (a.x + b.x),
+                (a.x - b.x) * (a.y + b.y),
+            );
+        }
+        let plane = (normal, normal.dot(pts3[0]));
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for q in &outer {
+            lo = lo.min(*q);
+            hi = hi.max(*q);
+        }
         // The outer loop runs counterclockwise seen from the front, and a mirror turns that over.
         let up = (area > 0.0) != mirror;
         let mut rings = vec![outer];
@@ -327,6 +395,9 @@ fn seen_faces(index: usize, p: &Part, w: &HashMap<VertexId, DVec3>) -> Vec<(Face
                 id,
                 rings,
                 z: z / f.outer.len().max(1) as f64,
+                plane,
+                lo,
+                hi,
                 up,
             }),
         ));
@@ -351,6 +422,160 @@ fn face_color(p: &Part, id: FaceId, up: bool, paint: Option<&Paint>) -> [u8; 4] 
     side.and_then(|r| paint.color(r)).unwrap_or(fallback)
 }
 
+/// How the plan draws the parts, without the drawing when it is the full one: the detail, the
+/// faces and the edges that count. For a list of objects, which asks for each of them.
+pub fn detail_of(parts: &[Part]) -> (Detail, usize, usize) {
+    let limits = Limits::DEFAULT;
+    let (faces, edges) = totals(parts);
+    if faces <= limits.faces && edges <= limits.edges {
+        return (Detail::Full, faces, edges);
+    }
+    (cached_drawing(parts, limits).detail, faces, edges)
+}
+
+/// The faces that are not hidden and the edges that are shown, in all the parts.
+fn totals(parts: &[Part]) -> (usize, usize) {
+    let faces = parts
+        .iter()
+        .map(|p| p.model.face_count() - p.model.hidden_faces().len())
+        .sum();
+    let edges = parts
+        .iter()
+        .map(|p| {
+            p.model
+                .edges()
+                .filter(|(id, _)| p.model.edge_shown(*id))
+                .count()
+        })
+        .sum();
+    (faces, edges)
+}
+
+/// The order in which the faces are drawn. `seen` is sorted by the average height. Two faces whose
+/// footprints overlap are ordered by their height at a point of the overlap: the lower one first.
+/// The pairs come from a grid over the boxes. Where the heights cross (a slope through a plate)
+/// the point decides, which is a known limit: the face is not cut. A cycle is broken at the
+/// face that comes first by the average height. Returns the indices of `seen` in drawing order.
+fn paint_order(seen: &[Seen]) -> Vec<usize> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    let n = seen.len();
+    if n < 2 {
+        return (0..n).collect();
+    }
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    let mut mean = 0.0;
+    for s in seen {
+        lo = lo.min(s.lo);
+        hi = hi.max(s.hi);
+        mean += (s.hi - s.lo).max_element();
+    }
+    mean /= n as f64;
+    let extent = (hi - lo).max_element().max(1e-9);
+    let cell = (mean * 2.0).max(extent / 512.0).max(1e-9);
+    let cols = (((hi.x - lo.x) / cell) as usize + 1).min(1024);
+    let rows = (((hi.y - lo.y) / cell) as usize + 1).min(1024);
+    let cell_of = |p: DVec2| {
+        (
+            (((p.x - lo.x) / cell) as usize).min(cols - 1),
+            (((p.y - lo.y) / cell) as usize).min(rows - 1),
+        )
+    };
+    let mut grid: Vec<Vec<u32>> = vec![Vec::new(); cols * rows];
+    let mut big: Vec<u32> = Vec::new();
+    for (i, s) in seen.iter().enumerate() {
+        let ((x0, y0), (x1, y1)) = (cell_of(s.lo), cell_of(s.hi));
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 64 {
+            big.push(i as u32);
+            continue;
+        }
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                grid[y * cols + x].push(i as u32);
+            }
+        }
+    }
+    let mut must_follow: Vec<Vec<u32>> = vec![Vec::new(); n];
+    let mut waiting = vec![0u32; n];
+    // Tests the pair `a`, `b`. In the grid a pair is met in every cell that both reach, so it is
+    // tested in one only: the cell of the lower left corner of the overlap of the two boxes.
+    let mut test = |a: u32, b: u32, only_in: Option<(usize, usize)>| {
+        let (a, b) = (a.min(b), a.max(b));
+        if a == b {
+            return;
+        }
+        let (fa, fb) = (&seen[a as usize], &seen[b as usize]);
+        let (olo, ohi) = (fa.lo.max(fb.lo), fa.hi.min(fb.hi));
+        if olo.x > ohi.x || olo.y > ohi.y {
+            return;
+        }
+        if only_in.is_some_and(|c| c != cell_of(olo)) {
+            return;
+        }
+        let mean_of = |s: &Seen| s.rings[0].iter().sum::<DVec2>() / s.rings[0].len() as f64;
+        for p in [(olo + ohi) / 2.0, mean_of(fa), mean_of(fb)] {
+            if fa.contains(p) && fb.contains(p) {
+                let (za, zb) = (fa.z_at(p), fb.z_at(p));
+                if (za - zb).abs() > 1e-6 * extent.max(1.0) {
+                    let (first, second) = if za < zb { (a, b) } else { (b, a) };
+                    must_follow[first as usize].push(second);
+                    waiting[second as usize] += 1;
+                    return;
+                }
+            }
+        }
+    };
+    for (c, cellv) in grid.iter().enumerate() {
+        let at = (c % cols, c / cols);
+        for (k, a) in cellv.iter().enumerate() {
+            for b in &cellv[k + 1..] {
+                test(*a, *b, Some(at));
+            }
+        }
+    }
+    // The big faces are in no cell: each is tested with every face, once.
+    for (k, a) in big.iter().enumerate() {
+        for b in 0..n as u32 {
+            if !big[..k].contains(&b) {
+                test(*a, b, None);
+            }
+        }
+    }
+    // The faces that nothing has to come before go in the order of the average height. A cycle
+    // is broken at the first face left.
+    let mut ready: BinaryHeap<Reverse<u32>> = (0..n as u32)
+        .filter(|i| waiting[*i as usize] == 0)
+        .map(Reverse)
+        .collect();
+    let mut done = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    let mut next_unplaced = 0usize;
+    while order.len() < n {
+        let i = match ready.pop() {
+            Some(Reverse(i)) => i as usize,
+            None => {
+                while done[next_unplaced] {
+                    next_unplaced += 1;
+                }
+                next_unplaced
+            }
+        };
+        if done[i] {
+            continue;
+        }
+        done[i] = true;
+        order.push(i);
+        for j in std::mem::take(&mut must_follow[i]) {
+            let w = &mut waiting[j as usize];
+            *w = w.saturating_sub(1);
+            if *w == 0 && !done[j as usize] {
+                ready.push(Reverse(j));
+            }
+        }
+    }
+    order
+}
+
 /// Draws the plan of the parts, within [`Limits::DEFAULT`].
 pub fn drawing(parts: &[Part], paint: Option<&Paint>) -> PlanDrawing {
     drawing_with(parts, paint, Limits::DEFAULT)
@@ -360,24 +585,13 @@ pub fn drawing(parts: &[Part], paint: Option<&Paint>) -> PlanDrawing {
 /// other limits to time the full drawing of a big model).
 pub fn drawing_with(parts: &[Part], paint: Option<&Paint>, limits: Limits) -> PlanDrawing {
     let worlds: Vec<HashMap<VertexId, DVec3>> = parts.iter().map(world).collect();
-    let faces_total: usize = parts
-        .iter()
-        .map(|p| p.model.face_count() - p.model.hidden_faces().len())
-        .sum();
-    let edges_total: usize = parts
-        .iter()
-        .map(|p| {
-            p.model
-                .edges()
-                .filter(|(id, _)| p.model.edge_shown(*id))
-                .count()
-        })
-        .sum();
+    let (faces_total, edges_total) = totals(parts);
     let mut out = PlanDrawing {
         items: Vec::new(),
         detail: Detail::Full,
         faces_total,
         edges_total,
+        limits,
     };
     let full = faces_total <= limits.faces && edges_total <= limits.edges;
     // The faces seen from above, and for every edge the sides of the faces at it.
@@ -406,19 +620,31 @@ pub fn drawing_with(parts: &[Part], paint: Option<&Paint>, limits: Limits) -> Pl
             if !p.model.edge_shown(id) {
                 return None;
             }
-            let a = w.get(&e.v[0])?.truncate();
-            let b = w.get(&e.v[1])?.truncate();
+            let (a3, b3) = (*w.get(&e.v[0])?, *w.get(&e.v[1])?);
+            let (a, b) = (a3.truncate(), b3.truncate());
             // A vertical edge is a point in the plan.
-            (a.distance_squared(b) > 1e-12).then_some((e.key(), a, b))
+            (a.distance_squared(b) > 1e-12).then_some((e.key(), a, b, a3.z.max(b3.z)))
         })
     };
     if full {
-        // Lowest first; the same height keeps the order of the parts and of the ids.
+        // Lowest first by the average height; the same height keeps the order of the parts and
+        // of the ids. Then faces that overlap are put in the order of their height at the overlap.
         seen.sort_by(|a, b| {
             a.z.total_cmp(&b.z)
                 .then(a.part.cmp(&b.part))
                 .then(a.id.cmp(&b.id))
         });
+        let zs: Vec<f64> = seen.iter().map(|s| s.z).collect();
+        let order = paint_order(&seen);
+        let mut slot: Vec<Option<Seen>> = seen.into_iter().map(Some).collect();
+        let seen: Vec<Seen> = order
+            .iter()
+            .map(|i| slot[*i].take().expect("once"))
+            .collect();
+        let mut place = vec![0usize; seen.len()];
+        for (pos, base) in order.iter().enumerate() {
+            place[*base] = pos;
+        }
         // The edge goes with the highest face that uses it.
         let mut top: Vec<HashMap<(VertexId, VertexId), usize>> = vec![HashMap::new(); parts.len()];
         for (rank, s) in seen.iter().enumerate() {
@@ -428,27 +654,39 @@ pub fn drawing_with(parts: &[Part], paint: Option<&Paint>, limits: Limits) -> Pl
                 }
             }
         }
-        let mut at: Vec<Vec<(DVec2, DVec2)>> = vec![Vec::new(); seen.len()];
-        let mut loose: Vec<(DVec2, DVec2)> = Vec::new();
+        // `after[r]` follows the face r. `before[r]` comes before it: the edges that no face seen
+        // from above uses (loose edges, the edges of walls) in the order of their height, so a
+        // roof over a wall covers the edges of the wall. `before[n]` is after every face.
+        let n = seen.len();
+        let mut after: Vec<Vec<(DVec2, DVec2)>> = vec![Vec::new(); n];
+        let mut before: Vec<Vec<(DVec2, DVec2)>> = vec![Vec::new(); n + 1];
         for (i, tops) in top.iter().enumerate() {
-            for (k, a, b) in shown_edges(i) {
+            for (k, a, b, z) in shown_edges(i) {
                 match tops.get(&k) {
-                    Some(rank) => at[*rank].push((a, b)),
-                    None => loose.push((a, b)),
+                    Some(rank) => after[*rank].push((a, b)),
+                    None => {
+                        // The faces whose average height is not above the edge come first.
+                        let base = zs.partition_point(|h| *h <= z);
+                        let at = if base >= n { n } else { place[base] };
+                        before[at].push((a, b));
+                    }
                 }
             }
         }
         for (rank, s) in seen.into_iter().enumerate() {
+            for (a, b) in before[rank].drain(..) {
+                out.items.push(PlanItem::Edge(a, b));
+            }
             let color = face_color(&parts[s.part], s.id, s.up, paint);
             out.items.push(PlanItem::Face(PlanFace {
                 rings: s.rings,
                 color,
             }));
-            for (a, b) in at[rank].drain(..) {
+            for (a, b) in after[rank].drain(..) {
                 out.items.push(PlanItem::Edge(a, b));
             }
         }
-        for (a, b) in loose {
+        for (a, b) in before[n].drain(..) {
             out.items.push(PlanItem::Edge(a, b));
         }
         return out;
@@ -456,7 +694,7 @@ pub fn drawing_with(parts: &[Part], paint: Option<&Paint>, limits: Limits) -> Pl
     // Too much to draw one by one: the outline.
     out.detail = Detail::Outline;
     for (i, part_sides) in sides.iter().enumerate() {
-        for (k, a, b) in shown_edges(i) {
+        for (k, a, b, _) in shown_edges(i) {
             if part_sides.get(&k).is_none_or(Sides::silhouette) {
                 out.items.push(PlanItem::Edge(a, b));
             }
@@ -550,17 +788,58 @@ pub struct SnapGeometry {
 }
 
 /// The snap points of the parts, those within `radius` of `near` (center, radius) when it is given.
-/// No part gives more than `cap` edges.
+/// No part gives more than `cap` edges and `cap` centres. A model that the plan draws as an
+/// outline or a box offers the points of that drawing only: the pointer is not offered a vertex
+/// that is not on the screen.
 pub fn snap_geometry(parts: &[Part], near: Option<(DVec2, f64)>, cap: usize) -> SnapGeometry {
+    snap_geometry_with(parts, near, cap, Limits::DEFAULT)
+}
+
+/// Like [`snap_geometry`], within other limits of the plan.
+pub fn snap_geometry_with(
+    parts: &[Part],
+    near: Option<(DVec2, f64)>,
+    cap: usize,
+    limits: Limits,
+) -> SnapGeometry {
     let close = |p: DVec2| near.is_none_or(|(c, r)| p.distance(c) <= r);
     let near_seg = |a: DVec2, b: DVec2| near.is_none_or(|(c, r)| dist_to_segment(c, a, b) <= r);
     let mut g = SnapGeometry::default();
+    let (faces, edges) = totals(parts);
+    if faces > limits.faces || edges > limits.edges {
+        let d = cached_drawing(parts, limits);
+        let mut used: Vec<DVec2> = Vec::new();
+        for item in &d.items {
+            let PlanItem::Edge(a, b) = item else { continue };
+            if g.edges.len() >= cap {
+                break;
+            }
+            if !near_seg(*a, *b) {
+                continue;
+            }
+            for q in [*a, *b] {
+                if close(q) && !used.contains(&q) {
+                    used.push(q);
+                    g.vertices.push(q);
+                }
+            }
+            g.edges.push([*a, *b]);
+            let mid = (*a + *b) / 2.0;
+            if close(mid) {
+                g.midpoints.push(mid);
+            }
+        }
+        return g;
+    }
     for part in parts {
         let w = world(part);
         let mut used: std::collections::HashSet<VertexId> = std::collections::HashSet::new();
-        let mut edges = 0usize;
+        let mut count = 0usize;
         for (id, e) in part.model.edges() {
-            if !part.model.edge_shown(id) || edges >= cap {
+            if count >= cap {
+                break;
+            }
+            if !part.model.edge_shown(id) {
                 continue;
             }
             let (Some(a), Some(b)) = (w.get(&e.v[0]), w.get(&e.v[1])) else {
@@ -570,7 +849,7 @@ pub fn snap_geometry(parts: &[Part], near: Option<(DVec2, f64)>, cap: usize) -> 
             if !near_seg(a, b) {
                 continue;
             }
-            edges += 1;
+            count += 1;
             for (v, q) in [(e.v[0], a), (e.v[1], b)] {
                 if close(q) && used.insert(v) {
                     g.vertices.push(q);
@@ -585,15 +864,75 @@ pub fn snap_geometry(parts: &[Part], near: Option<(DVec2, f64)>, cap: usize) -> 
                 }
             }
         }
+        let mut centers = 0usize;
         for (_, s) in seen_faces(0, part, &w) {
+            if centers >= cap {
+                break;
+            }
             let Some(s) = s else { continue };
             let c = centroid(&s.rings[0]);
             if close(c) {
+                centers += 1;
                 g.centers.push(c);
             }
         }
     }
     g
+}
+
+thread_local! {
+    /// The outline drawings of big models that the snap asked for, by what they were made from.
+    static OUTLINES: std::cell::RefCell<Vec<(u64, std::rc::Rc<PlanDrawing>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What the parts are made of, as a number: their edit counts, sizes, placements and the
+/// coordinates of their vertices. Two parts with the same number draw the same.
+fn fingerprint(parts: &[Part], limits: Limits) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (limits.faces, limits.edges, limits.outline).hash(&mut h);
+    for p in parts {
+        (
+            p.model.rev(),
+            p.model.vertex_count(),
+            p.model.edge_count(),
+            p.model.face_count(),
+            p.fill,
+        )
+            .hash(&mut h);
+        for x in p.xf.to_cols_array() {
+            x.to_bits().hash(&mut h);
+        }
+        for (id, v) in p.model.vertices() {
+            (id.0, v.x.to_bits(), v.y.to_bits(), v.z.to_bits()).hash(&mut h);
+        }
+        for id in p.model.hidden_faces() {
+            id.0.hash(&mut h);
+        }
+        for id in p.model.hidden_edges() {
+            id.0.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+/// The drawing of the parts within the limits, kept for the last few models: the snap asks for it
+/// at every move of the pointer.
+fn cached_drawing(parts: &[Part], limits: Limits) -> std::rc::Rc<PlanDrawing> {
+    let key = fingerprint(parts, limits);
+    OUTLINES.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((_, d)) = c.iter().find(|(k, _)| *k == key) {
+            return d.clone();
+        }
+        let d = std::rc::Rc::new(drawing_with(parts, None, limits));
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push((key, d.clone()));
+        d
+    })
 }
 
 /// The centre of mass of a ring.

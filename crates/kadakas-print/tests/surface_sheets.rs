@@ -526,8 +526,11 @@ fn a_surface_that_is_not_closed_is_cut_to_a_line_and_not_filled() {
     let d = drawing(&ed, &vp, line);
     assert!(d.faces.is_empty());
     assert!(d.cut_area().abs() < 1e-9);
-    // The cut is a line round the cut: the U of the walls and the floor, closed by the open top.
+    // The cut is one open line: the U of the two walls and the floor. The top is missing.
     assert_eq!(d.profiles.len(), 1);
+    let line_points = &d.profiles[0].points;
+    assert_eq!(line_points.len(), 4, "{line_points:?}");
+    assert_ne!(line_points.first(), line_points.last(), "not closed");
     let page = compose_page(ed.doc(), sheet).unwrap();
     assert!(
         paths(&page.prims)
@@ -536,22 +539,189 @@ fn a_surface_that_is_not_closed_is_cut_to_a_line_and_not_filled() {
     );
 }
 
-#[test]
-fn a_box_with_a_hole_through_it_is_cut_to_a_ring_with_the_area_of_the_walls() {
-    let mut ed = Editor::default();
-    let b = add_box(&mut ed, 0.0, 0.0, 1000.0, 500.0);
-    let line = section_line(&mut ed);
-    let (_, vp) = section_sheet(&mut ed, line);
-    // The cut of the plain box and of the same box after a move by 2000 mm: the same area.
-    let plain = drawing(&ed, &vp, line).cut_area();
+/// A section line across `y` from x = -1000 to `x1`, looking toward +y.
+fn section_line_at(ed: &mut Editor, y: f64, x1: f64) -> ObjectId {
+    let line = ObjectId(
+        run(
+            ed,
+            Command::AddObject {
+                shape: Shape::Line {
+                    a: v(-1000.0, y),
+                    b: v(x1, y),
+                },
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            },
+        )[0],
+    );
     run(
-        &mut ed,
-        Command::MoveObjects {
-            ids: vec![b],
-            delta: v(0.0, 0.0),
+        ed,
+        Command::SetData {
+            id: line,
+            set: [(KEY.to_string(), json!({"name": "A", "look": "left"}))].into(),
+            remove: vec![],
         },
     );
-    assert!((plain - 500_000.0).abs() < 1.0);
+    line
+}
+
+#[test]
+fn a_box_with_a_hole_through_it_is_cut_to_a_ring_with_a_hole_and_the_area_of_the_walls() {
+    let mut ed = Editor::default();
+    // A box of 2000 x 2000 x 1000 mm with a hole of 1000 x 500 mm through it along y.
+    let b = add_box(&mut ed, 0.0, 0.0, 2000.0, 1000.0);
+    let p = [
+        [500.0, 0.0, 250.0],
+        [1500.0, 0.0, 250.0],
+        [1500.0, 0.0, 750.0],
+        [500.0, 0.0, 750.0],
+    ];
+    run(
+        &mut ed,
+        Command::EditSurface {
+            id: b,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        },
+    );
+    // The small face on the front (y = 0), pushed through to the back.
+    let inner = {
+        let m = model(&ed, b);
+        m.faces()
+            .filter(|(_, f)| f.plane.normal.y < -0.9)
+            .min_by(|a, c| {
+                m.face_area(a.0)
+                    .unwrap()
+                    .total_cmp(&m.face_area(c.0).unwrap())
+            })
+            .map(|(f, _)| f)
+            .unwrap()
+    };
+    run(
+        &mut ed,
+        Command::EditSurface {
+            id: b,
+            edit: Edit::PushPull {
+                face: inner,
+                distance: -2000.0,
+            },
+        },
+    );
+    assert!(model(&ed, b).check().is_closed(), "still a closed solid");
+    let line = section_line_at(&mut ed, 1000.0, 3000.0);
+    let mut vp = Viewport::new(
+        v(20.0, 20.0),
+        v(220.0, 120.0),
+        v(1500.0, 500.0),
+        20.0,
+        vec![FIRST_LAYER],
+    );
+    vp.view = "section".into();
+    vp.section = Some(SectionView::new(line));
+    vp.snapshot_visibility(ed.doc());
+    let (sheet, _) = add_sheet(&mut ed, vp.clone());
+    let d = drawing(&ed, &vp, line);
+    // One cut face with two rings: the outside 2000 x 1000 and the hole 1000 x 500.
+    assert_eq!(d.faces.len(), 1);
+    assert_eq!(d.faces[0].rings.len(), 2, "{:?}", d.faces[0].rings);
+    assert!((d.cut_area() - 1_500_000.0).abs() < 1.0, "{}", d.cut_area());
+    let areas: Vec<f64> = d.faces[0]
+        .rings
+        .iter()
+        .map(|r| kadakas_core::geom::signed_area(r))
+        .collect();
+    assert!(areas.iter().any(|a| (a - 2_000_000.0).abs() < 1.0));
+    assert!(
+        areas.iter().any(|a| (a + 500_000.0).abs() < 1.0),
+        "{areas:?}"
+    );
+    // The poche on the page has the hole: one path with two sub-paths.
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    let poche: Vec<&PathPrim> = paths(&page.prims)
+        .into_iter()
+        .filter(|p| p.fill == Some([214, 214, 210, 255]))
+        .collect();
+    assert_eq!(poche.len(), 1);
+    assert_eq!(
+        poche[0]
+            .segs
+            .iter()
+            .filter(|s| matches!(s, PSeg::Move(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn a_box_without_a_wall_parallel_to_the_cut_is_cut_to_a_line_though_the_ring_closes() {
+    let mut ed = Editor::default();
+    let b = add_box(&mut ed, 0.0, 0.0, 1000.0, 500.0);
+    let wall = model(&ed, b)
+        .faces()
+        .find(|(_, f)| f.plane.normal.y > 0.9)
+        .map(|(f, _)| f)
+        .unwrap();
+    run(
+        &mut ed,
+        Command::EditSurface {
+            id: b,
+            edit: Edit::EraseFaces { faces: vec![wall] },
+        },
+    );
+    let line = section_line(&mut ed);
+    let (_, vp) = section_sheet(&mut ed, line);
+    let d = drawing(&ed, &vp, line);
+    // The four sides of the cut close a ring, but the model has no inside.
+    assert!(
+        d.faces.is_empty() && d.cut_area().abs() < 1e-9,
+        "{}",
+        d.cut_area()
+    );
+    assert_eq!(d.profiles.len(), 1);
+    let ring = &d.profiles[0].points;
+    assert_eq!(ring.first(), ring.last(), "the line closes on itself");
+}
+
+#[test]
+fn each_part_of_an_instance_is_cut_by_its_own_state() {
+    let mut ed = Editor::default();
+    let closed = add_box(&mut ed, 0.0, 0.0, 1000.0, 500.0);
+    let open = add_box(&mut ed, 2000.0, 0.0, 1000.0, 500.0);
+    let wall = model(&ed, open)
+        .faces()
+        .find(|(_, f)| f.plane.normal.y > 0.9)
+        .map(|(f, _)| f)
+        .unwrap();
+    run(
+        &mut ed,
+        Command::EditSurface {
+            id: open,
+            edit: Edit::EraseFaces { faces: vec![wall] },
+        },
+    );
+    let out = run(
+        &mut ed,
+        Command::MakeComponent {
+            name: "Pair".into(),
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: vec![closed, open],
+            replace: true,
+        },
+    );
+    let inst = ObjectId(out[1]);
+    let line = section_line_at(&mut ed, 500.0, 4000.0);
+    let (_, vp) = section_sheet(&mut ed, line);
+    let d = drawing(&ed, &vp, line);
+    // One instance: the closed box is filled, the other one is a line.
+    assert_eq!(d.faces.len(), 1, "{:?}", d.faces);
+    assert_eq!(d.faces[0].object, inst);
+    assert!((d.cut_area() - 500_000.0).abs() < 1.0, "{}", d.cut_area());
+    assert_eq!(d.profiles.len(), 1);
+    assert_eq!(d.profiles[0].object, inst);
 }
 
 #[test]
@@ -704,4 +874,256 @@ fn an_elevation_shows_the_edges_of_the_model_and_cuts_nothing() {
     // Right of the line the u axis runs the other way: from the end (x = 2000).
     assert!((hi.y - 500.0).abs() < 0.5 && lo.y.abs() < 0.5, "{lo} {hi}");
     assert!(((hi.x - lo.x) - 1000.0).abs() < 0.5, "{lo} {hi}");
+}
+
+/// A box whose model is in the class "Parts", made a component. The instance is in the default
+/// class, so only the part follows the class.
+fn instance_with_part_class(ed: &mut Editor) -> (ClassId, ObjectId) {
+    let part_class = ClassId(
+        run(
+            ed,
+            Command::AddClass {
+                name: "Parts".into(),
+                attrs: Attributes::default(),
+            },
+        )[0],
+    );
+    let b = add_box_in(ed, 0.0, 0.0, 1000.0, 500.0, Some(part_class));
+    let out = run(
+        ed,
+        Command::MakeComponent {
+            name: "Block".into(),
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: vec![b],
+            replace: true,
+        },
+    );
+    let inst = ObjectId(out[1]);
+    let class = ed.doc().active_class;
+    run(
+        ed,
+        Command::ModifyObject {
+            id: inst,
+            shape: None,
+            layer: None,
+            class: Some(class),
+            attrs: None,
+        },
+    );
+    (part_class, inst)
+}
+
+#[test]
+fn a_viewport_that_hides_the_class_of_a_part_hides_the_part_in_the_plan_in_3d_and_in_a_section() {
+    let mut ed = Editor::default();
+    let (part_class, _) = instance_with_part_class(&mut ed);
+    // The plan.
+    let (sheet, vpo) = plan_viewport(&mut ed, 100.0);
+    let tops =
+        |ed: &Editor| fills(&compose_page(ed.doc(), sheet).unwrap().prims, SURFACE_FRONT).len();
+    assert_eq!(tops(&ed), 1);
+    set_viewport(&mut ed, vpo, |v| {
+        v.class_overrides.entry(part_class).or_default().visible = Some(false)
+    });
+    assert_eq!(tops(&ed), 0, "the plan follows the viewport");
+    // The class is still on in the document: another viewport shows it.
+    assert!(ed.doc().class(part_class).unwrap().visible);
+    set_viewport(&mut ed, vpo, |v| v.class_overrides.clear());
+    assert_eq!(tops(&ed), 1);
+
+    // A hidden-line viewport.
+    let mut hl = Viewport::new(
+        v(20.0, 20.0),
+        v(220.0, 120.0),
+        v(500.0, 500.0),
+        20.0,
+        vec![FIRST_LAYER],
+    );
+    hl.view = "right_isometric".into();
+    let style = kadakas_core::present::RenderStyle {
+        mode: kadakas_core::present::RenderMode::HiddenLine,
+        ..Default::default()
+    };
+    let lines = |vp: &Viewport| {
+        let mut out = Vec::new();
+        hidden_line_prims(ed.doc(), vp, &style, 10_000, &mut out);
+        out.len()
+    };
+    assert_eq!(lines(&hl), 9);
+    hl.class_overrides.entry(part_class).or_default().visible = Some(false);
+    assert_eq!(lines(&hl), 0, "the 3D viewport follows the viewport");
+
+    // A section.
+    let line = section_line(&mut ed);
+    let (_, mut vp) = section_sheet(&mut ed, line);
+    assert!((drawing(&ed, &vp, line).cut_area() - 500_000.0).abs() < 1.0);
+    vp.class_overrides.entry(part_class).or_default().visible = Some(false);
+    let d = drawing(&ed, &vp, line);
+    assert!(
+        d.faces.is_empty() && d.edges.is_empty(),
+        "the section follows the viewport"
+    );
+}
+
+/// A flat grid of `n` x `n` squares of 10 mm cut in two, as a file has it.
+fn flat_grid(n: usize) -> kadakas_core::surface::SurfaceModel {
+    use kadakas_core::surface::{Edge, Face, FaceId, Plane, SurfaceModel, VertexId};
+    use std::collections::{BTreeMap, HashSet};
+    let id_of = |x: usize, y: usize| VertexId((y * (n + 1) + x) as u32 + 1);
+    let mut vertices = BTreeMap::new();
+    for y in 0..=n {
+        for x in 0..=n {
+            vertices.insert(
+                id_of(x, y),
+                glam::DVec3::new(x as f64 * 10.0, y as f64 * 10.0, 0.0),
+            );
+        }
+    }
+    let (mut edges, mut faces) = (BTreeMap::new(), BTreeMap::new());
+    let (mut seen, mut e, mut f) = (HashSet::new(), 0u32, 0u32);
+    let up = Plane::new(glam::DVec3::ZERO, glam::DVec3::Z).unwrap();
+    for y in 0..n {
+        for x in 0..n {
+            let (a, b, c, d) = (
+                id_of(x, y),
+                id_of(x + 1, y),
+                id_of(x + 1, y + 1),
+                id_of(x, y + 1),
+            );
+            for tri in [[a, b, c], [a, c, d]] {
+                for k in 0..3 {
+                    let (p, q) = (tri[k], tri[(k + 1) % 3]);
+                    if seen.insert((p.min(q), p.max(q))) {
+                        e += 1;
+                        edges.insert(
+                            kadakas_core::surface::EdgeId(1_000_000 + e),
+                            Edge { v: [p, q] },
+                        );
+                    }
+                }
+                f += 1;
+                faces.insert(FaceId(2_000_000 + f), Face::new(up, tri.to_vec(), vec![]));
+            }
+        }
+    }
+    SurfaceModel::from_parts(vertices, edges, faces, 3_000_000)
+}
+
+fn add_shape(ed: &mut Editor, shape: Shape) -> ObjectId {
+    ObjectId(
+        run(
+            ed,
+            Command::AddObject {
+                shape,
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            },
+        )[0],
+    )
+}
+
+#[test]
+fn a_big_model_in_a_plan_viewport_says_so_on_the_page_in_the_svg_and_the_pdf() {
+    let mut ed = Editor::default();
+    // 101 x 101 squares: 20,402 faces and 30,603 edges, over the limits of the plan.
+    add_shape(&mut ed, Shape::SurfaceModel(Box::new(flat_grid(101))));
+    let mut vp = Viewport::new(
+        v(20.0, 20.0),
+        v(220.0, 120.0),
+        v(505.0, 505.0),
+        10.0,
+        vec![FIRST_LAYER],
+    );
+    vp.name = "Plan".into();
+    let (sheet, _) = add_sheet(&mut ed, vp);
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    assert_eq!(page.notes.len(), 1, "{:?}", page.notes);
+    assert!(page.notes[0].contains("outline") && page.notes[0].contains("20402 faces"));
+    // Only the border is drawn: 4 sides of 101 edges, no fill.
+    assert_eq!(edge_segments(&page.prims), 4 * 101);
+    let text = svg::page_svg(&page);
+    assert!(
+        text.contains("<desc>") && text.contains("drawn as its outline"),
+        "{text}"
+    );
+    let mut cache = PageCache::default();
+    let bytes = export_pdf(
+        ed.doc(),
+        ed.revision(),
+        &mut cache,
+        &select_sheets(ed.doc(), None).unwrap(),
+    )
+    .unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let info = pdf.trailer.get(b"Info").unwrap().as_reference().unwrap();
+    let subject = pdf
+        .get_dictionary(info)
+        .unwrap()
+        .get(b"Subject")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let subject = String::from_utf8_lossy(subject).to_string();
+    assert!(
+        subject.contains("Page 1:") && subject.contains("outline"),
+        "{subject}"
+    );
+    // A page with nothing to say has no note.
+    let mut small = Editor::default();
+    add_box(&mut small, 0.0, 0.0, 1000.0, 500.0);
+    let (s2, _) = plan_viewport(&mut small, 100.0);
+    let page = compose_page(small.doc(), s2).unwrap();
+    assert!(page.notes.is_empty());
+    assert!(!svg::page_svg(&page).contains("<desc>"));
+}
+
+#[test]
+fn a_hidden_line_viewport_and_a_section_say_when_they_leave_edges_out() {
+    let mut ed = Editor::default();
+    // 130 x 130 squares: 50,960 edges, over the 50,000 lines of one object.
+    add_shape(&mut ed, Shape::SurfaceModel(Box::new(flat_grid(130))));
+    let mut vp = Viewport::new(
+        v(20.0, 20.0),
+        v(220.0, 120.0),
+        v(650.0, 650.0),
+        20.0,
+        vec![FIRST_LAYER],
+    );
+    vp.view = "top".into();
+    vp.mode = "hidden_line".into();
+    vp.name = "Top".into();
+    let (sheet, _) = add_sheet(&mut ed, vp);
+    let page = compose_page(ed.doc(), sheet).unwrap();
+    assert!(
+        page.notes
+            .iter()
+            .any(|n| n.contains("hidden-line limit") && n.contains("Viewport Top")),
+        "{:?}",
+        page.notes
+    );
+    let mut ed2 = Editor::default();
+    add_shape(&mut ed2, Shape::SurfaceModel(Box::new(flat_grid(130))));
+    // The whole grid is beyond the cut plane, in front of the grid.
+    let line = section_line_at(&mut ed2, -10.0, 1400.0);
+    let mut sv = Viewport::new(
+        v(20.0, 20.0),
+        v(220.0, 120.0),
+        v(500.0, 0.0),
+        10.0,
+        vec![FIRST_LAYER],
+    );
+    sv.view = "section".into();
+    sv.name = "Cut".into();
+    sv.section = Some(SectionView::new(line));
+    sv.snapshot_visibility(ed2.doc());
+    let (s2, _) = add_sheet(&mut ed2, sv);
+    let page = compose_page(ed2.doc(), s2).unwrap();
+    assert!(
+        page.notes.iter().any(|n| n.contains("Viewport Cut")),
+        "{:?}",
+        page.notes
+    );
 }
