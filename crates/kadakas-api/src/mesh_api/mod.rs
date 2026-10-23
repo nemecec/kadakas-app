@@ -22,6 +22,7 @@ use crate::errors::bad;
 use crate::params::mesh::*;
 use crate::{RpcError, Session};
 
+mod convert;
 mod edit;
 mod query;
 mod read;
@@ -120,6 +121,10 @@ pub const MESH_SOFTEN_EDGES: (&str, &str) = (
     "mesh.soften_edges",
     "Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and three numbers. considered is how many edges the angle test looked at. changed is how many of them got other flags than they had (a second call with the same angle changes 0). softened is how many edges are soft in the whole model after the call.",
 );
+pub const MESH_TO_SURFACE: (&str, &str) = (
+    "mesh.to_surface",
+    "Turn a mesh object (shape kind mesh3d, for example from import.file or an IFC import) into a surface model, in place and in one undo step. params: {id, tolerance? (mm, 0.001 to 1000, default 0.01: vertices closer than this weld), soften_below_angle? (degrees, 0 to 180, default off: edges between faces at an angle below it become soft and smooth, with the soften engine of mesh.soften_edges), merge? (default true: triangles in one plane merge into faces with holes; false keeps every triangle a face), dry_run? (convert nothing and answer with the report)}. The model must fit the limits of a surface model: 55,000 vertices, 150,000 edges, 100,000 faces and 300,000 loop vertices, counted after the merge. A mesh over a limit is refused with the counts (error_id mesh_too_large_for_surface, data over and counts) and nothing changes. Returns {id, kind: surface_model, softened_edges (0 when no angle was given), report: {source_vertices, source_triangles, welded_vertices, degenerate_triangles, duplicate_triangles, vertices, edges, faces, faces_with_holes, merged_triangles, unmerged_regions, healed_vertices, tolerance_mm, border_edges, nonmanifold_edges, closed, area_mm2, volume_mm3?, considered_edges, softened_edges, soften_below_angle?}, notes?}. The color of the mesh becomes the fill of the object. The sides of the faces follow the winding of the triangles.",
+);
 pub const MESH_SOLID: (&str, &str) = (
     "mesh.solid",
     "A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). Returns the change.",
@@ -178,6 +183,9 @@ pub const ERROR_IDS: &[&str] = &[
     "batch_too_large",
     "batch_edges_too_many",
     "command_refused",
+    "not_a_mesh",
+    "mesh_too_large_for_surface",
+    "mesh_not_convertible",
     "no_such_class",
     "no_such_resource",
 ];
@@ -194,6 +202,7 @@ pub fn describe() -> Value {
         "workflow": "Make a model with mesh.create. Draw edges with mesh.add_edges and read the ids of the new faces from the answer. Pull a face with mesh.push_pull. Check with mesh.solid_report. Look at it with mesh.render. Use mesh.batch for a long run of edits that must succeed together.",
         "results": "An edit answers {op, id, counts: {vertices, edges, faces}, revision, created: {vertices, edges, faces}, removed: {vertices, edges, faces}, truncated?, notes?}. The lists in created and removed have at most 1000 ids each. Notes tell what the edit changed that you did not ask for, such as a material that a merged face dropped. model_gone is true when the edit moved the whole model away (mesh.make_group of every face), so there are no counts.",
         "soften_edges": "mesh.soften_edges answers with three numbers. considered is how many edges the angle test looked at (edges with exactly two faces, and edges between coplanar faces only with coplanar). changed is how many edges got other flags than they had. softened is how many edges are soft in the whole model after the edit. A second call with the same angle changes 0.",
+        "to_surface": "mesh.to_surface turns a mesh3d object into a surface model (MOD-12). Imports of OBJ, STL and glTF files make mesh3d objects, which hold millions of triangles and have no edges and faces to edit. The conversion welds the vertices, merges coplanar triangles into faces with holes, and softens the edges under an angle if you pass soften_below_angle. It reports counts: the answer has softened_edges, and report has the rest. A mesh over the limits of a surface model is refused with the counts and stays a mesh. import.file does the same in one step with the options to_surface and soften_below_angle.",
         "undo": "Every edit method is one undo step, also mesh.erase with edges and faces, and mesh.batch with all its edits. A refused edit changes nothing and makes no step. The person sees the steps of an agent in the activity panel and can revert them.",
         "camera": "The camera of mesh.render and render.png is in drawing coordinates: target is a point of the drawing in mm. The answer of mesh.render has the camera that was used. Give it back as camera and the picture is the same, also after other models were added elsewhere.",
         "errors": format!("A refusal is a validation error (code 3, kind validation). A missing object, layer, vertex, edge or face is not_found (2). A locked layer is a conflict (5). A size limit is limit (6). A parameter of the wrong name or type is invalid_params (-32602) and has no error_id. The data of the error has error_id, a stable name, and the ids that matter (object, layer, edge, face, vertex, operand, step). The message is English text for a person. Ids: {}. The data of an edit in a batch has step, the index of the edit.", ERROR_IDS.join(", ")),
@@ -214,6 +223,7 @@ pub fn describe() -> Value {
             {"method": "mesh.solid_report", "params": {"id": m}},
             {"method": "mesh.transform", "params": {"id": m, "faces": [9], "scale": {"factor": 0.5, "about": [2000, 1500, 2500]}}},
             {"method": "mesh.soften_edges", "params": {"id": m, "below_angle": 20}},
+            {"method": "mesh.to_surface", "params": {"id": m, "soften_below_angle": 20, "dry_run": true}},
             {"method": "mesh.near", "params": {"point": [100, 100, 0], "radius": 500, "kinds": ["faces", "edges"]}},
             {"method": "mesh.pick", "params": {"origin": [2000, 1500, 9000], "direction": [0, 0, -1]}},
             {"method": "material.create", "params": {"name": "Brick", "base_color": [180, 80, 60]}},
@@ -238,6 +248,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "near" | "pick" => query::handle(s, op, p),
         "render" => render(s, p),
         "batch" => edit::batch(s, p),
+        "to_surface" => convert::to_surface(s, p),
         _ if edit::is_edit(op) => edit::single(s, op, p),
         _ => Err(RpcError::method_not_found(method)),
     })

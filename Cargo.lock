@@ -2704,6 +2704,7 @@ dependencies = [
  "kadakas-ifc",
  "kadakas-io",
  "kadakas-irrigation",
+ "kadakas-meshio",
  "kadakas-plants",
  "kadakas-plugin",
  "kadakas-plugin-abi",
@@ -2991,6 +2992,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-meshio"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "kadakas-modeler"
 version = "0.1.0"
 dependencies = [
@@ -3204,6 +3216,7 @@ dependencies = [
  "kadakas-site",
  "kadakas-units",
  "proptest",
+ "serde",
  "serde_json",
 ]
 

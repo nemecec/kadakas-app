@@ -604,6 +604,10 @@ An agent drives the same geometry as the tools of the modeler. The methods are `
 
 The edits of an agent are marked as agent changes and show in the Activity panel of the person. The modeler has no review window of its own for them.
 
+## Import and export (MOD-12)
+
+File > Import reads OBJ, STL, glTF, GLB and IFC. File > Export writes STL, OBJ, glTF, GLB, IFC and DXF. The windows build the calls of `import.file` and `export.file`, so the modeler and an agent use one code path. A mesh file becomes `mesh3d` objects. The window asks for the unit and the up axis of OBJ and STL files and for the move to the origin. It also asks "Soften edges under an angle?". The answer is off at first, with 20 degrees. When it is on, the window counts the edges that the angle would soften, and the import makes surface models that fit the limits. The answer is kept in `modeler.json`. The guide is `docs/interop.md`.
+
 ## Clean room
 
 The layout, the tool names, the logic of the tools and the default keys follow public documentation of programs of this kind (`docs/research/sketchup-public-features.md`). No program of that kind was downloaded or run. No icon, image or text was copied. SketchUp is a trademark of Trimble Inc. The About window says that Kadakas Modeler is not affiliated with it.

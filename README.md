@@ -6,6 +6,7 @@ Kadakas is a 2D CAD program for landscape design, written in Rust. Every change 
 serializable, undoable command. The desktop app, scripts and AI agents all send the same commands.
 
 - `crates/kadakas-core`: document model, commands with undo, SVG render, JSON-RPC API. No UI code.
+- `crates/kadakas-meshio`: readers for OBJ, STL and glTF and a writer for STL (`docs/interop.md`). No file access.
 - `crates/kadakas-io`: file formats. Imports DXF, Shapefile and GeoJSON, exports DXF and GeoJSON. Reads and writes DWG through a converter that you install (`docs/dwg.md`). The core never parses files.
 - `crates/kadakas-ifc`: IFC4 export and IFC2x3, IFC4 and IFC4x3 import (a streaming STEP reader, geometry, mapping).
 - `crates/kadakas-script`: scripting. It finds Python, runs scripts with limits, and holds the plug-in object reset protocol.

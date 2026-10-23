@@ -91,6 +91,8 @@ mod ifc_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod io;
 #[cfg(not(target_arch = "wasm32"))]
+mod meshio_api;
+#[cfg(not(target_arch = "wasm32"))]
 mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 mod x3d_api;
@@ -699,6 +701,7 @@ pub const METHODS: &[(&str, &str)] = &[
     mesh_api::MESH_HIDE,
     mesh_api::MESH_SOFTEN,
     mesh_api::MESH_SOFTEN_EDGES,
+    mesh_api::MESH_TO_SURFACE,
     mesh_api::MESH_SOLID,
     mesh_api::MESH_MAKE_GROUP,
     mesh_api::MESH_MAKE_COMPONENT,

@@ -31,12 +31,10 @@ impl<W: Write> Exporter<'_, W> {
             Shape::Mesh3d(_) => self.mesh3d(obj),
             Shape::Extrude(_) | Shape::Sweep(_) => self.solid(obj),
             Shape::Underlay(_) => skip("map underlay (a picture)"),
-            Shape::SurfaceModel(_) => {
-                skip("surface model: IFC export of surface models is not done yet (MOD-12)")
-            }
-            Shape::Component { .. } => {
-                skip("component: IFC export of components is not done yet (MOD-12)")
-            }
+            Shape::SurfaceModel(_) => self.surface_object(obj),
+            Shape::Component { .. } => skip(
+                "component instance of the 3D modeler: IFC export of components is not done, explode the instance first",
+            ),
             Shape::Guide(_) => skip("guide: construction geometry of the 3D modeler"),
             Shape::SiteModifier {
                 modifier: kadakas_core::site::ModifierKind::TextureBed { .. },

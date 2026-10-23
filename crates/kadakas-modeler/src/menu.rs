@@ -196,6 +196,23 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             entry(
                 ui,
                 cmds,
+                tr!("modeler-file-import"),
+                String::new(),
+                true,
+                Cmd::Import,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-file-export"),
+                String::new(),
+                true,
+                Cmd::Export,
+            );
+            ui.separator();
+            entry(
+                ui,
+                cmds,
                 tr!("modeler-file-open-in-app"),
                 String::new(),
                 true,

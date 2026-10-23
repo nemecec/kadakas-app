@@ -51,6 +51,8 @@ mod tests_massing;
 #[cfg(test)]
 mod tests_solids;
 #[cfg(test)]
+mod tests_surface;
+#[cfg(test)]
 mod tests_wall;
 
 use std::io::Write;

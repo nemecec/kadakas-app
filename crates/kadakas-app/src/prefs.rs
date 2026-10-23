@@ -44,6 +44,9 @@ pub struct Prefs {
     pub max_version_mib: u32,
     /// Animate the view when an agent moves it (AGR-02). Off: the view jumps.
     pub animate_agent_view: bool,
+    /// The answer to "Soften edges under an angle?" in the import of meshes (MOD-12): off, 20
+    /// degrees, until the person changes it. The next import starts with the last answer.
+    pub import_soften: kadakas_ui_core::mesh_import::SoftenPref,
 }
 
 /// The default of `Prefs::max_versions`: the most a reader reads (no practical limit).
@@ -80,6 +83,7 @@ impl Default for Prefs {
             max_versions: DEFAULT_MAX_VERSIONS,
             max_version_mib: DEFAULT_MAX_VERSION_MIB,
             animate_agent_view: true,
+            import_soften: kadakas_ui_core::mesh_import::SoftenPref::default(),
         }
     }
 }

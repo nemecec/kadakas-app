@@ -48,6 +48,7 @@ Edits. Each one is one undo step.
 | `mesh.hide` | Hide or show faces and edges. |
 | `mesh.soften` | Set the soft and smooth flags of edges. |
 | `mesh.soften_edges` | Soften every edge under an angle. It counts the edges that changed. |
+| `mesh.to_surface` | Turn a mesh object (from `import.file`) into a surface model. It can soften the edges under an angle. See `docs/interop.md`. |
 | `mesh.solid` | Union, subtract, intersect, trim or split two solids. |
 | `mesh.make_group` | Make a group. |
 | `mesh.make_component` | Make a component. |
@@ -216,6 +217,9 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `batch_too_large` | More than 50 edits. | `max`, `count` |
 | `batch_edges_too_many` | More than 10,000 edges in all. | `max`, `count` |
 | `command_refused` | A group or component command was refused. | `op` |
+| `not_a_mesh` | `mesh.to_surface` was called on an object that is not a mesh (`mesh3d`). | `object`, `kind` |
+| `mesh_too_large_for_surface` | The mesh is over a limit of a surface model. Nothing changes. | `over` (each count with its limit), `counts` |
+| `mesh_not_convertible` | The mesh gives no valid surface model (no triangle with an area, or a point out of range). | |
 
 `operand` is `first` or `second`. `open_kind` is `border`, `non_manifold` or `reversed`. In a batch the data also has `step`.
 

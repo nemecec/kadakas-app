@@ -412,6 +412,26 @@ pub struct MeshSoftenEdgesParams {
     pub coplanar: Option<bool>,
 }
 
+// Parameters of `mesh.to_surface`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeshToSurfaceParams {
+    /// a mesh object (shape kind mesh3d), for example from import.file
+    pub id: ObjectRef,
+    /// mm, 0.001 to 1000: vertices closer than this weld. Default 0.01
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance: Option<f64>,
+    /// degrees, 0 to 180, default off: edges between faces at an angle below it become soft and smooth
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soften_below_angle: Option<f64>,
+    /// true (default): coplanar triangles merge into faces with holes. false: every triangle is a face
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<bool>,
+    /// true: convert nothing, answer with the report (the counts and the edges that would soften)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+}
+
 // Parameters of `mesh.solid`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -546,6 +566,7 @@ entries! {
     "mesh.hide" => MeshHideParams,
     "mesh.soften" => MeshSoftenParams,
     "mesh.soften_edges" => MeshSoftenEdgesParams,
+    "mesh.to_surface" => MeshToSurfaceParams,
     "mesh.solid" => MeshSolidParams,
     "mesh.make_group" => MeshMakeGroupParams,
     "mesh.make_component" => MeshMakeComponentParams,

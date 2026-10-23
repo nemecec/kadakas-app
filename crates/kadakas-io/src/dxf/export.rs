@@ -14,9 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 use std::fmt::{Display, Write};
 
-use kadakas_core::DVec2;
 use kadakas_core::curve::{self, Seg};
 use kadakas_core::model::{Attributes, Color, Document, Object, Shape, arc_sweep};
+use kadakas_core::{DVec2, DVec3};
 
 use super::nearest_aci;
 use crate::options::{ExportOrigin, LayerMode};
@@ -357,8 +357,9 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
             report.count(o.shape.kind());
         } else {
             let why = match o.shape {
-                Shape::SurfaceModel(_) | Shape::Component { .. } => {
-                    "surface models and components of the 3D modeler: DXF export is not done yet (MOD-12)"
+                Shape::SurfaceModel(_) => "surface model without a visible face",
+                Shape::Component { .. } => {
+                    "component instance of the 3D modeler: DXF export of components is not done, explode the instance first"
                 }
                 Shape::Guide(_) => "guide: construction geometry of the 3D modeler",
                 _ => "unsupported kind",
@@ -1162,6 +1163,34 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
             cx.pt3(w, 10, p.x, p.y, p.z);
         }
         Shape::Mesh3d(m) => native::mesh_object(w, cx, o, layer, hidden, m),
+        Shape::SurfaceModel(m) => {
+            // The faces as triangles, in the drawing, up at the elevation of the layer. A hidden
+            // face is left out, and a mirror turns the triangles back to face outward.
+            let Ok(sm) = m.mesh() else {
+                return false;
+            };
+            let lift = cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation);
+            let vertices: Vec<DVec3> = sm
+                .positions
+                .iter()
+                .map(|p| {
+                    let q = m.transform.transform_point3(*p);
+                    DVec3::new(q.x, q.y, q.z + lift)
+                })
+                .collect();
+            let flip = m.transform.matrix3.determinant() < 0.0;
+            let triangles: Vec<[u32; 3]> = sm
+                .triangles
+                .iter()
+                .zip(&sm.faces)
+                .filter(|(_, f)| !m.face_hidden(**f))
+                .map(|(t, _)| if flip { [t[0], t[2], t[1]] } else { *t })
+                .collect();
+            if triangles.is_empty() {
+                return false;
+            }
+            native::mesh(w, cx, o, layer, hidden, &vertices, &triangles);
+        }
         Shape::Extrude(_) | Shape::Sweep(_) => {
             // The mesh of the solid, up at the elevation of its layer.
             let Some(m) = o.shape.solid_mesh() else {

@@ -19,6 +19,7 @@ kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 kadakas-review = { version = "0.1.0", path = "../kadakas-review", default-features = false }
 glam = { version = "0.34.1", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
 [dev-dependencies]

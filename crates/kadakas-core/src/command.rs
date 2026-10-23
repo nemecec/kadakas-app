@@ -682,6 +682,23 @@ pub enum Command {
         id: ObjectId,
         edit: crate::surface::Edit,
     },
+    /// Mesh to surface model (MOD-12, see `crate::surface::surface_from_triangles`): the mesh
+    /// object `id` (`mesh3d`) becomes a surface model, in place (same ID, layer, class and
+    /// data). Vertices within `tolerance` mm weld (default: the length tolerance of surface
+    /// models), triangles in one plane merge into faces with holes, and with `merge` false every
+    /// triangle stays a face. `soften_below_angle` (degrees, 0 to 180) softens the edges under
+    /// the angle with the soften engine of MOD-08. A mesh over the limits of a surface model
+    /// (vertices, edges, faces, loop vertices) is refused with the counts and nothing changes.
+    /// One undo step. The outcome has a `report` with the counts.
+    Mesh3dToSurface {
+        id: ObjectId,
+        #[serde(default)]
+        tolerance: Option<f64>,
+        #[serde(default)]
+        soften_below_angle: Option<f64>,
+        #[serde(default = "yes")]
+        merge: bool,
+    },
     /// Make Group (MOD-07, see `crate::component`): the chosen faces and edges of the surface model
     /// `model` and the chosen `objects` (groups, component instances, whole surface models) go into
     /// a new group. The geometry moves into a surface model of its own (same ids and placement), so
@@ -768,6 +785,11 @@ impl StepRun<'_, '_> {
         self.tx.doc
     }
 
+    /// The IDs of the objects, layers and classes that the commands so far made, in order.
+    pub fn created(&self) -> &[Uid] {
+        &self.out.created
+    }
+
     /// Runs one command. An error ends the step and the editor takes back the commands that ran.
     pub fn run(&mut self, cmd: &Command) -> Result<(), CommandError> {
         check_picture_limits(self.limits, cmd)?;
@@ -830,6 +852,9 @@ pub enum CommandError {
     /// give a stable id without running the edit again).
     #[error("invalid value: {0}")]
     Surface(crate::surface::SurfaceError),
+    /// A mesh could not become a surface model (MOD-12): the typed reason keeps the counts.
+    #[error("{0}")]
+    MeshToSurface(crate::surface::ConvertError),
 }
 
 /// Result of a successful command.
@@ -841,6 +866,10 @@ pub struct Outcome {
     /// face that merged into another face in `edit_surface`). Left out when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// A report that the command makes for its caller (for example the counts of
+    /// `mesh3d_to_surface`). Left out when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<serde_json::Value>,
 }
 
 /// Snapshot of the document parts that are not objects.
@@ -2070,6 +2099,12 @@ impl<'a> Tx<'a> {
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
             Command::EditSurface { id, edit } => self.run_surface(*id, edit, out)?,
+            Command::Mesh3dToSurface {
+                id,
+                tolerance,
+                soften_below_angle,
+                merge,
+            } => self.run_mesh_to_surface(*id, *tolerance, *soften_below_angle, *merge, out)?,
             Command::MakeGroup { .. }
             | Command::MakeComponent { .. }
             | Command::Explode { .. }

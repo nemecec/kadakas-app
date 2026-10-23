@@ -45,3 +45,66 @@ impl Tx<'_> {
         Ok(())
     }
 }
+
+impl Tx<'_> {
+    /// Mesh to surface model (MOD-12): replaces the shape of a `mesh3d` object by the surface
+    /// model that `surface_from_triangles` makes from it.
+    pub(super) fn run_mesh_to_surface(
+        &mut self,
+        id: ObjectId,
+        tolerance: Option<f64>,
+        soften_below_angle: Option<f64>,
+        merge: bool,
+        out: &mut Outcome,
+    ) -> Result<(), CommandError> {
+        self.editable(id)?;
+        let obj = self.doc.object(id).ok_or(CommandError::NoObject(id))?;
+        let Shape::Mesh3d(mesh) = &obj.shape else {
+            return Err(CommandError::Invalid(format!(
+                "object {id} is not a mesh ({}): only a mesh3d object becomes a surface model",
+                obj.shape.kind()
+            )));
+        };
+        let elevation = self.doc.layer(obj.layer).map_or(0.0, |l| l.elevation);
+        let converted = crate::surface::surface_from_triangles(
+            &mesh.vertices,
+            &mesh.triangles,
+            &crate::surface::ConvertOptions {
+                tolerance,
+                soften_below_angle,
+                merge,
+            },
+        )
+        .map_err(CommandError::MeshToSurface)?;
+        let crate::surface::Converted {
+            mut model,
+            origin,
+            report,
+            mut notes,
+        } = converted;
+        // The mesh has absolute heights. The model measures them from the layer.
+        model.transform = glam::DAffine3::from_translation(glam::DVec3::new(
+            origin.x,
+            origin.y,
+            origin.z - elevation,
+        ));
+        model.name = mesh.name.clone();
+        let color = mesh.color;
+        if let Some(p) = model.problem() {
+            return Err(CommandError::Invalid(p));
+        }
+        self.touch(id);
+        let o = self.doc.object_mut(id).expect("checked");
+        o.shape = Shape::SurfaceModel(Box::new(model));
+        if let Some(c) = color
+            && o.attrs.fill.is_none()
+        {
+            o.attrs.fill = Some(c);
+            notes.push("the color of the mesh is now the fill of the object".into());
+        }
+        out.notes
+            .extend(notes.into_iter().map(|n| format!("object {id}: {n}")));
+        out.report = serde_json::to_value(&report).ok();
+        Ok(())
+    }
+}

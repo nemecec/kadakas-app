@@ -15,6 +15,10 @@ param_enum! {
         Shp = "shp" | "shapefile",
         Geojson = "geojson" | "json",
         Ifc = "ifc",
+        Obj = "obj",
+        Stl = "stl",
+        Gltf = "gltf",
+        Glb = "glb",
     }
 }
 
@@ -27,6 +31,7 @@ param_enum! {
         Gltf = "gltf",
         Glb = "glb",
         Obj = "obj",
+        Stl = "stl",
         Pdf = "pdf",
         SheetSvg = "sheet_svg",
         SheetPng = "sheet_png",

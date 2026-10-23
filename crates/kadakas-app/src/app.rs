@@ -1283,7 +1283,7 @@ impl KadakasApp {
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::ExportPdf => self.export_pdf(),
             #[cfg(not(target_arch = "wasm32"))]
-            MenuAction::Import => self.io_ui.start_import(),
+            MenuAction::Import => self.io_ui.start_import(self.prefs.import_soften),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::Export => self.io_ui.start_export(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -3831,8 +3831,12 @@ impl eframe::App for KadakasApp {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.io_ui.show(&ctx, &mut self.session, &mut self.status)
-            == crate::io_dialog::IoEvent::Imported
+        if self.io_ui.show(
+            &ctx,
+            &mut self.session,
+            &mut self.status,
+            &mut self.prefs.import_soften,
+        ) == crate::io_dialog::IoEvent::Imported
         {
             self.needs_fit = true;
         }

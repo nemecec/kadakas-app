@@ -139,6 +139,7 @@ mod arrange;
 mod check;
 mod clash;
 mod edit;
+mod frommesh;
 mod geom;
 mod index;
 mod part;
@@ -154,6 +155,8 @@ mod tests;
 mod tests_absorb;
 #[cfg(test)]
 mod tests_followme;
+#[cfg(test)]
+mod tests_frommesh;
 #[cfg(test)]
 mod tests_hide;
 #[cfg(test)]
@@ -178,6 +181,10 @@ pub use edit::style::{
     ATTR_FACETED, ATTR_SMOOTH, ATTR_SOFT, SoftSurfaces, dihedral_of, flagged, soften_plan,
 };
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
+pub use frommesh::{
+    ConvertError, ConvertOptions, ConvertReport, Converted, Counts, MAX_CONVERT_TRIANGLES,
+    OverLimit, softened_count, surface_from_triangles,
+};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
 pub use query::{closest_on_segment, faces_near, ray_faces};

@@ -15,6 +15,7 @@ mod canvas;
 mod edit3d;
 mod files;
 mod icons;
+mod interop;
 mod launch;
 mod menu;
 mod prefs;

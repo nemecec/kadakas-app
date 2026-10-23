@@ -4572,6 +4572,43 @@
       "type": "object"
     },
     {
+      "description": "Mesh to surface model (MOD-12, see `crate::surface::surface_from_triangles`): the mesh\nobject `id` (`mesh3d`) becomes a surface model, in place (same ID, layer, class and\ndata). Vertices within `tolerance` mm weld (default: the length tolerance of surface\nmodels), triangles in one plane merge into faces with holes, and with `merge` false every\ntriangle stays a face. `soften_below_angle` (degrees, 0 to 180) softens the edges under\nthe angle with the soften engine of MOD-08. A mesh over the limits of a surface model\n(vertices, edges, faces, loop vertices) is refused with the counts and nothing changes.\nOne undo step. The outcome has a `report` with the counts.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "merge": {
+          "default": true,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "mesh3d_to_surface",
+          "type": "string"
+        },
+        "soften_below_angle": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "tolerance": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Make Group (MOD-07, see `crate::component`): the chosen faces and edges of the surface model\n`model` and the chosen `objects` (groups, component instances, whole surface models) go into\na new group. The geometry moves into a surface model of its own (same ids and placement), so\nit no longer welds to the rest. The objects and the model must be on one layer and in one\ngroup. Returns the ID of the group, then the ID of the new surface model, if one was made.",
       "properties": {
         "edges": {

@@ -50,6 +50,7 @@ kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
 kadakas-ifc = { version = "0.1.0", path = "../kadakas-ifc" }
 kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
+kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"

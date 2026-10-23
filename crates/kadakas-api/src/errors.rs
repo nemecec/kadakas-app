@@ -184,8 +184,37 @@ impl From<kadakas_core::command::CommandError> for RpcError {
             | E::NoIssue(_)
             | E::NoComment(_) => Self::not_found(e),
             E::ResourceInUse(..) | E::LayerNotEmpty(_) | E::LayerLocked(_) => Self::conflict(e),
+            E::MeshToSurface(ref c) => convert_rpc(c),
             E::LastLayer | E::Invalid(_) | E::Surface(_) => Self::validation(e),
         }
+    }
+}
+
+/// A refusal of the conversion into a surface model, as an API error with the counts.
+pub fn convert_rpc(e: &kadakas_core::surface::ConvertError) -> RpcError {
+    match e {
+        kadakas_core::surface::ConvertError::OverLimit { over, counts } => {
+            let d = json!({
+                "error_id": "mesh_too_large_for_surface",
+                "over": over,
+                "counts": counts,
+            });
+            RpcError::limit(e)
+                .with_reason("mesh_too_large_for_surface")
+                .with_details(d)
+        }
+        kadakas_core::surface::ConvertError::TooManyTriangles { count, limit } => {
+            RpcError::limit(e)
+                .with_reason("mesh_too_large_for_surface")
+                .with_details(json!({
+                    "error_id": "mesh_too_large_for_surface",
+                    "triangles": count, "limit": limit,
+                }))
+        }
+        kadakas_core::surface::ConvertError::Options(_) => bad(e),
+        other => RpcError::validation(other)
+            .with_reason("mesh_not_convertible")
+            .with_details(json!({"error_id": "mesh_not_convertible"})),
     }
 }
 

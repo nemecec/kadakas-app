@@ -47,7 +47,7 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
         None => Ok(None),
         Some(n) => Format::from_name(n).map(Some).ok_or_else(|| {
             RpcError::invalid_params(format!(
-                "unknown format '{n}'. Use dxf, shp, geojson, ifc or dwg (export also: gltf, glb, obj)"
+                "unknown format '{n}'. Use dxf, shp, geojson, ifc, dwg, obj, stl, gltf or glb (export also: pdf, sheet_svg, sheet_png)"
             ))
         }),
     }
@@ -56,8 +56,8 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 /// Formats, options and examples, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)"],
-        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "import_formats": ["dxf (ASCII)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)", "obj, stl, gltf, glb (triangle meshes, see describe.io.mesh_files)"],
+        "export_formats": ["dxf (ASCII)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "stl (3D, binary or ASCII, see describe.io.mesh_files)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed). Default: for DXF and DWG with track_source (the default) a new layer named after the file, else the active layer; for GIS files the active layer",
@@ -85,13 +85,14 @@ pub(crate) fn describe() -> Value {
             "visible_only": "false (default)",
             "native_annotations": "DXF: true (default). Linear, radial and diameter dimensions become DIMENSION entities (each with its block), callouts become LEADER and MTEXT, text becomes MTEXT. Other annotations are lines and text. false: all annotations are lines and text",
             "site_mesh": "DXF: none (default) | existing | proposed. Also writes the triangles of a site model surface as a 3D mesh",
-            "mesh_entity": "DXF: polyface (default: a POLYLINE polyface mesh) | face3d (one 3DFACE per triangle). For mesh3d objects and the site mesh",
+            "mesh_entity": "DXF: polyface (default: a POLYLINE polyface mesh) | face3d (one 3DFACE per triangle) | mesh (one MESH entity, DXF 2010 style, with triangle faces). For mesh3d objects, surface models and the site mesh",
             "patterns": "DXF: what to write of the unit pattern of hardscapes that have a joint pattern. none (default: only the outline; a pattern can have hundreds of thousands of units) | gaps (gap center lines as LINE on <layer>-GAPS) | units (every unit, whole or cut, as a closed polyline with the gap taken off: <layer>-UNITS-WHOLE and <layer>-UNITS-CUT; a hole inside a cut unit is a closed polyline on <layer>-UNITS-VOID) | blocks (like units, but each whole unit is an INSERT of the block of its unit type, e.g. KADAKAS_200X100, on <layer>-UNITS-WHOLE; cut units stay polylines; about 1.4 to 1.6 times smaller than units, and CAD programs count the blocks directly). The zones and courses of a hardscape are written group by group on their own layers (<layer>-ZONE-<NAME>-..., <layer>-COURSE-<NAME>-...). Cut units are cut exactly to the outline minus the holes; curves are cut into lines within the tolerance. The counts equal report.unit_pattern when the tolerances are equal (both default to 1 mm). A pattern with more than 600000 units (gaps: 1000000 lines) is an error that names the hardscape: nothing is dropped silently. When the units of a hardscape do not cover its area as they should (a hole in a course, or as the coverage findings of unit_pattern.check), the reply has warnings: [text] (also report.warnings) with the count, the area and where. The report lists the counts written",
             "tolerance": "mm, curve approximation. Default 1"
         },
         "ifc": crate::ifc_api::describe(),
         "dwg": crate::dwg_api::describe(),
         "x3d": crate::x3d_api::describe()["export"],
+        "mesh_files": crate::meshio_api::describe(),
         "section_viewport": crate::x3d_api::describe()["section_viewport"],
         "examples": [
             {"method": "import.file", "params": {"path": "/data/site.dxf", "options": {"layer_mode": "classes"}}},
@@ -182,6 +183,9 @@ impl Session {
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.import_ifc_file(path, &options, checked);
         }
+        if let Some(f) = crate::meshio_api::format_of(format.as_deref(), &path) {
+            return self.import_mesh_file(f, path, &options, checked);
+        }
         let mut opts = ImportOptions::from_json(&options).map_err(rpc)?;
         // A client cannot raise the limit of the session.
         opts.max_bytes = opts.max_bytes.min(self.limits.import_text_bytes);
@@ -266,6 +270,11 @@ impl Session {
         }
         if crate::ifc_api::is_ifc(format.as_deref(), &path) {
             return self.export_ifc_file(path, &options, overwrite, checked);
+        }
+        if crate::meshio_api::format_of(format.as_deref(), &path)
+            == Some(kadakas_meshio::Format::Stl)
+        {
+            return self.export_stl_file(path, &options, overwrite, checked);
         }
         if let Some(kind) = crate::x3d_api::kind_of(format.as_deref(), &path) {
             return self.export_x3d_file(kind, path, &options, overwrite, checked);

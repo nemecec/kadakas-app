@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 mod elements;
+mod faceted;
 mod finish;
 mod massing;
 mod schema;
@@ -134,7 +135,7 @@ fn default_class(kind: &str) -> (&'static str, Option<&'static str>) {
         "wall" => ("IfcWall", Some("SOLIDWALL")),
         "retaining_wall" => ("IfcWall", Some("RETAININGWALL")),
         "site_model" => ("IfcGeographicElement", Some("TERRAIN")),
-        "massing" | "mesh3d" | "extrude" | "sweep" => {
+        "massing" | "mesh3d" | "surface_model" | "extrude" | "sweep" => {
             ("IfcBuildingElementProxy", Some("NOTDEFINED"))
         }
         _ => ("IfcGeographicElement", Some("USERDEFINED")),

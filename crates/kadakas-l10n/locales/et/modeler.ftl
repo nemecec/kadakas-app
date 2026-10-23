@@ -215,3 +215,11 @@ modeler-app-save-first = Salvesta mudel kõigepealt. Siis saab Kadakase rakendus
 modeler-app-sent = Fail { $name } saadeti töötavale Kadakase rakendusele. Fail on nüüd avatud kahes programmis: viimane salvestus jääb peale.
 modeler-file-changed-reloaded = Teine programm muutis faili { $name }; see laaditi uuesti.
 modeler-file-changed-dirty = Teine programm muutis faili { $name }. Sinu muudatused on salvestamata; salvestamine küsib enne faili asendamist.
+
+## Fail > Import ja Fail > Ekspordi (interop.rs, MOD-12)
+modeler-file-import = Impordi...
+modeler-file-export = Ekspordi...
+modeler-import-title = Faili import
+modeler-import-button = Impordi
+modeler-import-cancel = Loobu
+modeler-export-title = Faili eksport

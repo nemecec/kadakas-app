@@ -1,0 +1,17 @@
+[package]
+name = "kadakas-meshio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Triangle mesh files for Kadakas (MOD-12): readers for OBJ, STL and glTF and a writer for STL. Pure Rust, no file access, no other Kadakas crate."
+
+[dependencies]
+base64 = "0.22.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+proptest = "1.11.0"

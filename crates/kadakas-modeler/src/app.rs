@@ -50,6 +50,10 @@ pub enum Cmd {
     Open,
     Save,
     SaveAs,
+    /// File > Import: OBJ, STL, glTF, GLB or IFC (MOD-12).
+    Import,
+    /// File > Export: STL, OBJ, glTF, GLB, IFC or DXF (MOD-12).
+    Export,
     Quit,
     Undo,
     Redo,
@@ -193,6 +197,8 @@ pub struct ModelerApp {
     watch: Option<(PathBuf, (u64, Option<std::time::SystemTime>))>,
     watch_next: f64,
     pub about: About,
+    /// The windows of File > Import and File > Export (MOD-12).
+    pub interop: crate::interop::Interop,
     launch: Launch,
     ask: Box<dyn Ask>,
     /// What waits for the answer about unsaved changes. One question at a time.
@@ -266,6 +272,7 @@ impl ModelerApp {
             watch: None,
             watch_next: 0.0,
             about: About::default(),
+            interop: Default::default(),
             launch: Launch::new(None),
             ask,
             pending: None,
@@ -653,6 +660,16 @@ impl ModelerApp {
             }
             Cmd::Save => self.save(false),
             Cmd::SaveAs => self.save(true),
+            Cmd::Import => {
+                if let Some(p) = crate::interop::pick_import() {
+                    self.interop.start_import(p, self.prefs.import_soften);
+                }
+            }
+            Cmd::Export => {
+                if let Some(p) = crate::interop::pick_export(self.path.as_deref()) {
+                    self.interop.start_export(p);
+                }
+            }
             Cmd::OpenInApp => self.open_in_app(),
             Cmd::Quit => {
                 if self.dirty() {
@@ -2013,8 +2030,25 @@ impl ModelerApp {
             self.ask_resize(r);
         }
         self.confirm_dialog(&ctx);
+        self.interop_windows(&ctx);
         self.about.show(&ctx);
         self.finish_frame(&ctx);
+    }
+
+    /// The windows of File > Import and File > Export. A finished import frames the new model.
+    fn interop_windows(&mut self, ctx: &egui::Context) {
+        let done = self.interop.show(
+            ctx,
+            &mut self.session,
+            &mut self.status,
+            &mut self.prefs.import_soften,
+        );
+        if done == crate::interop::Outcome::Imported {
+            self.session.selection.clear();
+            self.edit.reset();
+            self.info_cache = None;
+            self.fit_pending = true;
+        }
     }
 
     /// The title, the close request and the end of the program.

@@ -7,6 +7,7 @@ use kadakas_l10n::tr;
 use std::path::{Path, PathBuf};
 
 use kadakas_api::Session;
+use kadakas_ui_core::mesh_import::{self, MeshImportForm, Preview, SoftenPref};
 use serde_json::{Map, Value, json};
 
 pub(crate) const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
@@ -18,9 +19,14 @@ enum Kind {
     Dxf,
     Gis,
     Ifc,
+    /// OBJ, STL, glTF and GLB (MOD-12).
+    Mesh,
 }
 
 fn kind_of(path: &Path) -> Kind {
+    if mesh_import::kind_of(path).is_some() {
+        return Kind::Mesh;
+    }
     match path
         .extension()
         .and_then(|e| e.to_str())
@@ -131,10 +137,16 @@ pub struct ImportForm {
     pub ifc_storeys: bool,
     /// IFC: terrain as a 3D mesh instead of a site model.
     pub ifc_terrain_mesh: bool,
+    /// IFC: the answer to "Soften edges under an angle?".
+    pub ifc_soften: SoftenPref,
+    /// OBJ, STL, glTF and GLB: the unit, the axis and the answer to "Soften edges under an
+    /// angle?". `None` for the other files.
+    pub mesh: Option<MeshImportForm>,
 }
 
 impl ImportForm {
     pub fn new(path: PathBuf) -> Self {
+        let path_for_mesh = path.clone();
         ImportForm {
             path,
             layers_as_layers: false,
@@ -151,7 +163,19 @@ impl ImportForm {
             keep_origin: false,
             ifc_storeys: true,
             ifc_terrain_mesh: false,
+            ifc_soften: SoftenPref::default(),
+            mesh: MeshImportForm::new(path_for_mesh, SoftenPref::default()),
         }
+    }
+
+    /// The form with the answer about softening that the prefs remember.
+    pub fn with_soften(path: PathBuf, soften: SoftenPref) -> Self {
+        let mut f = ImportForm::new(path);
+        f.ifc_soften = soften.valid();
+        if let Some(m) = f.mesh.as_mut() {
+            m.soften = soften.valid();
+        }
+        f
     }
 
     /// The `import.file` parameters.
@@ -162,10 +186,27 @@ impl ImportForm {
                 o.insert(key.into(), json!(v.trim()));
             }
         };
+        if let Some(m) = self
+            .mesh
+            .as_ref()
+            .filter(|_| kind_of(&self.path) == Kind::Mesh)
+        {
+            let mut p = m.params(false);
+            if !self.layer.trim().is_empty() {
+                p["options"]["layer"] = json!(self.layer.trim());
+            }
+            return p;
+        }
         if kind_of(&self.path) == Kind::Ifc {
             o.insert("layers_from_storeys".into(), json!(self.ifc_storeys));
             if self.ifc_terrain_mesh {
                 o.insert("terrain".into(), json!("mesh"));
+            }
+            if self.ifc_soften.on {
+                o.insert(
+                    "soften_below_angle".into(),
+                    json!(self.ifc_soften.valid().angle),
+                );
             }
             return json!({"path": self.path, "options": o});
         }
@@ -194,7 +235,7 @@ impl ImportForm {
                     o.insert("base".into(), json!(base.option()));
                 }
             }
-            Kind::Ifc => {}
+            Kind::Ifc | Kind::Mesh => {}
             Kind::Gis => {
                 text(&mut o, "source_crs", &self.source_crs);
                 text(&mut o, "target_crs", &self.target_crs);
@@ -220,6 +261,24 @@ pub struct ExportForm {
     pub ifc_include_2d: bool,
     /// IFC: one building storey per design layer.
     pub ifc_storeys: bool,
+    /// STL: ASCII text instead of binary.
+    pub stl_ascii: bool,
+}
+
+/// The format of a 3D mesh file that an export writes, by the extension.
+fn mesh_export_format(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("stl") => Some("stl"),
+        Some("obj") => Some("obj"),
+        Some("gltf") => Some("gltf"),
+        Some("glb") => Some("glb"),
+        _ => None,
+    }
 }
 
 /// The name of a length unit of `UNITS` in the language of the UI.
@@ -252,11 +311,20 @@ impl ExportForm {
             ifc_classes_as_layers: true,
             ifc_include_2d: false,
             ifc_storeys: false,
+            stl_ascii: false,
         }
     }
 
     pub fn params(&self) -> Value {
         let mut o = Map::new();
+        if let Some(f) = mesh_export_format(&self.path) {
+            let options = if f == "stl" {
+                mesh_import::stl_export_options(self.stl_ascii)
+            } else {
+                json!({})
+            };
+            return json!({"path": self.path, "format": f, "options": options, "overwrite": true});
+        }
         if is_ifc(&self.path) {
             o.insert(
                 "classes_as_layers".into(),
@@ -290,7 +358,12 @@ pub struct IoUi {
     /// Drawings with too much update data wait for the choice of the person, one question at a
     /// time. A second one that comes meanwhile waits in the queue.
     base_questions: std::collections::VecDeque<BaseQuestion>,
+    /// What the soften question of a mesh file would do, for the choices it was made for.
+    preview: Option<(PreviewKey, Preview)>,
 }
+
+/// The choices that a preview was made for: the file and the choices of the form.
+type PreviewKey = (PathBuf, (Option<usize>, Option<bool>, bool, bool, u64));
 
 /// What a dialog did.
 #[derive(Debug, PartialEq, Eq)]
@@ -302,12 +375,13 @@ pub enum IoEvent {
 
 impl IoUi {
     /// File > Import...: asks for a file, then shows the options.
-    pub fn start_import(&mut self) {
+    pub fn start_import(&mut self, soften: SoftenPref) {
         let picked = rfd::FileDialog::new()
             .add_filter(
                 tr!("io-dialog-dxf-dwg-ifc-shapefile-geojson"),
                 &["dxf", "dwg", "ifc", "shp", "geojson", "json"],
             )
+            .add_filter(tr!("meshio-ui-file-filter"), &["obj", "stl", "gltf", "glb"])
             .add_filter("DXF", &["dxf"])
             .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
             .add_filter("IFC", &["ifc"])
@@ -315,8 +389,14 @@ impl IoUi {
             .add_filter("GeoJSON", &["geojson", "json"])
             .pick_file();
         if let Some(p) = picked {
-            self.import = Some(ImportForm::new(p));
+            self.open_import(p, soften);
         }
+    }
+
+    /// Shows the options for a file that is already chosen.
+    pub fn open_import(&mut self, path: PathBuf, soften: SoftenPref) {
+        self.preview = None;
+        self.import = Some(ImportForm::with_soften(path, soften));
     }
 
     /// File > Export...: asks for a file name, then shows the options.
@@ -325,12 +405,22 @@ impl IoUi {
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
             .add_filter("IFC4", &["ifc"])
+            .add_filter("STL", &["stl"])
+            .add_filter("OBJ", &["obj"])
+            .add_filter("glTF", &["gltf"])
+            .add_filter("GLB", &["glb"])
             .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
             .set_file_name("drawing.dxf")
             .save_file();
         if let Some(p) = picked {
             self.export = Some(ExportForm::new(p));
         }
+    }
+
+    /// Opens the export window for a file that is already chosen (for the tests).
+    #[cfg(test)]
+    fn start_export_for_test(&mut self, path: PathBuf) {
+        self.export = Some(ExportForm::new(path));
     }
 
     /// Runs `import.file` for the form. A drawing over the cap is not an error for the person: the
@@ -343,11 +433,15 @@ impl IoUi {
     ) -> IoEvent {
         match session.import_file_trusted(form.params()) {
             Ok(r) => {
-                *status = tr!(
-                    "io-dialog-imported-objects-skipped",
-                    imported = r["imported"].as_u64().unwrap_or(0),
-                    skipped = r["skipped"].as_u64().unwrap_or(0)
-                );
+                *status = if kind_of(&form.path) == Kind::Mesh {
+                    mesh_import::imported_text(&r)
+                } else {
+                    tr!(
+                        "io-dialog-imported-objects-skipped",
+                        imported = r["imported"].as_u64().unwrap_or(0),
+                        skipped = r["skipped"].as_u64().unwrap_or(0)
+                    )
+                };
                 IoEvent::Imported
             }
             Err(e) => {
@@ -397,6 +491,7 @@ impl IoUi {
         ctx: &egui::Context,
         session: &mut Session,
         status: &mut String,
+        soften: &mut SoftenPref,
     ) -> IoEvent {
         let mut event = IoEvent::None;
         if let Some(form) = self.import.as_mut() {
@@ -461,6 +556,26 @@ impl IoUi {
                                 &mut form.ifc_terrain_mesh,
                                 tr!("io-dialog-terrain-as-a-3d-mesh-default-a"),
                             );
+                            if soften_question(ui, &mut form.ifc_soften, None) {
+                                *soften = form.ifc_soften;
+                            }
+                            if form.ifc_soften.on {
+                                ui.label(tr!("meshio-ui-ifc-soften-hint"));
+                            }
+                        }
+                        Kind::Mesh => {
+                            if let Some(m) = form.mesh.as_mut() {
+                                mesh_options(ui, m);
+                                let text = match &self.preview {
+                                    Some((k, p)) if *k == (m.path.clone(), m.preview_key()) => {
+                                        Some(p.text())
+                                    }
+                                    _ => Some(tr!("meshio-ui-preview-counting")),
+                                };
+                                if soften_question(ui, &mut m.soften, text) {
+                                    *soften = m.soften;
+                                }
+                            }
                         }
                         Kind::Gis => {
                             for (label, value) in [
@@ -482,10 +597,12 @@ impl IoUi {
                         }
                     }
                     if kind_of(&form.path) != Kind::Ifc {
-                        ui.checkbox(
-                            &mut form.keep_origin,
-                            tr!("io-dialog-keep-the-coordinates-of-the-file-default"),
-                        );
+                        if kind_of(&form.path) != Kind::Mesh {
+                            ui.checkbox(
+                                &mut form.keep_origin,
+                                tr!("io-dialog-keep-the-coordinates-of-the-file-default"),
+                            );
+                        }
                         ui.horizontal(|ui| {
                             ui.label(tr!("io-dialog-design-layer"));
                             let mut edit = egui::TextEdit::singleline(&mut form.layer);
@@ -505,12 +622,30 @@ impl IoUi {
                         close = ui.button(tr!("io-dialog-cancel")).clicked();
                     });
                 });
+            // The preview of the soften question: when the choices changed and no mouse button is
+            // down (a drag of the angle does not count the edges at each step).
+            let idle = !ctx.input(|i| i.pointer.any_down());
+            let wanted = form
+                .mesh
+                .as_ref()
+                .filter(|_| kind_of(&form.path) == Kind::Mesh && !run && !close)
+                .cloned();
             if run {
                 let form = form.clone();
                 event = self.run_import(session, form, status);
             }
             if run || close {
                 self.import = None;
+            } else if let Some(m) = wanted.filter(|_| idle) {
+                let key = (m.path.clone(), m.preview_key());
+                if self.preview.as_ref().map(|(k, _)| k) != Some(&key) {
+                    let p = match session.import_file_trusted(m.params(true)) {
+                        Ok(r) => Preview::from_result(&r),
+                        Err(e) => Preview::Failed(e.message),
+                    };
+                    self.preview = Some((key, p));
+                    ctx.request_repaint();
+                }
             }
         }
         match self.show_base_question(ctx) {
@@ -551,6 +686,19 @@ impl IoUi {
                             &mut form.ifc_include_2d,
                             tr!("io-dialog-include-2d-objects-as-annotations"),
                         );
+                    } else if let Some(f) = mesh_export_format(&form.path) {
+                        match f {
+                            "stl" => {
+                                ui.label(tr!("meshio-ui-export-stl-hint"));
+                                ui.checkbox(&mut form.stl_ascii, tr!("meshio-ui-export-ascii"));
+                            }
+                            "obj" => {
+                                ui.label(tr!("meshio-ui-export-obj-hint"));
+                            }
+                            _ => {
+                                ui.label(tr!("meshio-ui-export-gltf-hint"));
+                            }
+                        }
                     } else if kind_of(&form.path) == Kind::Dxf {
                         ui.checkbox(
                             &mut form.layers_as_layers,
@@ -579,10 +727,12 @@ impl IoUi {
                         .response
                         .on_hover_text(tr!("io-dialog-patterns-hint"));
                     }
-                    ui.checkbox(
-                        &mut form.visible_only,
-                        tr!("io-dialog-only-visible-layers-and-classes"),
-                    );
+                    if mesh_export_format(&form.path).is_none() {
+                        ui.checkbox(
+                            &mut form.visible_only,
+                            tr!("io-dialog-only-visible-layers-and-classes"),
+                        );
+                    }
                     ui.horizontal(|ui| {
                         run = ui.button(tr!("io-dialog-export")).clicked();
                         close = ui.button(tr!("io-dialog-cancel")).clicked();
@@ -605,6 +755,87 @@ impl IoUi {
         }
         event
     }
+}
+
+/// The unit and the up axis of the file, and moving the model to the origin.
+fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm) {
+    if m.kind.takes_frame() {
+        ui.horizontal(|ui| {
+            ui.label(tr!("meshio-ui-unit"));
+            let label = match m.unit {
+                None => tr!(
+                    "meshio-ui-unit-default",
+                    unit = mesh_import::unit_name(m.kind.default_unit())
+                ),
+                Some(i) => mesh_import::unit_name(mesh_import::UNITS[i]),
+            };
+            egui::ComboBox::from_id_salt("import_mesh_unit")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut m.unit,
+                        None,
+                        tr!(
+                            "meshio-ui-unit-default",
+                            unit = mesh_import::unit_name(m.kind.default_unit())
+                        ),
+                    );
+                    for (i, u) in mesh_import::UNITS.iter().enumerate() {
+                        ui.selectable_value(&mut m.unit, Some(i), mesh_import::unit_name(u));
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label(tr!("meshio-ui-up-axis"));
+            let default = if m.kind.default_y_up() {
+                tr!("meshio-ui-up-default-y")
+            } else {
+                tr!("meshio-ui-up-default-z")
+            };
+            let label = match m.y_up {
+                None => default.clone(),
+                Some(true) => tr!("meshio-ui-up-y"),
+                Some(false) => tr!("meshio-ui-up-z"),
+            };
+            egui::ComboBox::from_id_salt("import_mesh_up")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut m.y_up, None, default);
+                    ui.selectable_value(&mut m.y_up, Some(true), tr!("meshio-ui-up-y"));
+                    ui.selectable_value(&mut m.y_up, Some(false), tr!("meshio-ui-up-z"));
+                });
+        });
+    } else {
+        ui.label(tr!("meshio-ui-gltf-fixed"));
+    }
+    ui.checkbox(&mut m.center, tr!("meshio-ui-center"));
+}
+
+/// The question "Soften edges under an angle?": a check box, the angle, the hint, and under it
+/// the line of the preview if there is one. Returns true when the answer changed.
+fn soften_question(ui: &mut egui::Ui, pref: &mut SoftenPref, preview: Option<String>) -> bool {
+    let mut changed = false;
+    ui.separator();
+    changed |= ui
+        .checkbox(&mut pref.on, tr!("meshio-ui-soften-question"))
+        .changed();
+    if pref.on {
+        ui.horizontal(|ui| {
+            ui.label(tr!("meshio-ui-soften-angle"));
+            let r = ui.add(
+                egui::DragValue::new(&mut pref.angle)
+                    .range(0.0..=180.0)
+                    .speed(0.5)
+                    .suffix("\u{b0}"),
+            );
+            changed |= r.changed();
+        });
+        ui.label(egui::RichText::new(tr!("meshio-ui-soften-hint")).weak());
+        if let Some(text) = preview {
+            ui.label(text);
+        }
+    }
+    changed
 }
 
 #[cfg(test)]
@@ -692,7 +923,15 @@ mod tests {
         let _ = ctx.run_ui(Default::default(), |u| {
             assert_eq!(ui.show_base_question(u.ctx()), None);
             let mut s = Session::default();
-            assert_eq!(ui.show(u.ctx(), &mut s, &mut String::new()), IoEvent::None);
+            assert_eq!(
+                ui.show(
+                    u.ctx(),
+                    &mut s,
+                    &mut String::new(),
+                    &mut SoftenPref::default()
+                ),
+                IoEvent::None
+            );
         });
         assert_eq!(ui.base_questions.len(), 2);
         // The text names the numbers, says that a link has the full path and that others see it,
@@ -828,6 +1067,150 @@ mod tests {
         let mut ui = IoUi::default();
         let mut status = String::new();
         let mut session = Session::default();
-        assert_eq!(ui.show(&ctx, &mut session, &mut status), IoEvent::None);
+        assert_eq!(
+            ui.show(&ctx, &mut session, &mut status, &mut SoftenPref::default()),
+            IoEvent::None
+        );
+    }
+
+    const CUBE_OBJ: &str = "o Cube\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\nf 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n";
+
+    #[test]
+    fn a_mesh_file_has_its_own_options_and_the_soften_answer() {
+        let mut f = ImportForm::new("/a/part.STL".into());
+        assert_eq!(kind_of(&f.path), Kind::Mesh);
+        assert_eq!(f.params()["options"], json!({}));
+        f.layer = " Parts ".into();
+        {
+            let m = f.mesh.as_mut().unwrap();
+            m.unit = Some(0);
+            m.y_up = Some(false);
+            m.center = true;
+            m.soften = SoftenPref {
+                on: true,
+                angle: 30.0,
+            };
+        }
+        assert_eq!(
+            f.params()["options"],
+            json!({"unit": "mm", "up_axis": "z", "center": true, "soften_below_angle": 30.0, "layer": "Parts"})
+        );
+        // The answer of the prefs starts the form.
+        let g = ImportForm::with_soften(
+            "/a/ball.obj".into(),
+            SoftenPref {
+                on: true,
+                angle: 12.0,
+            },
+        );
+        assert_eq!(g.params()["options"], json!({"soften_below_angle": 12.0}));
+        // An IFC file takes the answer too, and the other files do not.
+        let ifc = ImportForm::with_soften(
+            "/a/site.ifc".into(),
+            SoftenPref {
+                on: true,
+                angle: 25.0,
+            },
+        );
+        assert_eq!(
+            ifc.params()["options"],
+            json!({"layers_from_storeys": true, "soften_below_angle": 25.0})
+        );
+        let dxf = ImportForm::with_soften(
+            "/a/site.dxf".into(),
+            SoftenPref {
+                on: true,
+                angle: 25.0,
+            },
+        );
+        assert!(dxf.params()["options"].get("soften_below_angle").is_none());
+        assert!(dxf.mesh.is_none());
+        // The default answer is off.
+        assert_eq!(
+            ImportForm::new("/a/site.ifc".into()).params()["options"],
+            json!({"layers_from_storeys": true})
+        );
+    }
+
+    #[test]
+    fn mesh_exports_pick_the_format_by_the_extension() {
+        let mut f = ExportForm::new("/a/out.stl".into());
+        let p = f.params();
+        assert_eq!(
+            (p["format"].as_str(), p["overwrite"].as_bool()),
+            (Some("stl"), Some(true))
+        );
+        assert_eq!(p["options"], json!({}));
+        f.stl_ascii = true;
+        assert_eq!(f.params()["options"], json!({"encoding": "ascii"}));
+        for (name, format) in [("a.OBJ", "obj"), ("a.gltf", "gltf"), ("a.glb", "glb")] {
+            assert_eq!(ExportForm::new(name.into()).params()["format"], format);
+        }
+        assert_eq!(mesh_export_format(Path::new("a.dxf")), None);
+        // A DXF export keeps its own options.
+        assert_eq!(
+            ExportForm::new("/a/out.dxf".into()).params()["options"]["unit"],
+            "mm"
+        );
+    }
+
+    #[test]
+    fn the_window_counts_the_edges_of_a_mesh_import_and_imports_with_the_answer() {
+        let dir = std::env::temp_dir().join(format!("kadakas-iodlg-mesh-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cube.obj");
+        std::fs::write(&path, CUBE_OBJ).unwrap();
+        let mut ui = IoUi::default();
+        ui.open_import(
+            path.clone(),
+            SoftenPref {
+                on: true,
+                angle: 100.0,
+            },
+        );
+        let mut session = Session::default();
+        let mut status = String::new();
+        let mut soften = SoftenPref::default();
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            let _ = ctx.run_ui(Default::default(), |u| {
+                ui.show(u.ctx(), &mut session, &mut status, &mut soften);
+            });
+        }
+        let (_, p) = ui.preview.clone().expect("a preview");
+        assert_eq!(
+            p,
+            Preview::Counted {
+                softened: 12,
+                edges: 12,
+                faces: 6
+            }
+        );
+        assert_eq!(session.editor.doc().objects.len(), 0);
+        // The import itself reports the count in the status line.
+        let form = ui.import.clone().unwrap();
+        assert_eq!(
+            ui.run_import(&mut session, form, &mut status),
+            IoEvent::Imported
+        );
+        assert!(
+            status.contains("12 triangles") && status.contains("12 edges"),
+            "{status}"
+        );
+        assert_eq!(session.editor.doc().objects.len(), 1);
+        // A mesh export through the dialog code.
+        let out = dir.join("cube.stl");
+        let r = session
+            .export_file_trusted(ExportForm::new(out.clone()).params())
+            .unwrap();
+        assert_eq!(r["report"]["triangles"], 12);
+        // The export window draws for each kind.
+        for name in ["a.stl", "a.obj", "a.glb", "a.dxf", "a.ifc"] {
+            ui.start_export_for_test(dir.join(name));
+            let _ = ctx.run_ui(Default::default(), |u| {
+                ui.show(u.ctx(), &mut session, &mut status, &mut soften);
+            });
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

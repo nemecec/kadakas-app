@@ -67,7 +67,7 @@ pub(super) fn set_edge_style(
 /// between coplanar faces (an angle of at most 0.01 degrees) is softened only with `coplanar`
 /// and is otherwise left as it is. Edges with no face, one face or more than two are left as they
 /// are.
-pub(super) fn soften_edges(
+pub(in crate::surface) fn soften_edges(
     m: &mut SurfaceModel,
     edges: &[EdgeId],
     angle: f64,

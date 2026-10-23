@@ -388,6 +388,10 @@ pub(super) fn mesh(
     vertices: &[DVec3],
     triangles: &[[u32; 3]],
 ) {
+    if cx.mesh_entity == crate::options::MeshEntity::Mesh {
+        mesh_entity(w, cx, o, layer, hidden, vertices, triangles);
+        return;
+    }
     if cx.mesh_entity == crate::options::MeshEntity::Face3d {
         for t in triangles {
             let p = |i: u32| vertices[i as usize];
@@ -449,6 +453,52 @@ pub(super) fn mesh(
         w.pair(100, "AcDbEntity");
         w.pair(8, layer);
     }
+}
+
+/// One MESH entity: the vertices that the triangles use, and the triangles as faces. The entity
+/// has no edges and no creases, and the subdivision level 0, so it shows the mesh as it is.
+fn mesh_entity(
+    w: &mut W,
+    cx: &Ctx,
+    o: &Object,
+    layer: &str,
+    hidden: bool,
+    vertices: &[DVec3],
+    triangles: &[[u32; 3]],
+) {
+    let mut map = std::collections::HashMap::new();
+    let mut used: Vec<u32> = Vec::new();
+    let faces: Vec<[usize; 3]> = triangles
+        .iter()
+        .map(|t| {
+            t.map(|i| {
+                *map.entry(i).or_insert_with(|| {
+                    used.push(i);
+                    used.len() - 1
+                })
+            })
+        })
+        .collect();
+    common(w, "MESH", layer, o, hidden);
+    w.pair(100, "AcDbSubDMesh");
+    w.pair(71, 2);
+    w.pair(72, 0);
+    w.pair(91, 0);
+    w.pair(92, used.len());
+    for i in &used {
+        let q = vertices[*i as usize];
+        cx.pt3(w, 10, q.x, q.y, q.z);
+    }
+    w.pair(93, faces.len() * 4);
+    for f in &faces {
+        w.pair(90, 3);
+        for v in f {
+            w.pair(90, v);
+        }
+    }
+    w.pair(94, 0);
+    w.pair(95, 0);
+    w.pair(90, 0);
 }
 
 /// The mesh of a mesh object.

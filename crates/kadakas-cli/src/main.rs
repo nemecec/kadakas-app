@@ -79,7 +79,7 @@ enum Cmd {
         #[arg(long, requires = "compare_from")]
         hide_unchanged: bool,
     },
-    /// Import a DXF, Shapefile (.shp) or GeoJSON file. Saves the document and prints the report.
+    /// Import a DXF, DWG, Shapefile (.shp), GeoJSON, IFC or mesh file (OBJ, STL, glTF, GLB). Saves the document and prints the report.
     Import {
         file: PathBuf,
         /// The document to write.
@@ -88,7 +88,7 @@ enum Cmd {
         /// Import into this document instead of an empty one.
         #[arg(long)]
         into: Option<PathBuf>,
-        /// dxf, shp or geojson. Default: from the file name.
+        /// dxf, dwg, shp, geojson, ifc, obj, stl, gltf or glb. Default: from the file name.
         #[arg(long)]
         format: Option<String>,
         /// Import options as JSON, for example '{"layer_mode": "layers"}'.
@@ -105,13 +105,13 @@ enum Cmd {
         #[arg(long)]
         format: Option<String>,
     },
-    /// Export a document to DXF, GeoJSON or IFC4 (.ifc). Prints the report. The input file is never
+    /// Export a document to DXF, GeoJSON, IFC4 (.ifc), STL, OBJ, glTF or GLB. Prints the report. The input file is never
     /// changed. GlobalIds come from the project GUID of the document.
     Export {
         file: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
-        /// dxf, geojson or ifc. Default: from the file name.
+        /// dxf, geojson, ifc, stl, obj, gltf or glb. Default: from the file name.
         #[arg(long)]
         format: Option<String>,
         /// Export options as JSON, for example '{"unit": "m"}' or, for IFC, '{"layers_as_storeys": true}'.

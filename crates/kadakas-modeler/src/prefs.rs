@@ -53,6 +53,9 @@ pub struct Prefs {
     pub tray: bool,
     /// The camera moves in a short animation when a scene is shown (MOD-10).
     pub animate_scenes: bool,
+    /// The answer to "Soften edges under an angle?" in the import of meshes (MOD-12): off, 20
+    /// degrees, until the person changes it. The next import starts with the last answer.
+    pub import_soften: kadakas_ui_core::mesh_import::SoftenPref,
     /// Units and formats of the app (`prefs.json`). Never written here.
     #[serde(skip)]
     pub units: kadakas_units::Settings,
@@ -65,6 +68,7 @@ impl Default for Prefs {
             language: None,
             tray: true,
             animate_scenes: true,
+            import_soften: kadakas_ui_core::mesh_import::SoftenPref::default(),
             units: kadakas_units::Settings::default(),
         }
     }

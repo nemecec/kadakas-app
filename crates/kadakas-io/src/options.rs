@@ -320,6 +320,10 @@ pub enum MeshEntity {
     Polyface,
     /// One 3DFACE entity per triangle.
     Face3d,
+    /// One MESH entity (a subdivision mesh with subdivision level 0) with shared vertices and
+    /// triangle faces (MOD-12). A CAD program that reads DXF 2010 or later shows it as a mesh
+    /// object.
+    Mesh,
 }
 
 /// What a DXF export writes of the unit pattern of an object (a hardscape with a joint pattern).

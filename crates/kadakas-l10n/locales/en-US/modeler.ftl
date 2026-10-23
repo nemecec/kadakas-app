@@ -215,3 +215,11 @@ modeler-app-save-first = Save the model first. Then the Kadakas app can open it.
 modeler-app-sent = Sent { $name } to the Kadakas app that runs. The file is now open in two programs: the last save wins.
 modeler-file-changed-reloaded = { $name } was changed by another program and is loaded again.
 modeler-file-changed-dirty = { $name } was changed by another program. Your changes are not saved; a save asks before it replaces the file.
+
+## File > Import and File > Export (interop.rs, MOD-12)
+modeler-file-import = Import...
+modeler-file-export = Export...
+modeler-import-title = Import
+modeler-import-button = Import
+modeler-import-cancel = Cancel
+modeler-export-title = Export

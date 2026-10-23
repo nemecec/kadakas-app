@@ -70,7 +70,7 @@ fn extrudes_and_sweeps_are_meshes_at_the_layer_elevation() {
 }
 
 #[test]
-fn components_and_surface_models_are_skipped_with_the_reason_of_the_modeler() {
+fn components_and_empty_surface_models_are_skipped_with_a_reason() {
     use kadakas_core::model::{Object, ObjectId};
     use kadakas_core::resource::ResourceId;
     let mut doc = Editor::with_sequential_ids().doc().clone();
@@ -91,8 +91,12 @@ fn components_and_surface_models_are_skipped_with_the_reason_of_the_modeler() {
         kinds.contains(&"component") && kinds.contains(&"surface_model"),
         "{kinds:?}"
     );
+    // A component is skipped with the way out. An empty surface model has nothing to write.
     assert!(
-        report.skipped.iter().all(|s| s.reason.contains("MOD-12")),
+        report
+            .skipped
+            .iter()
+            .all(|s| s.reason.contains("explode") || s.reason.contains("without a visible face")),
         "{:?}",
         report.skipped
     );

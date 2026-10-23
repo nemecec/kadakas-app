@@ -64,7 +64,10 @@ fn import_describe() -> Value {
             "georef": "true (default): IfcMapConversion sets the georeference of an empty document, or moves the geometry into the georeference of a document that has the same CRS",
             "max_objects": "Default 500000",
             "max_triangles": "Default 20000000",
-            "max_file_mb": "Default 1024"
+            "max_file_mb": "Default 1024",
+            "to_surface": "false (default). true: the meshes of the import (mesh3d) that fit the limits of a surface model become surface models, with vertices welded and coplanar triangles merged into faces. A mesh over a limit stays a mesh and is listed in report.to_surface.refused with the counts (MOD-12)",
+            "soften_below_angle": "degrees, 0 to 180, default off. Edges between faces at an angle below it become soft and smooth in the surface models. It asks for to_surface. The result always has softened_edges",
+            "surface_tolerance": "mm, 0.001 to 1000. The weld distance of to_surface. Default 0.01"
         },
         "mapping": {
             "IfcSlab, IfcCovering, IfcWall and every other element with a body": "mesh3d (generic 3D mesh). data.ifc_class holds the IFC class, data.ifc the GlobalId, name, type and tag. Nothing is turned into a hardscape",
@@ -102,7 +105,41 @@ impl Session {
         options: &Value,
         checked: bool,
     ) -> Result<Value, RpcError> {
-        let opts = IfcImportOptions::from_json(options).map_err(import_rpc)?;
+        // The options of the conversion into surface models (MOD-12) are ours, not the IFC reader's.
+        let mut options = options.clone();
+        let mut take = |k: &str| options.as_object_mut().and_then(|o| o.remove(k));
+        let (to_surface, soften, tolerance) = (
+            take("to_surface"),
+            take("soften_below_angle"),
+            take("surface_tolerance"),
+        );
+        let ask = crate::meshio_api::SurfaceAsk::of(
+            to_surface
+                .as_ref()
+                .map(|v| {
+                    v.as_bool()
+                        .ok_or_else(|| RpcError::invalid_params("to_surface: true or false"))
+                })
+                .transpose()?,
+            soften
+                .as_ref()
+                .map(|v| {
+                    v.as_f64().ok_or_else(|| {
+                        RpcError::invalid_params("soften_below_angle: a number of degrees")
+                    })
+                })
+                .transpose()?,
+            tolerance
+                .as_ref()
+                .map(|v| {
+                    v.as_f64().ok_or_else(|| {
+                        RpcError::invalid_params("surface_tolerance: a number of mm")
+                    })
+                })
+                .transpose()?,
+            None,
+        )?;
+        let opts = IfcImportOptions::from_json(&options).map_err(import_rpc)?;
         let path = if checked {
             self.check_path(&path, false, &["ifc"])
                 .map_err(RpcError::policy)?
@@ -111,14 +148,30 @@ impl Session {
         };
         let result =
             kadakas_ifc::import_file(&path, self.editor.doc(), &opts).map_err(import_rpc)?;
+        let mut summary = None;
         self.editor
-            .execute(&result.command)
+            .execute_stepwise(|step| {
+                step.run(&result.command)?;
+                if let Some(ask) = &ask {
+                    summary = Some(crate::meshio_api::convert_created(step, 0, ask)?);
+                }
+                Ok(())
+            })
             .map_err(RpcError::from)?;
         self.prune_selection();
+        let softened = summary
+            .as_ref()
+            .and_then(|s| s["softened_edges"].as_u64())
+            .unwrap_or(0);
+        let mut report = json!(result.report);
+        if let Some(s) = summary {
+            report["to_surface"] = s;
+        }
         Ok(json!({
             "imported": result.report.total(),
             "skipped": result.report.skipped_total(),
-            "report": result.report,
+            "softened_edges": softened,
+            "report": report,
             "georeference": self.editor.doc().georef,
         }))
     }
