@@ -26,9 +26,10 @@ use crate::{RpcError, Session};
 
 /// The most edits in one `mesh.batch`.
 ///
-/// `docs/modeler-limits.md`: a command on a model of 80,000 edges costs about 0.125 s. So 50
-/// edits cost about 6 s in the worst case, and the call stays one request that an agent can wait
-/// for.
+/// Measured through the API (release build, a model of 72,580 edges): 50 hides took 5.25 s and 48
+/// Push/Pulls took 15.3 s, a command costing 0.1 to 0.3 s. `docs/modeler-limits.md` has the base:
+/// about 0.125 s for a command on a model of 80,000 edges. So one batch stays a request that an
+/// agent can wait for.
 pub const BATCH_EDITS_MAX: usize = 50;
 /// The most new edges in all `add_edges` edits of one `mesh.batch`. It is the limit of the edges
 /// in one edit of the core (10,000), so a batch does not do more edge work than one big edit
@@ -294,7 +295,7 @@ fn plan(s: &Session, op: &str, p: Value) -> Result<Planned, RpcError> {
         ($q:ident : $ty:ty) => {{
             let $q: $ty = parse(p)?;
             let id = object_id(&$q.id.0)?;
-            model_of(doc, id)?;
+            editable_model(doc, id)?;
             out.model = Some(id);
             ($q, id)
         }};
@@ -693,7 +694,7 @@ fn item_json(doc: &Document, item: &Planned, before: &Snap) -> Value {
         v["id"] = json!(id);
     }
     if item.op == "make_group" {
-        v["group"] = json!(created_objects.first());
+        v["group"] = json!(created_objects.iter().find(|id| doc.is_group(**id)));
     }
     let Some(m) = model.and_then(|id| model_of(doc, id).ok()) else {
         if item.model.is_some() {
@@ -736,34 +737,25 @@ fn item_json(doc: &Document, item: &Planned, before: &Snap) -> Value {
     v
 }
 
-/// The typed error of a refused step. `doc` is the document as it was when the step failed.
-fn refusal(doc: &Document, cmd: &Command, e: &CommandError, step: Option<usize>) -> RpcError {
+/// The typed error of a refused step. The core says why with a typed error, so the edit is not
+/// run again.
+fn refusal(cmd: &Command, e: &CommandError, step: Option<usize>) -> RpcError {
     let msg = e.to_string();
     let mut facts = json!({});
     if let Some(i) = step {
         facts["step"] = json!(i);
     }
-    let base = |m: &str| match e {
-        CommandError::NoObject(_) => RpcError::not_found(m),
-        _ => RpcError::validation(m),
+    match cmd {
+        Command::EditSurface { id, .. } => facts["object"] = json!(id),
+        other => facts["op"] = json!(op_of(other)),
+    }
+    let with = |mut f: Value, k: &str, v: Value| {
+        f[k] = v;
+        f
     };
-    let Command::EditSurface { id, edit } = cmd else {
-        facts["op"] = json!(op_of(cmd));
-        let id = if matches!(e, CommandError::NoObject(_)) {
-            "no_such_object"
-        } else {
-            "command_refused"
-        };
-        return typed(base(&msg), id, facts);
-    };
-    facts["object"] = json!(id);
-    let Ok(model) = model_of(doc, *id) else {
-        return typed(base(&msg), "no_such_object", facts);
-    };
-    let mut work = model.clone();
-    match work.apply(edit) {
-        Err(se) => {
-            let (kind, error_id, more) = classify(&se);
+    match e {
+        CommandError::Surface(se) => {
+            let (kind, error_id, more) = classify(se);
             if let (Value::Object(f), Value::Object(m)) = (&mut facts, more) {
                 f.extend(m);
             }
@@ -775,13 +767,75 @@ fn refusal(doc: &Document, cmd: &Command, e: &CommandError, step: Option<usize>)
             };
             typed(err, error_id, facts)
         }
-        // The edit works, but the model is invalid after it.
-        Ok(_) => typed(
-            RpcError::validation(msg.trim_start_matches("invalid value: ").to_string()),
-            "model_invalid",
-            facts,
+        CommandError::NoObject(o) => typed(
+            RpcError::not_found(msg),
+            "no_such_object",
+            with(facts, "object", json!(o)),
         ),
+        CommandError::NoLayer(l) => typed(
+            RpcError::not_found(msg),
+            "no_such_layer",
+            with(facts, "layer", json!(l)),
+        ),
+        CommandError::NoClass(c) => typed(
+            RpcError::not_found(msg),
+            "no_such_class",
+            with(facts, "class", json!(c)),
+        ),
+        CommandError::NoResource(r) => typed(
+            RpcError::not_found(msg),
+            "no_such_resource",
+            with(facts, "resource", json!(r)),
+        ),
+        CommandError::LayerLocked(l) => typed(
+            RpcError::conflict(msg),
+            "layer_locked",
+            with(facts, "layer", json!(l)),
+        ),
+        CommandError::LayerNotEmpty(_) | CommandError::ResourceInUse(..) => {
+            typed(RpcError::conflict(msg), "command_refused", facts)
+        }
+        // The edit works, but the model is invalid after it.
+        CommandError::Invalid(m) if matches!(cmd, Command::EditSurface { .. }) => {
+            typed(RpcError::validation(m.clone()), "model_invalid", facts)
+        }
+        _ => typed(RpcError::validation(msg), "command_refused", facts),
     }
+}
+
+/// The surface model of an object that the person could edit now: the layer is not locked and
+/// neither the layer nor the class is grey. The refusal is typed before anything runs.
+fn editable_model(doc: &Document, id: ObjectId) -> Result<&SurfaceModel, RpcError> {
+    let m = model_of(doc, id)?;
+    let o = doc.object(id).expect("checked by model_of");
+    if doc.layer(o.layer).is_some_and(|l| l.locked) {
+        return Err(typed(
+            RpcError::conflict(format!("layer {} is locked", o.layer)),
+            "layer_locked",
+            json!({"object": id, "layer": o.layer}),
+        ));
+    }
+    if doc.drawing.grey.layers.contains(&o.layer) {
+        return Err(typed(
+            RpcError::validation(format!(
+                "layer {} is grey: its objects cannot be edited. Make it visible first",
+                o.layer
+            )),
+            "layer_grey",
+            json!({"object": id, "layer": o.layer}),
+        ));
+    }
+    if doc.drawing.grey.classes.contains(&o.class) {
+        return Err(typed(
+            RpcError::validation(format!(
+                "class {} is grey: its objects cannot be edited. Make it visible first",
+                o.class
+            )),
+            "class_grey",
+            json!({"object": id, "class": o.class}),
+        ));
+    }
+    Ok(m)
 }
 
 fn op_of(cmd: &Command) -> &'static str {
@@ -859,6 +913,7 @@ fn run(
 ) -> Result<(Vec<Value>, Vec<String>), RpcError> {
     let mut failure: Option<RpcError> = None;
     let mut results: Vec<Value> = Vec::with_capacity(items.len());
+    let mut made = 0usize;
     let outcome = s.editor.execute_stepwise(|step| {
         for (i, item) in items.iter().enumerate() {
             let mut before = Snap::of(step.doc(), item);
@@ -888,8 +943,16 @@ fn run(
                     before.considered = soften_plan(m, edges, *angle, *coplanar).len();
                 }
                 if let Err(e) = step.run(&cmd) {
-                    failure = Some(refusal(step.doc(), &cmd, &e, index));
+                    failure = Some(refusal(&cmd, &e, index));
                     return Err(e);
+                }
+            }
+            // The work of a batch is bounded by the edges that its edits make, of any kind.
+            if batch {
+                made += new_edges(step.doc(), item, &before);
+                if made > BATCH_EDGES_MAX {
+                    failure = Some(too_many_edges(made, i));
+                    return Err(CommandError::Invalid("too many edges".into()));
                 }
             }
             results.push(item_json(step.doc(), item, &before));
@@ -904,6 +967,37 @@ fn run(
         (Err(_), Some(e)) => Err(e),
         (Err(e), None) => Err(RpcError::from(e)),
     }
+}
+
+/// How many edges the item made in its model.
+fn new_edges(doc: &Document, item: &Planned, before: &Snap) -> usize {
+    item.model
+        .and_then(|id| model_of(doc, id).ok())
+        .map_or(0, |m| {
+            m.edges()
+                .filter(|(e, _)| !before.edges.contains(&e.0))
+                .count()
+        })
+}
+
+fn too_many_edges_drawn(count: usize) -> RpcError {
+    typed(
+        RpcError::limit(format!(
+            "the add_edges edits of a batch draw at most {BATCH_EDGES_MAX} edges in all and this batch draws {count}"
+        )),
+        "batch_edges_too_many",
+        json!({"max": BATCH_EDGES_MAX, "count": count}),
+    )
+}
+
+fn too_many_edges(count: usize, step: usize) -> RpcError {
+    typed(
+        RpcError::limit(format!(
+            "the edits of a batch make at most {BATCH_EDGES_MAX} edges in all and the edits up to edit {step} made {count}"
+        )),
+        "batch_edges_too_many",
+        json!({"max": BATCH_EDGES_MAX, "count": count, "step": step}),
+    )
 }
 
 /// Adds the index of the edit in a batch to an error.
@@ -982,13 +1076,7 @@ pub(super) fn batch(s: &mut Session, p: Value) -> Result<Value, RpcError> {
         planned.push(plan(s, &op, checked).map_err(at)?);
     }
     if new_edges > BATCH_EDGES_MAX {
-        return Err(typed(
-            RpcError::limit(format!(
-                "the add_edges edits of a batch draw at most {BATCH_EDGES_MAX} edges in all and this batch draws {new_edges}"
-            )),
-            "batch_edges_too_many",
-            json!({"max": BATCH_EDGES_MAX, "count": new_edges}),
-        ));
+        return Err(too_many_edges_drawn(new_edges));
     }
     let (results, notes) = run(s, &planned, true)?;
     let mut v = json!({"count": results.len(), "edits": results});

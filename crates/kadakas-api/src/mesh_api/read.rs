@@ -1,5 +1,7 @@
 //! `mesh.summary|vertices|edges|faces|solid_report|bounds`: read a surface model.
 
+use std::collections::BTreeMap;
+
 use glam::DVec3;
 use serde_json::{Value, json};
 
@@ -69,7 +71,12 @@ fn summary(doc: &Document, p: Value) -> Result<Value, RpcError> {
             row
         })
         .collect();
-    Ok(json!({ "models": rows }))
+    let instances = doc
+        .objects
+        .values()
+        .filter(|o| matches!(o.shape, kadakas_core::model::Shape::Component { .. }))
+        .count();
+    Ok(json!({ "component_instances": instances, "models": rows }))
 }
 
 /// The page of a list: the ids asked for, else a window of all ids.
@@ -94,6 +101,11 @@ fn page(
     }
     let offset = offset.unwrap_or(0) as usize;
     if let Some(ids) = ids {
+        if ids.len() > PAGE_MAX {
+            return Err(bad(format!(
+                "ids: at most {PAGE_MAX} ids in one call, read the rest with another call"
+            )));
+        }
         let (found, missing): (Vec<u32>, Vec<u32>) = ids.into_iter().partition(|i| has(*i));
         return Ok(Page {
             total: found.len(),
@@ -113,7 +125,7 @@ fn page(
 fn paged(page: Page, items: Vec<Value>) -> Value {
     let mut out = json!({"total": page.total, "offset": page.offset, "items": items});
     if !page.missing.is_empty() {
-        out["missing"] = json!(page.missing);
+        out["missing"] = json!(page.missing.iter().take(PAGE_MAX).collect::<Vec<_>>());
     }
     out
 }
@@ -137,7 +149,23 @@ fn vertices(doc: &Document, p: Value) -> Result<Value, RpcError> {
     Ok(paged(pg, items))
 }
 
-pub(super) fn edge_json(m: &SurfaceModel, id: EdgeId) -> Value {
+/// The faces of each edge (by its pair of vertices), made in one pass over the faces.
+type EdgeFaces = BTreeMap<(VertexId, VertexId), Vec<FaceId>>;
+
+fn edge_faces(m: &SurfaceModel) -> EdgeFaces {
+    let mut map: EdgeFaces = BTreeMap::new();
+    for (fid, f) in m.faces() {
+        for (a, b) in f.uses() {
+            let list = map.entry(if a <= b { (a, b) } else { (b, a) }).or_default();
+            if list.last() != Some(&fid) {
+                list.push(fid);
+            }
+        }
+    }
+    map
+}
+
+pub(super) fn edge_json(m: &SurfaceModel, id: EdgeId, faces: &EdgeFaces) -> Value {
     let e = m.edge(id).expect("exists");
     let length = match (m.vertex(e.v[0]), m.vertex(e.v[1])) {
         (Some(a), Some(b)) => a.distance(b),
@@ -146,7 +174,7 @@ pub(super) fn edge_json(m: &SurfaceModel, id: EdgeId) -> Value {
     json!({
         "id": id,
         "v": [e.v[0], e.v[1]],
-        "faces": m.faces_of_edge(id),
+        "faces": faces.get(&e.key()).cloned().unwrap_or_default(),
         "soft": m.edge_soft(id),
         "smooth": m.edge_smooth(id),
         "hidden": m.edge_hidden(id),
@@ -166,7 +194,12 @@ fn edges(doc: &Document, p: Value) -> Result<Value, RpcError> {
         q.limit,
         |i| m.edge(EdgeId(i)).is_some(),
     )?;
-    let items = pg.ids.iter().map(|i| edge_json(m, EdgeId(*i))).collect();
+    let faces = edge_faces(m);
+    let items = pg
+        .ids
+        .iter()
+        .map(|i| edge_json(m, EdgeId(*i), &faces))
+        .collect();
     Ok(paged(pg, items))
 }
 

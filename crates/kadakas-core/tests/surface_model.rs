@@ -75,7 +75,13 @@ fn each_edit_is_one_undo_step() {
         },
     )
     .unwrap_err();
-    assert_eq!(err, CommandError::Invalid("edge 999 does not exist".into()));
+    assert_eq!(
+        err,
+        CommandError::Surface(kadakas_core::surface::SurfaceError::NoEdge(
+            kadakas_core::surface::EdgeId(999)
+        ))
+    );
+    assert_eq!(err.to_string(), "invalid value: edge 999 does not exist");
     assert_eq!(ed.undo_depth(), depth);
     assert_eq!(ed.doc(), &before);
     // An edit that changes nothing makes no step either.
@@ -408,4 +414,26 @@ fn smooth_edges_are_not_lines_and_the_faces_of_a_model_are_two_sided() {
     .unwrap();
     let s2 = mesh::build(ed2.doc());
     assert!((0..s2.mesh.positions.len()).all(|i| !s2.mesh.is_two_sided(i)));
+}
+
+#[test]
+fn a_refused_surface_edit_keeps_the_reason_typed() {
+    use kadakas_core::surface::{FaceId, SurfaceError};
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    edit(&mut ed, id, square(100.0)).unwrap();
+    let err = edit(
+        &mut ed,
+        id,
+        Edit::EraseFaces {
+            faces: vec![FaceId(999)],
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        CommandError::Surface(SurfaceError::NoFace(FaceId(999)))
+    );
+    // The text is the one the Invalid variant had.
+    assert_eq!(err.to_string(), "invalid value: face 999 does not exist");
 }

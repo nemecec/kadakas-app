@@ -1659,6 +1659,7 @@ impl ModelerApp {
     /// and `size` the size of the 3D view. Every command is one undo step.
     pub fn scene_action(&mut self, a: scenes_panel::Action, now: f64, size: glam::Vec2) {
         use scenes_panel::Action;
+        let origin = self.session.scene().origin;
         let doc = self.session.editor.doc();
         let camera = self.nav.camera;
         let mut added = None;
@@ -1666,10 +1667,10 @@ impl ModelerApp {
             Action::Add => {
                 let name = scene_panel::new_name(doc);
                 added = Some(name.clone());
-                scene_panel::add(doc, &name, &camera)
+                scene_panel::add(doc, &name, &camera, origin)
                     .map(|c| (Some(c), tr!("modeler-scenes-added", name = name)))
             }
-            Action::Update(n) => scene_panel::update(doc, n, &camera)
+            Action::Update(n) => scene_panel::update(doc, n, &camera, origin)
                 .map(|c| (Some(c), tr!("modeler-scenes-updated", name = n.clone()))),
             Action::Rename(n, new) => scene_panel::rename(doc, n, new).map(|c| {
                 (
@@ -1768,7 +1769,8 @@ impl ModelerApp {
     /// Shows a scene: the tags, layers and style in one undo step, and the camera, moved in a
     /// short animation unless the person switched that off.
     fn show_scene(&mut self, name: &str, now: f64, size: glam::Vec2) {
-        let act = match scene_panel::activate(self.session.editor.doc(), name) {
+        let origin = self.session.scene().origin;
+        let act = match scene_panel::activate(self.session.editor.doc(), name, origin) {
             Ok(a) => a,
             Err(p) => {
                 self.status = scenes_panel::problem_text(p);
@@ -1780,6 +1782,10 @@ impl ModelerApp {
             return;
         }
         self.scenes.active = Some(name.to_string());
+        // The restore can change which layers show, and so the origin of the scene: the saved
+        // camera is in drawing coordinates, so it is placed again for the new origin.
+        let origin = self.session.scene().origin;
+        let act = scene_panel::activate(self.session.editor.doc(), name, origin).unwrap_or(act);
         let goal = match act.goal {
             scene_panel::Goal::Camera(c) => Some(c),
             scene_panel::Goal::Standard(view, projection) => {
@@ -1886,6 +1892,7 @@ impl ModelerApp {
             let missing =
                 kadakas_ui_core::materials::missing_defaults(self.session.editor.doc()).len();
             let targets = self.tag_targets();
+            let scene_origin = self.session.scene().origin;
             egui::Panel::right("tray")
                 .default_size(tray::WIDTH)
                 .size_range(180.0..=420.0)
@@ -1911,10 +1918,9 @@ impl ModelerApp {
                     let scene_rows = scene_panel::rows(doc, scenes_state.active.as_deref());
                     let style_rows = scene_panel::styles(doc);
                     let animating = self.scene_anim.is_some();
-                    let modified = scenes_state
-                        .active
-                        .as_deref()
-                        .is_some_and(|n| scene_panel::is_modified(doc, n, &self.nav.camera));
+                    let modified = scenes_state.active.as_deref().is_some_and(|n| {
+                        scene_panel::is_modified(doc, n, &self.nav.camera, scene_origin)
+                    });
                     let animate = self.prefs.animate_scenes;
                     tray_actions = tray::show(
                         ui,

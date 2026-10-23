@@ -213,8 +213,13 @@ fn line_passes_triangle(o: DVec3, d: DVec3, tri: &[DVec3; 3]) -> bool {
     lo <= 0.0 && hi >= 0.0
 }
 
-/// The distance from a point to a triangle (Ericson, Real-Time Collision Detection).
+/// The distance from a point to a triangle.
 pub(super) fn distance_to_triangle(p: DVec3, t: &[DVec3; 3]) -> f64 {
+    p.distance(closest_on_triangle(p, t))
+}
+
+/// The point of a triangle that is nearest to `p` (Ericson, Real-Time Collision Detection).
+pub(in crate::surface) fn closest_on_triangle(p: DVec3, t: &[DVec3; 3]) -> DVec3 {
     let [a, b, c] = *t;
     let ab = b - a;
     let ac = c - a;
@@ -222,39 +227,55 @@ pub(super) fn distance_to_triangle(p: DVec3, t: &[DVec3; 3]) -> f64 {
     let d1 = ab.dot(ap);
     let d2 = ac.dot(ap);
     if d1 <= 0.0 && d2 <= 0.0 {
-        return p.distance(a);
+        return a;
     }
     let bp = p - b;
     let d3 = ab.dot(bp);
     let d4 = ac.dot(bp);
     if d3 >= 0.0 && d4 <= d3 {
-        return p.distance(b);
+        return b;
     }
     let vc = d1 * d4 - d3 * d2;
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let v = d1 / (d1 - d3);
-        return p.distance(a + ab * v);
+        return a + ab * (d1 / (d1 - d3));
     }
     let cp = p - c;
     let d5 = ab.dot(cp);
     let d6 = ac.dot(cp);
     if d6 >= 0.0 && d5 <= d6 {
-        return p.distance(c);
+        return c;
     }
     let vb = d5 * d2 - d1 * d6;
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let w = d2 / (d2 - d6);
-        return p.distance(a + ac * w);
+        return a + ac * (d2 / (d2 - d6));
     }
     let va = d3 * d6 - d5 * d4;
     if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return p.distance(b + (c - b) * w);
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
     }
     let denom = 1.0 / (va + vb + vc);
-    let v = vb * denom;
-    let w = vc * denom;
-    p.distance(a + ab * v + ac * w)
+    a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+/// The distance along the ray (a unit direction) to a triangle that it meets from either side, or
+/// `None`. It uses the margins of the locate test: a hit near an edge still counts, and a ray in
+/// the plane of the triangle does not.
+pub(in crate::surface) fn ray_hit_distance(
+    o: DVec3,
+    d: DVec3,
+    tri: &[DVec3; 3],
+    plane_tol: f64,
+) -> Option<f64> {
+    if matches!(ray_triangle(o, d, tri, plane_tol), Hit::Miss) {
+        return None;
+    }
+    let (e1, e2) = (tri[1] - tri[0], tri[2] - tri[0]);
+    let det = e1.dot(d.cross(e2));
+    if det == 0.0 {
+        return None;
+    }
+    let t = e2.dot((o - tri[0]).cross(e1)) / det;
+    (t.is_finite() && t >= -plane_tol).then_some(t.max(0.0))
 }
 
 #[cfg(test)]

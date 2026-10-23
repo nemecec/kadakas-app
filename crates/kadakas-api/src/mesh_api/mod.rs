@@ -17,7 +17,6 @@ use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::sheets::ViewCamera;
 use kadakas_core::surface::SurfaceModel;
 use kadakas_render::Camera;
-use kadakas_render::Projection;
 
 use crate::errors::bad;
 use crate::params::mesh::*;
@@ -27,9 +26,11 @@ mod edit;
 mod query;
 mod read;
 
+pub(crate) use query::QueryCache;
+
 pub const MESH_SUMMARY: (&str, &str) = (
     "mesh.summary",
-    "The surface models of the document. params: {id?} (one model, else all). Returns {models: [{id, name, layer, class, parent?, vertices, edges, faces, curves, revision, problem (null or the first problem of the model), hidden_faces, hidden_edges, soft_edges, transform (12 numbers), bounds: {local, world} ({min, max} in mm or null for an empty model)}]}. Coordinates in the other mesh methods are local to the model. Drawing coordinates are the local ones moved by the transform.",
+    "The surface models of the document. params: {id?} (one model, else all). Returns {component_instances (how many component instances the document has: their geometry is not listed here), models: [{id, name, layer, class, parent?, vertices, edges, faces, curves, revision, problem (null or the first problem of the model), hidden_faces, hidden_edges, soft_edges, transform (12 numbers), bounds: {local, world} ({min, max} in mm or null for an empty model)}]}. Coordinates in the other mesh methods are local to the model. Drawing coordinates are the local ones moved by the transform.",
 );
 pub const MESH_VERTICES: (&str, &str) = (
     "mesh.vertices",
@@ -53,11 +54,11 @@ pub const MESH_BOUNDS: (&str, &str) = (
 );
 pub const MESH_NEAR: (&str, &str) = (
     "mesh.near",
-    "Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?}, nearest first.",
+    "Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?, skipped?}, nearest first. Hidden faces and edges and soft edges are left out unless include_hidden. Models on a hidden layer or class are left out unless id names the model. skipped lists a model whose faces cannot be cut into triangles. Component instances are not searched.",
 );
 pub const MESH_PICK: (&str, &str) = (
     "mesh.pick",
-    "Shoots a ray at the surface models. params: {id?, origin: [x, y, z], direction: [x, y, z] (drawing coordinates), all? (every face the ray meets, nearest first, at most 200), include_hidden?}. Returns {hit: null | {model, face, distance, point: [x, y, z] (drawing coordinates), local: [x, y, z], side (front | back: the side of the face that the ray meets), normal: [x, y, z] (drawing coordinates)}, hits? (with all)}.",
+    "Shoots a ray at the surface models. params: {id?, origin: [x, y, z], direction: [x, y, z] (drawing coordinates), all? (every face the ray meets, nearest first, at most 200), include_hidden?}. Returns {hit: null | {model, face, distance, point: [x, y, z] (drawing coordinates), local: [x, y, z], side (front | back: the side of the face that the ray meets), normal: [x, y, z] (drawing coordinates)}, hits? (with all, at most 200, truncated is true when more faces were met), skipped?}. It has the rules of mesh.near for hidden items, layers, classes and instances.",
 );
 pub const MESH_CREATE: (&str, &str) = (
     "mesh.create",
@@ -117,7 +118,7 @@ pub const MESH_SOFTEN: (&str, &str) = (
 );
 pub const MESH_SOFTEN_EDGES: (&str, &str) = (
     "mesh.soften_edges",
-    "Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and {changed (how many edges changed their flags), softened (edges that are soft now), considered (edges that were looked at)}.",
+    "Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and three numbers. considered is how many edges the angle test looked at. changed is how many of them got other flags than they had (a second call with the same angle changes 0). softened is how many edges are soft in the whole model after the call.",
 );
 pub const MESH_SOLID: (&str, &str) = (
     "mesh.solid",
@@ -137,47 +138,91 @@ pub const MESH_EXPLODE: (&str, &str) = (
 );
 pub const MESH_BATCH: (&str, &str) = (
     "mesh.batch",
-    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits and at most 10000 edges in all add_edges edits. method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
+    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
 );
 pub const MESH_RENDER: (&str, &str) = (
     "mesh.render",
-    "A PNG of the model so that you see the result. params: {id? (frame the camera on this surface model), view?, camera? ({target, yaw, pitch, distance, fov, projection}, wins over view), width?, height?, projection?, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), render_style? (a style of the document or a built-in one such as Realistic), samples?}. It is render.png with the camera and the framing of a model. Returns {png_base64, width, height, view, projection, mode, camera, render_style?}. MCP gives the image itself.",
+    "A PNG of the model so that you see the result. params: {id? (frame the camera on this surface model), view?, camera? ({target (drawing coordinates, mm), yaw, pitch, distance, fov, projection}, wins over view), width?, height?, projection?, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), render_style? (a style of the document or a built-in one such as Realistic), samples?}. It is render.png with the camera and the framing of a model. Returns {png_base64, width, height, view, projection, mode, camera (in drawing coordinates, give it back as camera to repeat the picture), render_style?}. MCP gives the image itself.",
 );
+
+/// The stable ids of refusals (`error_id`). `describe` and `docs/mesh-api.md` list the same names
+/// (a test compares them).
+pub const ERROR_IDS: &[&str] = &[
+    "no_such_object",
+    "not_a_surface_model",
+    "no_such_vertex",
+    "no_such_edge",
+    "no_such_face",
+    "layer_locked",
+    "layer_grey",
+    "class_grey",
+    "no_such_layer",
+    "bad_point",
+    "edge_too_short",
+    "edge_too_close",
+    "model_limit",
+    "faces_unsolved",
+    "edit_refused",
+    "model_invalid",
+    "solid_empty",
+    "solid_open",
+    "solid_self_crossing",
+    "solid_inverted",
+    "solid_flat",
+    "solid_attached",
+    "solid_no_result",
+    "solid_cut",
+    "solid_result_open",
+    "solid_result_volume",
+    "solid_result_invalid",
+    "batch_too_large",
+    "batch_edges_too_many",
+    "command_refused",
+    "no_such_class",
+    "no_such_resource",
+];
+
+/// The id of the first model in a fresh session with sequential ids, for the examples.
+const EXAMPLE_MODEL: &str = "00000000-0000-0000-0000-000000000002";
 
 /// Extra text for `describe`.
 pub fn describe() -> Value {
+    let m = EXAMPLE_MODEL;
     json!({
         "model": "A surface model (shape kind 'surface_model') is made of vertices, edges and faces. Coordinates are local, in mm, and the transform of the model places them in the drawing. Vertices, edges and faces have whole-number ids that come from one counter of the model and are never reused. Faces are planar and may have holes. Closed coplanar edges make a face, a new edge splits a face, and geometry of one model sticks together. A group or a component keeps its geometry apart.",
+        "scope": "The mesh methods read and edit the surface model objects of the document, also the ones inside groups. Component instances show their definition in renders, but their geometry is not listed by the reads: edit the definition with mesh.explode or work on the model before mesh.make_component. mesh.summary counts the instances (component_instances). mesh.near and mesh.pick leave out the models on a hidden layer or class unless you name the model with id.",
         "workflow": "Make a model with mesh.create. Draw edges with mesh.add_edges and read the ids of the new faces from the answer. Pull a face with mesh.push_pull. Check with mesh.solid_report. Look at it with mesh.render. Use mesh.batch for a long run of edits that must succeed together.",
-        "results": "An edit answers {op, id, counts: {vertices, edges, faces}, revision, created: {vertices, edges, faces}, removed: {vertices, edges, faces}, truncated?, notes?}. The lists in created and removed have at most 1000 ids each. Notes tell what the edit changed that you did not ask for, such as a material that a merged face dropped.",
+        "results": "An edit answers {op, id, counts: {vertices, edges, faces}, revision, created: {vertices, edges, faces}, removed: {vertices, edges, faces}, truncated?, notes?}. The lists in created and removed have at most 1000 ids each. Notes tell what the edit changed that you did not ask for, such as a material that a merged face dropped. model_gone is true when the edit moved the whole model away (mesh.make_group of every face), so there are no counts.",
+        "soften_edges": "mesh.soften_edges answers with three numbers. considered is how many edges the angle test looked at (edges with exactly two faces, and edges between coplanar faces only with coplanar). changed is how many edges got other flags than they had. softened is how many edges are soft in the whole model after the edit. A second call with the same angle changes 0.",
         "undo": "Every edit method is one undo step, also mesh.erase with edges and faces, and mesh.batch with all its edits. A refused edit changes nothing and makes no step. The person sees the steps of an agent in the activity panel and can revert them.",
-        "errors": "A refusal is a validation error (code 3, kind validation). A missing object, vertex, edge or face is not_found (2). A size limit is limit (6). The data of the error has error_id, a stable name, and the ids that matter (object, edge, face, vertex, operand, step). The message is English text for a person. Ids: no_such_object, not_a_surface_model, no_such_vertex, no_such_edge, no_such_face, bad_point, edge_too_short, edge_too_close, model_limit, faces_unsolved, edit_refused, model_invalid, solid_empty, solid_open, solid_self_crossing, solid_inverted, solid_flat, solid_attached, solid_no_result, solid_cut, solid_result_open, solid_result_volume, solid_result_invalid, batch_too_large, batch_edges_too_many, command_refused. The data of an edit in a batch has step, the index of the edit.",
+        "camera": "The camera of mesh.render and render.png is in drawing coordinates: target is a point of the drawing in mm. The answer of mesh.render has the camera that was used. Give it back as camera and the picture is the same, also after other models were added elsewhere.",
+        "errors": format!("A refusal is a validation error (code 3, kind validation). A missing object, layer, vertex, edge or face is not_found (2). A locked layer is a conflict (5). A size limit is limit (6). A parameter of the wrong name or type is invalid_params (-32602) and has no error_id. The data of the error has error_id, a stable name, and the ids that matter (object, layer, edge, face, vertex, operand, step). The message is English text for a person. Ids: {}. The data of an edit in a batch has step, the index of the edit.", ERROR_IDS.join(", ")),
         "limits": {
             "batch_edits": edit::BATCH_EDITS_MAX,
             "batch_edges": edit::BATCH_EDGES_MAX,
             "edges_per_edit": 10000,
-            "page": 1000,
-            "why": "docs/modeler-limits.md: one command on a model of 80,000 edges costs about 0.125 s, and an edit of 10,000 edges costs 0.2 to 0.75 s. 50 edits and 10,000 new edges in all keep a batch near 7 s in the worst case."
+            "page": read::PAGE_MAX,
+            "why": "docs/modeler-limits.md: one command on a model of 80,000 edges costs about 0.125 s, and an edit of 10,000 edges costs 0.2 to 0.75 s. Measured through mesh.batch on a release build with 72,580 edges: 50 hides took 5.25 s and 48 push_pulls took 15.3 s. A batch stops when the edges that its edits made, of any kind, pass 10,000."
         },
         "agent_changes": "Edits are marked as agent changes. They show in agent.activity and in the Activity panel of the person, who can undo or revert them.",
         "examples": [
             {"method": "mesh.create", "params": {"name": "Shed", "origin": [0, 0, 0]}},
             {"method": "mesh.summary", "params": {}},
-            {"method": "mesh.add_edges", "params": {"id": "00000000-0000-0000-0000-000000000002", "edges": [[[0, 0, 0], [4000, 0, 0]], [[4000, 0, 0], [4000, 3000, 0]], [[4000, 3000, 0], [0, 3000, 0]], [[0, 3000, 0], [0, 0, 0]]]}},
-            {"method": "mesh.push_pull", "params": {"id": "00000000-0000-0000-0000-000000000002", "face": 1, "distance": 2500}},
-            {"method": "mesh.faces", "params": {"id": "00000000-0000-0000-0000-000000000002", "limit": 10, "with_points": true}},
-            {"method": "mesh.solid_report", "params": {"id": "00000000-0000-0000-0000-000000000002"}},
-            {"method": "mesh.transform", "params": {"id": "00000000-0000-0000-0000-000000000002", "faces": [1], "rotate": {"axis": [0, 0, 1], "degrees": 15, "about": [0, 0, 0]}, "translate": [100, 0, 0]}},
-            {"method": "mesh.soften_edges", "params": {"id": "00000000-0000-0000-0000-000000000002", "below_angle": 20}},
-            {"method": "mesh.solid", "params": {"id": "00000000-0000-0000-0000-000000000002", "op": "subtract", "first_face": 1, "second_face": 9}},
+            {"method": "mesh.add_edges", "params": {"id": m, "edges": [[[0, 0, 0], [4000, 0, 0]], [[4000, 0, 0], [4000, 3000, 0]], [[4000, 3000, 0], [0, 3000, 0]], [[0, 3000, 0], [0, 0, 0]]]}},
+            {"method": "mesh.push_pull", "params": {"id": m, "face": 9, "distance": 2500}},
+            {"method": "mesh.faces", "params": {"id": m, "limit": 10, "with_points": true}},
+            {"method": "mesh.solid_report", "params": {"id": m}},
+            {"method": "mesh.transform", "params": {"id": m, "faces": [9], "scale": {"factor": 0.5, "about": [2000, 1500, 2500]}}},
+            {"method": "mesh.soften_edges", "params": {"id": m, "below_angle": 20}},
             {"method": "mesh.near", "params": {"point": [100, 100, 0], "radius": 500, "kinds": ["faces", "edges"]}},
             {"method": "mesh.pick", "params": {"origin": [2000, 1500, 9000], "direction": [0, 0, -1]}},
-            {"method": "mesh.batch", "params": {"id": "00000000-0000-0000-0000-000000000002", "edits": [
-                {"method": "add_edges", "edges": [[[0, 0, 3000], [4000, 0, 3000]]]},
-                {"method": "paint", "faces": [1], "material": "Brick"},
-                {"method": "hide", "edges": [1], "hidden": true}
+            {"method": "material.create", "params": {"name": "Brick", "base_color": [180, 80, 60]}},
+            {"method": "mesh.batch", "params": {"id": m, "edits": [
+                {"method": "add_edges", "edges": [[[6000, 0, 0], [7000, 0, 0]]]},
+                {"method": "paint", "faces": [9], "material": "Brick"},
+                {"method": "hide", "faces": [9], "hidden": false}
             ]}},
-            {"method": "mesh.render", "params": {"id": "00000000-0000-0000-0000-000000000002", "camera": {"target": [2000, 1500, 1000], "yaw": 0.8, "pitch": 0.5, "distance": 12000, "fov": 45, "projection": "perspective"}, "width": 800, "height": 600}}
+            {"method": "mesh.render", "params": {"id": m, "camera": {"target": [2000, 1500, 1000], "yaw": 0.8, "pitch": 0.5, "distance": 12000, "fov": 45, "projection": "perspective"}, "width": 400, "height": 300}}
         ]
     })
 }
@@ -190,7 +235,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
         "summary" | "vertices" | "edges" | "faces" | "solid_report" | "bounds" => {
             read::handle(s.editor.doc(), op, p)
         }
-        "near" | "pick" => query::handle(s.editor.doc(), op, p),
+        "near" | "pick" => query::handle(s, op, p),
         "render" => render(s, p),
         "batch" => edit::batch(s, p),
         _ if edit::is_edit(op) => edit::single(s, op, p),
@@ -255,33 +300,37 @@ pub(crate) fn models<'a>(
     Ok(out)
 }
 
-/// The orbit camera of a saved camera. The camera is checked first.
-pub(crate) fn camera_of(c: &ViewCamera) -> Result<Camera, RpcError> {
+/// Like [`models`], without the models on a hidden layer or class when no model is named.
+pub(crate) fn visible_models<'a>(
+    doc: &'a Document,
+    only: Option<&str>,
+) -> Result<Vec<(ObjectId, &'a SurfaceModel)>, RpcError> {
+    let mut list = models(doc, only)?;
+    if only.is_none() {
+        list.retain(|(id, _)| {
+            doc.object(*id).is_some_and(|o| {
+                doc.layer(o.layer).is_none_or(|l| l.visible)
+                    && doc.class(o.class).is_none_or(|c| c.visible)
+            })
+        });
+    }
+    Ok(list)
+}
+
+/// The orbit camera of a camera in drawing coordinates, for a scene with this origin. The
+/// camera is checked first.
+pub(crate) fn camera_of(c: &ViewCamera, origin: glam::DVec3) -> Result<Camera, RpcError> {
     if !c.is_valid() {
         return Err(bad(
             "camera: finite numbers, distance above 0, fov 1 to 170 degrees, projection perspective or ortho",
         ));
     }
-    Ok(Camera {
-        target: glam::Vec3::new(c.target[0] as f32, c.target[1] as f32, c.target[2] as f32),
-        yaw: c.yaw as f32,
-        pitch: c.pitch as f32,
-        distance: c.distance as f32,
-        projection: Projection::from_name(&c.projection).unwrap_or(Projection::Perspective),
-        fov_y: c.fov.to_radians() as f32,
-    })
+    Ok(Camera::from_saved(c, origin))
 }
 
-/// A camera as JSON, in the form that `camera` takes.
-pub(crate) fn camera_json(c: &Camera) -> Value {
-    json!({
-        "target": [c.target.x, c.target.y, c.target.z],
-        "yaw": c.yaw,
-        "pitch": c.pitch,
-        "distance": c.distance,
-        "fov": f64::from(c.fov_y).to_degrees(),
-        "projection": c.projection.id(),
-    })
+/// A camera as JSON in drawing coordinates, in the form that `camera` takes.
+pub(crate) fn camera_json(c: &Camera, origin: glam::DVec3) -> Value {
+    serde_json::to_value(c.to_saved(origin)).unwrap_or(Value::Null)
 }
 
 /// `mesh.render`: render.png with a model to frame.

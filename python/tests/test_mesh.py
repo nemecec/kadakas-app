@@ -144,3 +144,16 @@ def test_render_gives_a_png(doc):
     png = base64.b64decode(picture["png_base64"])
     assert png[1:4] == b"PNG"
     assert picture["camera"]["projection"] == "perspective"
+
+
+def test_the_camera_of_a_render_is_in_drawing_coordinates_and_repeats_the_picture(doc):
+    far = doc.api.mesh_create()["id"]
+    model = doc.api.mesh_create()["id"]
+    doc.api.mesh_add_edges(id=model, edges=rect(100000, 50000, 101000, 51000))
+    first = doc.api.mesh_render(id=model, width=64, height=48)
+    x, y, _ = first["camera"]["target"]
+    assert 100000 <= x <= 101000 and 50000 <= y <= 51000
+    doc.api.mesh_add_edges(id=far, edges=rect(-500000, 0, -499000, 1000))
+    again = doc.api.mesh_render(camera=first["camera"], width=64, height=48)
+    assert again["camera"] == first["camera"]
+    assert again["png_base64"] == doc.api.mesh_render(id=model, width=64, height=48)["png_base64"]

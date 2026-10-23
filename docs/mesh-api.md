@@ -112,17 +112,16 @@ An edit answers with the change it made.
   "id": "<model>",
   "counts": {"vertices": 8, "edges": 12, "faces": 6},
   "revision": 2,
-  "created": {"vertices": [], "edges": [], "faces": []},
-  "removed": {"vertices": [], "edges": [], "faces": []},
-  "notes": []
+  "created": {"vertices": [10, 11, 12, 13], "edges": [14, 15, 16, 17, 18, 19, 20, 21], "faces": [22, 23, 24, 25, 26]},
+  "removed": {"vertices": [], "edges": [], "faces": []}
 }
 ```
 
-`created` and `removed` list at most 1000 ids each. If a list was cut, `truncated` is true. `notes` tell what the edit changed that you did not ask for. An example is a material that a merged face dropped.
+The answer above is the push of the face of a rectangle of 4000 by 3000 mm. `created` and `removed` list at most 1000 ids each. If a list was cut, `truncated` is true. `notes` is in the answer only when the edit changed something that you did not ask for. An example is a material that a merged face dropped.
 
-`mesh.soften_edges` adds `changed`, `softened` and `considered`. `changed` is the number of edges that got other flags. `softened` is the number of soft edges in the model now. `considered` is the number of edges that the angle test looked at. Edges that do not have exactly two faces are not touched.
+`mesh.soften_edges` adds `changed`, `softened` and `considered`. Take a box with 12 edges that all meet at 90 degrees and call it with an angle of 20. `considered` is 12, the edges that the test looked at. `changed` is 0, because no edge got other flags than it had. `softened` is 0, the number of soft edges in the whole model after the call. Call it with 100 and `changed` is 12 and `softened` is 12. Call it again with 100 and `changed` is 0 and `softened` stays 12. Edges that do not have exactly two faces are not looked at.
 
-`mesh.make_group`, `mesh.make_component` and `mesh.explode` add `created_objects`, `removed_objects` and `created_resources`.
+`mesh.make_group`, `mesh.make_component` and `mesh.explode` add `created_objects`, `removed_objects` and `created_resources`. `mesh.make_group` also names the new group object in `group`. When the group or component takes every face of the model, the model moves away with them. Then the answer has `model_gone: true` and no counts.
 
 ## Transform
 
@@ -172,7 +171,9 @@ The answer has `count` and `edits`, the change of each edit.
 
 A batch has at most 50 edits. The `add_edges` edits of a batch draw at most 10,000 edges in all. A call over a cap is refused at once with the id `batch_too_large` or `batch_edges_too_many`.
 
-The caps come from `docs/modeler-limits.md`. A command on a model of 80,000 edges costs about 0.125 s. Fifty edits cost about 6 s. An edit of 10,000 edges costs 0.2 to 0.75 s. So a batch stays near 7 s in the worst case.
+A batch also stops when its edits made more than 10,000 edges in all, of any kind: copies, Follow Me, Offset, Intersect Faces and the solid tools count too. The check runs after each edit. The error `batch_edges_too_many` names the edit (`step`) and all edits are undone.
+
+The caps come from `docs/modeler-limits.md`. A command on a model of 80,000 edges costs about 0.125 s. An edit of 10,000 edges costs 0.2 to 0.75 s. I measured a batch through the API on a release build with a model of 72,580 edges, 36,481 vertices and 36,100 faces. Fifty `hide` edits took 5.25 s (0.105 s each). Forty-eight `push_pull` edits took 15.3 s (0.32 s each). A batch with one `add_edges` of 5,000 edges took 0.33 s. So a batch of 50 stays near 5 s for cheap edits and near 16 s for Push/Pull on a model of that size. A debug build is slower. The cost of a batch is the sum of its edits, so a call that must stay short uses fewer edits.
 
 ## Undo and review
 
@@ -182,7 +183,7 @@ Edits of an agent are marked as agent changes. They show in `agent.activity` and
 
 ## Errors
 
-A refusal is a validation error (code 3). A missing object, vertex, edge or face is `not_found` (code 2). A size limit is `limit` (code 6). A wrong parameter is `invalid_params` (code -32602).
+A refusal is a validation error (code 3). A missing object, layer, class, vertex, edge or face is `not_found` (code 2). A locked layer is a `conflict` (code 5). A size limit is `limit` (code 6). A wrong parameter is `invalid_params` (code -32602) and has no `error_id`.
 
 The data of the error has `error_id`, a stable name. It also has the ids that matter. The message is English text for a person. A tool reads `error_id`, not the message.
 
@@ -191,6 +192,9 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `no_such_object` | The object does not exist. | `object` |
 | `not_a_surface_model` | The object is another kind. | `object`, `kind` |
 | `no_such_vertex`, `no_such_edge`, `no_such_face` | The id is not in the model. | `object`, `vertex`, `edge` or `face` |
+| `layer_locked` | The layer of the model is locked. | `object`, `layer` |
+| `layer_grey`, `class_grey` | The layer or class of the model is grey. Make it visible first. | `object`, `layer` or `class` |
+| `no_such_layer`, `no_such_class`, `no_such_resource` | A command named a layer, class or resource that is not there. | `layer`, `class` or `resource` |
 | `bad_point` | A point is not finite or is out of range. | `object` |
 | `edge_too_short` | An edge is shorter than the length tolerance. | `tolerance_mm` |
 | `edge_too_close` | An edge passes too close to other geometry. | `tolerance_mm` |
@@ -221,19 +225,23 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 
 ## Questions about space
 
-`mesh.near` takes a point in drawing coordinates and a radius. It returns faces, edges or vertices, nearest first. It leaves out hidden items unless `include_hidden` is true.
+`mesh.near` takes a point in drawing coordinates and a radius. It returns faces, edges or vertices, nearest first, at most `limit` of each kind (200 at the most). It leaves out hidden faces and edges and soft edges unless `include_hidden` is true. It leaves out the models on a hidden layer or class unless you name the model with `id`. A model whose faces cannot be cut into triangles is listed in `skipped` and not searched.
 
-`mesh.pick` shoots a ray. The answer says which face was hit, the distance, the point, and the `side` that was met (`front` or `back`). With `all` it lists every face on the ray.
+`mesh.pick` shoots a ray. The answer says which face was hit, the distance, the point, and the `side` that was met (`front` or `back`). With `all` it lists every face on the ray, nearest first. It lists at most 200 and then `truncated` is true. It has the same rules for hidden items, layers, classes and `skipped` as `mesh.near`. Both methods keep the triangles of a model for a revision of the document, so many calls in a row cut the faces once.
 
 ## Pictures
 
-`mesh.render` is `render.png` with a camera and a model to frame. It takes `view`, `camera`, `width`, `height`, `projection`, `mode`, `render_style` and `samples`. The camera is the same as in a scene (MOD-10): `target`, `yaw`, `pitch`, `distance`, `fov` and `projection`. `render.png` takes `camera` too. The answer has the camera that was used, so a later call repeats it.
+`mesh.render` is `render.png` with a camera and a model to frame. It takes `view`, `camera`, `width`, `height`, `projection`, `mode`, `render_style` and `samples`. The camera has `target`, `yaw`, `pitch`, `distance`, `fov` and `projection`. The `target` is a point of the drawing in millimeters (drawing coordinates), the same frame as every other coordinate of the API and as the cameras of scenes (MOD-10). It does not depend on which other objects are in the drawing. Give the camera of an answer back as `camera` and the picture is the same, also after you add models far away. `render.png` takes `camera` too. The answer has the camera that was used.
 
 Over MCP the picture comes as an image block.
 
 ## Limits
 
 Models have the limits of `docs/modeler-limits.md`: 50,000 vertices, 100,000 edges, 50,000 faces and 10,000 edges in one edit. A refused edit gives `model_limit`.
+
+## What the reads see
+
+The reads and edits work on the surface model objects of the document, also the ones inside groups. A component instance shows its definition in renders, but the reads do not list its geometry. `mesh.summary` counts the instances in `component_instances`. To read or edit a component, explode the instance with `mesh.explode`. When `mesh.make_component` takes every face of a model, the geometry lives in the definition and the model is gone (`model_gone`).
 
 ## Where the code is
 

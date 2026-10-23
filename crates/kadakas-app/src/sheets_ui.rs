@@ -502,7 +502,7 @@ pub fn capture(session: &Session, name: &str, zoom: f64, pan: DVec2) -> SavedVie
             .and_then(|v| v.camera.clone())
             .filter(|c| {
                 let near = kadakas_ui_core::scene_panel::nearest_standard(
-                    &kadakas_ui_core::scene_panel::camera_from_saved(c),
+                    &kadakas_ui_core::scene_panel::camera_from_saved(c, glam::DVec3::ZERO),
                 );
                 near.id() == session.view.view.id()
             }),
@@ -554,7 +554,7 @@ mod tests {
             .unwrap();
         // The app stores the view again under the name of a scene of the modeler.
         let near = kadakas_ui_core::scene_panel::nearest_standard(
-            &kadakas_ui_core::scene_panel::camera_from_saved(&cam),
+            &kadakas_ui_core::scene_panel::camera_from_saved(&cam, glam::DVec3::ZERO),
         );
         session.view.view = near;
         let v = capture(&session, "scene 1", 0.5, DVec2::ZERO);

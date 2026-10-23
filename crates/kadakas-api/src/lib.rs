@@ -40,6 +40,7 @@ mod issue_api;
 mod libfiles;
 mod massing_api;
 mod mesh_api;
+pub use mesh_api::ERROR_IDS as MESH_ERROR_IDS;
 mod pattern_api;
 mod picture_api;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -168,6 +169,8 @@ pub struct Session {
     /// What the last refused call wanted (see `unsaved`).
     blocked: Option<Blocked>,
     mesh_cache: MeshCache,
+    /// The triangles of surface models for `mesh.near` and `mesh.pick` (see `mesh_api`).
+    mesh_query: mesh_api::QueryCache,
     /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
     lod_scene: Option<(u64, kadakas_core::plants::form3d::Detail, Arc<Scene>)>,
     /// Which files requests may read and write (`import.file`, `export.file`, `file.open`, `file.save`).
@@ -529,7 +532,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "render.png",
-        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.",
+        "PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z] in drawing coordinates (mm), yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.",
     ),
     (
         "view.list",
@@ -1156,6 +1159,7 @@ impl Session {
             guard_unsaved: false,
             blocked: None,
             mesh_cache: MeshCache::default(),
+            mesh_query: Default::default(),
             lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
             paths: PathPolicy::default(),
@@ -1902,7 +1906,7 @@ impl Session {
                 };
                 // A free camera is used as it is; the others frame the model.
                 match &free_camera {
-                    Some(c) => camera = mesh_api::camera_of(c)?,
+                    Some(c) => camera = mesh_api::camera_of(c, scene.origin)?,
                     None => camera.fit(framed, width as f32 / height as f32),
                 }
                 // A named style, else the active style of the document, else none.
@@ -1962,7 +1966,7 @@ impl Session {
                     "mode": used_mode.id(),
                 });
                 if free_camera.is_some() || with_camera == Some(true) {
-                    out["camera"] = mesh_api::camera_json(&camera);
+                    out["camera"] = mesh_api::camera_json(&camera, scene.origin);
                 }
                 // The settings of the style are only given when materials or a style were used.
                 if !plain {

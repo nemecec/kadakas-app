@@ -2,7 +2,9 @@
 
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::*;
-use kadakas_core::surface::{Edit, FaceId, ShellState, SolidOp, SurfaceModel};
+use kadakas_core::surface::{
+    Edit, FaceId, ShellState, SolidError, SolidOp, SurfaceError, SurfaceModel,
+};
 
 fn model(ed: &Editor, id: ObjectId) -> &SurfaceModel {
     match &ed.doc().object(id).unwrap().shape {
@@ -103,9 +105,12 @@ fn a_refused_operation_changes_nothing_and_makes_no_step() {
         },
     )
     .unwrap_err();
-    let CommandError::Invalid(text) = err else {
+    // The refusal is typed: the API gives a stable id without running the edit again.
+    let CommandError::Surface(SurfaceError::Solid(SolidError::Open { which, .. })) = &err else {
         panic!("{err:?}")
     };
+    assert_eq!(which.to_string(), "first");
+    let text = err.to_string();
     assert!(
         text.contains("the first solid is not a closed solid"),
         "{text}"

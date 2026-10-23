@@ -60,6 +60,7 @@ use super::{EdgeId, FaceId, SurfaceModel};
 
 mod boolean;
 mod locate;
+pub(super) use locate::{closest_on_triangle, ray_hit_distance};
 mod shell;
 
 pub use shell::{OpenEdge, OpenKind, Shell, ShellState, SolidReport};

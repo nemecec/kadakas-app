@@ -4,8 +4,9 @@
 //! The camera orbits a target. `yaw` is the angle of the eye around Z, measured from
 //! +X toward +Y. `pitch` is the angle of the eye above the XY plane.
 
-use glam::{Mat4, Vec2, Vec3, Vec4};
+use glam::{DVec3, Mat4, Vec2, Vec3, Vec4};
 use kadakas_core::mesh::Bounds3;
+use kadakas_core::sheets::ViewCamera;
 
 use crate::views::{Projection, StandardView};
 
@@ -79,6 +80,45 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// The saved camera (drawing coordinates). The target of a camera is relative to the origin
+    /// of the scene (`Scene::origin`), so the origin is added back in f64.
+    pub fn to_saved(&self, origin: DVec3) -> ViewCamera {
+        // A turn of many laps is the same view: keep the number small enough to be valid.
+        let yaw = if self.yaw.abs() > 1.0e3 {
+            self.yaw.rem_euclid(std::f32::consts::TAU)
+        } else {
+            self.yaw
+        };
+        ViewCamera {
+            target: (DVec3::new(
+                f64::from(self.target.x),
+                f64::from(self.target.y),
+                f64::from(self.target.z),
+            ) + origin)
+                .to_array(),
+            yaw: f64::from(yaw),
+            pitch: f64::from(self.pitch),
+            distance: f64::from(self.distance),
+            // The conversion runs in f64, so f32 radians come back to the same f32.
+            fov: f64::from(self.fov_y).to_degrees(),
+            projection: self.projection.id().to_string(),
+        }
+    }
+
+    /// The orbit camera of a saved camera, for a scene with this origin. A projection that is not
+    /// known gives the perspective one.
+    pub fn from_saved(v: &ViewCamera, origin: DVec3) -> Camera {
+        let t = DVec3::from(v.target) - origin;
+        Camera {
+            target: Vec3::new(t.x as f32, t.y as f32, t.z as f32),
+            yaw: v.yaw as f32,
+            pitch: v.pitch as f32,
+            distance: v.distance as f32,
+            projection: Projection::from_name(&v.projection).unwrap_or(Projection::Perspective),
+            fov_y: v.fov.to_radians() as f32,
+        }
+    }
+
     pub fn standard(view: StandardView, projection: Projection) -> Camera {
         let (yaw, pitch) = view.yaw_pitch();
         Camera {

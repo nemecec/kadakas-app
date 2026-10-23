@@ -13,7 +13,7 @@
 //! The wording of the feature follows the public SketchUp help (scenes, styles), not verified
 //! against the product.
 
-use glam::Vec3;
+use glam::DVec3;
 use kadakas_core::command::Command;
 use kadakas_core::model::Document;
 use kadakas_core::present::RenderStyle;
@@ -105,41 +105,22 @@ fn check_name(doc: &Document, name: &str, except: Option<&str>) -> Result<String
     }
 }
 
-/// The saved camera of an orbit camera.
-pub fn camera_to_saved(c: &Camera) -> ViewCamera {
-    // A turn of many laps is the same view: keep the number small enough to be valid.
-    let yaw = if c.yaw.abs() > 1.0e3 {
-        c.yaw.rem_euclid(std::f32::consts::TAU)
-    } else {
-        c.yaw
-    };
-    ViewCamera {
-        target: [c.target.x as f64, c.target.y as f64, c.target.z as f64],
-        yaw: yaw as f64,
-        pitch: c.pitch as f64,
-        distance: c.distance as f64,
-        // The conversion runs in f64, so f32 radians come back to the same f32.
-        fov: f64::from(c.fov_y).to_degrees(),
-        projection: c.projection.id().to_string(),
-    }
+/// The saved camera of an orbit camera, in drawing coordinates. `origin` is the origin of the
+/// scene (`Scene::origin`): the target of the camera is relative to it.
+pub fn camera_to_saved(c: &Camera, origin: DVec3) -> ViewCamera {
+    c.to_saved(origin)
 }
 
-/// The orbit camera of a saved camera. A projection that is not known gives the perspective one.
-pub fn camera_from_saved(v: &ViewCamera) -> Camera {
-    Camera {
-        target: Vec3::new(v.target[0] as f32, v.target[1] as f32, v.target[2] as f32),
-        yaw: v.yaw as f32,
-        pitch: v.pitch as f32,
-        distance: v.distance as f32,
-        projection: Projection::from_name(&v.projection).unwrap_or(Projection::Perspective),
-        fov_y: v.fov.to_radians() as f32,
-    }
+/// The orbit camera of a saved camera, for a scene with this origin. A projection that is not
+/// known gives the perspective one.
+pub fn camera_from_saved(v: &ViewCamera, origin: DVec3) -> Camera {
+    Camera::from_saved(v, origin)
 }
 
 /// The saved view of the present state: the visibility of all layers and tags, the active layer
 /// and tag, the camera, the standard view that is nearest to it (the app uses that one) and the
 /// active render style. The zoom and pan of the 2D view are left out: a scene is a 3D view.
-pub fn capture(doc: &Document, name: &str, camera: &Camera) -> SavedView {
+pub fn capture(doc: &Document, name: &str, camera: &Camera, origin: DVec3) -> SavedView {
     SavedView {
         name: name.trim().to_string(),
         layers: doc.layers.iter().map(|l| (l.id, l.visible)).collect(),
@@ -152,7 +133,7 @@ pub fn capture(doc: &Document, name: &str, camera: &Camera) -> SavedView {
         projection: Some(camera.projection.id().to_string()),
         // The app draws with the mode, so the mode of the style goes with the scene.
         mode: Some(active_mode(doc).id().to_string()),
-        camera: Some(camera_to_saved(camera)),
+        camera: Some(camera_to_saved(camera, origin)),
         render_style: active_style_name(doc),
         // Fields of a later version stay when a scene is updated.
         extra: find(doc, name).map(|v| v.extra.clone()).unwrap_or_default(),
@@ -200,16 +181,21 @@ pub fn nearest_standard(camera: &Camera) -> StandardView {
 }
 
 /// Add Scene: stores the present state under a new name.
-pub fn add(doc: &Document, name: &str, camera: &Camera) -> Result<Command, Problem> {
+pub fn add(doc: &Document, name: &str, camera: &Camera, origin: DVec3) -> Result<Command, Problem> {
     let name = check_name(doc, name, None)?;
-    save(capture(doc, &name, camera))
+    save(capture(doc, &name, camera, origin))
 }
 
 /// Update: stores the present camera, visibility and style in the scene that already exists. It
 /// keeps its place in the list.
-pub fn update(doc: &Document, name: &str, camera: &Camera) -> Result<Command, Problem> {
+pub fn update(
+    doc: &Document,
+    name: &str,
+    camera: &Camera,
+    origin: DVec3,
+) -> Result<Command, Problem> {
     let found = find(doc, name).ok_or(Problem::NoSuchScene)?;
-    save(capture(doc, &found.name, camera))
+    save(capture(doc, &found.name, camera, origin))
 }
 
 fn save(view: SavedView) -> Result<Command, Problem> {
@@ -286,13 +272,13 @@ pub struct Activation {
 
 /// Choose a scene. The command is `RestoreView`, which also sets the render style, so the same
 /// call works through `saved_view.restore` for an agent.
-pub fn activate(doc: &Document, name: &str) -> Result<Activation, Problem> {
+pub fn activate(doc: &Document, name: &str, origin: DVec3) -> Result<Activation, Problem> {
     let v = find(doc, name).ok_or(Problem::NoSuchScene)?;
     let goal = match (
         &v.camera,
         v.view.as_deref().and_then(StandardView::from_name),
     ) {
-        (Some(c), _) if c.is_valid() => Goal::Camera(camera_from_saved(c)),
+        (Some(c), _) if c.is_valid() => Goal::Camera(camera_from_saved(c, origin)),
         (_, Some(s)) if !s.is_plan() => {
             Goal::Standard(s, v.projection.as_deref().and_then(Projection::from_name))
         }
@@ -309,11 +295,11 @@ pub fn activate(doc: &Document, name: &str) -> Result<Activation, Problem> {
 
 /// Does the scene still match the present state? Used to show that the active scene has changes
 /// that Update would store (the camera moved, a tag was hidden or the style changed).
-pub fn is_modified(doc: &Document, name: &str, camera: &Camera) -> bool {
+pub fn is_modified(doc: &Document, name: &str, camera: &Camera, origin: DVec3) -> bool {
     let Some(v) = find(doc, name) else {
         return false;
     };
-    let now = capture(doc, &v.name, camera);
+    let now = capture(doc, &v.name, camera, origin);
     let camera_same = match (&v.camera, &now.camera) {
         (Some(a), Some(b)) => same_camera(a, b),
         _ => true,

@@ -33,7 +33,7 @@ impl Tx<'_> {
         let mut model = (**model).clone();
         let notes = model
             .apply_with_notes(edit)
-            .map_err(|e| CommandError::Invalid(e.to_string()))?;
+            .map_err(CommandError::Surface)?;
         if let Some(problem) = model.problem() {
             return Err(CommandError::Invalid(problem));
         }

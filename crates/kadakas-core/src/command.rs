@@ -826,6 +826,10 @@ pub enum CommandError {
     NoComment(crate::issue::CommentId),
     #[error("invalid value: {0}")]
     Invalid(String),
+    /// An edit of a surface model was refused (MOD-11 keeps the reason typed, so that the API can
+    /// give a stable id without running the edit again).
+    #[error("invalid value: {0}")]
+    Surface(crate::surface::SurfaceError),
 }
 
 /// Result of a successful command.

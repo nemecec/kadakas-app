@@ -1169,7 +1169,15 @@ fn erase_takes_faces_first_so_the_edges_are_still_good() {
         "mesh.erase",
         json!({"id": c.id, "faces": [c.top, c.bottom], "edges": [c.edge]}),
     );
-    assert!(r["counts"]["faces"].as_u64().unwrap() < 6);
+    // The two faces go first, then the edge takes the front face that stands on it.
+    assert_eq!(r["counts"]["faces"], 3);
+    let removed = r["removed"]["faces"].as_array().unwrap();
+    assert!(removed.contains(&json!(c.top)) && removed.contains(&json!(c.bottom)));
+    assert_eq!(removed.len(), 3);
+    assert_eq!(
+        r["removed"]["edges"].as_array().unwrap(),
+        &vec![json!(c.edge)]
+    );
 }
 
 #[test]
@@ -1234,7 +1242,16 @@ fn a_batch_can_work_on_several_models_and_group() {
         ]}),
     );
     assert_eq!(r["edits"][2]["op"], "make_group");
+    assert_eq!(r["count"], 3);
+    assert_eq!(r["edits"][0]["id"], json!(a));
+    assert_eq!(
+        r["edits"][0]["counts"],
+        json!({"vertices": 8, "edges": 12, "faces": 6})
+    );
+    assert_eq!(r["edits"][1]["id"], json!(b));
+    assert_eq!(r["edits"][1]["op"], "hide");
     assert!(r["edits"][2]["group"].is_string());
+    assert_eq!(r["edits"][2]["id"], json!(b));
     let e = err(
         &mut s,
         "mesh.batch",
@@ -1277,24 +1294,44 @@ fn a_batch_is_all_or_nothing() {
         ]}),
     );
     assert_eq!(depth(&s), d + 1);
-    // A solid refusal inside a batch keeps its id and names the step.
-    let id2 = new_model(&mut s);
-    let d = depth(&s);
-    ok(
+}
+
+#[test]
+fn a_real_solid_refusal_in_a_batch_keeps_its_id_and_names_the_step() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let flat = ok(
         &mut s,
         "mesh.add_edges",
-        json!({"id": id2, "edges": rect(0.0, 0.0, 100.0, 100.0)}),
+        json!({"id": id, "edges": rect(0.0, 0.0, 1000.0, 1000.0)}),
+    )["created"]["faces"][0]
+        .clone();
+    draw_boxes(
+        &mut s,
+        &id,
+        &[([3000.0, 0.0, 0.0], [4000.0, 1000.0, 1000.0])],
     );
+    let boxed = face_facing(&mut s, &id, [0.0, 0.0, -1.0]);
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
     let e = err(
         &mut s,
         "mesh.batch",
-        json!({"id": id2, "edits": [
-            {"method": "hide", "faces": [1]},
-            {"method": "solid", "first_face": 1, "second_face": 1},
+        json!({"id": id, "edits": [
+            {"method": "hide", "faces": [flat]},
+            {"method": "solid", "op": "union", "first_face": flat, "second_face": boxed},
         ]}),
     );
-    assert_eq!(e.code, -32602);
-    assert_eq!(depth(&s), d + 1);
+    assert_eq!((e.code, error_id(&e).as_str()), (3, "solid_open"));
+    let data = e.details.as_ref().unwrap();
+    assert_eq!(data["step"], 1);
+    assert_eq!(data["operand"], "first");
+    assert_eq!(data["open_kind"], "border");
+    assert_eq!(data["object"], json!(id));
+    assert!(e.message.contains("not a closed solid"), "{}", e.message);
+    // The hide of the first edit is undone, and there is no step.
+    assert_eq!(snapshot(&mut s, &id), before);
+    assert_eq!(depth(&s), d);
 }
 
 #[test]
@@ -1376,41 +1413,6 @@ fn a_batch_has_a_hard_cap() {
     ] {
         assert_eq!(err(&mut s, "mesh.batch", bad.clone()).code, -32602, "{bad}");
     }
-}
-
-#[test]
-fn a_notes_text_tells_what_a_merge_dropped() {
-    let mut s = Session::with_sequential_ids();
-    let id = new_model(&mut s);
-    ok(
-        &mut s,
-        "mesh.add_edges",
-        json!({"id": id, "edges": rect(0.0, 0.0, 100.0, 100.0)}),
-    );
-    ok(
-        &mut s,
-        "mesh.add_edges",
-        json!({"id": id, "edges": [[[50, 0, 0], [50, 100, 0]]]}),
-    );
-    let mat = ok(
-        &mut s,
-        "material.create",
-        json!({"name": "Red", "base_color": [200, 0, 0]}),
-    )["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let faces = all(&mut s, "mesh.faces", &id);
-    assert_eq!(faces.len(), 2);
-    ok(
-        &mut s,
-        "mesh.paint",
-        json!({"id": id, "faces": [ids(&faces)[1]], "material": mat}),
-    );
-    let middle = edge_between(&mut s, &id, [50.0, 0.0, 0.0], [50.0, 100.0, 0.0]);
-    let r = ok(&mut s, "mesh.erase", json!({"id": id, "edges": [middle]}));
-    assert_eq!(r["counts"]["faces"], 1);
-    assert!(r.get("notes").is_none() || r["notes"].is_array());
 }
 
 #[test]
@@ -1626,4 +1628,413 @@ fn the_edit_methods_are_edits_and_the_reads_are_reads_for_scripts() {
         ok(&mut s, m, p);
         assert_eq!(s.editor.revision(), rev, "{m} reads only");
     }
+}
+
+fn target(v: &Value) -> Vec<f64> {
+    v["camera"]["target"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
+}
+
+#[test]
+fn the_camera_of_a_render_is_in_drawing_coordinates_and_repeats_the_picture() {
+    let mut s = Session::with_sequential_ids();
+    let far = new_model(&mut s);
+    let id = new_model(&mut s);
+    ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": cuboid([100000.0, 50000.0, 0.0], [101000.0, 51000.0, 1000.0])}),
+    );
+    let first = ok(
+        &mut s,
+        "mesh.render",
+        json!({"id": id, "width": 96, "height": 72}),
+    );
+    let t = target(&first);
+    assert!((100000.0..=101000.0).contains(&t[0]), "{t:?}");
+    assert!((50000.0..=51000.0).contains(&t[1]), "{t:?}");
+    // Another model far away moves the origin of the scene. The camera of the first call still
+    // looks at the first model.
+    ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": far, "edges": cuboid([-500000.0, 0.0, 0.0], [-499000.0, 1000.0, 1000.0])}),
+    );
+    let again = ok(
+        &mut s,
+        "mesh.render",
+        json!({"camera": first["camera"], "width": 96, "height": 72}),
+    );
+    assert_eq!(target(&again), t);
+    assert_eq!(again["camera"], first["camera"]);
+    // The same picture: the far model is out of the frame, the first model is in the middle.
+    let wide = ok(
+        &mut s,
+        "mesh.render",
+        json!({"id": id, "width": 96, "height": 72}),
+    );
+    assert_eq!(wide["png_base64"], again["png_base64"]);
+    assert_eq!(target(&wide), t);
+    // render.png takes the same camera.
+    let plain = ok(
+        &mut s,
+        "render.png",
+        json!({"camera": first["camera"], "width": 96, "height": 72}),
+    );
+    assert_eq!(plain["png_base64"], again["png_base64"]);
+    assert_eq!(plain["camera"], first["camera"]);
+}
+
+#[test]
+fn a_locked_layer_refuses_every_edit_with_a_conflict() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Locked"}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id = ok(&mut s, "mesh.create", json!({"layer": layer}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let face = ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": rect(0.0, 0.0, 100.0, 100.0)}),
+    )["created"]["faces"][0]
+        .clone();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": layer, "locked": true}}),
+    );
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
+    for (m, p) in [
+        (
+            "mesh.push_pull",
+            json!({"id": id, "face": face, "distance": 10}),
+        ),
+        ("mesh.hide", json!({"id": id, "faces": [face]})),
+        (
+            "mesh.add_edges",
+            json!({"id": id, "edges": [[[0, 0, 0], [1, 1, 1]]]}),
+        ),
+        ("mesh.make_group", json!({"id": id, "faces": [face]})),
+    ] {
+        let e = err(&mut s, m, p);
+        assert_eq!((e.code, e.kind), (5, "conflict"), "{m}");
+        assert_eq!(error_id(&e), "layer_locked", "{m}");
+        assert_eq!(e.details.as_ref().unwrap()["layer"], json!(layer));
+    }
+    // In a batch the same, and nothing is done.
+    let e = err(
+        &mut s,
+        "mesh.batch",
+        json!({"id": id, "edits": [{"method": "hide", "faces": [face]}]}),
+    );
+    assert_eq!(error_id(&e), "layer_locked");
+    assert_eq!(e.details.as_ref().unwrap()["step"], 0);
+    assert_eq!(depth(&s), d);
+    assert_eq!(snapshot(&mut s, &id), before);
+    // Reads still work.
+    ok(&mut s, "mesh.faces", json!({"id": id}));
+}
+
+#[test]
+fn a_grey_layer_and_a_grey_class_are_refused_with_their_own_ids() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Grey"}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let class = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_class", "name": "Greyed"}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let a = ok(&mut s, "mesh.create", json!({"layer": layer}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = ok(&mut s, "mesh.create", json!({"class": class}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "layers": [layer], "mode": "grey"}}),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_visibility", "classes": [class], "mode": "grey"}}),
+    );
+    let edges = json!([[[0, 0, 0], [100, 0, 0]]]);
+    let e = err(&mut s, "mesh.add_edges", json!({"id": a, "edges": edges}));
+    assert_eq!((e.code, error_id(&e).as_str()), (3, "layer_grey"));
+    let e = err(&mut s, "mesh.add_edges", json!({"id": b, "edges": edges}));
+    assert_eq!((e.code, error_id(&e).as_str()), (3, "class_grey"));
+}
+
+#[test]
+fn every_describe_example_runs_in_order_on_a_fresh_session() {
+    let mut s = Session::with_sequential_ids();
+    let d = ok(&mut s, "describe", json!({}));
+    let examples = d["mesh"]["examples"].as_array().unwrap().clone();
+    assert!(examples.len() >= 12);
+    for e in examples {
+        let m = e["method"].as_str().unwrap();
+        let r = call(&mut s, m, e["params"].clone());
+        assert!(
+            r.is_ok(),
+            "{m} {}: {:?}",
+            e["params"],
+            r.err().map(|e| e.message)
+        );
+    }
+    // The example model exists and was pulled up, painted and softened.
+    let sum = ok(&mut s, "mesh.summary", json!({}));
+    assert_eq!(sum["models"].as_array().unwrap().len(), 1);
+    assert_eq!(sum["models"][0]["faces"], 6);
+}
+
+#[test]
+fn the_docs_and_describe_list_the_same_error_ids() {
+    let docs = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/mesh-api.md"
+    ));
+    let mut s = Session::with_sequential_ids();
+    let d = ok(&mut s, "describe", json!({}));
+    let text = d["mesh"]["errors"].as_str().unwrap();
+    for id in kadakas_api::MESH_ERROR_IDS {
+        assert!(text.contains(id), "describe lacks {id}");
+        assert!(docs.contains(&format!("`{id}`")), "docs lack {id}");
+    }
+}
+
+#[test]
+fn a_batch_stops_when_its_edits_make_too_many_edges_of_any_kind() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let face = ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": rect(0.0, 0.0, 100.0, 100.0)}),
+    )["created"]["faces"][0]
+        .clone();
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
+    let e = err(
+        &mut s,
+        "mesh.batch",
+        json!({"id": id, "edits": [
+            {"method": "hide", "faces": [face], "hidden": false},
+            {"method": "copy", "faces": [face], "translate": [500, 0, 0], "count": 1300},
+            {"method": "copy", "faces": [face], "translate": [0, 500, 0], "count": 1300},
+        ]}),
+    );
+    assert_eq!((e.code, error_id(&e).as_str()), (6, "batch_edges_too_many"));
+    let data = e.details.as_ref().unwrap();
+    assert_eq!(data["step"], 2);
+    assert_eq!(data["max"], 10_000);
+    assert!(data["count"].as_u64().unwrap() > 10_000);
+    assert_eq!(depth(&s), d);
+    assert_eq!(snapshot(&mut s, &id), before);
+}
+
+#[test]
+fn ids_are_capped_and_a_long_missing_list_is_cut() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    draw_boxes(&mut s, &id, &[([0.0; 3], [100.0; 3])]);
+    let many: Vec<u32> = (5000..6001).collect();
+    let e = err(&mut s, "mesh.faces", json!({"id": id, "ids": many}));
+    assert_eq!(e.code, -32602);
+    assert!(e.message.contains("1000"), "{}", e.message);
+    let ok_ids: Vec<u32> = (5000..6000).collect();
+    let r = ok(&mut s, "mesh.vertices", json!({"id": id, "ids": ok_ids}));
+    assert_eq!(r["total"], 0);
+    assert_eq!(r["missing"].as_array().unwrap().len(), 1000);
+}
+
+#[test]
+fn a_pick_through_many_faces_says_when_it_cut_the_list() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let mut edges = Vec::new();
+    for i in 0..205 {
+        let z = f64::from(i) * 10.0;
+        for k in 0..4 {
+            let c = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+            let (a, b) = (c[k], c[(k + 1) % 4]);
+            edges.push(json!([[a[0], a[1], z], [b[0], b[1], z]]));
+        }
+    }
+    ok(&mut s, "mesh.add_edges", json!({"id": id, "edges": edges}));
+    let r = ok(
+        &mut s,
+        "mesh.pick",
+        json!({"origin": [50, 50, 5000], "direction": [0, 0, -1], "all": true}),
+    );
+    assert_eq!(r["hits"].as_array().unwrap().len(), 200);
+    assert_eq!(r["truncated"], true);
+    let one = ok(
+        &mut s,
+        "mesh.pick",
+        json!({"origin": [50, 50, 5000], "direction": [0, 0, -1], "all": true, "id": id}),
+    );
+    assert_eq!(one["hit"]["distance"], r["hit"]["distance"]);
+}
+
+#[test]
+fn near_and_pick_leave_out_hidden_layers_and_soft_edges() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Shy"}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id = ok(&mut s, "mesh.create", json!({"layer": layer}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    draw_boxes(&mut s, &id, &[([0.0; 3], [1000.0; 3])]);
+    let e1 = edge_between(&mut s, &id, [0.0, 0.0, 0.0], [1000.0, 0.0, 0.0]);
+    ok(
+        &mut s,
+        "mesh.soften",
+        json!({"id": id, "edges": [e1], "soft": true}),
+    );
+    let q = json!({"point": [500, 0, 0], "radius": 5, "kinds": ["edges"]});
+    let near = ok(&mut s, "mesh.near", q.clone());
+    assert_eq!(near["edges"], json!([]), "a soft edge is not found");
+    let mut with_hidden = q.clone();
+    with_hidden["include_hidden"] = json!(true);
+    assert_eq!(ok(&mut s, "mesh.near", with_hidden)["edges"][0]["id"], e1);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": layer, "visible": false}}),
+    );
+    let ray = json!({"origin": [500, 500, 5000], "direction": [0, 0, -1]});
+    assert_eq!(ok(&mut s, "mesh.pick", ray.clone())["hit"], Value::Null);
+    let mut named = ray;
+    named["id"] = json!(id);
+    assert!(ok(&mut s, "mesh.pick", named)["hit"].is_object());
+    let n = ok(
+        &mut s,
+        "mesh.near",
+        json!({"point": [500, 500, 1100], "radius": 200}),
+    );
+    assert_eq!(n["faces"], json!([]));
+}
+
+#[test]
+fn component_instances_are_counted_but_their_geometry_is_not_listed() {
+    let mut s = Session::with_sequential_ids();
+    let c = scene(&mut s);
+    assert_eq!(
+        ok(&mut s, "mesh.summary", json!({}))["component_instances"],
+        0
+    );
+    let faces: Vec<Value> = all(&mut s, "mesh.faces", &c.id)
+        .iter()
+        .map(|f| f["id"].clone())
+        .collect();
+    let r = ok(
+        &mut s,
+        "mesh.make_component",
+        json!({"id": c.id, "faces": faces, "name": "Box", "replace": true}),
+    );
+    assert_eq!(r["model_gone"], true);
+    let sum = ok(&mut s, "mesh.summary", json!({}));
+    assert_eq!(sum["component_instances"], 1);
+    // The geometry lives in the definition now, so the reads find no model there.
+    assert_eq!(sum["models"], json!([]));
+    let hit = ok(
+        &mut s,
+        "mesh.pick",
+        json!({"origin": [500, 500, 5000], "direction": [0, 0, -1]}),
+    );
+    assert_eq!(hit["hit"], Value::Null);
+}
+
+#[test]
+fn make_group_names_the_group_object() {
+    let mut s = Session::with_sequential_ids();
+    let c = scene(&mut s);
+    let r = ok(
+        &mut s,
+        "mesh.make_group",
+        json!({"id": c.id, "faces": [c.top]}),
+    );
+    let group = r["group"].as_str().unwrap();
+    let o = ok(&mut s, "objects.get", json!({"id": group}));
+    assert_eq!(o["shape"]["kind"], "group");
+    assert!(r["created_objects"].as_array().unwrap().len() >= 2);
+}
+
+#[test]
+fn a_merge_that_drops_a_material_is_noted() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": rect(0.0, 0.0, 100.0, 100.0)}),
+    );
+    ok(
+        &mut s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": [[[50, 0, 0], [50, 100, 0]]]}),
+    );
+    let mat = ok(
+        &mut s,
+        "material.create",
+        json!({"name": "Red", "base_color": [200, 0, 0]}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let faces = all(&mut s, "mesh.faces", &id);
+    assert_eq!(faces.len(), 2);
+    let second = ids(&faces)[1];
+    ok(
+        &mut s,
+        "mesh.paint",
+        json!({"id": id, "faces": [second], "material": mat}),
+    );
+    let middle = edge_between(&mut s, &id, [50.0, 0.0, 0.0], [50.0, 100.0, 0.0]);
+    let r = ok(&mut s, "mesh.erase", json!({"id": id, "edges": [middle]}));
+    assert_eq!(r["counts"]["faces"], 1);
+    assert_eq!(r["removed"]["faces"].as_array().unwrap().len(), 1);
+    let notes = r["notes"].as_array().expect("a note");
+    assert!(
+        notes[0]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("material"),
+        "{notes:?}"
+    );
 }

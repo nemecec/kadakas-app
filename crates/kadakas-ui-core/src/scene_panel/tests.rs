@@ -2,6 +2,8 @@ use kadakas_core::command::{Command, Editor};
 use kadakas_core::model::{Attributes, ClassId};
 use proptest::prelude::*;
 
+use glam::Vec3;
+
 use super::*;
 
 fn editor() -> (Editor, ClassId) {
@@ -54,21 +56,30 @@ fn hide(ed: &mut Editor, c: ClassId) {
 fn new_names_are_free_and_numbered() {
     let (mut ed, _) = editor();
     assert_eq!(new_name(ed.doc()), "Scene 1");
-    run!(ed, add(ed.doc(), "Scene 1", &cam()));
-    run!(ed, add(ed.doc(), "scene 2", &cam()));
+    run!(ed, add(ed.doc(), "Scene 1", &cam(), DVec3::ZERO));
+    run!(ed, add(ed.doc(), "scene 2", &cam(), DVec3::ZERO));
     assert_eq!(new_name(ed.doc()), "Scene 3");
 }
 
 #[test]
 fn add_refuses_empty_and_taken_names() {
     let (mut ed, _) = editor();
-    run!(ed, add(ed.doc(), " North ", &cam()));
+    run!(ed, add(ed.doc(), " North ", &cam(), DVec3::ZERO));
     assert_eq!(names(&ed), ["North"]);
-    assert_eq!(add(ed.doc(), "  ", &cam()), Err(Problem::Empty));
-    assert_eq!(add(ed.doc(), "NORTH", &cam()), Err(Problem::Taken));
+    assert_eq!(
+        add(ed.doc(), "  ", &cam(), DVec3::ZERO),
+        Err(Problem::Empty)
+    );
+    assert_eq!(
+        add(ed.doc(), "NORTH", &cam(), DVec3::ZERO),
+        Err(Problem::Taken)
+    );
     let mut bad = cam();
     bad.distance = f32::NAN;
-    assert_eq!(add(ed.doc(), "Bad", &bad), Err(Problem::BadCamera));
+    assert_eq!(
+        add(ed.doc(), "Bad", &bad, DVec3::ZERO),
+        Err(Problem::BadCamera)
+    );
 }
 
 #[test]
@@ -79,11 +90,11 @@ fn a_scene_stores_camera_tags_layers_and_style() {
     })
     .unwrap();
     hide(&mut ed, trees);
-    run!(ed, add(ed.doc(), "A", &cam()));
+    run!(ed, add(ed.doc(), "A", &cam(), DVec3::ZERO));
     let v = find(ed.doc(), "a").unwrap();
     assert_eq!(v.classes.get(&trees), Some(&false));
     assert_eq!(v.render_style.as_deref(), Some("Hidden Line"));
-    let back = camera_from_saved(v.camera.as_ref().unwrap());
+    let back = camera_from_saved(v.camera.as_ref().unwrap(), DVec3::ZERO);
     assert!((back.target - cam().target).length() < 1e-3);
     assert_eq!(back.projection, Projection::Perspective);
     assert!(v.view.is_some() && v.zoom.is_none());
@@ -96,28 +107,31 @@ fn a_scene_stores_camera_tags_layers_and_style() {
 fn update_keeps_the_place_and_stores_the_present_state() {
     let (mut ed, trees) = editor();
     for n in ["A", "B", "C"] {
-        run!(ed, add(ed.doc(), n, &cam()));
+        run!(ed, add(ed.doc(), n, &cam(), DVec3::ZERO));
     }
     hide(&mut ed, trees);
     let mut moved = cam();
     moved.yaw += 1.0;
-    assert!(is_modified(ed.doc(), "B", &moved));
-    run!(ed, update(ed.doc(), "b", &moved));
+    assert!(is_modified(ed.doc(), "B", &moved, DVec3::ZERO));
+    run!(ed, update(ed.doc(), "b", &moved, DVec3::ZERO));
     assert_eq!(names(&ed), ["A", "B", "C"]);
-    assert!(!is_modified(ed.doc(), "B", &moved));
+    assert!(!is_modified(ed.doc(), "B", &moved, DVec3::ZERO));
     assert_eq!(
         find(ed.doc(), "B").unwrap().classes.get(&trees),
         Some(&false)
     );
-    assert_eq!(update(ed.doc(), "X", &moved), Err(Problem::NoSuchScene));
-    assert!(!is_modified(ed.doc(), "X", &moved));
+    assert_eq!(
+        update(ed.doc(), "X", &moved, DVec3::ZERO),
+        Err(Problem::NoSuchScene)
+    );
+    assert!(!is_modified(ed.doc(), "X", &moved, DVec3::ZERO));
 }
 
 #[test]
 fn rename_delete_and_move_are_one_undo_step_each() {
     let (mut ed, _) = editor();
     for n in ["A", "B", "C"] {
-        run!(ed, add(ed.doc(), n, &cam()));
+        run!(ed, add(ed.doc(), n, &cam(), DVec3::ZERO));
     }
     let base = ed.doc().drawing.saved_views.clone();
     run!(ed, rename(ed.doc(), "A", "First"));
@@ -147,7 +161,7 @@ fn rename_delete_and_move_are_one_undo_step_each() {
 fn move_by_stops_at_the_ends() {
     let (mut ed, _) = editor();
     for n in ["A", "B", "C"] {
-        run!(ed, add(ed.doc(), n, &cam()));
+        run!(ed, add(ed.doc(), n, &cam(), DVec3::ZERO));
     }
     assert_eq!(move_by(ed.doc(), "A", -1), Ok(None));
     assert_eq!(move_by(ed.doc(), "C", 1), Ok(None));
@@ -167,7 +181,7 @@ fn activating_restores_tags_and_style_in_one_undo_step() {
     })
     .unwrap();
     hide(&mut ed, trees);
-    run!(ed, add(ed.doc(), "Dusk", &cam()));
+    run!(ed, add(ed.doc(), "Dusk", &cam(), DVec3::ZERO));
     ed.execute(&Command::ModifyClass {
         id: trees,
         name: None,
@@ -180,7 +194,7 @@ fn activating_restores_tags_and_style_in_one_undo_step() {
     })
     .unwrap();
     let before = ed.doc().clone();
-    let a = activate(ed.doc(), "dusk").unwrap();
+    let a = activate(ed.doc(), "dusk", DVec3::ZERO).unwrap();
     ed.execute(&a.command).unwrap();
     assert!(!ed.doc().class(trees).unwrap().visible);
     assert_eq!(active_style_name(ed.doc()).as_deref(), Some("Realistic"));
@@ -191,7 +205,10 @@ fn activating_restores_tags_and_style_in_one_undo_step() {
         ed.doc().drawing.presentation.active_style,
         before.drawing.presentation.active_style
     );
-    assert_eq!(activate(ed.doc(), "none"), Err(Problem::NoSuchScene));
+    assert_eq!(
+        activate(ed.doc(), "none", DVec3::ZERO),
+        Err(Problem::NoSuchScene)
+    );
 }
 
 #[test]
@@ -213,14 +230,17 @@ fn a_view_of_the_app_becomes_a_standard_goal() {
         ed.execute(&c).unwrap();
     }
     assert_eq!(
-        activate(ed.doc(), "Front").unwrap().goal,
+        activate(ed.doc(), "Front", DVec3::ZERO).unwrap().goal,
         Goal::Standard(StandardView::Front, Some(Projection::Orthographic))
     );
     assert_eq!(
-        activate(ed.doc(), "Plan").unwrap().goal,
+        activate(ed.doc(), "Plan", DVec3::ZERO).unwrap().goal,
         Goal::Standard(StandardView::Top, None)
     );
-    assert_eq!(activate(ed.doc(), "Nothing").unwrap().goal, Goal::Stay);
+    assert_eq!(
+        activate(ed.doc(), "Nothing", DVec3::ZERO).unwrap().goal,
+        Goal::Stay
+    );
     assert!(!rows(ed.doc(), None)[0].has_camera);
 }
 
@@ -308,22 +328,25 @@ fn the_fov_comes_back_exactly_from_degrees() {
     let mut c = cam();
     c.fov_y = 108.02393_f32.to_radians();
     c.projection = Projection::Orthographic;
-    assert_eq!(camera_from_saved(&camera_to_saved(&c)), c);
+    assert_eq!(
+        camera_from_saved(&camera_to_saved(&c, DVec3::ZERO), DVec3::ZERO),
+        c
+    );
     // Many laps of turning give a valid number.
     c.yaw = 5.0e6;
-    assert!(camera_to_saved(&c).is_valid());
+    assert!(camera_to_saved(&c, DVec3::ZERO).is_valid());
 }
 
 #[test]
 fn a_scene_stores_the_mode_of_its_style_and_marks_a_missing_style() {
     let (mut ed, _) = editor();
-    run!(ed, add(ed.doc(), "A", &cam()));
+    run!(ed, add(ed.doc(), "A", &cam(), DVec3::ZERO));
     assert_eq!(find(ed.doc(), "A").unwrap().mode.as_deref(), Some("shaded"));
     ed.execute(&Command::UseRenderStyle {
         name: "Wireframe".into(),
     })
     .unwrap();
-    run!(ed, update(ed.doc(), "A", &cam()));
+    run!(ed, update(ed.doc(), "A", &cam(), DVec3::ZERO));
     assert_eq!(
         find(ed.doc(), "A").unwrap().mode.as_deref(),
         Some("wireframe")
@@ -365,12 +388,12 @@ proptest! {
             projection: if persp { Projection::Perspective } else { Projection::Orthographic },
             fov_y: fov.to_radians(),
         };
-        let saved = camera_to_saved(&c);
+        let saved = camera_to_saved(&c, DVec3::ZERO);
         prop_assert!(saved.is_valid());
         let json = serde_json::to_string(&saved).unwrap();
         let back: ViewCamera = serde_json::from_str(&json).unwrap();
         prop_assert_eq!(&back, &saved);
-        let c2 = camera_from_saved(&back);
+        let c2 = camera_from_saved(&back, DVec3::ZERO);
         prop_assert_eq!(c2, c);
     }
 
@@ -384,8 +407,8 @@ proptest! {
             let before = ed.doc().drawing.saved_views.clone();
             let name = pool[i];
             let cmd = match op {
-                0 => add(ed.doc(), name, &cam()),
-                1 => update(ed.doc(), name, &cam()),
+                0 => add(ed.doc(), name, &cam(), DVec3::ZERO),
+                1 => update(ed.doc(), name, &cam(), DVec3::ZERO),
                 2 => rename(ed.doc(), name, pool[j]),
                 3 => delete(ed.doc(), name),
                 _ => move_to(ed.doc(), name, j),
@@ -407,4 +430,27 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn a_saved_camera_is_in_drawing_coordinates_and_follows_the_origin_of_the_scene() {
+    let c = cam();
+    let first = DVec3::new(100_000.0, 50_000.0, 0.0);
+    let saved = camera_to_saved(&c, first);
+    assert_eq!(saved.target, [100_100.0, 50_200.0, 300.0]);
+    // The same drawing point in a scene with another origin.
+    let second = DVec3::new(-500_000.0, 0.0, 0.0);
+    let there = camera_from_saved(&saved, second);
+    assert_eq!(there.target, Vec3::new(600_100.0, 50_200.0, 300.0));
+    assert_eq!(camera_to_saved(&there, second), saved);
+    assert_eq!(camera_from_saved(&saved, first), c);
+    // The scene does not look changed when the camera is the one that the origin gives.
+    let (mut ed, _) = editor();
+    run!(ed, add(ed.doc(), "A", &c, first));
+    assert!(!is_modified(ed.doc(), "A", &c, first));
+    assert!(!is_modified(ed.doc(), "A", &there, second));
+    assert!(is_modified(ed.doc(), "A", &c, second));
+    // Choosing it puts the camera at the same place of the drawing.
+    let goal = activate(ed.doc(), "A", second).unwrap().goal;
+    assert_eq!(goal, Goal::Camera(there));
 }

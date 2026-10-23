@@ -37,8 +37,9 @@ fn add_stores_the_camera_and_starts_a_rename() {
         app.scenes.renaming,
         Some(("Scene 1".into(), "Scene 1".into()))
     );
+    let origin = app.session.scene().origin;
     let v = &app.session.editor.doc().drawing.saved_views[0];
-    let cam = scene_panel::camera_from_saved(v.camera.as_ref().unwrap());
+    let cam = scene_panel::camera_from_saved(v.camera.as_ref().unwrap(), origin);
     assert_eq!(cam, app.nav.camera);
     app.scene_action(Action::Add, 0.0, SIZE);
     assert_eq!(views(&app), ["Scene 1", "Scene 2"]);
@@ -149,10 +150,12 @@ fn showing_a_scene_restores_tags_style_and_moves_the_camera_in_an_animation() {
     assert!((app.nav.camera.distance - start.distance).abs() < 1.0);
     assert!(t >= 10.0 + TRANSITION_SECONDS - 0.1);
     // The camera is where the scene put it, so the panel shows no change mark.
+    let origin = app.session.scene().origin;
     assert!(!scene_panel::is_modified(
         app.session.editor.doc(),
         "Scene 1",
-        &app.nav.camera
+        &app.nav.camera,
+        origin
     ));
 }
 
@@ -231,7 +234,8 @@ fn a_saved_file_shows_the_same_scenes_after_it_is_opened() {
     b.scene_action(Action::Activate("Scene 2".into()), 0.0, SIZE);
     b.scene_action(Action::Animate(false), 0.0, SIZE);
     b.scene_action(Action::Activate("Scene 2".into()), 0.0, SIZE);
-    let want = scene_panel::camera_from_saved(saved[0].camera.as_ref().unwrap());
+    let origin = b.session.scene().origin;
+    let want = scene_panel::camera_from_saved(saved[0].camera.as_ref().unwrap(), origin);
     assert_eq!(b.nav.camera, want);
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -424,4 +428,45 @@ fn a_scene_with_a_missing_style_is_marked_in_the_panel() {
         all = texts(&frame(&ctx, &mut app, vec![], f64::from(i) * 0.1)).join("\n");
     }
     assert!(all.contains(&tr!("modeler-scenes-style-missing", name = "Nowhere")));
+}
+
+#[test]
+fn a_scene_keeps_its_place_in_the_drawing_when_the_origin_of_the_scene_moves() {
+    let mut app = app();
+    app.session
+        .handle(
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [0, 0], "max": [1000, 1000]}}}),
+        )
+        .unwrap();
+    app.scene_action(Action::Add, 0.0, SIZE);
+    let saved = app.session.editor.doc().drawing.saved_views[0]
+        .camera
+        .clone()
+        .unwrap();
+    let first = app.session.scene().origin;
+    // An object far away moves the origin of the scene.
+    app.session
+        .handle(
+            "execute",
+            json!({"command": {"op": "add_object", "shape": {"kind": "rect", "min": [600000, 0], "max": [601000, 1000]}}}),
+        )
+        .unwrap();
+    let moved = app.session.scene().origin;
+    assert!((moved - first).length() > 1000.0, "{first} {moved}");
+    app.scene_action(Action::Animate(false), 0.0, SIZE);
+    app.scene_action(Action::Activate("Scene 1".into()), 0.0, SIZE);
+    // The camera looks at the same point of the drawing as when the scene was saved.
+    let t = app.nav.camera.target;
+    for (k, want) in saved.target.iter().enumerate() {
+        let got = f64::from([t.x, t.y, t.z][k]) + moved[k];
+        assert!((got - want).abs() < 0.5, "axis {k}: {got} against {want}");
+    }
+    // And the panel shows no change mark.
+    assert!(!scene_panel::is_modified(
+        app.session.editor.doc(),
+        "Scene 1",
+        &app.nav.camera,
+        moved
+    ));
 }

@@ -142,6 +142,7 @@ mod edit;
 mod geom;
 mod index;
 mod part;
+mod query;
 mod serial;
 mod solid;
 pub mod sync;
@@ -179,6 +180,7 @@ pub use edit::style::{
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
+pub use query::{closest_on_segment, faces_near, ray_faces};
 pub use solid::{OpenEdge, OpenKind, Operand, Shell, ShellState, SolidError, SolidOp, SolidReport};
 
 /// The version of the saved form of a surface model (the field `v`). A file with a higher number

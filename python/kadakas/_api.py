@@ -3449,7 +3449,7 @@ class Api:
         return self._call("render.svg", params or None)
 
     def render_png(self, **params: "Unpack[RenderPngParams]") -> Any:
-        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.
+        """PNG image of the 3D model. params: {view?, width?, height?, projection?, mode?, render_style?, samples?, region? ([x0, y0, x1, y1] in drawing coordinates, mm: frame the camera on this part of the drawing instead of the whole model, for a close picture of a part of a big site)}. view is one of view.list (default: the current view), projection is ortho or perspective, mode is shaded, wireframe, hidden_line or dashed_hidden_line, render_style is a render style of the document (ID or name) or a built-in one (Realistic draws materials, the sun and shadows); without it the active style is used. samples is 1 to 3 (anti-aliasing). camera ({target: [x, y, z] in drawing coordinates (mm), yaw, pitch (radians), distance (mm), fov (degrees), projection (perspective | ortho)}) is a free camera that is used as given, instead of the view and the framing of the model; the answer then has the camera that was used. Size is 16 to 2048 px per side and at most 4 million px (default 800x600), larger sizes are scaled down. compare {from, to, mode?, hide_unchanged?, ...} (see describe.review.compare) draws `to` with the changes since `from`: added objects green, changed orange, removed objects as see-through red ghosts; with mode side_by_side it draws both sides next to each other with the same framing. render_style cannot be used with compare. Returns {png_base64, width, height, view, projection, mode, camera? (when you gave one), render_style (not with compare), compare?}.
 
         JSON-RPC method ``render.png``."""
         return self._call("render.png", params or None)
@@ -4049,7 +4049,7 @@ class Api:
         return self._call("massing.report", params or None)
 
     def mesh_summary(self, **params: "Unpack[MeshSummaryParams]") -> Any:
-        """The surface models of the document. params: {id?} (one model, else all). Returns {models: [{id, name, layer, class, parent?, vertices, edges, faces, curves, revision, problem (null or the first problem of the model), hidden_faces, hidden_edges, soft_edges, transform (12 numbers), bounds: {local, world} ({min, max} in mm or null for an empty model)}]}. Coordinates in the other mesh methods are local to the model. Drawing coordinates are the local ones moved by the transform.
+        """The surface models of the document. params: {id?} (one model, else all). Returns {component_instances (how many component instances the document has: their geometry is not listed here), models: [{id, name, layer, class, parent?, vertices, edges, faces, curves, revision, problem (null or the first problem of the model), hidden_faces, hidden_edges, soft_edges, transform (12 numbers), bounds: {local, world} ({min, max} in mm or null for an empty model)}]}. Coordinates in the other mesh methods are local to the model. Drawing coordinates are the local ones moved by the transform.
 
         JSON-RPC method ``mesh.summary``."""
         return self._call("mesh.summary", params or None)
@@ -4085,13 +4085,13 @@ class Api:
         return self._call("mesh.bounds", params or None)
 
     def mesh_near(self, **params: "Unpack[MeshNearParams]") -> Any:
-        """Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?}, nearest first.
+        """Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?, skipped?}, nearest first. Hidden faces and edges and soft edges are left out unless include_hidden. Models on a hidden layer or class are left out unless id names the model. skipped lists a model whose faces cannot be cut into triangles. Component instances are not searched.
 
         JSON-RPC method ``mesh.near``."""
         return self._call("mesh.near", params or None)
 
     def mesh_pick(self, **params: "Unpack[MeshPickParams]") -> Any:
-        """Shoots a ray at the surface models. params: {id?, origin: [x, y, z], direction: [x, y, z] (drawing coordinates), all? (every face the ray meets, nearest first, at most 200), include_hidden?}. Returns {hit: null | {model, face, distance, point: [x, y, z] (drawing coordinates), local: [x, y, z], side (front | back: the side of the face that the ray meets), normal: [x, y, z] (drawing coordinates)}, hits? (with all)}.
+        """Shoots a ray at the surface models. params: {id?, origin: [x, y, z], direction: [x, y, z] (drawing coordinates), all? (every face the ray meets, nearest first, at most 200), include_hidden?}. Returns {hit: null | {model, face, distance, point: [x, y, z] (drawing coordinates), local: [x, y, z], side (front | back: the side of the face that the ray meets), normal: [x, y, z] (drawing coordinates)}, hits? (with all, at most 200, truncated is true when more faces were met), skipped?}. It has the rules of mesh.near for hidden items, layers, classes and instances.
 
         JSON-RPC method ``mesh.pick``."""
         return self._call("mesh.pick", params or None)
@@ -4181,7 +4181,7 @@ class Api:
         return self._call("mesh.soften", params or None)
 
     def mesh_soften_edges(self, **params: "Unpack[MeshSoftenEdgesParams]") -> Any:
-        """Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and {changed (how many edges changed their flags), softened (edges that are soft now), considered (edges that were looked at)}.
+        """Soften every edge under an angle. params: {id, below_angle (degrees, 0 to 180), edges? (default all edges of the model), smooth? (default true), coplanar? (also edges between faces in one plane, default false)}. An edge between two faces at an angle below the limit becomes soft. The other edges of the set become hard. Edges without exactly two faces are not touched. Returns the change and three numbers. considered is how many edges the angle test looked at. changed is how many of them got other flags than they had (a second call with the same angle changes 0). softened is how many edges are soft in the whole model after the call.
 
         JSON-RPC method ``mesh.soften_edges``."""
         return self._call("mesh.soften_edges", params or None)
@@ -4211,13 +4211,13 @@ class Api:
         return self._call("mesh.explode", params or None)
 
     def mesh_batch(self, **params: "Unpack[MeshBatchParams]") -> Any:
-        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits and at most 10000 edges in all add_edges edits. method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
+        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
 
         JSON-RPC method ``mesh.batch``."""
         return self._call("mesh.batch", params or None)
 
     def mesh_render(self, **params: "Unpack[MeshRenderParams]") -> Any:
-        """A PNG of the model so that you see the result. params: {id? (frame the camera on this surface model), view?, camera? ({target, yaw, pitch, distance, fov, projection}, wins over view), width?, height?, projection?, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), render_style? (a style of the document or a built-in one such as Realistic), samples?}. It is render.png with the camera and the framing of a model. Returns {png_base64, width, height, view, projection, mode, camera, render_style?}. MCP gives the image itself.
+        """A PNG of the model so that you see the result. params: {id? (frame the camera on this surface model), view?, camera? ({target (drawing coordinates, mm), yaw, pitch, distance, fov, projection}, wins over view), width?, height?, projection?, mode? (shaded | wireframe | hidden_line | dashed_hidden_line), render_style? (a style of the document or a built-in one such as Realistic), samples?}. It is render.png with the camera and the framing of a model. Returns {png_base64, width, height, view, projection, mode, camera (in drawing coordinates, give it back as camera to repeat the picture), render_style?}. MCP gives the image itself.
 
         JSON-RPC method ``mesh.render``."""
         return self._call("mesh.render", params or None)

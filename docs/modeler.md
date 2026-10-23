@@ -596,6 +596,8 @@ The headless code is `kadakas_ui_core::scene_panel` (rows, commands, activation 
 - A scene transition in the Vectorworks-like app. It sets the standard view at once.
 - Styles with edge and face settings of their own beyond the 3D-08 fields, and the style mixer.
 
+The target of the camera of a scene is a point of the drawing in millimeters (drawing coordinates). It does not depend on the origin of the 3D scene, which moves when the visible drawing grows. A scene saved by an earlier build has its target relative to that origin and may look at another place after a change of the drawing. Save it again with Update.
+
 ## Agent API (MOD-11)
 
 An agent drives the same geometry as the tools of the modeler. The methods are `mesh.*`. They work over JSON-RPC, over MCP (the tool `mesh`) and in Python (`doc.api.mesh_*`). Reads give the summary, vertices, edges and faces in pages, the solid report, bounds, faces near a point and a ray pick. Edits are thin wrappers over `edit_surface` and the group and component commands. Each edit is one undo step. `mesh.batch` runs up to 50 edits as one undo step, all or nothing. `mesh.soften_edges {below_angle}` softens every edge under an angle and says how many edges changed. `mesh.render` gives a picture of the result. A refusal has a stable `error_id`. The guide with examples is `docs/mesh-api.md`.

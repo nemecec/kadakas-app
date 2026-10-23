@@ -1,28 +1,76 @@
 //! `mesh.near` and `mesh.pick`: spatial questions about the surface models.
 //!
-//! Everything is computed in drawing coordinates on the triangles of `SurfaceModel::mesh`.
+//! The triangle tests are in `kadakas_core::surface` (`faces_near`, `ray_faces`). This file keeps
+//! the triangles of each model for a revision of the document, in drawing coordinates, so that
+//! many questions in a row cut the faces once.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use glam::DVec3;
 use serde_json::{Value, json};
 
 use kadakas_core::model::{Document, ObjectId};
-use kadakas_core::surface::{FaceId, SurfaceModel};
+use kadakas_core::surface::{
+    FaceId, SurfaceMesh, SurfaceModel, closest_on_segment, faces_near, ray_faces,
+};
 
-use super::models;
-use crate::RpcError;
+use super::visible_models;
 use crate::errors::bad;
 use crate::params::mesh::*;
+use crate::{RpcError, Session};
 
 const LIMIT_DEFAULT: usize = 20;
-const LIMIT_MAX: usize = 200;
+/// The most items of one kind in an answer.
+pub const LIMIT_MAX: usize = 200;
 
-pub(super) fn handle(doc: &Document, op: &str, p: Value) -> Result<Value, RpcError> {
+/// The triangles of one model, with the positions in drawing coordinates.
+pub(crate) struct Tris {
+    mesh: SurfaceMesh,
+    world: Vec<DVec3>,
+}
+
+/// The triangles of the models for one revision of the document. A model whose faces cannot be
+/// cut into triangles is kept as `None`.
+#[derive(Default)]
+pub(crate) struct QueryCache {
+    revision: u64,
+    models: BTreeMap<ObjectId, Option<Arc<Tris>>>,
+    /// How many times a model was cut (for the tests).
+    pub(crate) builds: usize,
+}
+
+impl QueryCache {
+    fn get(&mut self, revision: u64, id: ObjectId, m: &SurfaceModel) -> Option<Arc<Tris>> {
+        if self.revision != revision {
+            self.revision = revision;
+            self.models.clear();
+        }
+        if let Some(t) = self.models.get(&id) {
+            return t.clone();
+        }
+        self.builds += 1;
+        let built = m.mesh().ok().map(|mesh| {
+            let world = mesh
+                .positions
+                .iter()
+                .map(|p| m.transform.transform_point3(*p))
+                .collect();
+            Arc::new(Tris { mesh, world })
+        });
+        self.models.insert(id, built.clone());
+        built
+    }
+}
+
+pub(super) fn handle(s: &mut Session, op: &str, p: Value) -> Result<Value, RpcError> {
+    let revision = s.editor.revision();
+    let doc = s.editor.doc();
+    let cache = &mut s.mesh_query;
     if op == "near" {
-        near(doc, p)
+        near(doc, cache, revision, p)
     } else {
-        pick(doc, p)
+        pick(doc, cache, revision, p)
     }
 }
 
@@ -47,76 +95,35 @@ fn limit_of(limit: Option<u32>) -> Result<usize, RpcError> {
     Ok(l)
 }
 
-/// The closest point of the triangle `abc` to `p`.
-fn closest_on_triangle(p: DVec3, a: DVec3, b: DVec3, c: DVec3) -> DVec3 {
-    let (ab, ac, ap) = (b - a, c - a, p - a);
-    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return a;
+/// The models to look at, with their triangles, and the models that could not be cut.
+type Looked<'a> = (Vec<(ObjectId, &'a SurfaceModel, Arc<Tris>)>, Vec<Value>);
+
+fn look<'a>(
+    doc: &'a Document,
+    cache: &mut QueryCache,
+    revision: u64,
+    only: Option<&str>,
+) -> Result<Looked<'a>, RpcError> {
+    let mut found = Vec::new();
+    let mut skipped = Vec::new();
+    for (id, m) in visible_models(doc, only)? {
+        match cache.get(revision, id, m) {
+            Some(t) => found.push((id, m, t)),
+            None => skipped.push(json!({
+                "model": id,
+                "reason": "a face of the model cannot be cut into triangles, so it is not searched"
+            })),
+        }
     }
-    let bp = p - b;
-    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
-    if d3 >= 0.0 && d4 <= d3 {
-        return b;
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        return a + ab * (d1 / (d1 - d3));
-    }
-    let cp = p - c;
-    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
-    if d6 >= 0.0 && d5 <= d6 {
-        return c;
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        return a + ac * (d2 / (d2 - d6));
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
-    }
-    let denom = 1.0 / (va + vb + vc);
-    a + ab * (vb * denom) + ac * (vc * denom)
+    Ok((found, skipped))
 }
 
-fn closest_on_segment(p: DVec3, a: DVec3, b: DVec3) -> DVec3 {
-    let ab = b - a;
-    let len2 = ab.length_squared();
-    if len2 == 0.0 {
-        return a;
-    }
-    a + ab * (((p - a).dot(ab) / len2).clamp(0.0, 1.0))
-}
-
-/// The triangles of the visible faces in drawing coordinates, with their face.
-fn triangles(m: &SurfaceModel, hidden: bool) -> Vec<(FaceId, [DVec3; 3])> {
-    let Ok(mesh) = m.mesh() else {
-        return Vec::new();
-    };
-    let world: Vec<DVec3> = mesh
-        .positions
-        .iter()
-        .map(|p| m.transform.transform_point3(*p))
-        .collect();
-    mesh.triangles
-        .iter()
-        .zip(&mesh.faces)
-        .filter(|(_, f)| hidden || !m.face_hidden(**f))
-        .map(|(t, f)| {
-            (
-                *f,
-                [
-                    world[t[0] as usize],
-                    world[t[1] as usize],
-                    world[t[2] as usize],
-                ],
-            )
-        })
-        .collect()
-}
-
-fn near(doc: &Document, p: Value) -> Result<Value, RpcError> {
+fn near(
+    doc: &Document,
+    cache: &mut QueryCache,
+    revision: u64,
+    p: Value,
+) -> Result<Value, RpcError> {
     let q: MeshNearParams = serde_json::from_value(p).map_err(bad)?;
     let at = finite(q.point, "point")?;
     if !(q.radius.is_finite() && q.radius >= 0.0) {
@@ -125,29 +132,28 @@ fn near(doc: &Document, p: Value) -> Result<Value, RpcError> {
     let limit = limit_of(q.limit)?;
     let hidden = q.include_hidden == Some(true);
     let kinds = q.kinds.unwrap_or_else(|| vec![MeshKind::Faces]);
-    let list = models(doc, q.id.as_ref().map(|r| r.0.as_str()))?;
+    let (list, skipped) = look(doc, cache, revision, q.id.as_ref().map(|r| r.0.as_str()))?;
     let mut out = json!({"point": point(at), "radius": q.radius});
+    if !skipped.is_empty() {
+        out["skipped"] = json!(skipped);
+    }
     for kind in [MeshKind::Faces, MeshKind::Edges, MeshKind::Vertices] {
         if !kinds.contains(&kind) {
             continue;
         }
         let mut found: Vec<(f64, ObjectId, u32, DVec3)> = Vec::new();
-        for (oid, m) in &list {
+        for (oid, m, tris) in &list {
             match kind {
                 MeshKind::Faces => {
-                    let mut best: BTreeMap<FaceId, (f64, DVec3)> = BTreeMap::new();
-                    for (f, [a, b, c]) in triangles(m, hidden) {
-                        let at_c = closest_on_triangle(at, a, b, c);
-                        let d = at_c.distance(at);
-                        if d <= q.radius && best.get(&f).is_none_or(|(bd, _)| d < *bd) {
-                            best.insert(f, (d, at_c));
-                        }
-                    }
-                    found.extend(best.into_iter().map(|(f, (d, c))| (d, *oid, f.0, c)));
+                    let near = faces_near(&tris.mesh, &tris.world, at, q.radius, |f| {
+                        !hidden && m.face_hidden(f)
+                    });
+                    found.extend(near.into_iter().map(|(f, d, c)| (d, *oid, f.0, c)));
                 }
                 MeshKind::Edges => {
                     for (e, ed) in m.edges() {
-                        if !hidden && m.edge_hidden(e) {
+                        // A hidden or soft edge is not drawn or picked, so it is left out too.
+                        if !hidden && !m.edge_shown(e) {
                             continue;
                         }
                         let (Some(a), Some(b)) = (m.vertex(ed.v[0]), m.vertex(ed.v[1])) else {
@@ -191,30 +197,12 @@ fn near(doc: &Document, p: Value) -> Result<Value, RpcError> {
     Ok(out)
 }
 
-/// The distance along the ray (unit direction) to the triangle, if it is hit from either side.
-fn ray_triangle(o: DVec3, d: DVec3, t: &[DVec3; 3]) -> Option<f64> {
-    let (e1, e2) = (t[1] - t[0], t[2] - t[0]);
-    let pv = d.cross(e2);
-    let det = e1.dot(pv);
-    if det.abs() < 1e-12 {
-        return None;
-    }
-    let inv = 1.0 / det;
-    let s = o - t[0];
-    let u = s.dot(pv) * inv;
-    if !(0.0..=1.0).contains(&u) {
-        return None;
-    }
-    let qv = s.cross(e1);
-    let v = d.dot(qv) * inv;
-    if v < 0.0 || u + v > 1.0 {
-        return None;
-    }
-    let dist = e2.dot(qv) * inv;
-    (dist > 0.0).then_some(dist)
-}
-
-fn pick(doc: &Document, p: Value) -> Result<Value, RpcError> {
+fn pick(
+    doc: &Document,
+    cache: &mut QueryCache,
+    revision: u64,
+    p: Value,
+) -> Result<Value, RpcError> {
     let q: MeshPickParams = serde_json::from_value(p).map_err(bad)?;
     let origin = finite(q.origin, "origin")?;
     let dir = finite(q.direction, "direction")?
@@ -222,28 +210,22 @@ fn pick(doc: &Document, p: Value) -> Result<Value, RpcError> {
         .ok_or_else(|| bad("direction: not zero"))?;
     let hidden = q.include_hidden == Some(true);
     let all = q.all == Some(true);
-    let list = models(doc, q.id.as_ref().map(|r| r.0.as_str()))?;
-    let mut hits: Vec<(f64, ObjectId, FaceId, DVec3)> = Vec::new();
-    for (oid, m) in &list {
-        let mut best: BTreeMap<FaceId, f64> = BTreeMap::new();
-        for (f, tri) in triangles(m, hidden) {
-            if let Some(d) = ray_triangle(origin, dir, &tri)
-                && best.get(&f).is_none_or(|b| d < *b)
-            {
-                best.insert(f, d);
-            }
-        }
-        for (f, d) in best {
-            hits.push((d, *oid, f, DVec3::ZERO));
+    let (list, skipped) = look(doc, cache, revision, q.id.as_ref().map(|r| r.0.as_str()))?;
+    let mut hits: Vec<(f64, ObjectId, FaceId)> = Vec::new();
+    for (oid, m, tris) in &list {
+        for (f, d) in ray_faces(&tris.mesh, &tris.world, origin, dir, |f| {
+            !hidden && m.face_hidden(f)
+        }) {
+            hits.push((d, *oid, f));
         }
     }
     hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    let row = |(d, oid, f, _): &(f64, ObjectId, FaceId, DVec3)| -> Value {
-        let (_, m) = list.iter().find(|(i, _)| i == oid).expect("listed");
+    let row = |(d, oid, f): &(f64, ObjectId, FaceId)| -> Value {
+        let (_, m, _) = list.iter().find(|(i, _, _)| i == oid).expect("listed");
         let world = origin + dir * *d;
         let local = m.to_local(world).unwrap_or(DVec3::NAN);
         let n = m.face_normal(*f).unwrap_or(DVec3::Z);
-        // The normal of the drawing: the inverse transpose of the linear part.
+        // The normal in the drawing: the inverse transpose of the linear part.
         let wn = m.transform.matrix3.inverse().transpose() * n;
         let wn = wn.try_normalize().unwrap_or(wn);
         json!({
@@ -256,10 +238,76 @@ fn pick(doc: &Document, p: Value) -> Result<Value, RpcError> {
             "normal": point(wn),
         })
     };
-    if all {
+    let mut out = if all {
         let rows: Vec<Value> = hits.iter().take(LIMIT_MAX).map(row).collect();
-        Ok(json!({"hit": rows.first().cloned().unwrap_or(Value::Null), "hits": rows}))
+        let mut o = json!({"hit": rows.first().cloned().unwrap_or(Value::Null), "hits": rows});
+        if hits.len() > LIMIT_MAX {
+            o["truncated"] = json!(true);
+        }
+        o
     } else {
-        Ok(json!({"hit": hits.first().map(row).unwrap_or(Value::Null)}))
+        json!({"hit": hits.first().map(row).unwrap_or(Value::Null)})
+    };
+    if !skipped.is_empty() {
+        out["skipped"] = json!(skipped);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_triangles_are_cut_once_for_a_revision_of_the_document() {
+        let mut s = Session::with_sequential_ids();
+        let id = s.handle("mesh.create", json!({})).unwrap()["id"].clone();
+        let edges: Vec<Value> = [
+            [[0, 0, 0], [100, 0, 0]],
+            [[100, 0, 0], [100, 100, 0]],
+            [[100, 100, 0], [0, 100, 0]],
+            [[0, 100, 0], [0, 0, 0]],
+        ]
+        .iter()
+        .map(|e| json!(e))
+        .collect();
+        let face = s
+            .handle("mesh.add_edges", json!({"id": id, "edges": edges}))
+            .unwrap()["created"]["faces"][0]
+            .clone();
+        for _ in 0..3 {
+            s.handle("mesh.near", json!({"point": [50, 50, 10], "radius": 20}))
+                .unwrap();
+            s.handle(
+                "mesh.pick",
+                json!({"origin": [50, 50, 10], "direction": [0, 0, -1]}),
+            )
+            .unwrap();
+        }
+        assert_eq!(s.mesh_query.builds, 1);
+        // An edit makes a new revision, and so a new cut. Undo and redo too.
+        s.handle(
+            "mesh.push_pull",
+            json!({"id": id, "face": face, "distance": 10}),
+        )
+        .unwrap();
+        let hit = s
+            .handle(
+                "mesh.pick",
+                json!({"origin": [50, 50, 100], "direction": [0, 0, -1]}),
+            )
+            .unwrap();
+        assert_eq!(s.mesh_query.builds, 2);
+        assert!((hit["hit"]["distance"].as_f64().unwrap() - 90.0).abs() < 1e-6);
+        s.handle("undo", json!({})).unwrap();
+        let hit = s
+            .handle(
+                "mesh.pick",
+                json!({"origin": [50, 50, 100], "direction": [0, 0, -1]}),
+            )
+            .unwrap();
+        assert_eq!(s.mesh_query.builds, 3);
+        assert!((hit["hit"]["distance"].as_f64().unwrap() - 100.0).abs() < 1e-6);
     }
 }
