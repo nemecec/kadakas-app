@@ -184,8 +184,12 @@ pub enum Preview {
         edges: u64,
         faces: u64,
     },
-    /// No part fits a surface model: the mesh stays a mesh and nothing is softened.
+    /// No part fits the limits of a surface model: the mesh stays a mesh and nothing is softened.
     TooLarge(String),
+    /// The mesh cannot become a surface model for another reason (the reason is the text).
+    NotConvertible(String),
+    /// The file is big: the edges are not counted before the import.
+    Skipped(u64),
     /// The file cannot be read.
     Failed(String),
 }
@@ -196,8 +200,13 @@ impl Preview {
         let t = &r["report"]["to_surface"];
         let converted = t["converted"].as_u64().unwrap_or(0);
         if converted == 0 {
-            let reason = t["refused"][0]["reason"].as_str().unwrap_or("").to_string();
-            return Preview::TooLarge(reason);
+            let first = &t["refused"][0];
+            let reason = first["reason"].as_str().unwrap_or("").to_string();
+            return if first["data"]["error_id"] == "mesh_too_large_for_surface" {
+                Preview::TooLarge(reason)
+            } else {
+                Preview::NotConvertible(reason)
+            };
         }
         Preview::Counted {
             softened: r["softened_edges"].as_u64().unwrap_or(0),
@@ -222,9 +231,44 @@ impl Preview {
             Preview::TooLarge(reason) => {
                 tr!("meshio-ui-preview-too-large", reason = reason.as_str())
             }
+            Preview::NotConvertible(reason) => {
+                tr!(
+                    "meshio-ui-preview-not-convertible",
+                    reason = reason.as_str()
+                )
+            }
+            Preview::Skipped(bytes) => tr!(
+                "meshio-ui-preview-skipped",
+                megabytes = *bytes / 1_000_000,
+                limit = PREVIEW_MAX_BYTES / 1_000_000
+            ),
             Preview::Failed(message) => tr!("meshio-ui-preview-failed", message = message.as_str()),
         }
     }
+}
+
+/// The biggest file whose edges are counted before the import. The count reads and converts the
+/// file in the window, so a big file waits for the import itself.
+pub const PREVIEW_MAX_BYTES: u64 = 32_000_000;
+
+/// The preview for the choices of the form: `None` when the question is off (nothing to count).
+/// `run` makes the call `import.file` with the parameters and answers with its result or the text
+/// of its error. A file over [`PREVIEW_MAX_BYTES`] is not read.
+pub fn compute_preview(
+    form: &MeshImportForm,
+    run: impl FnOnce(Value) -> Result<Value, String>,
+) -> Option<Preview> {
+    if !form.soften.on {
+        return None;
+    }
+    let bytes = std::fs::metadata(&form.path).map_or(0, |m| m.len());
+    if bytes > PREVIEW_MAX_BYTES {
+        return Some(Preview::Skipped(bytes));
+    }
+    Some(match run(form.params(true)) {
+        Ok(r) => Preview::from_result(&r),
+        Err(message) => Preview::Failed(message),
+    })
 }
 
 /// The status line after an import: the objects, the triangles and the edges softened.
@@ -383,7 +427,7 @@ mod tests {
         assert!(en.contains("150") && en.contains("480"), "{en}");
         let et = kadakas_l10n::with_language("et", || p.text());
         assert!(et.contains("150") && et != en, "{et}");
-        let big = json!({"softened_edges": 0, "report": {"to_surface": {"converted": 0, "refused": [{"reason": "too many faces"}]}}});
+        let big = json!({"softened_edges": 0, "report": {"to_surface": {"converted": 0, "refused": [{"reason": "too many faces", "data": {"error_id": "mesh_too_large_for_surface"}}]}}});
         let p = Preview::from_result(&big);
         assert_eq!(p, Preview::TooLarge("too many faces".into()));
         assert!(p.text().contains("too many faces"));
@@ -393,6 +437,71 @@ mod tests {
             kadakas_l10n::with_language("et", || failed.text()),
             failed.text()
         );
+    }
+
+    #[test]
+    fn the_preview_runs_only_when_the_question_is_on_and_the_file_is_small() {
+        let dir = std::env::temp_dir().join(format!("kadakas-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("a.obj");
+        std::fs::write(&small, "v 0 0 0\n").unwrap();
+        let mut f = MeshImportForm::new(small.clone(), SoftenPref::default()).unwrap();
+        let ran = std::cell::Cell::new(0);
+        let answer = json!({"softened_edges": 3, "report": {"to_surface": {"converted": 1, "edges": 9, "faces": 4}}});
+        let run = |_: Value| {
+            ran.set(ran.get() + 1);
+            Ok(answer.clone())
+        };
+        // Off: nothing runs.
+        assert_eq!(compute_preview(&f, run), None);
+        assert_eq!(ran.get(), 0);
+        f.soften.on = true;
+        let p = compute_preview(&f, |v| {
+            assert_eq!(v["options"]["preview"], true);
+            Ok(answer.clone())
+        });
+        assert_eq!(
+            p,
+            Some(Preview::Counted {
+                softened: 3,
+                edges: 9,
+                faces: 4
+            })
+        );
+        assert_eq!(
+            compute_preview(&f, |_| Err("no".into())),
+            Some(Preview::Failed("no".into()))
+        );
+        // A big file is skipped without a read (a sparse file of 40 MB).
+        let big = dir.join("b.obj");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(40_000_000).unwrap();
+        let g = MeshImportForm::new(
+            big,
+            SoftenPref {
+                on: true,
+                angle: 20.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            compute_preview(&g, |_| panic!("must not run")),
+            Some(Preview::Skipped(40_000_000))
+        );
+        let text = Preview::Skipped(40_000_000).text();
+        assert!(text.contains("40") && text.contains("32"), "{text}");
+        assert_ne!(
+            kadakas_l10n::with_language("et", || Preview::Skipped(40_000_000).text()),
+            text
+        );
+        // A refusal that is not about the size has its own text.
+        let r = json!({"softened_edges": 0, "report": {"to_surface": {"converted": 0, "refused": [{"reason": "bad", "data": {"error_id": "mesh_not_convertible"}}]}}});
+        assert_eq!(
+            Preview::from_result(&r),
+            Preview::NotConvertible("bad".into())
+        );
+        assert!(Preview::NotConvertible("bad".into()).text().contains("bad"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

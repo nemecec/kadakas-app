@@ -40,13 +40,19 @@ The model has millimeters and Z up. A file says its own unit and axis, or it doe
 | OBJ | `unit`, default `m` | `up_axis`, default `y` |
 | STL | `unit`, default `mm` | `up_axis`, default `z` |
 
-A Y up file turns so that Z is up. The point (x, y, z) of the file becomes (x, -z, y). This is the inverse of the glTF and OBJ export of Kadakas, so a round trip returns the same place. The units are `mm`, `cm`, `m`, `km`, `inch`, `foot`, `yard` and `mile`. A glTF file with a `unit` or an `up_axis` in the call is refused, because the format fixes both.
+A Y up file turns so that Z is up. The point (x, y, z) of the file becomes (x, -z, y). This is the inverse of the glTF and OBJ export of Kadakas. The units are `mm`, `cm`, `m`, `km`, `inch`, `foot`, `yard` and `mile`. A glTF file with a `unit` or an `up_axis` in the call is refused, because the format fixes both.
 
 The result lists the unit, the axis and the box around the model in millimeters (`bounds_mm`), so a wrong guess shows at once. The option `center` moves the middle of the box to x = 0 and y = 0 and the lowest point to z = 0.
+
+### Where the model lands
+
+The 3D scene of an export is local: its numbers are near zero. A file that Kadakas wrote says where its origin was in the model. The OBJ has the comment `# local origin in model mm:` and the glTF has the extension `KADAKAS_georeference` (`local_origin`). The import adds this origin back, so a round trip returns the model to its place. The note in the report says so. The option `restore_origin: false` keeps the local numbers. An STL file has no place for an origin, so the STL export writes the coordinates of the model (the report has `origin_mm` for the record). A file from another program has no origin and lands as it is.
 
 ### Parts, colors and names
 
 A file becomes one object for each pair of an object name and a material. The option `join` makes one object. A file with more than 5,000 such pairs has its parts joined by color first. If that is not enough the import is refused with the count.
+
+A face with more than three corners is cut into triangles. A face that is not convex and has more than 500 corners, or that crosses itself, is cut as a fan, and a note counts these faces. The budget of triangles is checked before the face is cut. Facets that follow an `endsolid` line in an ASCII STL file go into a part of their own, with a note. ASCII STL numbers are read as doubles.
 
 - OBJ: the name is the `o` or `g` line. The color is `Kd` of the material in the MTL file, with `d` or `Tr` as opacity. The MTL file is read from the folder of the OBJ file. A missing MTL file is a note.
 - STL: one object per `solid` of an ASCII file, one object for a binary file. The header `COLOR=` and four bytes sets the color. Colors of single triangles are not read.
@@ -68,6 +74,8 @@ Every limit is checked before the work it protects. A refusal changes nothing an
 
 Other refusals: `mesh_truncated` (the file ends too soon, with `have` and `need`), `mesh_not_finite` (NaN or infinity), `mesh_out_of_range` (a coordinate over 1,000 km), `mesh_bad_index` (a face names a vertex that does not exist), `mesh_malformed`, `mesh_unsupported` (Draco, Meshopt, quantized or sparse glTF data, a glTF version other than 2) and `mesh_empty`. The size limits are `limit` errors. The others are validation errors. A reader never panics. A test feeds it random bytes and damaged files.
 
+A glTF file has more limits. The nodes are walked with a stack that is checked at every push: at most 100,000 uses of nodes in all, at most 256 deep, and a node that is its own descendant is refused. The buffer files next to the glTF file are read once for each name, and all of them together count against `max_bytes` and the memory limit. A name may have letters outside ASCII (`caf%C3%A9.bin` or `café.bin`) and a folder below the glTF file, never `..`, a colon or the root.
+
 ## Convert a mesh to a surface model
 
 ```json
@@ -84,6 +92,8 @@ The core command is `mesh3d_to_surface`. The object keeps its id, layer, class a
 6. The counts are compared with the limits. Merging comes first, so a flat mesh with a million triangles can still fit. A result over a limit is refused with `mesh_too_large_for_surface`. The data has `over` (each count with its limit) and `counts` (what the result would have). A mesh with more than 2,000,000 triangles is refused before the work.
 7. With `soften_below_angle`, the soften engine of MOD-08 softens the edges under the angle, soft and smooth. Edges between faces in one plane count too.
 
+A triangle that has another triangle with the same corners the other way round is the back of a double sided mesh. The second one is dropped and counted (`reversed_triangles`). Faces that enclose no volume are not a closed solid.
+
 The faces keep the winding of the triangles, so the front is the outside of a closed mesh. The answer has `softened_edges` and a `report` with the counts: `source_triangles`, `welded_vertices`, `degenerate_triangles`, `duplicate_triangles`, `joined_slivers`, `vertices`, `edges`, `faces`, `faces_with_holes`, `merged_triangles`, `unmerged_regions`, `healed_vertices`, `border_edges`, `nonmanifold_edges`, `closed`, `area_mm2` and `volume_mm3` for a closed mesh. `dry_run: true` converts a copy and changes nothing.
 
 ## Soften edges at import
@@ -98,13 +108,13 @@ For an agent:
 - `preview: true` reads the file, converts it and answers with the count, and changes nothing.
 - The IFC import takes the same options (`to_surface`, `soften_below_angle` and `surface_tolerance`) and converts the meshes it made.
 
-For a person, the import window of the app and of the modeler (File > Import) asks "Soften edges under an angle?" for a mesh file. It is off by default. The angle is 20 degrees. When it is on, the window shows how many edges would be softened. The answer is kept in the prefs of the program (`import_soften` in `prefs.json` of the app and in `modeler.json` of the modeler) and comes back at the next import.
+For a person, the import window of the app and of the modeler (File > Import) asks "Soften edges under an angle?" for a mesh file. It is off by default. The angle is 20 degrees. When it is on, the window shows how many edges would be softened. The count reads and converts the file in the window, so it runs only while the question is on, and only for files up to 32 MB. A bigger file is imported with the same softening and not counted before. The answer is kept when the person imports, not when the window is cancelled. It is kept in the prefs of the program (`import_soften` in `prefs.json` of the app and in `modeler.json` of the modeler) and comes back at the next import.
 
 ## Export
 
 ### STL
 
-`export.file` with `format: "stl"` writes the triangles of all 3D objects, or of the objects in `objects`. The options are `encoding` (`binary` by default, or `ascii`), `units` (`mm` by default, or `m`), `y_up` (false by default) and `name`. STL has no colors, materials or lines. The result has `open_models`, the number of surface models that are not closed solids, and a note, because a printer needs closed solids.
+`export.file` with `format: "stl"` writes the triangles of all 3D objects, or of the objects in `objects`. The options are `encoding` (`binary` by default, or `ascii`), `units` (`mm` by default, or `m`), `y_up` (false by default) and `name`. STL has no colors, materials or lines. The result has `open_models`, the number of exported surface models that are not closed solids, and a note, because a printer needs closed solids. It also has `leaky_models`: closed solids whose triangles are not watertight (an edge that two triangles do not share), with a note. The report holds the coordinates of the model, so reading the file again puts it where it was.
 
 ### OBJ, glTF and GLB
 
@@ -116,7 +126,7 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 ### DXF
 
-A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A DXF file with a MESH entity needs a program that reads DXF 2010 or later. Kadakas does not read the MESH entity.
+A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file stays release 2004 (`AC1018`) with its code page, and the audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas does not read the MESH entity.
 
 ## Code
 
@@ -138,7 +148,7 @@ The parsers are written for Kadakas. No new third-party crate was added, so the 
 
 - `kadakas-meshio`: unit tests for every reader and the STL writer, damaged and hostile files, and a property test with random bytes.
 - `kadakas-core`: tests of the conversion with cubes, spheres, grids with holes, welds, slivers, limits and soften counts, a property test on random terrain and spheres, and the command tests (`tests/mesh_to_surface.rs`).
-- `kadakas-api/tests/meshio.rs`: round trips of a closed slab with a hole through OBJ, STL, ASCII STL, glTF and GLB (the same volume, area and face count), a property test on random prisms and terrain, options, guards, refusals and the path policy.
+- `kadakas-api/tests/meshio.rs`: a U shaped prism whose outline has corners on a line (watertight through every format), the place of the model after a round trip, hostile glTF files, round trips of a closed slab with a hole through OBJ, STL, ASCII STL, glTF and GLB (the same volume, area and face count), a property test on random prisms and terrain, options, guards, refusals and the path policy.
 - `kadakas-ifc` and `kadakas-io`: the entities of the surface export.
 - `tests/behavior/test_meshio.py`: the checks of IfcOpenShell (the IFC of surface models), ezdxf (the DXF) and glTF validation. They skip when the tool is missing.
 
@@ -149,4 +159,3 @@ The parsers are written for Kadakas. No new third-party crate was added, so the 
 - glTF with Draco, Meshopt or quantized data, and sparse accessors, are refused.
 - The DXF MESH entity is written and not read.
 - Component instances are not exported to IFC and DXF. Explode them first.
-- A face that is not convex and has a corner on the line between two others is triangulated with a triangle of no area. The 3D scene does not write such a triangle. So after OBJ, STL or glTF the face can come back as two. Volume and area stay the same.

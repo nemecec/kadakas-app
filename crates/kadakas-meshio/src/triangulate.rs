@@ -1,9 +1,13 @@
 //! Polygons into triangles, for OBJ faces with more than three corners.
 
+/// The most corners that ear clipping works on.
+pub(crate) const MAX_EAR_CORNERS: usize = 500;
+
 /// Triangles `[a, b, c]` of the polygon whose corners are `pts` (in order). The triangles keep
 /// the winding of the polygon. A convex polygon is a fan. Other polygons are cut by ear
 /// clipping in the plane of the polygon (Newell normal). A polygon that cannot be cut (it
-/// crosses itself) falls back to a fan, and the second value is `false`.
+/// crosses itself, or is not convex and has more than 500 corners) is cut as a fan, and the second
+/// value is `false`.
 pub(crate) fn polygon(pts: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
     let n = pts.len();
     if n < 3 {
@@ -54,8 +58,12 @@ pub(crate) fn polygon(pts: &[[f64; 3]]) -> (Vec<[usize; 3]>, bool) {
         let c = cross(p2[i], p2[(i + 1) % n], p2[(i + 2) % n]);
         if ccw { c >= 0.0 } else { c <= 0.0 }
     });
-    if convex || n > 2_000 {
+    if convex {
         return (fan(), true);
+    }
+    // Ear clipping costs up to n cubed: a big polygon that is not convex is cut as a fan.
+    if n > MAX_EAR_CORNERS {
+        return (fan(), false);
     }
     let mut idx: Vec<usize> = (0..n).collect();
     let mut out = Vec::with_capacity(n - 2);

@@ -1,7 +1,7 @@
 //! Interop of surface models (MOD-12): import of OBJ, STL and glTF into meshes, the conversion
 //! into surface models with the soften option, the export of STL and the round trips.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kadakas_api::{PathPolicy, RpcError, Session};
 use serde_json::{Value, json};
@@ -983,6 +983,232 @@ fn small_helpers_of_the_import_are_covered() {
     assert_eq!(r["report"]["bounds_mm"]["min"][2], 0.0);
 }
 
+/// A U shaped prism: its outline has corners on a line between two others.
+fn u_prism(s: &mut Session, origin: [i64; 3]) -> String {
+    let id = ok(s, "mesh.create", json!({"name": "U", "origin": origin}))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pts = [
+        [0, 0],
+        [1000, 0],
+        [2000, 0],
+        [3000, 0],
+        [3000, 3000],
+        [2000, 3000],
+        [2000, 1000],
+        [1000, 1000],
+        [1000, 3000],
+        [0, 3000],
+    ];
+    let edges: Vec<Value> = (0..pts.len())
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            json!([[a[0], a[1], 0], [b[0], b[1], 0]])
+        })
+        .collect();
+    let drawn = ok(s, "mesh.add_edges", json!({"id": id, "edges": edges}));
+    let face = drawn["created"]["faces"][0].clone();
+    ok(
+        s,
+        "mesh.push_pull",
+        json!({"id": id, "face": face, "distance": 500}),
+    );
+    id
+}
+
+#[test]
+fn a_closed_solid_with_collinear_corners_stays_watertight_in_every_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Session::with_sequential_ids();
+    let id = u_prism(&mut a, [0, 0, 0]);
+    let before = facts(&mut a, &id);
+    assert!(before.closed);
+    assert_eq!(before.faces, 12);
+    for (file, format) in [
+        ("u.stl", "stl"),
+        ("u.obj", "obj"),
+        ("u.glb", "glb"),
+        ("u.gltf", "gltf"),
+    ] {
+        let out = path(dir.path(), file);
+        let r = ok(
+            &mut a,
+            "export.file",
+            json!({"path": out, "format": format, "options": {"objects": [id]}, "overwrite": true}),
+        );
+        if format == "stl" {
+            assert_eq!(r["report"]["triangles"], 36);
+            assert_eq!(r["report"]["leaky_models"], 0);
+            assert_eq!(r["report"]["open_models"], 0);
+        }
+        let mut b = Session::with_sequential_ids();
+        let imp = ok(
+            &mut b,
+            "import.file",
+            json!({"path": out, "options": {"to_surface": true}}),
+        );
+        let t = &imp["report"]["to_surface"];
+        assert_eq!(t["converted"], 1, "{format}");
+        assert_eq!(t["degenerate_triangles"], 0, "{format}");
+        let id2 = first_object(&imp);
+        let after = facts(&mut b, &id2);
+        assert!(after.closed, "{format}");
+        // The three sides on the line y = 0 are one plane: they come back as one face.
+        assert_eq!(after.faces, 10, "{format}");
+        assert!(
+            (after.volume - before.volume).abs() < 1e-6 * before.volume,
+            "{format}"
+        );
+        let conv = ok(&mut b, "objects.get", json!({"id": id2}));
+        assert_eq!(conv["shape"]["kind"], "surface_model");
+        let rep = ok(&mut b, "mesh.solid_report", json!({"id": id2}));
+        assert_eq!(
+            rep["wire_edges"].as_array().map_or(0, Vec::len),
+            0,
+            "{format}"
+        );
+    }
+}
+
+#[test]
+fn a_round_trip_returns_the_model_to_its_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = Session::with_sequential_ids();
+    let id = u_prism(&mut a, [25000, 41000, 3000]);
+    let want = ok(&mut a, "mesh.bounds", json!({"id": id}))["world"].clone();
+    for (file, format) in [
+        ("p.stl", "stl"),
+        ("p.obj", "obj"),
+        ("p.glb", "glb"),
+        ("p.gltf", "gltf"),
+    ] {
+        let out = path(dir.path(), file);
+        ok(
+            &mut a,
+            "export.file",
+            json!({"path": out, "format": format, "options": {"objects": [id]}, "overwrite": true}),
+        );
+        let mut b = Session::with_sequential_ids();
+        // An STL file carries no origin: its coordinates are those of the model. OBJ and glTF
+        // files say where their origin was.
+        let imp = ok(&mut b, "import.file", json!({"path": out}));
+        let min = &imp["report"]["bounds_mm"]["min"];
+        let max = &imp["report"]["bounds_mm"]["max"];
+        for k in 0..3 {
+            assert!(
+                (min[k].as_f64().unwrap() - want["min"][k].as_f64().unwrap()).abs() < 0.01,
+                "{format} min {k}: {min} {}",
+                want["min"]
+            );
+            assert!(
+                (max[k].as_f64().unwrap() - want["max"][k].as_f64().unwrap()).abs() < 0.01,
+                "{format} max {k}"
+            );
+        }
+        if format == "obj" || format.starts_with("gl") {
+            assert!(
+                imp["report"]["notes"]
+                    .to_string()
+                    .contains("back at its place"),
+                "{format}"
+            );
+            // The option keeps the local numbers.
+            let local = ok(
+                &mut b,
+                "import.file",
+                json!({"path": out, "options": {"restore_origin": false}}),
+            );
+            assert_ne!(local["report"]["bounds_mm"]["min"], *min, "{format}");
+        }
+    }
+}
+
+#[test]
+fn the_report_of_the_conversion_lists_what_it_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    // A square of two triangles, one of them twice, its back, and a triangle in a line.
+    let text = "v 0 0 0\nv 1000 0 0\nv 1000 1000 0\nv 0 1000 0\nv 5000 0 0\nv 6000 0 0\nv 7000 0.001 0\n\
+f 1 2 3\nf 1 3 4\nf 1 2 3\nf 3 2 1\nf 5 6 7\n";
+    let p = write(dir.path(), "dirty.obj", text.as_bytes());
+    let mut s = Session::with_sequential_ids();
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": p, "options": {"unit": "mm", "up_axis": "z", "to_surface": true}}),
+    );
+    let t = &r["report"]["to_surface"];
+    assert_eq!(t["duplicate_triangles"], 1);
+    assert_eq!(t["reversed_triangles"], 1);
+    assert_eq!(t["degenerate_triangles"], 1);
+    let notes = t["notes"].to_string();
+    assert!(
+        notes.contains("repeated another")
+            && notes.contains("double sided")
+            && notes.contains("no area"),
+        "{notes}"
+    );
+    assert_eq!(t["converted"], 1);
+}
+
+#[test]
+fn the_layer_option_never_picks_a_layer_of_another_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::with_sequential_ids();
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Plans", "kind": "sheet"}}),
+    );
+    let obj = write(dir.path(), "cube.obj", CUBE_OBJ.as_bytes());
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": obj, "options": {"layer": "Plans"}}),
+    );
+    let id = first_object(&r);
+    let layer = ok(&mut s, "objects.get", json!({"id": id}))["layer"].clone();
+    let summary = ok(&mut s, "document.summary", json!({}));
+    let layers = summary["layers"].as_array().unwrap();
+    let mine = layers.iter().find(|l| l["id"] == layer).unwrap();
+    assert_eq!(mine["name"], "Plans");
+    assert_ne!(mine["kind"], "sheet", "{mine}");
+    assert_eq!(layers.iter().filter(|l| l["name"] == "Plans").count(), 2);
+}
+
+#[test]
+fn hostile_gltf_files_are_refused_without_a_flood_of_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::with_sequential_ids();
+    // 150,000 uses of one node, in a file of 300 KB.
+    let kids = vec!["1"; 150_000].join(",");
+    let wide = format!(r#"{{"asset":{{"version":"2.0"}},"nodes":[{{"children":[{kids}]}},{{}}]}}"#);
+    let p = write(dir.path(), "wide.gltf", wide.as_bytes());
+    let start = std::time::Instant::now();
+    let e = err(&mut s, "import.file", json!({"path": p}));
+    assert_eq!(reason(&e), "mesh_malformed");
+    assert!(start.elapsed().as_secs() < 20);
+    // Twelve buffers that name one file: read once, so the file counts once.
+    let data = vec![0u8; 3000];
+    write(dir.path(), "big.bin", &data);
+    let buffers = [r#"{"byteLength":39,"uri":"big.bin"}"#; 12].join(",");
+    let ok_text = format!(
+        r#"{{"asset":{{"version":"2.0"}},"nodes":[{{"mesh":0}}],
+"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"indices":1}}]}}],
+"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}},{{"bufferView":1,"componentType":5121,"count":3,"type":"SCALAR"}}],
+"bufferViews":[{{"buffer":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":3}}],"buffers":[{buffers}]}}"#
+    );
+    let g = write(dir.path(), "twelve.gltf", ok_text.as_bytes());
+    // The data are zeros: three points at one place and indices 0, so no triangle has an area,
+    // but the buffers were read. The budget of 4000 bytes is enough for one read of 3000.
+    let e = err(
+        &mut s,
+        "import.file",
+        json!({"path": g, "options": {"max_bytes": 4000}}),
+    );
+    assert_ne!(reason(&e), "mesh_file_too_large", "{e:?}");
+}
+
 mod props {
     use super::*;
     use proptest::prelude::*;
@@ -1082,10 +1308,9 @@ mod props {
             prop_assert!((after.area - before.area).abs() <= 1e-5 * before.area);
         }
 
-        // A random terrain survives mesh -> surface -> file -> mesh -> surface: the same area, in
-        // each format. A face that is not convex and has a corner on the line between two others
-        // is triangulated with a triangle of no area, which the 3D scene does not write, so such
-        // a face can come back as two. So the count never goes down.
+        // A random terrain survives mesh -> surface -> file -> mesh -> surface: the same area and
+        // the same number of faces, in each format. (A face with a corner on the line between
+        // two others used to lose a triangle in the file and come back as two faces.)
         #[test]
         fn random_meshes_round_trip(
             n in 2usize..7,
@@ -1108,13 +1333,10 @@ mod props {
             let back = ok(&mut b, "import.file", json!({"path": out, "options": {"to_surface": true}}));
             let id2 = first_object(&back);
             let sum = ok(&mut b, "mesh.summary", json!({"id": id2}));
-            prop_assert!(sum["models"][0]["faces"].as_u64().unwrap() >= faces);
+            prop_assert_eq!(sum["models"][0]["faces"].as_u64().unwrap(), faces);
             let area1: f64 = ok(&mut b, "mesh.faces", json!({"id": id2, "limit": 1000}))["items"]
                 .as_array().unwrap().iter().map(|f| f["area_mm2"].as_f64().unwrap()).sum();
             prop_assert!((area0 - area1).abs() <= 1e-6 * area0.max(1.0), "{} {}", area0, area1);
         }
     }
 }
-
-#[allow(dead_code)]
-fn unused(_: PathBuf) {}

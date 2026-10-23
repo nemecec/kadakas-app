@@ -1179,17 +1179,48 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 })
                 .collect();
             let flip = m.transform.matrix3.determinant() < 0.0;
-            let triangles: Vec<[u32; 3]> = sm
-                .triangles
-                .iter()
-                .zip(&sm.faces)
-                .filter(|(_, f)| !m.face_hidden(**f))
-                .map(|(t, _)| if flip { [t[0], t[2], t[1]] } else { *t })
-                .collect();
+            // An edge of a triangle is drawn when it is an edge of the model that is not soft or
+            // hidden. The diagonals that cut a face into triangles are not edges of the model.
+            let edge_of: std::collections::HashMap<_, _> =
+                m.edges().map(|(id, e)| (e.key(), id)).collect();
+            let shown = |t: &[u32; 3]| -> [bool; 3] {
+                std::array::from_fn(|k| {
+                    let (a, b) = (
+                        sm.vertices[t[k] as usize],
+                        sm.vertices[t[(k + 1) % 3] as usize],
+                    );
+                    let key = if a <= b { (a, b) } else { (b, a) };
+                    edge_of.get(&key).is_some_and(|e| m.edge_shown(*e))
+                })
+            };
+            let mut triangles: Vec<[u32; 3]> = Vec::new();
+            let mut visible: Vec<[bool; 3]> = Vec::new();
+            for (t, f) in sm.triangles.iter().zip(&sm.faces) {
+                if m.face_hidden(*f) {
+                    continue;
+                }
+                let s = shown(t);
+                if flip {
+                    triangles.push([t[0], t[2], t[1]]);
+                    visible.push([s[2], s[1], s[0]]);
+                } else {
+                    triangles.push(*t);
+                    visible.push(s);
+                }
+            }
             if triangles.is_empty() {
                 return false;
             }
-            native::mesh(w, cx, o, layer, hidden, &vertices, &triangles);
+            native::mesh(
+                w,
+                cx,
+                o,
+                layer,
+                hidden,
+                &vertices,
+                &triangles,
+                Some(&visible),
+            );
         }
         Shape::Extrude(_) | Shape::Sweep(_) => {
             // The mesh of the solid, up at the elevation of its layer.
@@ -1197,7 +1228,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                 return false;
             };
             let m = m.lifted(cx.doc.layer(o.layer).map_or(0.0, |l| l.elevation));
-            native::mesh(w, cx, o, layer, hidden, &m.vertices, &m.triangles);
+            native::mesh(w, cx, o, layer, hidden, &m.vertices, &m.triangles, None);
         }
         Shape::Polyline3d { points, closed } => polyline3d(
             w,
@@ -1256,7 +1287,7 @@ fn write_plain(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -
                     .iter()
                     .map(|v| kadakas_core::DVec3::new(v.x + shift.x, v.y + shift.y, v.z + lift))
                     .collect();
-                native::mesh(w, cx, o, layer, hidden, &vertices, &tin.triangles);
+                native::mesh(w, cx, o, layer, hidden, &vertices, &tin.triangles, None);
             }
         }
         // An annotation is written as lines and text (exploded), because its look comes from styles

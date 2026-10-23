@@ -1,7 +1,7 @@
 ## meshio-ui: import and export of mesh files (mesh_import.rs in ui-core, io_dialog.rs in the app, interop.rs in the modeler)
 
 meshio-ui-file-filter = 3D meshes: OBJ, STL, glTF, GLB
-meshio-ui-all-filter = All 3D files: OBJ, STL, glTF, GLB, DXF, IFC
+meshio-ui-all-filter = All 3D files: OBJ, STL, glTF, GLB, IFC
 meshio-ui-unit = Unit of the file
 meshio-ui-unit-default = { $unit } (default for this format)
 meshio-ui-up-axis = Up axis of the file
@@ -21,6 +21,8 @@ meshio-ui-preview =
        *[other] { $softened } edges
     } of { $edges } would be softened ({ $faces } faces).
 meshio-ui-preview-too-large = The mesh is too large for a surface model ({ $reason }). It stays a mesh and no edge is softened.
+meshio-ui-preview-not-convertible = The mesh cannot become a surface model ({ $reason }). It stays a mesh and no edge is softened.
+meshio-ui-preview-skipped = The file is big ({ $megabytes } MB, the edges are counted up to { $limit } MB). The import softens the edges all the same.
 meshio-ui-preview-failed = The file cannot be read: { $message }
 meshio-ui-imported =
     Imported { $count ->
@@ -36,5 +38,5 @@ meshio-ui-export-ascii = ASCII text (default: binary)
 meshio-ui-export-stl-hint = STL holds triangles only, without colors or lines.
 meshio-ui-export-ifc-hint = IFC4. Closed surface models become solids, open ones become shells.
 meshio-ui-export-dxf-hint = DXF. Surface models are written as polyface meshes.
-meshio-ui-export-obj-hint = OBJ with a MTL file, in meters with Y up.
+meshio-ui-export-obj-hint = OBJ with an MTL file, in meters with Y up.
 meshio-ui-export-gltf-hint = glTF 2.0, in meters with Y up.

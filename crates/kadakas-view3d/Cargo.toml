@@ -10,6 +10,7 @@ description = "The 3D view that the UI programs share: the GPU drawing of the sc
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
 kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
 kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
 kadakas-review = { version = "0.1.0", path = "../kadakas-review", default-features = false }
 kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }

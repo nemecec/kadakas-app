@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 /// The crates with user interface text. A crate with egui calls must be here.
 const UI_CRATES: &[&str] = &[
     "kadakas-app",
+    "kadakas-view3d",
     "kadakas-ui-core",
     "kadakas-launcher",
     "kadakas-modeler",
@@ -29,6 +30,7 @@ const UI_CRATES: &[&str] = &[
 /// Crates that use messages (all the crates with `tr!`, `msg!` or `translate` calls).
 const CODE_CRATES: &[&str] = &[
     "kadakas-app",
+    "kadakas-view3d",
     "kadakas-ui-core",
     "kadakas-launcher",
     "kadakas-modeler",
@@ -136,7 +138,6 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("io_dialog.rs", "OBJ"),
     ("io_dialog.rs", "glTF"),
     ("io_dialog.rs", "GLB"),
-    ("io_dialog.rs", "\\u{b0}"),
     ("interop.rs", "IFC"),
     ("interop.rs", "IFC4"),
     ("interop.rs", "DXF"),
@@ -144,7 +145,7 @@ const LITERAL_OK: &[(&str, &str)] = &[
     ("interop.rs", "OBJ"),
     ("interop.rs", "glTF"),
     ("interop.rs", "GLB"),
-    ("interop.rs", "\\u{b0}"),
+    ("import_widgets.rs", "\\u{b0}"),
     ("plant_ui.rs", "CSV"),
     // Names of file types in the file dialogs of the modeler.
     ("files.rs", "Kadakas"),

@@ -110,6 +110,10 @@ pub struct MeshSet {
     pub totals: Totals,
     /// What the reader left out or changed, in words.
     pub notes: Vec<String>,
+    /// Where the file says its local origin is in the Kadakas model (millimeters). Kadakas writes
+    /// it into the files that it exports, so that a round trip can return the model to its place.
+    /// The positions in `parts` are local, they do not have it added.
+    pub origin_mm: Option<[f64; 3]>,
 }
 
 impl MeshSet {
@@ -152,6 +156,7 @@ impl MeshSet {
             parts,
             totals,
             notes,
+            origin_mm: None,
         })
     }
 
@@ -166,6 +171,15 @@ impl MeshSet {
             }
         }
         (lo, hi)
+    }
+
+    /// Moves every vertex by `d` millimeters.
+    pub fn move_by(&mut self, d: [f64; 3]) {
+        for p in self.parts.iter_mut().flat_map(|p| p.positions.iter_mut()) {
+            for k in 0..3 {
+                p[k] += d[k];
+            }
+        }
     }
 
     /// Joins all parts into one, keeping the color when all parts have the same.

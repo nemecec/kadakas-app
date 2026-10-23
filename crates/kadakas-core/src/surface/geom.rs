@@ -243,6 +243,59 @@ pub(super) fn spliced(
     )
 }
 
+/// Flips away the triangles with no area. The triangulation of a polygon with a corner on the line
+/// between two others makes one: a triangle `(a, m, b)` with `m` on the segment `ab`. It draws
+/// nothing, but the neighbour across `ab` then has a long edge where the other side has two, a
+/// crack when the mesh is written to a file. The triangle and its neighbour `(b, a, c)` become
+/// `(a, m, c)` and `(m, b, c)`, which cover the same area and share the edges. `p` are the
+/// positions of the indices in the plane. A triangle that has no neighbour is dropped.
+pub(super) fn flip_slivers(tris: &mut Vec<[u32; 3]>, p: &[DVec2]) {
+    let flat = |t: &[u32; 3]| -> Option<usize> {
+        let (a, b, c) = (p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]);
+        let cross = (b - a).perp_dot(c - a).abs();
+        let longest = (b - a)
+            .length_squared()
+            .max((c - b).length_squared())
+            .max((a - c).length_squared());
+        if cross > 1e-5f64.max(1e-9 * longest) {
+            return None;
+        }
+        // The middle corner: the one whose opposite edge is the longest.
+        let lens = [
+            (c - b).length_squared(),
+            (a - c).length_squared(),
+            (b - a).length_squared(),
+        ];
+        (0..3).max_by(|&i, &j| lens[i].total_cmp(&lens[j]))
+    };
+    for _ in 0..tris.len() + 8 {
+        let Some(i) = tris.iter().position(|t| flat(t).is_some()) else {
+            return;
+        };
+        let t = tris[i];
+        let m = flat(&t).unwrap_or(0);
+        // Corner `m` is the middle one, the edge `(x, y)` opposite it runs x to y in `t`.
+        let (mv, x, y) = (t[m], t[(m + 1) % 3], t[(m + 2) % 3]);
+        // The neighbour has the edge the other way round.
+        let nb = tris.iter().enumerate().find_map(|(j, n)| {
+            if j == i {
+                return None;
+            }
+            (0..3).find_map(|k| (n[k] == y && n[(k + 1) % 3] == x).then_some((j, n[(k + 2) % 3])))
+        });
+        match nb {
+            Some((j, c)) => {
+                // The neighbour runs y, x, c: the new triangles run y, m, c and m, x, c.
+                tris[i] = [y, mv, c];
+                tris[j] = [mv, x, c];
+            }
+            None => {
+                tris.remove(i);
+            }
+        }
+    }
+}
+
 /// The triangles of a face, counterclockwise seen from the front.
 pub(super) fn triangulate_face(
     id: FaceId,
@@ -255,10 +308,12 @@ pub(super) fn triangulate_face(
         .loops()
         .map(|l| l.iter().map(|v| f.plane.project(pos(*v))).collect())
         .collect();
-    let triangles = match triangulate_rings(&rings) {
+    let mut triangles = match triangulate_rings(&rings) {
         Some(t) => t,
         None => spliced(f, &vertices, &pos)?,
     };
+    let flat: Vec<DVec2> = rings.iter().flatten().copied().collect();
+    flip_slivers(&mut triangles, &flat);
     Some(FaceTriangles {
         face: id,
         normal: f.plane.normal,

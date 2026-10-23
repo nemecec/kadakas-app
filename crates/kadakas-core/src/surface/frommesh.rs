@@ -119,6 +119,9 @@ pub struct ConvertReport {
     pub degenerate_triangles: usize,
     /// Triangles dropped because an earlier triangle has the same corners.
     pub duplicate_triangles: usize,
+    /// Triangles dropped because another triangle has the same corners the other way round: the
+    /// second side of a double sided mesh.
+    pub reversed_triangles: usize,
     /// Triangles with no area (corners in a line) that joined a face as the glue of its
     /// triangulation.
     pub joined_slivers: usize,
@@ -343,7 +346,21 @@ pub fn surface_from_triangles(
             }
         }
         report.duplicate_triangles = drop_it.iter().filter(|d| **d).count();
-        if report.duplicate_triangles > 0 {
+        // A double sided mesh has each face twice, the second one turned over. The second one
+        // goes: it adds no area, and with it the mesh would look like a closed solid.
+        let mut seen: std::collections::HashSet<[u32; 3]> = std::collections::HashSet::new();
+        for (i, t) in tris.iter().enumerate() {
+            if drop_it[i] {
+                continue;
+            }
+            if seen.contains(&canon(&[t[0], t[2], t[1]])) {
+                drop_it[i] = true;
+                report.reversed_triangles += 1;
+            } else {
+                seen.insert(canon(t));
+            }
+        }
+        if drop_it.iter().any(|d| *d) {
             let mut i = 0;
             tris.retain(|_| {
                 i += 1;
@@ -363,6 +380,12 @@ pub fn surface_from_triangles(
         notes.push(format!(
             "{} triangles repeated another triangle and were dropped",
             report.duplicate_triangles
+        ));
+    }
+    if report.reversed_triangles > 0 {
+        notes.push(format!(
+            "{} triangles were the back of another triangle (a double sided mesh) and were dropped",
+            report.reversed_triangles
         ));
     }
 
@@ -639,7 +662,14 @@ pub fn surface_from_triangles(
         && model.edge_count() > 0
         && uses.len() == model.edge_count();
     if report.closed {
-        report.volume_mm3 = Some(volume_of(&model));
+        let volume = volume_of(&model);
+        // Faces that enclose nothing (two sheets on top of each other) are not a solid.
+        if volume > 1e-9 * report.area_mm2.powf(1.5) {
+            report.volume_mm3 = Some(volume);
+        } else {
+            report.closed = false;
+            notes.push("the faces enclose no volume: it is not a solid".to_string());
+        }
     }
     if let Some(angle) = opts.soften_below_angle {
         let all: Vec<EdgeId> = model.edges().map(|(id, _)| id).collect();

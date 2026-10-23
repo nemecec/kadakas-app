@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use kadakas_core::command::{Command, CommandError};
 use kadakas_core::mesh3d::{self, Mesh3d};
 use kadakas_core::model::{Attributes, Color, Document, LayerKind, ObjectId, Shape};
-use kadakas_core::surface::{ConvertOptions, Converted, surface_from_triangles};
+use kadakas_core::surface::{ConvertError, ConvertOptions, Converted, surface_from_triangles};
 use kadakas_meshio::{Format, Frame, Limits, MeshError, MeshSet, Unit, Up};
 
 use crate::errors::{app, bad, convert_rpc};
@@ -61,6 +61,7 @@ struct ImportOptions {
     preview: bool,
     center: bool,
     join: bool,
+    restore_origin: Option<bool>,
     max_bytes: Option<u64>,
     max_triangles: Option<u64>,
     max_vertices: Option<u64>,
@@ -125,6 +126,104 @@ pub(crate) fn mesh_rpc(e: &MeshError) -> RpcError {
     err.with_reason(e.kind()).with_details(Value::Object(d))
 }
 
+/// The counts of the conversions of one import, for `report.to_surface`.
+pub(crate) struct Tally {
+    converted: usize,
+    faces: usize,
+    edges: usize,
+    softened: usize,
+    welded: usize,
+    degenerate: usize,
+    duplicate: usize,
+    reversed: usize,
+    unmerged: usize,
+    joined_slivers: usize,
+    refused: Vec<Value>,
+    notes: Vec<String>,
+    parts: usize,
+    angle: Option<f64>,
+}
+
+impl Tally {
+    pub(crate) fn new(angle: Option<f64>, parts: usize) -> Tally {
+        Tally {
+            converted: 0,
+            faces: 0,
+            edges: 0,
+            softened: 0,
+            welded: 0,
+            degenerate: 0,
+            duplicate: 0,
+            reversed: 0,
+            unmerged: 0,
+            joined_slivers: 0,
+            refused: Vec::new(),
+            notes: Vec::new(),
+            parts,
+            angle,
+        }
+    }
+
+    pub(crate) fn ok(&mut self, name: &str, c: &Converted) {
+        let r = &c.report;
+        self.converted += 1;
+        self.faces += r.faces;
+        self.edges += r.edges;
+        self.softened += r.softened_edges;
+        self.welded += r.welded_vertices;
+        self.degenerate += r.degenerate_triangles;
+        self.duplicate += r.duplicate_triangles;
+        self.reversed += r.reversed_triangles;
+        self.unmerged += r.unmerged_regions;
+        self.joined_slivers += r.joined_slivers;
+        for n in &c.notes {
+            self.notes.push(if self.parts > 1 {
+                format!("{name}: {n}")
+            } else {
+                n.clone()
+            });
+        }
+        if r.unmerged_regions > 0 {
+            self.notes.push(format!(
+                "{name}: {} regions of triangles in one plane could not become one face",
+                r.unmerged_regions
+            ));
+        }
+    }
+
+    pub(crate) fn refused(&mut self, name: &str, object: Option<ObjectId>, e: &ConvertError) {
+        let err = convert_rpc(e);
+        self.refused.push(json!({
+            "part": name,
+            "object": object,
+            "reason": e.to_string(),
+            "data": err.details,
+        }));
+    }
+
+    pub(crate) fn softened(&self) -> usize {
+        self.softened
+    }
+
+    pub(crate) fn json(&self) -> Value {
+        json!({
+            "converted": self.converted,
+            "refused": self.refused,
+            "faces": self.faces,
+            "edges": self.edges,
+            "softened_edges": self.softened,
+            "soften_below_angle": self.angle,
+            "welded_vertices": self.welded,
+            "degenerate_triangles": self.degenerate,
+            "duplicate_triangles": self.duplicate,
+            "reversed_triangles": self.reversed,
+            "joined_slivers": self.joined_slivers,
+            "unmerged_regions": self.unmerged,
+            "notes": self.notes,
+        })
+    }
+}
+
 /// Turns the mesh objects that the commands of a step made into surface models, as far as they
 /// fit the limits (`from` is the number of created ids before those commands). A mesh over a
 /// limit stays a mesh and is listed in `refused` with the counts. The answer is the summary for
@@ -144,8 +243,7 @@ pub(crate) fn convert_created(
             )
         })
         .collect();
-    let (mut converted, mut faces, mut edges, mut softened) = (0usize, 0usize, 0usize, 0usize);
-    let mut refused: Vec<Value> = Vec::new();
+    let mut tally = Tally::new(ask.opts.soften_below_angle, ids.len());
     for id in ids {
         let (result, layer, color, name) = {
             let o = step.doc().object(id).expect("listed above");
@@ -160,10 +258,7 @@ pub(crate) fn convert_created(
         match result {
             Ok(c) => {
                 let elevation = step.doc().layer(layer).map_or(0.0, |l| l.elevation);
-                converted += 1;
-                faces += c.report.faces;
-                edges += c.report.edges;
-                softened += c.report.softened_edges;
+                tally.ok(&name, &c);
                 let Converted {
                     mut model, origin, ..
                 } = c;
@@ -189,25 +284,10 @@ pub(crate) fn convert_created(
                     attrs: Some(attrs),
                 })?;
             }
-            Err(e) => {
-                let err = convert_rpc(&e);
-                refused.push(json!({
-                    "object": id,
-                    "name": name,
-                    "reason": e.to_string(),
-                    "data": err.details,
-                }));
-            }
+            Err(e) => tally.refused(&name, Some(id), &e),
         }
     }
-    Ok(json!({
-        "converted": converted,
-        "refused": refused,
-        "faces": faces,
-        "edges": edges,
-        "softened_edges": softened,
-        "soften_below_angle": ask.opts.soften_below_angle,
-    }))
+    Ok(tally.json())
 }
 
 /// Formats, options and examples for `describe`.
@@ -227,6 +307,7 @@ pub(crate) fn describe() -> Value {
                 "layer": "name of the design layer that receives the objects (created if needed). Default the active layer",
                 "name": "name of the objects. Default the names in the file, else the file name",
                 "join": "false (default: one object for each object and material of the file) | true (one mesh for the whole file; the color stays if all parts have the same)",
+                "restore_origin": "true (default). OBJ and glTF files that Kadakas wrote say where their origin was in the model (a comment in the OBJ, the extension KADAKAS_georeference in glTF). The model goes back to that place, so a round trip returns it to where it was. false keeps the local numbers of the file. STL files carry no origin, but the STL export writes the coordinates of the model",
                 "center": "false (default: the coordinates of the file) | true (the middle of the box around the file goes to x = 0 and y = 0, and the lowest point to z = 0)",
                 "to_surface": "false (default: mesh3d objects). true: parts that fit a surface model (55,000 vertices, 150,000 edges, 100,000 faces) become surface models, with vertices welded and coplanar triangles merged into faces. A part over a limit stays a mesh3d and is listed in report.to_surface.refused with the counts",
                 "soften_below_angle": "degrees, 0 to 180, default off. Edges between faces at an angle below it become soft and smooth. It asks for to_surface",
@@ -237,7 +318,7 @@ pub(crate) fn describe() -> Value {
                 "max_triangles": "Default and most 8000000, in all parts together",
                 "max_vertices": "Default and most 4000000, in all parts together"
             },
-            "result": "{imported, skipped, softened_edges (always, 0 when nothing was softened), report: {format, bytes, unit, up_axis, parts, vertices, triangles, degenerate_triangles, bounds_mm: {min, max, size}, objects: [{id, name, kind, vertices, triangles, color}], notes, to_surface?: {converted, refused: [{part, reason, counts?}], faces, edges, softened_edges}, preview?}, georeference}. A file that is too large, has too many triangles, ends too soon, has a number that is not finite or an index that does not exist is refused with an error whose reason names the problem (mesh_file_too_large, mesh_too_many_triangles, mesh_truncated, mesh_not_finite, mesh_bad_index and so on) and whose data has the counts. Nothing changes",
+            "result": "{imported, skipped, softened_edges (always, 0 when nothing was softened), report: {format, bytes, unit, up_axis, parts, vertices, triangles, degenerate_triangles, bounds_mm: {min, max, size}, objects: [{id, name, kind, vertices, triangles, color}], notes, to_surface?: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, welded_vertices, degenerate_triangles, duplicate_triangles, reversed_triangles, joined_slivers, unmerged_regions, notes}, preview?}, georeference}. A file that is too large, has too many triangles, ends too soon, has a number that is not finite or an index that does not exist is refused with an error whose reason names the problem (mesh_file_too_large, mesh_too_many_triangles, mesh_truncated, mesh_not_finite, mesh_bad_index and so on) and whose data has the counts. Nothing changes",
             "examples": [
                 {"method": "import.file", "params": {"path": "/data/model.obj", "options": {"unit": "mm", "up_axis": "z"}}},
                 {"method": "import.file", "params": {"path": "/data/part.stl", "options": {"to_surface": true, "soften_below_angle": 20}}},
@@ -254,7 +335,7 @@ pub(crate) fn describe() -> Value {
                 "plant_detail": "fine (default) | coarse | billboard | auto",
                 "name": "the name in the solid line of an ASCII file and in the header of a binary file"
             },
-            "result": "{path, exported (objects), report: {triangles, objects, bytes, encoding, units, y_up, open_models (surface models that are not closed solids), skipped: [{id, reason}], notes}}. STL holds no colors, materials or lines. A printer wants closed solids: open_models says how many surface models are not.",
+            "result": "{path, exported (objects), report: {triangles, objects, bytes, encoding, units, y_up, origin_mm, open_models (exported surface models that are not closed solids), leaky_models (closed solids whose triangles are not watertight), skipped: [{id, reason}], notes}}. The coordinates are those of the model, so reading the file again puts it where it was. STL holds no colors, materials or lines. A printer wants closed solids: open_models says how many surface models are not.",
             "examples": [
                 {"method": "export.file", "params": {"path": "/data/part.stl", "format": "stl", "options": {"encoding": "ascii"}, "overwrite": true}}
             ]
@@ -283,7 +364,7 @@ struct Prepared {
     mesh: Mesh3d,
     /// The conversion, when it was asked for and the part fits.
     surface: Option<Converted>,
-    refused: Option<(RpcError, Value)>,
+    refused: bool,
 }
 
 impl Session {
@@ -400,6 +481,18 @@ impl Session {
         }
         .map_err(|e| mesh_rpc(&e))?;
         drop(bytes);
+        // A file that Kadakas wrote says where its origin was in the model: the model returns to
+        // its place.
+        let mut origin_note = None;
+        if let Some(d) = set.origin_mm.filter(|d| d.iter().any(|x| *x != 0.0))
+            && o.restore_origin.unwrap_or(true)
+        {
+            set.move_by(d);
+            origin_note = Some(format!(
+                "the file says that its origin was at ({}, {}, {}) mm in the model: the model is back at its place",
+                d[0], d[1], d[2]
+            ));
+        }
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -456,54 +549,38 @@ impl Session {
                 triangles,
                 mesh,
                 surface: None,
-                refused: None,
+                refused: false,
             });
         }
         // The conversion into surface models is made before anything changes, so that a preview
         // and an import give the same counts.
         let mut to_surface = None;
+        let mut softened_total = 0usize;
         if let Some(ask) = &ask {
-            let mut converted = 0usize;
-            let (mut faces, mut edges, mut softened) = (0usize, 0usize, 0usize);
-            let mut refused: Vec<Value> = Vec::new();
+            let mut tally = Tally::new(ask.opts.soften_below_angle, prepared.len());
             for p in &mut prepared {
                 match surface_from_triangles(&p.mesh.vertices, &p.mesh.triangles, &ask.opts) {
                     Ok(c) => {
-                        converted += 1;
-                        faces += c.report.faces;
-                        edges += c.report.edges;
-                        softened += c.report.softened_edges;
+                        tally.ok(&p.name, &c);
                         p.surface = Some(c);
                     }
                     Err(e) => {
-                        let err = convert_rpc(&e);
-                        let d = err.details.clone().unwrap_or(Value::Null);
-                        refused.push(json!({"part": p.name, "reason": e.to_string(), "data": d}));
-                        p.refused = Some((err, d));
+                        tally.refused(&p.name, None, &e);
+                        p.refused = true;
                     }
                 }
             }
-            to_surface = Some(json!({
-                "converted": converted,
-                "refused": refused,
-                "faces": faces,
-                "edges": edges,
-                "softened_edges": softened,
-                "soften_below_angle": ask.opts.soften_below_angle,
-            }));
+            softened_total = tally.softened();
+            to_surface = Some(tally.json());
         }
-        let softened_total: usize = prepared
-            .iter()
-            .filter_map(|p| p.surface.as_ref())
-            .map(|c| c.report.softened_edges)
-            .sum();
         let mut notes = set.notes.clone();
+        notes.extend(origin_note);
         if let Some(ask) = &ask
-            && prepared.iter().any(|p| p.refused.is_some())
+            && prepared.iter().any(|p| p.refused)
         {
             notes.push(format!(
                 "{} parts are over the limits of a surface model and stay meshes{}",
-                prepared.iter().filter(|p| p.refused.is_some()).count(),
+                prepared.iter().filter(|p| p.refused).count(),
                 if ask.opts.soften_below_angle.is_some() {
                     ", with no edges softened"
                 } else {
@@ -584,17 +661,18 @@ impl Session {
                     match found {
                         Some(id) => id,
                         None => {
+                            let before = step.created().len();
                             step.run(&Command::AddLayer {
                                 name: n.to_string(),
                                 elevation: 0.0,
                                 scale: None,
                                 kind: None,
                             })?;
-                            step.doc()
-                                .layers
-                                .iter()
-                                .find(|l| l.name == n)
-                                .map(|l| l.id)
+                            // The layer that the command made, not a layer of another kind that
+                            // has the same name.
+                            step.created()
+                                .get(before)
+                                .map(|u| kadakas_core::model::LayerId(*u))
                                 .ok_or_else(|| {
                                     CommandError::Invalid("the layer was not made".into())
                                 })?
@@ -775,19 +853,58 @@ impl Session {
                 kadakas_x3d::X3dError::Empty => RpcError::validation(e),
                 e => app(e),
             })?;
+        // The coordinates of the model, not the local ones of the 3D scene: an STL file carries
+        // no origin, so a file that is read again lands where the model was.
+        let org = model.conv.point(model.origin);
+        let exported: std::collections::HashSet<kadakas_core::uid::Uid> = model
+            .parts
+            .iter()
+            .flat_map(|p| p.ids.iter().copied())
+            .collect();
+        let mut closed: std::collections::HashSet<kadakas_core::uid::Uid> =
+            std::collections::HashSet::new();
+        let mut open = 0usize;
+        for obj in doc.objects.values() {
+            if let Shape::SurfaceModel(m) = &obj.shape
+                && exported.contains(&obj.id.0)
+            {
+                if m.check().is_closed() {
+                    closed.insert(obj.id.0);
+                } else {
+                    open += 1;
+                }
+            }
+        }
         let mut tris: Vec<[[f32; 3]; 3]> = Vec::new();
+        let mut leaky = 0usize;
         for part in &model.parts {
+            let first = tris.len();
             for prim in part.prims.iter().filter(|p| !p.lines) {
                 let at = |i: u32| {
                     let p = prim.positions[i as usize];
                     [
-                        (p[0] as f64 + part.anchor[0]) as f32,
-                        (p[1] as f64 + part.anchor[1]) as f32,
-                        (p[2] as f64 + part.anchor[2]) as f32,
+                        (p[0] as f64 + part.anchor[0] + org[0]) as f32,
+                        (p[1] as f64 + part.anchor[1] + org[1]) as f32,
+                        (p[2] as f64 + part.anchor[2] + org[2]) as f32,
                     ]
                 };
                 for t in prim.indices.as_chunks::<3>().0 {
                     tris.push([at(t[0]), at(t[1]), at(t[2])]);
+                }
+            }
+            // A closed solid must give a watertight mesh: every edge is used twice.
+            if !part.ids.is_empty() && part.ids.iter().all(|id| closed.contains(id)) {
+                let key = |p: [f32; 3]| p.map(|v| if v == 0.0 { 0u32 } else { v.to_bits() });
+                let mut uses: std::collections::HashMap<([u32; 3], [u32; 3]), u32> =
+                    std::collections::HashMap::new();
+                for t in &tris[first..] {
+                    for k in 0..3 {
+                        let (a, b) = (key(t[k]), key(t[(k + 1) % 3]));
+                        *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+                    }
+                }
+                if uses.values().any(|n| *n != 2) {
+                    leaky += 1;
                 }
             }
         }
@@ -807,21 +924,19 @@ impl Session {
         } else {
             kadakas_meshio::stl::write_binary(&name, tris.into_iter()).map_err(|e| mesh_rpc(&e))?
         };
-        let mut open = 0usize;
-        let wanted = |id: &ObjectId| o.objects.as_ref().is_none_or(|l| l.contains(id));
-        for obj in doc.objects.values() {
-            if let Shape::SurfaceModel(m) = &obj.shape
-                && wanted(&obj.id)
-                && !m.check().is_closed()
-            {
-                open += 1;
-            }
-        }
         let mut notes: Vec<String> = Vec::new();
         notes.push("STL holds triangles only: colors, materials and lines are not written".into());
+        notes.push(format!(
+            "the coordinates are those of the model ({units}); the local origin of the 3D scene is added back"
+        ));
         if open > 0 {
             notes.push(format!(
                 "{open} surface models are not closed solids: a printer needs closed solids"
+            ));
+        }
+        if leaky > 0 {
+            notes.push(format!(
+                "{leaky} closed solids did not give a watertight mesh: some edges are not shared by two triangles"
             ));
         }
         kadakas_sys::fsio::write_atomic(&path, &data)
@@ -843,6 +958,8 @@ impl Session {
                 "units": units,
                 "y_up": y_up,
                 "open_models": open,
+                "leaky_models": leaky,
+                "origin_mm": [model.origin.x, model.origin.y, model.origin.z],
                 "skipped": skipped,
                 "notes": notes,
             },

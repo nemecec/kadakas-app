@@ -146,6 +146,8 @@ struct State<'a> {
     short_faces: u64,
     bad_fans: u64,
     missing_mtl: Vec<String>,
+    big_mtl: Vec<String>,
+    origin: Option<[f64; 3]>,
     corners: Vec<u32>,
 }
 
@@ -173,6 +175,8 @@ pub fn read(
         short_faces: 0,
         bad_fans: 0,
         missing_mtl: Vec::new(),
+        big_mtl: Vec::new(),
+        origin: None,
         corners: Vec::new(),
     };
     for (n, raw) in bytes.split(|b| *b == b'\n').enumerate() {
@@ -196,8 +200,14 @@ impl State<'_> {
         }
         if self.bad_fans > 0 {
             notes.push(format!(
-                "{} faces cross themselves and were cut as fans",
-                self.bad_fans
+                "{} faces cross themselves or are not convex and have more than {} corners: they were cut as fans",
+                self.bad_fans,
+                triangulate::MAX_EAR_CORNERS
+            ));
+        }
+        for m in &self.big_mtl {
+            notes.push(format!(
+                "the material file {m} is larger than 16 MB: the colors of the materials are not read"
             ));
         }
         for m in &self.missing_mtl {
@@ -240,18 +250,31 @@ impl State<'_> {
                 triangles: tris,
             });
         }
-        MeshSet::finish(
+        let mut set = MeshSet::finish(
             Format::Obj,
             self.opts.frame,
             out,
             self.degenerate,
             notes,
             &self.opts.limits,
-        )
+        )?;
+        set.origin_mm = self.origin;
+        Ok(set)
     }
 
     fn line(&mut self, line: &str, line_no: usize) -> Result<(), MeshError> {
         let line = line.trim();
+        if let Some(rest) = line.strip_prefix("# local origin in model mm:") {
+            // Kadakas writes where the local point (0, 0, 0) of the file is in the model.
+            let v: Vec<f64> = rest
+                .split_whitespace()
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            if v.len() == 3 && v.iter().all(|x| x.is_finite()) {
+                self.origin = Some([v[0], v[1], v[2]]);
+            }
+            return Ok(());
+        }
         if line.is_empty() || line.starts_with('#') {
             return Ok(());
         }
@@ -277,6 +300,9 @@ impl State<'_> {
                 tries.extend(rest.split_whitespace());
                 let found = tries.into_iter().find_map(|name| (self.mtl)(name));
                 match found {
+                    Some(b) if b.len() > MAX_MTL_BYTES => {
+                        self.big_mtl.push(rest.to_string());
+                    }
                     Some(b) => self.colors.extend(parse_mtl(&b)),
                     None => {
                         if !rest.is_empty() && !self.missing_mtl.iter().any(|m| m == rest) {
@@ -371,6 +397,14 @@ impl State<'_> {
         if self.corners.len() < 3 {
             self.short_faces += 1;
             return Ok(());
+        }
+        // The budget comes before the work: a face of n corners makes n - 2 triangles.
+        let most = self.corners.len() as u64 - 2;
+        if self.triangle_count + most > lim.max_triangles {
+            return Err(MeshError::TooManyTriangles {
+                count: self.triangle_count + most,
+                limit: lim.max_triangles,
+            });
         }
         let at = self.part()?;
         let tris: Vec<[usize; 3]> = if self.corners.len() == 3 {

@@ -259,3 +259,105 @@ fn the_3d_faces_come_back_as_one_mesh_with_the_same_volume() {
     assert!((meshes[0].volume() - 1.0e9).abs() < 1.0);
     let _ = DVec2::ZERO;
 }
+
+/// A U shaped prism: the top has corners on a line and is cut into triangles by diagonals.
+fn u_prism() -> (Editor, kadakas_core::model::ObjectId) {
+    let pts = [
+        [0.0, 0.0],
+        [1000.0, 0.0],
+        [2000.0, 0.0],
+        [3000.0, 0.0],
+        [3000.0, 3000.0],
+        [2000.0, 3000.0],
+        [2000.0, 1000.0],
+        [1000.0, 1000.0],
+        [1000.0, 3000.0],
+        [0.0, 3000.0],
+    ];
+    let mut ed = Editor::with_sequential_ids();
+    let id = kadakas_core::model::ObjectId(
+        ed.execute(&Command::AddObject {
+            shape: Shape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap()
+        .created[0],
+    );
+    let edges = (0..pts.len())
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            [[a[0], a[1], 0.0], [b[0], b[1], 0.0]]
+        })
+        .collect();
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::AddEdges { edges },
+    })
+    .unwrap();
+    let face = {
+        let Shape::SurfaceModel(m) = &ed.doc().object(id).unwrap().shape else {
+            panic!()
+        };
+        m.faces().next().unwrap().0
+    };
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::PushPull {
+            face,
+            distance: 500.0,
+        },
+    })
+    .unwrap();
+    (ed, id)
+}
+
+#[test]
+fn the_diagonals_of_a_face_and_the_soft_edges_are_not_drawn() {
+    let (mut ed, id) = u_prism();
+    let edge_count = {
+        let Shape::SurfaceModel(m) = &ed.doc().object(id).unwrap().shape else {
+            panic!()
+        };
+        m.edge_count()
+    };
+    // Each edge of the model is the side of two triangles: so 2 x edges sides are drawn.
+    let (faces, _) = export(ed.doc(), MeshEntity::Face3d);
+    let triangles = count(&faces, "3DFACE");
+    assert_eq!(triangles, 36);
+    let hidden: u32 = values(&faces, "70")
+        .iter()
+        .map(|v| (*v as u32).count_ones())
+        .sum();
+    assert_eq!(3 * triangles as u32 - hidden, 2 * edge_count as u32);
+    // The same in the polyface mesh: the indices of the face records that are negative.
+    let (poly, _) = export(ed.doc(), MeshEntity::Polyface);
+    let mut negative = 0;
+    for code in ["71", "72", "73"] {
+        negative += values(&poly, code).iter().filter(|v| **v < 0.0).count();
+    }
+    assert_eq!(3 * triangles - negative, 2 * edge_count);
+    // A soft edge is not drawn either.
+    let first_edge = {
+        let Shape::SurfaceModel(m) = &ed.doc().object(id).unwrap().shape else {
+            panic!()
+        };
+        m.edges().next().unwrap().0
+    };
+    ed.execute(&Command::EditSurface {
+        id,
+        edit: Edit::SetEdgeStyle {
+            edges: vec![first_edge],
+            soft: Some(true),
+            smooth: None,
+        },
+    })
+    .unwrap();
+    let (soft, _) = export(ed.doc(), MeshEntity::Face3d);
+    let hidden_soft: u32 = values(&soft, "70")
+        .iter()
+        .map(|v| (*v as u32).count_ones())
+        .sum();
+    assert_eq!(hidden_soft, hidden + 2);
+}

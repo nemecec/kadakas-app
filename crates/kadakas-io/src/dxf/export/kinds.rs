@@ -251,7 +251,7 @@ pub(super) fn massing(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: 
         return;
     }
     let vertices: Vec<DVec3> = solid.positions;
-    native::mesh(w, cx, o, layer, hidden, &vertices, &solid.tris);
+    native::mesh(w, cx, o, layer, hidden, &vertices, &solid.tris, None);
 }
 
 /// A plant tag: the leader, the ID bubble and the text lines.

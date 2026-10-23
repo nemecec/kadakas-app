@@ -11,6 +11,7 @@
 //! the same way. The code was in `kadakas-app` and moved here without a change of behavior.
 
 pub mod gpu3d;
+pub mod import_widgets;
 pub mod input;
 pub mod vertex;
 pub mod view3d;

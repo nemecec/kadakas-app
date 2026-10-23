@@ -43,6 +43,8 @@ struct Root {
     materials: Vec<Material>,
     #[serde(rename = "extensionsRequired")]
     extensions_required: Vec<String>,
+    #[serde(rename = "extensionsUsed")]
+    extensions_used: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -55,6 +57,7 @@ struct Asset {
 #[serde(default)]
 struct Scene {
     nodes: Vec<usize>,
+    extensions: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Default)]
@@ -64,6 +67,7 @@ struct Node {
     mesh: Option<usize>,
     children: Vec<usize>,
     matrix: Option<Vec<f64>>,
+    extensions: Option<serde_json::Value>,
     translation: Option<Vec<f64>>,
     rotation: Option<Vec<f64>>,
     scale: Option<Vec<f64>>,
@@ -143,6 +147,16 @@ struct Pbr {
 const MAGIC: &[u8; 4] = b"glTF";
 const CHUNK_JSON: u32 = 0x4E4F_534A;
 const CHUNK_BIN: u32 = 0x004E_4942;
+/// The most nodes that one file may visit (each use of a node counts), and the deepest nesting.
+const MAX_NODE_VISITS: u64 = 100_000;
+const MAX_NODE_DEPTH: u32 = 256;
+
+fn too_many_nodes() -> MeshError {
+    MeshError::Malformed(format!(
+        "the nodes are used more than {MAX_NODE_VISITS} times in all"
+    ))
+}
+
 const REFUSED_EXTENSIONS: [&str; 4] = [
     "KHR_draco_mesh_compression",
     "EXT_meshopt_compression",
@@ -303,21 +317,21 @@ fn apply(m: &Mat, p: [f32; 3]) -> [f64; 3] {
 
 struct Data<'a> {
     root: &'a Root,
-    buffers: Vec<Vec<u8>>,
+    /// The bytes of the buffers that are not the binary chunk. Buffers that name one file share it.
+    store: Vec<Vec<u8>>,
+    /// For each buffer, its place in `store`, or `NO_STORE` for the binary chunk.
+    which: Vec<usize>,
     bin: Option<&'a [u8]>,
 }
 
+const NO_STORE: usize = usize::MAX;
+
 impl Data<'_> {
     fn buffer(&self, i: usize) -> &[u8] {
-        match self.buffers.get(i) {
-            Some(b) if !b.is_empty() => b,
-            _ => {
-                if i == 0 {
-                    self.bin.unwrap_or(&[])
-                } else {
-                    &[]
-                }
-            }
+        match self.which.get(i) {
+            Some(&k) if k != NO_STORE => &self.store[k],
+            _ if i == 0 => self.bin.unwrap_or(&[]),
+            _ => &[],
         }
     }
 
@@ -370,7 +384,7 @@ impl Data<'_> {
         let view_end = view.byte_offset.saturating_add(view.byte_length);
         if end > view_end || end > buf.len() as u64 {
             return Err(MeshError::Truncated {
-                what: format!("{what}: accessor {acc} reads past its buffer, and"),
+                what: format!("{what}: accessor {acc} (it reads past its buffer)"),
                 have: (buf.len() as u64).min(view_end),
                 need: end,
             });
@@ -456,23 +470,28 @@ struct Decoded {
     positions: Vec<[f32; 3]>,
     triangles: Vec<[u32; 3]>,
     degenerate: u64,
+    /// Indices at the end of a triangle list that do not make a whole triangle.
+    leftover: u64,
 }
 
+/// The file name of a buffer URI: percent escapes decoded to bytes, then read as UTF-8, so
+/// `caf%C3%A9.bin` and `café.bin` are the same name. A name with `..`, a drive, a colon or a
+/// start at the root is refused. A folder below the glTF file is allowed.
 fn safe_name(uri: &str) -> Option<String> {
-    let mut out = String::new();
     let b = uri.as_bytes();
+    let mut raw: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
             let h = std::str::from_utf8(&b[i + 1..i + 3]).ok()?;
-            let v = u8::from_str_radix(h, 16).ok()?;
-            out.push(v as char);
+            raw.push(u8::from_str_radix(h, 16).ok()?);
             i += 3;
         } else {
-            out.push(b[i] as char);
+            raw.push(b[i]);
             i += 1;
         }
     }
+    let out = String::from_utf8(raw).ok()?;
     let bad = out.is_empty()
         || out.starts_with('/')
         || out.starts_with('\\')
@@ -483,7 +502,9 @@ fn safe_name(uri: &str) -> Option<String> {
 }
 
 /// Reads a glTF or GLB file. `external` returns the bytes of a buffer file next to the glTF file
-/// (the name is checked: no folders, no `..`), or `None`.
+/// (the name is checked: no `..`, no colon, not from the root), or `None`. A file that several
+/// buffers name is asked for once. The bytes of all the files together are limited by
+/// `max_bytes`.
 pub fn read(
     bytes: &[u8],
     opts: &GltfOptions,
@@ -514,11 +535,15 @@ pub fn read(
         )));
     }
     let mut notes: Vec<String> = Vec::new();
-    // Buffers.
-    let mut buffers: Vec<Vec<u8>> = Vec::with_capacity(root.buffers.len());
+    // Buffers. A file that several buffers name is read once, and all files together stay
+    // within the budget of the file size and of the memory.
+    let mut store: Vec<Vec<u8>> = Vec::new();
+    let mut which: Vec<usize> = Vec::with_capacity(root.buffers.len());
+    let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut loaded = 0u64;
     for (i, b) in root.buffers.iter().enumerate() {
         match &b.uri {
-            None => buffers.push(Vec::new()),
+            None => which.push(NO_STORE),
             Some(u) if u.starts_with("data:") => {
                 let (_, data) = u.split_once(',').ok_or_else(|| {
                     MeshError::Malformed(format!("buffer {i}: the data URI has no comma"))
@@ -531,28 +556,46 @@ pub fn read(
                             "buffer {i}: the base64 text is not valid: {e}"
                         ))
                     })?;
-                buffers.push(d);
+                store.push(d);
+                which.push(store.len() - 1);
             }
             Some(u) => {
                 let name = safe_name(u).ok_or_else(|| {
                     MeshError::Malformed(format!("buffer {i}: the file name '{u}' is not allowed"))
                 })?;
-                let d = external(&name).ok_or_else(|| {
-                    MeshError::Malformed(format!("buffer {i}: the file '{name}' was not found"))
-                })?;
-                if d.len() as u64 > lim.max_bytes {
-                    return Err(MeshError::FileTooLarge {
-                        bytes: d.len() as u64,
-                        limit: lim.max_bytes,
-                    });
-                }
-                buffers.push(d);
+                let k = match by_name.get(&name) {
+                    Some(k) => *k,
+                    None => {
+                        let d = external(&name).ok_or_else(|| {
+                            MeshError::Malformed(format!(
+                                "buffer {i}: the file '{name}' was not found"
+                            ))
+                        })?;
+                        loaded += d.len() as u64;
+                        if loaded > lim.max_bytes {
+                            return Err(MeshError::FileTooLarge {
+                                bytes: loaded,
+                                limit: lim.max_bytes,
+                            });
+                        }
+                        let need = loaded.saturating_mul(2);
+                        if need > lim.max_memory {
+                            return Err(MeshError::TooMuchMemory {
+                                bytes: need,
+                                limit: lim.max_memory,
+                            });
+                        }
+                        store.push(d);
+                        by_name.insert(name, store.len() - 1);
+                        store.len() - 1
+                    }
+                };
+                which.push(k);
             }
         }
-        let have = if b.uri.is_none() {
-            bin.map_or(0, |x| x.len() as u64)
-        } else {
-            buffers[i].len() as u64
+        let have = match which[i] {
+            NO_STORE => bin.map_or(0, |x| x.len() as u64),
+            k => store[k].len() as u64,
         };
         if have < b.byte_length {
             return Err(MeshError::Truncated {
@@ -564,7 +607,8 @@ pub fn read(
     }
     let data = Data {
         root: &root,
-        buffers,
+        store,
+        which,
         bin,
     };
     // Roots of the scene.
@@ -597,22 +641,63 @@ pub fn read(
     let (mut vertex_total, mut triangle_total, mut degenerate) = (0u64, 0u64, 0u64);
     let mut skipped_modes = 0u64;
     let mut textured = 0u64;
-    let mut visits = 0u64;
-    let mut stack: Vec<(usize, Mat, u32)> = roots.iter().rev().map(|n| (*n, IDENTITY, 0)).collect();
-    while let Some((ni, parent, depth)) = stack.pop() {
-        visits += 1;
-        if depth > 256 || visits > 2_000_000 {
-            return Err(MeshError::Malformed(
-                "the nodes are nested too deep, or refer to each other in a loop".into(),
-            ));
+    let mut leftover = 0u64;
+    let mut instanced = false;
+    // The nodes are walked with an explicit stack. Every push is checked, so the stack cannot
+    // grow past the budget, a node that is on the path again is a loop, and the depth is bounded.
+    enum Step {
+        Enter(usize, Mat, u32),
+        Leave(usize),
+    }
+    let mut on_path = vec![false; root.nodes.len()];
+    let mut pushes = 0u64;
+    let mut stack: Vec<Step> = Vec::new();
+    for n in roots.iter().rev() {
+        pushes += 1;
+        if pushes > MAX_NODE_VISITS {
+            return Err(too_many_nodes());
         }
+        stack.push(Step::Enter(*n, IDENTITY, 0));
+    }
+    while let Some(step) = stack.pop() {
+        let (ni, parent, depth) = match step {
+            Step::Leave(n) => {
+                on_path[n] = false;
+                continue;
+            }
+            Step::Enter(n, m, d) => (n, m, d),
+        };
         let node = root
             .nodes
             .get(ni)
             .ok_or_else(|| MeshError::Malformed(format!("node {ni} does not exist")))?;
+        if on_path[ni] {
+            return Err(MeshError::Malformed(format!(
+                "node {ni} is its own descendant: the nodes refer to each other in a loop"
+            )));
+        }
         let world = mul(&parent, &node_matrix(node, ni)?);
+        on_path[ni] = true;
+        stack.push(Step::Leave(ni));
+        if !node.children.is_empty() && depth + 1 > MAX_NODE_DEPTH {
+            return Err(MeshError::Malformed(format!(
+                "the nodes are nested more than {MAX_NODE_DEPTH} deep"
+            )));
+        }
         for c in node.children.iter().rev() {
-            stack.push((*c, world, depth + 1));
+            pushes += 1;
+            if pushes > MAX_NODE_VISITS {
+                return Err(too_many_nodes());
+            }
+            stack.push(Step::Enter(*c, world, depth + 1));
+        }
+        if node
+            .extensions
+            .as_ref()
+            .and_then(|e| e.as_object())
+            .is_some_and(|o| o.contains_key("EXT_mesh_gpu_instancing"))
+        {
+            instanced = true;
         }
         let Some(mi) = node.mesh else { continue };
         let mesh = root
@@ -679,12 +764,14 @@ pub fn read(
                     positions,
                     triangles: tris,
                     degenerate: dropped,
+                    leftover: if mode == 4 { (raw.len() % 3) as u64 } else { 0 },
                 });
             }
             let dec = &cache[&(mi, pi)];
             vertex_total += dec.positions.len() as u64;
             triangle_total += dec.triangles.len() as u64;
             degenerate += dec.degenerate;
+            leftover += dec.leftover;
             lim.check_counts(vertex_total, triangle_total)?;
             let name = node
                 .name
@@ -726,6 +813,22 @@ pub fn read(
             }));
         }
     }
+    if leftover > 0 {
+        notes.push(format!(
+            "{leftover} indices at the end of a triangle list did not make a whole triangle and were left out"
+        ));
+    }
+    if instanced
+        || root
+            .extensions_used
+            .iter()
+            .any(|e| e == "EXT_mesh_gpu_instancing")
+    {
+        notes.push(
+            "the file uses EXT_mesh_gpu_instancing: the instances are not expanded, each node is read once"
+                .to_string(),
+        );
+    }
     if skipped_modes > 0 {
         notes.push(format!(
             "{skipped_modes} primitives of points or lines were skipped"
@@ -736,7 +839,17 @@ pub fn read(
             "{textured} materials have a texture: textures are not read, the base color is kept"
         ));
     }
-    MeshSet::finish(Format::Gltf, FRAME, parts, degenerate, notes, lim)
+    let mut set = MeshSet::finish(Format::Gltf, FRAME, parts, degenerate, notes, lim)?;
+    // Kadakas writes where the local origin of the file is in the model (millimeters).
+    set.origin_mm = root
+        .scenes
+        .iter()
+        .filter_map(|s| s.extensions.as_ref())
+        .filter_map(|e| e.get("KADAKAS_georeference")?.get("local_origin"))
+        .filter_map(|v| serde_json::from_value::<Vec<f64>>(v.clone()).ok())
+        .find(|v| v.len() == 3 && v.iter().all(|x| x.is_finite()))
+        .map(|v| [v[0], v[1], v[2]]);
+    Ok(set)
 }
 
 fn material_of(root: &Root, m: Option<usize>, textured: &mut u64) -> (Option<[u8; 4]>, String) {

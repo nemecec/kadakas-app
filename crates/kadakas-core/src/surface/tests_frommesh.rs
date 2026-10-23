@@ -457,6 +457,68 @@ fn the_result_is_deterministic_and_survives_edits() {
     assert!(m.area() < a.model.area());
 }
 
+/// The mesh of a model is watertight: every edge of the triangles is used twice, once each way.
+fn watertight(m: &SurfaceModel) -> bool {
+    let mesh = m.mesh().unwrap();
+    let mut uses: std::collections::HashMap<(u32, u32), i32> = std::collections::HashMap::new();
+    for t in &mesh.triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *uses.entry((a.min(b), a.max(b))).or_default() += if a < b { 1 } else { -1 };
+        }
+    }
+    let mut twice = std::collections::HashMap::new();
+    for t in &mesh.triangles {
+        for k in 0..3 {
+            let (a, b) = (t[k], t[(k + 1) % 3]);
+            *twice.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+        }
+    }
+    uses.values().all(|v| *v == 0) && twice.values().all(|n| *n == 2)
+}
+
+#[test]
+fn a_face_with_collinear_corners_has_no_triangle_without_area() {
+    // A U shaped prism: the outline has corners on the line between two others.
+    let pts = [
+        [0.0, 0.0],
+        [1000.0, 0.0],
+        [2000.0, 0.0],
+        [3000.0, 0.0],
+        [3000.0, 3000.0],
+        [2000.0, 3000.0],
+        [2000.0, 1000.0],
+        [1000.0, 1000.0],
+        [1000.0, 3000.0],
+        [0.0, 3000.0],
+    ];
+    let mut m = SurfaceModel::new();
+    let edges = (0..pts.len())
+        .map(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            [[a[0], a[1], 0.0], [b[0], b[1], 0.0]]
+        })
+        .collect();
+    m.apply(&Edit::AddEdges { edges }).unwrap();
+    let face = m.faces().next().unwrap().0;
+    m.apply(&Edit::PushPull {
+        face,
+        distance: 500.0,
+    })
+    .unwrap();
+    assert!(m.check().is_closed());
+    let mesh = m.mesh().unwrap();
+    // Every triangle has an area, and together they close the solid: two caps of 10 corners
+    // (8 triangles each) and 10 sides of 2 triangles.
+    for t in &mesh.triangles {
+        let p = |i: u32| mesh.positions[i as usize];
+        let area = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0])).length();
+        assert!(area > 1.0, "a triangle without area: {t:?}");
+    }
+    assert_eq!(mesh.triangles.len(), 2 * 8 + 10 * 2);
+    assert!(watertight(&m));
+}
+
 mod props {
     use super::*;
     use proptest::prelude::*;
@@ -511,4 +573,28 @@ mod props {
             prop_assert!(c.model.check().is_valid());
         }
     }
+}
+
+#[test]
+fn a_double_sided_mesh_loses_its_second_side_and_is_not_a_solid() {
+    let (v, t) = cube(1000.0);
+    // Every triangle again, turned over.
+    let mut both = t.clone();
+    both.extend(t.iter().map(|t| [t[0], t[2], t[1]]));
+    let r = surface_from_triangles(&v, &both, &ConvertOptions::default()).unwrap();
+    assert_eq!(r.report.reversed_triangles, 12);
+    assert_eq!(r.report.faces, 6);
+    assert!(r.report.closed, "the cube itself is closed");
+    assert!(r.notes.iter().any(|n| n.contains("double sided")));
+    // A single square sheet in both directions has no volume.
+    let sheet = vec![
+        DVec3::ZERO,
+        DVec3::X * 100.0,
+        DVec3::new(100.0, 100.0, 0.0),
+        DVec3::Y * 100.0,
+    ];
+    let tris = vec![[0, 1, 2], [0, 2, 3]];
+    let r = surface_from_triangles(&sheet, &tris, &ConvertOptions::default()).unwrap();
+    assert!(!r.report.closed);
+    assert_eq!(r.report.reversed_triangles, 0);
 }

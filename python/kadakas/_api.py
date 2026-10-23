@@ -3487,13 +3487,13 @@ class Api:
         return self._call("report.areas", params or None)
 
     def import_file(self, **params: "Unpack[ImportFileParams]") -> Any:
-        """Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON or IFC. params: {path, format?: dxf|dwg|shp|geojson|ifc (default: from the extension), options?}. See describe.io for the options of each format. Returns {imported, skipped, report, georeference}.
+        """Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC, or a triangle mesh (OBJ, STL, glTF or GLB). params: {path, format?: dxf|dwg|shp|geojson|ifc|obj|stl|gltf|glb (default: from the extension), options?}. See describe.io for the options of each format (describe.io.mesh_files.import for meshes: unit, up_axis, to_surface, soften_below_angle, preview). Returns {imported, skipped, report, georeference}. A mesh or IFC import also returns softened_edges (0 when nothing was softened), and report.to_surface when it converted meshes into surface models: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, notes, and the counts of what the conversion dropped}.
 
         JSON-RPC method ``import.file``."""
         return self._call("import.file", params or None)
 
     def export_file(self, **params: "Unpack[ExportFileParams]") -> Any:
-        """Export the document to a file: DXF, GeoJSON, DWG (needs a converter), IFC (IFC4, IFC2X3 or IFC4X3), glTF, GLB or OBJ (3D), or a sheet as PDF, SVG or PNG. params: {path, format?: dxf|geojson|dwg|ifc|gltf|glb|obj|pdf|sheet_svg|sheet_png (default: from the extension; the sheet formats need format), options?, overwrite? (replace an existing file; a server for agents needs it)}. See describe.io for the options of each format. Returns {path, exported, report}.
+        """Export the document to a file: DXF, GeoJSON, DWG (needs a converter), IFC (IFC4, IFC2X3 or IFC4X3), glTF, GLB, OBJ or STL (3D), or a sheet as PDF, SVG or PNG. params: {path, format?: dxf|geojson|dwg|ifc|gltf|glb|obj|stl|pdf|sheet_svg|sheet_png (default: from the extension; the sheet formats need format), options?, overwrite? (replace an existing file; a server for agents needs it)}. See describe.io for the options of each format. Returns {path, exported, report}.
 
         JSON-RPC method ``export.file``."""
         return self._call("export.file", params or None)

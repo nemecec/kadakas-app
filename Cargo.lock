@@ -3256,6 +3256,7 @@ dependencies = [
  "glam",
  "kadakas-api",
  "kadakas-core",
+ "kadakas-l10n",
  "kadakas-render",
  "kadakas-review",
  "kadakas-ui-core",

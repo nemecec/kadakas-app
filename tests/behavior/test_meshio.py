@@ -132,8 +132,11 @@ def test_dxf_export_of_surface_models_passes_the_ezdxf_audit(cad, tmp_path):
             assert len(list(mesh.faces)) >= 20
             zs = sorted({round(v[2]) for v in mesh.vertices})
             assert zs == [0, 500]
+        assert doc.dxfversion == "AC1018", "the MESH entity is audited in the 2004 file"
         if entity == "face3d":
             assert len(found) >= 20
+            # The diagonals that cut a face into triangles are not drawn.
+            assert any(f.dxf.invisible_edges for f in found)
             assert {round(p[2]) for f in found for p in f.wcs_vertices()} == {0, 500}
     assert counts["polyface"] == 1 and counts["mesh"] == 1
 
@@ -340,3 +343,48 @@ def test_describe_lists_the_mesh_formats_and_the_soften_option(cad):
         assert needle in text, needle
     assert "mesh.to_surface" in json.dumps(d["mesh"])
     assert "mesh_too_large_for_surface" in d["mesh"]["errors"]
+
+
+def u_prism(cad):
+    """A U shaped prism: the outline has corners on a line between two others."""
+    model = cad.result("mesh.create", {"name": "U"})["id"]
+    pts = [[0, 0], [1000, 0], [2000, 0], [3000, 0], [3000, 3000], [2000, 3000], [2000, 1000], [1000, 1000], [1000, 3000], [0, 3000]]
+    edges = [[[*pts[i], 0], [*pts[(i + 1) % len(pts)], 0]] for i in range(len(pts))]
+    face = cad.result("mesh.add_edges", {"id": model, "edges": edges})["created"]["faces"][0]
+    cad.result("mesh.push_pull", {"id": model, "face": face, "distance": 500})
+    return model
+
+
+def test_a_closed_solid_gives_a_watertight_stl(cad, tmp_path):
+    model = u_prism(cad)
+    assert cad.result("mesh.solid_report", {"id": model})["closed"]
+    out = tmp_path / "u.stl"
+    r = cad.result("export.file", {"path": str(out), "options": {"objects": [model]}})
+    assert r["report"]["triangles"] == 36 and r["report"]["leaky_models"] == 0
+    data = out.read_bytes()
+    n = struct.unpack("<I", data[80:84])[0]
+    uses = {}
+    for i in range(n):
+        rec = data[84 + 50 * i: 84 + 50 * (i + 1)]
+        pts = [struct.unpack("<3f", rec[12 + 12 * k: 24 + 12 * k]) for k in range(3)]
+        for k in range(3):
+            a, b = pts[k], pts[(k + 1) % 3]
+            key = (min(a, b), max(a, b))
+            uses[key] = uses.get(key, 0) + 1
+    assert set(uses.values()) == {2}, "every edge is shared by two triangles"
+    back = cad.result("import.file", {"path": str(out), "options": {"to_surface": True}})
+    shell = cad.result("mesh.solid_report", {"id": back["report"]["objects"][0]["id"]})
+    assert shell["closed"] is True
+
+
+def test_the_model_returns_to_its_place_after_a_round_trip(cad, tmp_path):
+    model = cad.result("mesh.create", {"name": "Far", "origin": [25000, 41000, 3000]})["id"]
+    cad.result("mesh.add_edges", {"id": model, "edges": [
+        [[0, 0, 0], [1000, 0, 0]], [[1000, 0, 0], [1000, 1000, 0]], [[1000, 1000, 0], [0, 1000, 0]], [[0, 1000, 0], [0, 0, 0]]]})
+    want = cad.result("mesh.bounds", {"id": model})["world"]
+    for name in ("far.obj", "far.glb", "far.stl"):
+        out = tmp_path / name
+        cad.result("export.file", {"path": str(out), "options": {"objects": [model]}})
+        back = cad.result("import.file", {"path": str(out)})
+        assert back["report"]["bounds_mm"]["min"] == approx(want["min"], abs=0.01), name
+        assert back["report"]["bounds_mm"]["max"] == approx(want["max"], abs=0.01), name

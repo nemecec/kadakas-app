@@ -68,7 +68,7 @@ pub fn read(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
 
 /// Joins equal corners.
 struct Welder {
-    map: HashMap<[u32; 3], u32>,
+    map: HashMap<[u64; 3], u32>,
     positions: Vec<[f64; 3]>,
 }
 
@@ -80,7 +80,7 @@ impl Welder {
         }
     }
 
-    fn add(&mut self, key: [u32; 3], p: [f64; 3]) -> u32 {
+    fn add(&mut self, key: [u64; 3], p: [f64; 3]) -> u32 {
         *self.map.entry(key).or_insert_with(|| {
             self.positions.push(p);
             (self.positions.len() - 1) as u32
@@ -88,7 +88,7 @@ impl Welder {
     }
 }
 
-fn bits(v: f32) -> u32 {
+fn bits(v: f64) -> u64 {
     // -0.0 and 0.0 are one value.
     if v == 0.0 { 0 } else { v.to_bits() }
 }
@@ -109,7 +109,7 @@ fn read_binary(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
     let mut notes = Vec::new();
     if (bytes.len() as u64) < need {
         return Err(MeshError::Truncated {
-            what: format!("the file says {n} triangles, and"),
+            what: format!("the STL data (the header says {n} triangles)"),
             have: bytes.len() as u64,
             need,
         });
@@ -147,7 +147,7 @@ fn read_binary(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
                 lim,
                 &|| format!("triangle {}", i + 1),
             )?;
-            *slot = w.add([bits(v[0]), bits(v[1]), bits(v[2])], p);
+            *slot = w.add([bits(p[0]), bits(p[1]), bits(p[2])], p);
             if w.positions.len() as u64 > lim.max_vertices {
                 return Err(MeshError::TooManyVertices {
                     count: w.positions.len() as u64,
@@ -228,7 +228,7 @@ fn read_ascii(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
             "endsolid" => {
                 if in_facet {
                     return Err(MeshError::Truncated {
-                        what: format!("line {line_no}: a facet is not closed, and"),
+                        what: format!("line {line_no}: a facet"),
                         have: line_no as u64,
                         need: line_no as u64 + 1,
                     });
@@ -245,6 +245,17 @@ fn read_ascii(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
                 }
             }
             "facet" => {
+                if !open {
+                    // Facets after an endsolid line, or in a file with no solid line.
+                    open = true;
+                    name.clear();
+                    if !parts.is_empty() && !notes.iter().any(|n: &String| n.contains("after")) {
+                        notes.push(
+                            "facets after an endsolid line were put in a part of their own"
+                                .to_string(),
+                        );
+                    }
+                }
                 if in_facet {
                     return Err(MeshError::Malformed(format!(
                         "line {line_no}: a facet starts before the last one ends"
@@ -259,7 +270,7 @@ fn read_ascii(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
                         "line {line_no}: a vertex outside a triangle, or a fourth vertex"
                     )));
                 }
-                let mut v = [0.0f32; 3];
+                let mut v = [0.0f64; 3];
                 let mut it = rest.split_whitespace();
                 for slot in v.iter_mut() {
                     let t = it.next().ok_or_else(|| {
@@ -271,13 +282,10 @@ fn read_ascii(bytes: &[u8], opts: &StlOptions) -> Result<MeshSet, MeshError> {
                         MeshError::Malformed(format!("line {line_no}: '{t}' is not a number"))
                     })?;
                 }
-                let p = model_point(
-                    opts.frame,
-                    [v[0] as f64, v[1] as f64, v[2] as f64],
-                    lim,
-                    &|| format!("the vertex on line {line_no}"),
-                )?;
-                let id = welder.add([bits(v[0]), bits(v[1]), bits(v[2])], p);
+                let p = model_point(opts.frame, v, lim, &|| {
+                    format!("the vertex on line {line_no}")
+                })?;
+                let id = welder.add([bits(p[0]), bits(p[1]), bits(p[2])], p);
                 corners.push(id);
                 if all_vertices + welder.positions.len() as u64 > lim.max_vertices {
                     return Err(MeshError::TooManyVertices {

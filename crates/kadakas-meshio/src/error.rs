@@ -14,7 +14,7 @@ pub enum MeshError {
     TooMuchMemory { bytes: u64, limit: u64 },
     #[error("the file has {count} parts, more than the limit of {limit}")]
     TooManyParts { count: u64, limit: u64 },
-    #[error("{what}: the file ends too soon (it has {have} of {need} bytes)")]
+    #[error("{what} ends too soon: found {have}, needed {need}")]
     Truncated { what: String, have: u64, need: u64 },
     #[error("{0}")]
     Malformed(String),

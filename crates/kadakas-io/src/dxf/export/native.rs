@@ -379,6 +379,7 @@ fn dimension(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) -> 
 }
 
 /// A triangle mesh as one or more polyface meshes, or as one 3DFACE per triangle.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mesh(
     w: &mut W,
     cx: &Ctx,
@@ -387,13 +388,17 @@ pub(super) fn mesh(
     hidden: bool,
     vertices: &[DVec3],
     triangles: &[[u32; 3]],
+    shown: Option<&[[bool; 3]]>,
 ) {
+    // Whether the edge `k` of triangle `i` is drawn: the edges of the faces of a surface model
+    // are, the diagonals that cut a face into triangles and the soft edges are not.
+    let drawn = |i: usize, k: usize| shown.is_none_or(|s| s[i][k]);
     if cx.mesh_entity == crate::options::MeshEntity::Mesh {
         mesh_entity(w, cx, o, layer, hidden, vertices, triangles);
         return;
     }
     if cx.mesh_entity == crate::options::MeshEntity::Face3d {
-        for t in triangles {
+        for (i, t) in triangles.iter().enumerate() {
             let p = |i: u32| vertices[i as usize];
             common(w, "3DFACE", layer, o, hidden);
             w.pair(100, "AcDbFace");
@@ -401,23 +406,42 @@ pub(super) fn mesh(
                 let q = p(c);
                 cx.pt3(w, 10 + k as i32, q.x, q.y, q.z);
             }
+            // Group 70: bit 1 hides the edge 1-2, bit 2 the edge 2-3, bit 8 the edge 4-1 (the
+            // third side of a triangle, as the fourth corner repeats the third).
+            let flags: i32 = [(0, 1), (1, 2), (2, 8)]
+                .iter()
+                .filter(|(k, _)| !drawn(i, *k))
+                .map(|(_, bit)| bit)
+                .sum();
+            if flags != 0 {
+                w.pair(70, flags);
+            }
         }
         return;
     }
     for run in polyface_runs(triangles) {
+        let run_start = run.start;
         let chunk = &triangles[run];
         // The vertices of this piece, numbered again from 1.
         let mut map = std::collections::HashMap::new();
         let mut used: Vec<u32> = Vec::new();
         let faces: Vec<[i32; 3]> = chunk
             .iter()
-            .map(|t| {
-                t.map(|i| {
+            .enumerate()
+            .map(|(j, t)| {
+                let mut f = t.map(|i| {
                     *map.entry(i).or_insert_with(|| {
                         used.push(i);
                         used.len() as i32
                     })
-                })
+                });
+                // A negative index hides the edge from this corner to the next one.
+                for (k, c) in f.iter_mut().enumerate() {
+                    if !drawn(run_start + j, k) {
+                        *c = -*c;
+                    }
+                }
+                f
             })
             .collect();
         common(w, "POLYLINE", layer, o, hidden);
@@ -503,7 +527,7 @@ fn mesh_entity(
 
 /// The mesh of a mesh object.
 pub(super) fn mesh_object(w: &mut W, cx: &Ctx, o: &Object, layer: &str, hidden: bool, m: &Mesh3d) {
-    mesh(w, cx, o, layer, hidden, &m.vertices, &m.triangles);
+    mesh(w, cx, o, layer, hidden, &m.vertices, &m.triangles, None);
 }
 
 /// The CRS alias that a GEODATA object names: `EPSG:3067` for an EPSG code. `None` for other CRSs.

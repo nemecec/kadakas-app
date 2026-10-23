@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 
 use kadakas_api::Session;
 use kadakas_ui_core::mesh_import::{self, MeshImportForm, Preview, SoftenPref};
+use kadakas_view3d::import_widgets::{mesh_options, soften_question};
 use serde_json::{Map, Value, json};
 
-pub(crate) const UNITS: &[&str] = &["mm", "cm", "m", "km", "inch", "foot", "yard", "mile"];
+pub(crate) const UNITS: &[&str] = mesh_import::UNITS;
 
 /// Which kind of file an import has, by its extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -556,25 +557,21 @@ impl IoUi {
                                 &mut form.ifc_terrain_mesh,
                                 tr!("io-dialog-terrain-as-a-3d-mesh-default-a"),
                             );
-                            if soften_question(ui, &mut form.ifc_soften, None) {
-                                *soften = form.ifc_soften;
-                            }
+                            soften_question(ui, &mut form.ifc_soften, None);
                             if form.ifc_soften.on {
                                 ui.label(tr!("meshio-ui-ifc-soften-hint"));
                             }
                         }
                         Kind::Mesh => {
                             if let Some(m) = form.mesh.as_mut() {
-                                mesh_options(ui, m);
+                                mesh_options(ui, m, "app_import");
                                 let text = match &self.preview {
                                     Some((k, p)) if *k == (m.path.clone(), m.preview_key()) => {
                                         Some(p.text())
                                     }
                                     _ => Some(tr!("meshio-ui-preview-counting")),
                                 };
-                                if soften_question(ui, &mut m.soften, text) {
-                                    *soften = m.soften;
-                                }
+                                soften_question(ui, &mut m.soften, text);
                             }
                         }
                         Kind::Gis => {
@@ -631,20 +628,26 @@ impl IoUi {
                 .filter(|_| kind_of(&form.path) == Kind::Mesh && !run && !close)
                 .cloned();
             if run {
+                // The answer is kept only when the person imports.
+                *soften = match &form.mesh {
+                    Some(m) => m.soften,
+                    None => form.ifc_soften,
+                };
                 let form = form.clone();
                 event = self.run_import(session, form, status);
             }
             if run || close {
                 self.import = None;
-            } else if let Some(m) = wanted.filter(|_| idle) {
+            } else if let Some(m) = wanted.filter(|m| idle && m.soften.on) {
                 let key = (m.path.clone(), m.preview_key());
                 if self.preview.as_ref().map(|(k, _)| k) != Some(&key) {
-                    let p = match session.import_file_trusted(m.params(true)) {
-                        Ok(r) => Preview::from_result(&r),
-                        Err(e) => Preview::Failed(e.message),
-                    };
-                    self.preview = Some((key, p));
-                    ctx.request_repaint();
+                    let p = mesh_import::compute_preview(&m, |params| {
+                        session.import_file_trusted(params).map_err(|e| e.message)
+                    });
+                    if let Some(p) = p {
+                        self.preview = Some((key, p));
+                        ctx.request_repaint();
+                    }
                 }
             }
         }
@@ -755,87 +758,6 @@ impl IoUi {
         }
         event
     }
-}
-
-/// The unit and the up axis of the file, and moving the model to the origin.
-fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm) {
-    if m.kind.takes_frame() {
-        ui.horizontal(|ui| {
-            ui.label(tr!("meshio-ui-unit"));
-            let label = match m.unit {
-                None => tr!(
-                    "meshio-ui-unit-default",
-                    unit = mesh_import::unit_name(m.kind.default_unit())
-                ),
-                Some(i) => mesh_import::unit_name(mesh_import::UNITS[i]),
-            };
-            egui::ComboBox::from_id_salt("import_mesh_unit")
-                .selected_text(label)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut m.unit,
-                        None,
-                        tr!(
-                            "meshio-ui-unit-default",
-                            unit = mesh_import::unit_name(m.kind.default_unit())
-                        ),
-                    );
-                    for (i, u) in mesh_import::UNITS.iter().enumerate() {
-                        ui.selectable_value(&mut m.unit, Some(i), mesh_import::unit_name(u));
-                    }
-                });
-        });
-        ui.horizontal(|ui| {
-            ui.label(tr!("meshio-ui-up-axis"));
-            let default = if m.kind.default_y_up() {
-                tr!("meshio-ui-up-default-y")
-            } else {
-                tr!("meshio-ui-up-default-z")
-            };
-            let label = match m.y_up {
-                None => default.clone(),
-                Some(true) => tr!("meshio-ui-up-y"),
-                Some(false) => tr!("meshio-ui-up-z"),
-            };
-            egui::ComboBox::from_id_salt("import_mesh_up")
-                .selected_text(label)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut m.y_up, None, default);
-                    ui.selectable_value(&mut m.y_up, Some(true), tr!("meshio-ui-up-y"));
-                    ui.selectable_value(&mut m.y_up, Some(false), tr!("meshio-ui-up-z"));
-                });
-        });
-    } else {
-        ui.label(tr!("meshio-ui-gltf-fixed"));
-    }
-    ui.checkbox(&mut m.center, tr!("meshio-ui-center"));
-}
-
-/// The question "Soften edges under an angle?": a check box, the angle, the hint, and under it
-/// the line of the preview if there is one. Returns true when the answer changed.
-fn soften_question(ui: &mut egui::Ui, pref: &mut SoftenPref, preview: Option<String>) -> bool {
-    let mut changed = false;
-    ui.separator();
-    changed |= ui
-        .checkbox(&mut pref.on, tr!("meshio-ui-soften-question"))
-        .changed();
-    if pref.on {
-        ui.horizontal(|ui| {
-            ui.label(tr!("meshio-ui-soften-angle"));
-            let r = ui.add(
-                egui::DragValue::new(&mut pref.angle)
-                    .range(0.0..=180.0)
-                    .speed(0.5)
-                    .suffix("\u{b0}"),
-            );
-            changed |= r.changed();
-        });
-        ui.label(egui::RichText::new(tr!("meshio-ui-soften-hint")).weak());
-        if let Some(text) = preview {
-            ui.label(text);
-        }
-    }
-    changed
 }
 
 #[cfg(test)]
