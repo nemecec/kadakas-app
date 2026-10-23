@@ -293,3 +293,73 @@ Measured once (release build, Apple M1 Pro, one run each, load average about 5 f
 | Split | 2.5 s | 52,351 |
 
 The same test checks that `vol(A union B) + vol(A intersect B) = vol(A) + vol(B)` and `vol(A subtract B) + vol(A intersect B) = vol(A)` hold on this model. Dense meshes show a case that small models do not: the pieces next to the cut can be thin slivers that touch the other surface within the plane tolerance. A piece is placed by the place that holds at least 80 percent of its area, so such a sliver does not refuse the operation. This is one measurement, not a campaign. A campaign that finds which step costs most is not done. No limit value changes.
+
+## D. Drawing of surface models in the app (MOD-13)
+
+This section measures the drawing of a model at the size of the limits (55,000 vertices, 150,000 edges, 100,000 faces). It chooses new limits, and says how. They are guards for time, like the guards above. They do not change a limit of the model.
+
+Method. Release build, Apple M1 Pro. One run each. The load average was about 5 from other work. Models of 100,000 faces: a bumpy terrain (223 x 223 squares cut in two, 50,176 vertices, 149,633 edges, 99,458 faces, open) and a closed ball (160 meridians, 313 parallels, 49,922 vertices, 149,760 edges, 99,840 faces). Models of 20,000 faces, the size just under the limit of the plan: a terrain of 100 x 100 squares (30,200 edges) and a ball (100 meridians, 100 parallels, 29,700 edges, 19,800 faces). The code is `crates/kadakas-print/tests/surface_perf.rs` and `time_of_the_plan_on_the_screen` and `time_of_5000_instances` in `crates/kadakas-app/src/surface_draw.rs` (all `--ignored`).
+
+### D1. Times
+
+```text
+What                                             Terrain 100k  Ball 100k  Terrain 20k  Ball 20k
+-----------------------------------------------  ------------  ---------  -----------  --------
+Plan geometry, the outline (the limit applies)   59 ms         61 ms      10 ms        .
+Plan geometry, every face and edge, ordered      173 ms        247 ms     29 ms        41 ms
+  the same without the order of overlaps         113 ms        92 ms      17 ms        .
+Faces cut in triangles for the screen (once)     13 ms         .          1.9 ms       .
+Mesh for a frame, every face (app)               4.1 ms        .          0.6 ms       .
+Tessellation of that mesh (egui)                 2.5 ms        .          0.7 ms       .
+Hit test (a click)                               3.1 ms        1.5 ms     0.6 ms       0.2 ms
+Snap points near the pointer (400 mm), first     71 ms         72 ms      12 ms        5.4 ms
+Object Info, counts                              26 ms         26 ms      4.7 ms       4.6 ms
+Object Info, closed-solid check                  1.5 s         1.7 s      0.23 s       0.24 s
+3D scene, mesh::build                            168 ms        170 ms     33 ms        33 ms
+Sheet, plan viewport (compose_page)              60 ms         60 ms      11 ms        44 ms
+Sheet, plan viewport as SVG                      .             .          .            53 ms
+Sheet, plan viewport as PDF                      60 ms         61 ms      11 ms        88 ms
+Section drawing (cut and edges beyond)           272 ms        199 ms     71 ms        42 ms
+```
+
+The plan of an object is made once for each revision of the document, with the faces already cut into triangles. A frame then pays for the mesh and the tessellation. At 100,000 faces that is 6.6 ms for 675,000 vertices, at 20,000 faces 1.3 ms. The first snap of a big model makes its outline (60 ms) and keeps it for the next moves of the pointer.
+
+The order of overlapping faces costs 12 ms at 20,000 faces of a terrain (a flat grid of faces side by side has few overlaps) and 155 ms at 100,000 faces of a ball (a ball has two layers of faces over each other). Without the grid of boxes that finds the pairs, the ball took 1.7 s.
+
+The check of the closed solid takes 1.5 to 3.2 s at the limits, as the first report found for the full check. It is not run by itself above the budget (D3).
+
+### D2. The hidden-line viewport, before and after the thinning of lines
+
+```text
+Hidden-line viewport    Terrain before  Terrain after  Ball before  Ball after
+----------------------  --------------  -------------  -----------  ----------
+Top                     672 ms          241 ms         469 ms       251 ms
+Right isometric         338 ms          240 ms         468 ms       246 ms
+Front                   2,336 ms        490 ms         856 ms       243 ms
+Section viewport        606 ms          278 ms         242 ms       200 ms
+```
+
+A viewport that takes over 1 s is the front view of the terrain: 150,000 lines, and every triangle covers the others edge-on. The pass cost 1.6 s for the lines and 0.3 s for the covers and the edges of the mesh. The time grows faster than the number of lines (20,000 faces and 30,200 lines took 0.15 s, which is 10.8 times less for 5 times fewer lines). So `kadakas_render::hlr` leaves out the lines of an object that has triangles and more than 50,000 lines, and draws it by the silhouettes, creases and borders of its mesh (the terrain keeps 3,000 of its 150,000 edges in the front view). That is 0.5 s at most in these measurements. The line list of a pass is also held to 150,000 lines: the objects with most lines go first. A model of 33,000 faces or fewer keeps all its edges. The sheets, the sections and `render.png` use the same pass, and each of them says when it left edges out (`HiddenLines::thinned_objects`).
+
+### D3. The limits that were chosen
+
+| Constant | Value | Why |
+|---|---|---|
+| `surface::plan::MAX_FACES` | 20,000 | The plan of every object is made again after every edit of the document (the cache is for a revision). 20,000 faces cost 29 to 41 ms for each model, 100,000 faces 170 to 250 ms. A frame at 100,000 faces would cost 6.6 ms, which would be fine, but the rebuild after an edit is not. |
+| `surface::plan::MAX_EDGES` | 30,000 | A triangulated mesh has 1.5 edges for each face, so 20,000 faces have 30,000 edges. The edge limit binds first for terrain and curved surfaces. |
+| `surface::plan::MAX_OUTLINE_EDGES` | 20,000 | The outline of a model over the first two limits. A longer outline (many separate pieces) is the box. |
+| `surface_draw::FRAME_VERTEX_BUDGET` | 400,000 vertices | The mesh and the tessellation of 675,000 vertices took 6.6 ms. A frame has 16 ms, and the rest of it is for the other objects and the palettes, so the surface models of a frame get about 4 ms here and three times that on a slower machine. An object that would pass the budget is drawn as its box and says so. |
+| `surface_draw` cache | 8,192 plans | Plans are small (a box is 40 vertices). Older revisions go first, then the quarter that was used least recently. |
+| `hlr::MAX_OBJECT_LINES`, `hlr::MAX_LINES` | 50,000 and 150,000 | The rule of about 1 s for a viewport (D2). |
+| `surface::info::AUTO_CHECK_FACES`, `LIST_CHECK_FACES` | 20,000 and 60,000 faces in one answer | The closed-solid check costs 0.23 s at 20,000 faces and 1.5 s or more at 100,000. The budget counts the faces of all models of the answer, and a model that was checked and has not changed costs nothing. |
+
+The plan limits apply to the screen, the sheets and the SVG alike (AGR-01). A sheet could draw more, because it draws once, but a print that shows more than the screen is a surprise.
+
+### D4. Many instances
+
+5,000 instances of one definition (a box, 40 vertices each): the first frame makes the 5,000 plans, cuts their faces and draws them in 33 ms. A frame from the cache takes 2.7 ms for 200,000 vertices. The 5,000 plans stay in the cache. The first frame is the one after every edit.
+
+### D5. What is not measured
+
+- Instances of a definition with thousands of parts. The parts are shared, and the plan of an instance costs the work for its parts.
+- Debug builds. They are about ten times slower. The tests use small models.

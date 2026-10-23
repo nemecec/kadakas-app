@@ -126,7 +126,7 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 ### DXF
 
-A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file stays release 2004 (`AC1018`) with its code page, and the audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas does not read the MESH entity.
+A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file stays release 2004 (`AC1018`) with its code page, and the audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas does not read the MESH entity.
 
 ## Code
 
@@ -158,4 +158,4 @@ The parsers are written for Kadakas. No new third-party crate was added, so the 
 - Colors of single triangles of an STL file, vertex colors and normals are not read.
 - glTF with Draco, Meshopt or quantized data, and sparse accessors, are refused.
 - The DXF MESH entity is written and not read.
-- Component instances are not exported to IFC and DXF. Explode them first.
+- Component instances are not exported to IFC. Explode them first. DXF writes them (MOD-13).

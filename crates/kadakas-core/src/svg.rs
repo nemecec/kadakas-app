@@ -380,6 +380,70 @@ fn legend_svg(rows: &[SvgLegendRow], lo: DVec2, hi: DVec2, dark: bool, s: &mut S
     s.push_str("</g>\n");
 }
 
+/// The plan drawing of a surface model or an instance as SVG: a group with the style of the object,
+/// the faces in their colours and the edges in the pen, in the order of the drawing. `flat` gives
+/// every face one colour (a compare tint).
+fn plan_svg(
+    s: &mut String,
+    d: &crate::surface::plan::PlanDrawing,
+    style: &str,
+    kind: &str,
+    flat: Option<&str>,
+) -> std::fmt::Result {
+    use crate::surface::plan::{Detail, PlanItem};
+    if d.items.is_empty() {
+        return Ok(());
+    }
+    let detail = match d.detail {
+        Detail::Full => "full",
+        Detail::Outline => "outline",
+        Detail::Box => "box",
+    };
+    writeln!(
+        s,
+        r#"<g {style} data-kind="{kind}" data-detail="{detail}" data-faces="{}" data-edges="{}">"#,
+        d.faces(),
+        d.edges()
+    )?;
+    let mut edges = String::new();
+    let flush = |s: &mut String, edges: &mut String| {
+        if !edges.is_empty() {
+            let _ = writeln!(s, r#"<path d="{}" fill="none"/>"#, edges.trim_end());
+            edges.clear();
+        }
+    };
+    for item in &d.items {
+        match item {
+            PlanItem::Edge(a, b) => {
+                let _ = write!(edges, "M {} {} L {} {} ", a.x, -a.y, b.x, -b.y);
+            }
+            PlanItem::Face(f) => {
+                flush(s, &mut edges);
+                if flat.is_none() && f.color[3] == 0 {
+                    continue;
+                }
+                let color = flat.map_or_else(|| Color(f.color).to_css(), str::to_string);
+                let path: String = f
+                    .rings
+                    .iter()
+                    .map(|r| {
+                        let pts: Vec<String> =
+                            r.iter().map(|p| format!("{} {}", p.x, -p.y)).collect();
+                        format!("M {} Z", pts.join(" L "))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                writeln!(
+                    s,
+                    r#"<path d="{path}" fill="{color}" stroke="none" fill-rule="evenodd"/>"#
+                )?;
+            }
+        }
+    }
+    flush(s, &mut edges);
+    writeln!(s, "</g>")
+}
+
 /// Draws an object in a tint, in a group with `data-compare` (and `data-ghost` for a ghost), and
 /// its mark at the top right corner of its box.
 #[allow(clippy::too_many_arguments)]
@@ -506,37 +570,22 @@ fn draw_object(
                 d.join(" ")
             )
         }
-        Shape::SurfaceModel(m) => match m.bounds() {
-            // Plan view: the box around the model (MOD-13 draws its edges).
-            Some((lo, hi)) => writeln!(
-                s,
-                r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="surface_model"/>"#,
-                lo.x,
-                -hi.y,
-                hi.x - lo.x,
-                hi.y - lo.y
-            ),
-            None => Ok(()),
-        },
-        Shape::Component { .. } => {
-            // Plan view: the box around the instance (MOD-13 draws its edges). An instance that
-            // cannot be drawn gets a cross in the warning colour and the reason, not nothing.
-            // The plan on the screen and in the print draw the same (`component::plan_mark`).
-            match crate::component::plan_mark(doc, &o.shape) {
-                Some(crate::component::PlanMark::Box([lo, _, hi, _])) => writeln!(
-                    s,
-                    r#"<rect x="{}" y="{}" width="{}" height="{}" {style} data-kind="component"/>"#,
-                    lo.x,
-                    -hi.y,
-                    hi.x - lo.x,
-                    hi.y - lo.y
-                ),
-                Some(crate::component::PlanMark::Broken(p, why)) => {
+        Shape::SurfaceModel(_) | Shape::Component { .. } => {
+            // The plan of the faces and edges (MOD-13), the same as the screen and the print
+            // (`surface::plan`). An instance that cannot be drawn gets a cross in the warning
+            // colour and the reason, not nothing.
+            let kind = o.shape.kind();
+            match crate::surface::plan::plan_of_object(doc, o) {
+                Some(crate::surface::plan::Outcome::Drawing(d)) => {
+                    let flat = tint.map(|_| fill.as_str());
+                    plan_svg(s, &d, &style, kind, flat)
+                }
+                Some(crate::surface::plan::Outcome::Broken(p, why)) => {
                     let h = crate::model::LOCUS_MARKER_HALF;
                     let [r, g, b, _] = crate::component::WARNING_COLOR;
                     writeln!(
                         s,
-                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" stroke="rgb({r},{g},{b})" fill="none" stroke-width="{sw}" data-id="{}" data-kind="component" data-problem="{}"/>"#,
+                        r#"<path d="M {} {} L {} {} M {} {} L {} {}" stroke="rgb({r},{g},{b})" fill="none" stroke-width="{sw}" data-id="{}" data-kind="{kind}" data-problem="{}"/>"#,
                         p.x - h,
                         -p.y,
                         p.x + h,
@@ -549,7 +598,7 @@ fn draw_object(
                         esc(&why)
                     )
                 }
-                _ => Ok(()),
+                None => Ok(()),
             }
         }
         Shape::Sweep(sw) => {

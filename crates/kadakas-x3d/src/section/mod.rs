@@ -119,6 +119,9 @@ pub struct SectionDrawing {
     pub cut_triangles: usize,
     /// True if the edges hit the limit and some are missing.
     pub truncated: bool,
+    /// How many objects were drawn by the edges of their mesh only, because they have too many
+    /// lines (`kadakas_render::hlr::MAX_OBJECT_LINES`).
+    pub thinned_objects: usize,
 }
 
 impl SectionDrawing {
@@ -211,6 +214,10 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             .is_some_and(|o| matches!(o.shape, Shape::Plant { .. } | Shape::ExistingTree { .. }))
     };
     let skipped = |id: ObjectId| doc.object(id).is_none_or(settings::is_section_line);
+    let surface_of = |id: ObjectId| {
+        doc.object(id)
+            .is_some_and(|o| matches!(o.shape, Shape::SurfaceModel(_) | Shape::Component { .. }))
+    };
     let mut tris: Vec<Tri> = Vec::with_capacity(mesh.triangle_count().min(MAX_TRIANGLES));
     for t in 0..mesh.triangle_count().min(MAX_TRIANGLES) {
         let object = mesh.tri_object[t];
@@ -233,6 +240,7 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             key: [bits(pos[0]), bits(pos[1]), bits(pos[2])],
             plant: plant_of(object),
             trunk: mesh.tri_part.get(t).copied() == Some(kadakas_core::present::PART_TRUNK),
+            open: scene.triangle_is_open(t),
         });
     }
 
@@ -241,8 +249,13 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
     }
     if spec.mode == Mode::Elevation || spec.beyond {
         let mut segs = Vec::new();
-        let with_tris: std::collections::BTreeSet<kadakas_core::uid::Uid> =
-            tris.iter().map(|t| t.object.0).collect();
+        // The edges that a surface model shows are lines of the scene, also where it has
+        // triangles: an edge between two faces in one plane is no crease of the mesh.
+        let with_tris: std::collections::BTreeSet<kadakas_core::uid::Uid> = tris
+            .iter()
+            .filter(|t| !surface_of(t.object))
+            .map(|t| t.object.0)
+            .collect();
         let l = &scene.lines;
         for s in 0..l.segment_count() {
             let object = l.objects[s];
@@ -262,10 +275,24 @@ pub fn compute(doc: &Document, scene: &Scene, spec: &SectionSpec) -> SectionDraw
             len: frame.len,
             depth: spec.depth.unwrap_or(f64::INFINITY),
         };
+        let soft: Vec<[DVec3; 2]> = scene
+            .soft_edges
+            .iter()
+            .map(|[a, b]| [frame.uvw(*a), frame.uvw(*b)])
+            .collect();
         let covers: Vec<&CutFace> = out.faces.iter().collect();
         // Depths closer than this count as equal: a ten thousandth of the section, at least 1 mm.
         let tol = (frame.len * 1e-4).max(1.0);
-        out.edges = beyond::edges(&tris, &segs, &region, &covers, tol, spec.mode == Mode::Cut);
+        out.edges = beyond::edges(
+            &tris,
+            &segs,
+            &soft,
+            &region,
+            &covers,
+            tol,
+            spec.mode == Mode::Cut,
+            &mut out.thinned_objects,
+        );
         out.truncated = out.edges.len() >= beyond::MAX_EDGES;
     }
     out.grow();
@@ -280,7 +307,7 @@ fn cut_faces(
     plant_of: &dyn Fn(ObjectId) -> bool,
 ) {
     // The trunk of a plant is cut on its own: it is a solid, the canopy only gives a silhouette.
-    let mut by_object: BTreeMap<(kadakas_core::uid::Uid, bool), Vec<(DVec2, DVec2)>> =
+    let mut by_object: BTreeMap<(kadakas_core::uid::Uid, bool, bool), Vec<(DVec2, DVec2)>> =
         BTreeMap::new();
     for t in tris {
         let w = [t.p[0].z, t.p[1].z, t.p[2].z];
@@ -301,13 +328,13 @@ fn cut_faces(
         }
         if let [a, b] = pts[..] {
             by_object
-                .entry((t.object.0, t.trunk))
+                .entry((t.object.0, t.trunk, t.open))
                 .or_default()
                 .push((a, b));
             out.cut_triangles += 1;
         }
     }
-    for ((id, trunk), segs) in by_object {
+    for ((id, trunk, open), segs) in by_object {
         let object = ObjectId(id);
         let mut rings: Vec<Vec<DVec2>> = Vec::new();
         for c in cut::chain(&segs) {
@@ -327,6 +354,16 @@ fn cut_faces(
             }
         }
         let rings = cut::orient(rings);
+        // The faces of a surface model that do not close a volume have no inside: the cut is an
+        // outline. Each part of an instance is judged by its own faces.
+        if !rings.is_empty() && open {
+            for r in rings {
+                let mut points = r;
+                points.push(points[0]);
+                out.profiles.push(Profile { object, points });
+            }
+            continue;
+        }
         if !rings.is_empty() {
             let face = CutFace { object, rings };
             if plant_of(object) && !trunk {

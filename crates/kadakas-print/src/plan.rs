@@ -540,48 +540,8 @@ fn shape_core(
                 out.push(Prim::Image(img));
             }
         }
-        Shape::SurfaceModel(m) => {
-            // Plan view: the box around the model (MOD-13 draws its edges).
-            if let Some((lo, hi)) = m.bounds() {
-                let (lo, hi) = (lo.truncate(), hi.truncate());
-                out.push(path(
-                    mapped(
-                        &[lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)],
-                        xf,
-                    ),
-                    true,
-                    &st,
-                ));
-            }
-        }
-        Shape::Component { .. } => {
-            // Plan view: the box around the instance (MOD-13 draws its edges). An instance that
-            // cannot be drawn gets a cross in the warning colour. The same as the screen and
-            // the SVG (`component::plan_mark`).
-            match kadakas_core::component::plan_mark(doc, &obj.shape) {
-                Some(kadakas_core::component::PlanMark::Box(ring)) => {
-                    out.push(path(mapped(&ring, xf), true, &st));
-                }
-                Some(kadakas_core::component::PlanMark::Broken(p, _)) => {
-                    let h = kadakas_core::model::LOCUS_MARKER_HALF;
-                    let warn = Style {
-                        stroke: Some(kadakas_core::component::WARNING_COLOR),
-                        fill: None,
-                        ..st
-                    };
-                    out.push(path(
-                        mapped(&[p - DVec2::new(h, 0.0), p + DVec2::new(h, 0.0)], xf),
-                        false,
-                        &warn,
-                    ));
-                    out.push(path(
-                        mapped(&[p - DVec2::new(0.0, h), p + DVec2::new(0.0, h)], xf),
-                        false,
-                        &warn,
-                    ));
-                }
-                _ => {}
-            }
+        Shape::SurfaceModel(_) | Shape::Component { .. } => {
+            surface_prims(doc, obj, &st, xf, tables, out)
         }
         Shape::Mesh3d(m) => {
             // Plan view: the box around the mesh.
@@ -710,6 +670,103 @@ fn irrigation_prims(
 
 fn attrs_set(obj: &Object) -> bool {
     obj.attrs.fill.is_some() || obj.attrs.pen.is_some()
+}
+
+/// The note of a page for a model that is drawn as an outline or a box, because it is big.
+pub fn simplified_note(obj: &Object, d: &kadakas_core::surface::plan::PlanDrawing) -> String {
+    use kadakas_core::surface::plan::Detail;
+    format!(
+        "Object {} is drawn as {}: {} faces and {} edges, the limits are {} faces and {} edges",
+        obj.id,
+        if d.detail == Detail::Box {
+            "its box"
+        } else {
+            "its outline"
+        },
+        d.faces_total,
+        d.edges_total,
+        d.limits.faces,
+        d.limits.edges
+    )
+}
+
+/// The plan of a surface model or an instance (MOD-13): the faces in the colours of their
+/// materials and the edges that are shown, the same as the screen and the SVG
+/// (`surface::plan`). An instance that cannot be drawn gets a cross in the warning colour.
+fn surface_prims(
+    doc: &Document,
+    obj: &Object,
+    st: &Style,
+    xf: &Xf,
+    tables: &crate::table::Tables,
+    out: &mut Vec<Prim>,
+) {
+    use kadakas_core::surface::plan::{Outcome, PlanItem, plan_of_object_with};
+    // The parts of an instance follow the classes that the viewport shows.
+    match plan_of_object_with(doc, obj, &|c| tables.class_shown(c)) {
+        Some(Outcome::Drawing(d)) => {
+            if d.simplified() {
+                tables.note(simplified_note(obj, &d));
+            }
+            // The edges that follow each other are one path.
+            let mut run: Vec<PSeg> = Vec::new();
+            let flush = |run: &mut Vec<PSeg>, out: &mut Vec<Prim>| {
+                if !run.is_empty() {
+                    out.push(Prim::Path(PathPrim {
+                        segs: std::mem::take(run),
+                        closed: false,
+                        stroke: st.stroke,
+                        fill: None,
+                        width: st.width,
+                        dash: None,
+                    }));
+                }
+            };
+            for item in &d.items {
+                match item {
+                    PlanItem::Edge(a, b) => {
+                        run.push(PSeg::Move(xf.p(*a)));
+                        run.push(PSeg::Line(xf.p(*b)));
+                    }
+                    PlanItem::Face(f) => {
+                        flush(&mut run, out);
+                        if f.color[3] == 0 {
+                            continue;
+                        }
+                        let segs: Vec<PSeg> = f.rings.iter().flat_map(|r| mapped(r, xf)).collect();
+                        out.push(Prim::Path(PathPrim {
+                            segs,
+                            closed: true,
+                            stroke: None,
+                            fill: Some(f.color),
+                            width: st.width,
+                            dash: None,
+                        }));
+                    }
+                }
+            }
+            flush(&mut run, out);
+        }
+        Some(Outcome::Broken(p, _)) => {
+            let h = kadakas_core::model::LOCUS_MARKER_HALF;
+            let warn = Style {
+                stroke: Some(kadakas_core::component::WARNING_COLOR),
+                fill: None,
+                ..*st
+            };
+            out.push(path(
+                mapped(&[p - DVec2::new(h, 0.0), p + DVec2::new(h, 0.0)], xf),
+                false,
+                &warn,
+            ));
+            out.push(path(
+                mapped(&[p - DVec2::new(0.0, h), p + DVec2::new(0.0, h)], xf),
+                false,
+                &warn,
+            ));
+        }
+        None => {}
+    }
 }
 
 /// The primitives of one annotation, on the sheet.

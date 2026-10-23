@@ -31,6 +31,17 @@ pub const CREASE_ANGLE: f64 = 35.0;
 /// Shortest piece of a cut edge that is kept, in pixels.
 const MIN_PIECE: f64 = 0.3;
 
+/// Most lines of one object that a pass tests against the covers. An object with triangles and more
+/// lines than this (a surface model of tens of thousands of faces) is drawn by the silhouettes,
+/// creases and borders of its mesh, not by every edge of the model. The cost of the pass grows
+/// faster than the number of edges: a terrain of 100,000 faces seen edge-on took 1.7 s with all its
+/// 150,000 edges and 0.3 s with the edges of its mesh (`docs/modeler-limits.md`).
+pub const MAX_OBJECT_LINES: usize = 50_000;
+
+/// Most lines of the line list that a pass tests. The objects with most lines (and triangles) are
+/// drawn by their mesh edges until the rest fits.
+pub const MAX_LINES: usize = 150_000;
+
 /// Dash and gap length of hidden edges, in pixels.
 pub const DASH: (f32, f32) = (6.0, 4.0);
 
@@ -79,6 +90,9 @@ pub struct HiddenLines {
     pub width: u32,
     pub height: u32,
     pub segments: Vec<HlSegment>,
+    /// How many objects were drawn by the edges of their mesh only, because they had more lines
+    /// than [`MAX_OBJECT_LINES`] (or the scene more than [`MAX_LINES`]).
+    pub thinned_objects: usize,
 }
 
 impl HiddenLines {
@@ -298,6 +312,9 @@ fn mesh_edges(scene: &Scene, camera: Option<&Camera>, known: &[Edge]) -> Vec<Edg
         })
     };
     let cos_crease = CREASE_ANGLE.to_radians().cos();
+    // The soft and hidden edges of surface models are never the crease of the mesh.
+    let soft: std::collections::HashSet<EdgeKey> =
+        scene.soft_edges.iter().map(|[a, b]| key(*a, *b)).collect();
     let mut out = Vec::new();
     for (kk, a, b) in order {
         if have.contains(&kk) {
@@ -312,7 +329,7 @@ fn mesh_edges(scene: &Scene, camera: Option<&Camera>, known: &[Edge]) -> Vec<Edg
                 let n2 = normal(t2);
                 let silhouette = camera.is_some() && front(t1, n1) != front(t2, n2);
                 // Two faces of different objects meet: the contour of each object stays.
-                let crease = n1.dot(n2) < cos_crease;
+                let crease = n1.dot(n2) < cos_crease && !soft.contains(&kk);
                 silhouette || crease
             }
         };
@@ -519,6 +536,47 @@ fn cut(lo: &mut f64, hi: &mut f64, g0: f64, g1: f64) -> bool {
     *lo < *hi
 }
 
+/// The objects whose lines a pass leaves out: those with triangles and more than `per_object`
+/// lines, and then, while the line list is over `max_total`, the object with most lines. Their
+/// mesh edges (silhouettes, creases and borders) stay.
+fn crowded_objects(
+    scene: &Scene,
+    per_object: usize,
+    max_total: usize,
+) -> std::collections::HashSet<ObjectId> {
+    let lines = &scene.lines;
+    let mut out = std::collections::HashSet::new();
+    if lines.segment_count() <= per_object.min(max_total) {
+        return out;
+    }
+    let mut count: HashMap<ObjectId, usize> = HashMap::new();
+    for o in &lines.objects {
+        *count.entry(*o).or_default() += 1;
+    }
+    let with_triangles: std::collections::HashSet<ObjectId> =
+        scene.mesh.tri_object.iter().copied().collect();
+    let mut total = lines.segment_count();
+    let mut by_size: Vec<(ObjectId, usize)> = count
+        .into_iter()
+        .filter(|(o, _)| with_triangles.contains(o))
+        .collect();
+    // The most lines first; the id breaks ties, so the result does not depend on the hash order.
+    by_size.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (o, n) in by_size {
+        if n > per_object || total > max_total {
+            out.insert(o);
+            total -= n;
+        }
+    }
+    out
+}
+
+/// How many objects a hidden-line pass of this scene draws by their mesh edges only
+/// (`HiddenLines::thinned_objects`), without making the pass.
+pub fn crowded_count(scene: &Scene) -> usize {
+    crowded_objects(scene, MAX_OBJECT_LINES, MAX_LINES).len()
+}
+
 /// Computes the visible edges of the scene.
 pub fn hidden_lines(
     scene: &Scene,
@@ -532,6 +590,7 @@ pub fn hidden_lines(
         width,
         height,
         segments: Vec::new(),
+        thinned_objects: 0,
     };
     if scene.is_empty() {
         return result;
@@ -643,7 +702,17 @@ pub fn hidden_lines(
     }
 
     // Edges.
+    let thinned = crowded_objects(scene, MAX_OBJECT_LINES, MAX_LINES);
+    result.thinned_objects = thinned.len();
     let mut edges: Vec<Edge> = (0..scene.lines.segment_count())
+        .filter(|s| {
+            thinned.is_empty()
+                || scene
+                    .lines
+                    .objects
+                    .get(*s)
+                    .is_none_or(|o| !thinned.contains(o))
+        })
         .map(|s| {
             let [a, b] = scene.lines.segment(s);
             Edge {
@@ -1239,5 +1308,61 @@ mod tests {
         let (mut lo, mut hi) = (0.0, 1.0);
         assert!(cut(&mut lo, &mut hi, 0.5, 0.5));
         assert!(!cut(&mut lo, &mut hi, -0.5, -0.5));
+    }
+
+    #[test]
+    fn an_object_with_too_many_lines_is_drawn_by_its_mesh_edges() {
+        let mut ed = Editor::default();
+        // 130 x 130 squares cut in two: 33,800 faces and 50,960 edges, over MAX_OBJECT_LINES.
+        add_surface_grid(&mut ed, 130);
+        let scene = scene_of(&ed);
+        assert!(scene.lines.segment_count() > MAX_OBJECT_LINES);
+        let mut cam = top_ortho(900.0);
+        cam.target = Vec3::new(650.0, 650.0, 0.0);
+        let hl = hidden_lines(&scene, &cam, 600, 600, &HlOptions::default());
+        assert_eq!(hl.thinned_objects, 1);
+        assert_eq!(crowded_count(&scene), 1, "the same count without the pass");
+        // The border of the flat grid is what the mesh gives: 4 sides of 130 edges.
+        assert_eq!(hl.visible_edge_count(), 4 * 130);
+        // A grid that fits keeps every edge: 3 n^2 + 2 n.
+        let mut ed = Editor::default();
+        add_surface_grid(&mut ed, 20);
+        let scene = scene_of(&ed);
+        let mut cam = top_ortho(150.0);
+        cam.target = Vec3::new(100.0, 100.0, 0.0);
+        let hl = hidden_lines(&scene, &cam, 600, 600, &HlOptions::default());
+        assert_eq!(hl.thinned_objects, 0);
+        assert_eq!(crowded_count(&scene), 0);
+        assert_eq!(hl.visible_edge_count(), 3 * 20 * 20 + 2 * 20);
+    }
+
+    #[test]
+    fn the_objects_that_are_left_out_are_the_biggest_and_the_choice_is_stable() {
+        let mut ed = Editor::default();
+        let a = add_surface_box(&mut ed, 0.0);
+        let b = add_surface_box(&mut ed, 3000.0);
+        let scene = scene_of(&ed);
+        assert_eq!(scene.lines.segment_count(), 24);
+        // Per object: both have 12 lines.
+        assert!(crowded_objects(&scene, 12, 1000).is_empty());
+        assert_eq!(crowded_objects(&scene, 11, 1000).len(), 2);
+        // In all: one goes, the one with the lower id when the sizes are equal.
+        let one = crowded_objects(&scene, 100, 20);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one.iter().next(), Some(&a.min(b)));
+        assert!(crowded_objects(&scene, 100, 24).is_empty());
+        // Lines of an object without triangles are never left out.
+        let mut ed = Editor::default();
+        add(
+            &mut ed,
+            Shape::Polyline3d {
+                points: (0..40)
+                    .map(|i| glam::DVec3::new(i as f64, 0.0, 0.0))
+                    .collect(),
+                closed: false,
+            },
+            None,
+        );
+        assert!(crowded_objects(&scene_of(&ed), 5, 5).is_empty());
     }
 }

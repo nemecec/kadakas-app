@@ -81,6 +81,8 @@ mod site_ui;
 mod snap_ui;
 mod solid_ui;
 mod style_ui;
+mod surface_draw;
+mod surface_ui;
 mod tess;
 #[cfg(test)]
 mod text_probe;

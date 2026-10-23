@@ -179,6 +179,9 @@ pub fn section_prims(
             Arc::new(d)
         }
     };
+    if d.thinned_objects > 0 {
+        tables.note(crate::compose::thinned_note(&vp.name, d.thinned_objects));
+    }
     prims_of(doc, vp, sv, &d, out);
 }
 

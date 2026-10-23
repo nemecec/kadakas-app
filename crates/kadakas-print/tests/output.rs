@@ -1659,6 +1659,7 @@ fn svg_is_in_mm_with_clip_text_and_images() {
     let odd = Page {
         size: v(100.0, 100.0),
         title: "t".into(),
+        notes: Vec::new(),
         prims: vec![
             Prim::PopClip,
             Prim::PushClip(vec![v(0.0, 0.0), v(10.0, 0.0), v(10.0, 10.0)]),
@@ -1752,6 +1753,7 @@ fn text_rendering_covers_alignment_and_tiny_text() {
     let page = Page {
         size: v(100.0, 50.0),
         title: "t".into(),
+        notes: Vec::new(),
         prims: vec![
             Prim::Text(TextPrim {
                 at: v(50.0, 25.0),

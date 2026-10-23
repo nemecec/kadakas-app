@@ -241,11 +241,23 @@ Over MCP the picture comes as an image block.
 
 ## Limits
 
-Models have the limits of `docs/modeler-limits.md`: 50,000 vertices, 100,000 edges, 50,000 faces and 10,000 edges in one edit. A refused edit gives `model_limit`.
+Models have the limits of `docs/modeler-limits.md`: 55,000 vertices, 150,000 edges, 100,000 faces and 10,000 edges in one edit. A refused edit gives `model_limit`.
 
 ## What the reads see
 
 The reads and edits work on the surface model objects of the document, also the ones inside groups. A component instance shows its definition in renders, but the reads do not list its geometry. `mesh.summary` counts the instances in `component_instances`. To read or edit a component, explode the instance with `mesh.explode`. When `mesh.make_component` takes every face of a model, the geometry lives in the definition and the model is gone (`model_gone`).
+
+## The objects in the app (MOD-13)
+
+The Vectorworks-like app shows a surface model, a group of models and a component instance as an object. An agent finds them with `objects.list` and `objects.get`. Both give the object the field `surface`: the counts of vertices, edges and faces, `solid`, `area_mm2`, `bounds` (`min`, `max`, `size` in the drawing), the materials with the number of faces and `unpainted_faces`. These are the numbers that Object Info of the app shows.
+
+`solid.state` is `closed` (with `solids` and `volume_mm3`), `open` (with `open_edges`), `crossing` (faces pass through each other, with `crossings`), `inward` (closed, but the fronts look in), `flat` (closed, but no volume), `empty` or `unchecked`. The check takes up to 3 s for a model at the limits, so one answer checks at most 20,000 faces (a list 60,000) and says `unchecked` for the rest. A model that was checked once is not checked again until its vertices, edges or faces change, so a second call is cheap and gives the rest.
+
+`objects.list` leaves the geometry out of a surface model and says so in `shape.elided`, because a list of big models would be huge. It changes nothing else: an instance keeps its `symbol` and `transform`, and a group keeps its shape. `objects.get` has the geometry too. `objects.query` finds them with `Kind = "surface_model"` or `Kind = "component"`.
+
+The plan simplifies a big model: over 20,000 faces or 30,000 edges it is the outline, and an outline of more than 20,000 lines is the box. Then `surface.plan` is `{detail: outline | box, faces, edges, limit_faces, limit_edges, limit_outline, note}`, with the same text as the note on the canvas of the app, in English. A model drawn in full has no `plan`. `render.svg` gives `notes` (the texts) and `simplified` (the objects with the same fields) when something was simplified. `render.png` in a hidden-line mode gives `notes` when an object with more than 50,000 edges was drawn by its outline, creases and borders only.
+
+The usual methods work on these objects: `selection.set`, and the commands `move_objects`, `rotate_objects`, `copy_objects`, `delete_objects`, `transform_objects` and `transform_objects3d` of `execute`. Each is one undo step. Visibility by layer and class (`visibility.set`) applies to them, and a grey one cannot be selected. `render.svg` draws their plan. `snap.query` finds their vertices, edge middles and face centers.
 
 ## Where the code is
 

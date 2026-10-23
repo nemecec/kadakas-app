@@ -157,3 +157,25 @@ def test_the_camera_of_a_render_is_in_drawing_coordinates_and_repeats_the_pictur
     again = doc.api.mesh_render(camera=first["camera"], width=64, height=48)
     assert again["camera"] == first["camera"]
     assert again["png_base64"] == doc.api.mesh_render(id=model, width=64, height=48)["png_base64"]
+
+
+def test_the_object_list_summarises_a_surface_model_like_object_info(doc):
+    """MOD-13: the app shows a model as an object, and the list gives the same numbers."""
+    model, _ = make_box(doc)
+    rows = doc.api.objects_list(kind="surface_model")
+    assert [r["id"] for r in rows] == [model]
+    row = rows[0]
+    assert row["shape"]["kind"] == "surface_model"
+    assert "elided" in row["shape"] and "faces" not in row["shape"]
+    surface = row["surface"]
+    assert (surface["vertices"], surface["edges"], surface["faces"]) == (8, 12, 6)
+    assert surface["solid"]["state"] == "closed"
+    assert abs(surface["solid"]["volume_mm3"] - 4000 * 3000 * 2500) < 1
+    assert surface["bounds"]["size"] == [4000.0, 3000.0, 2500.0]
+    # The object itself has the geometry as well.
+    assert len(doc.api.objects_get(id=model)["shape"]["vertices"]) == 8
+    # The model moves with the usual command, in one undo step.
+    doc.api.execute(command={"op": "move_objects", "ids": [model], "delta": [100, 200]})
+    assert doc.api.mesh_bounds(id=model)["world"]["min"] == [100.0, 200.0, 0.0]
+    doc.api.undo()
+    assert doc.api.mesh_bounds(id=model)["world"]["min"] == [0.0, 0.0, 0.0]

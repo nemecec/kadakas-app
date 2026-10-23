@@ -431,6 +431,7 @@ impl Session {
                 kadakas_print::Page {
                     size,
                     title: labels[i].clone(),
+                    notes: Vec::new(),
                     prims: vec![kadakas_print::Prim::Text(TextPrim {
                         at: size / 2.0,
                         text: "(this sheet is not in this version)".into(),

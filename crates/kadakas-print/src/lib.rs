@@ -134,6 +134,7 @@ pub fn image_pdf(rgb: Vec<u8>, width: u32, height: u32, dpi: f64, title: &str) -
     let page = Page {
         size,
         title: title.to_string(),
+        notes: Vec::new(),
         prims: vec![Prim::Image(display::ImagePrim {
             min: glam::DVec2::ZERO,
             max: size,
