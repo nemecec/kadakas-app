@@ -1,0 +1,351 @@
+//! Public sample files (IOP-15). Every file of the ezdxf and GDAL test data goes through the
+//! importer: it must not panic, it must finish in time, and the report must account for every
+//! entity. The files are fetched at run time (see `support::corpus`) and the test skips when
+//! there is no network.
+
+mod support;
+
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::time::{Duration, Instant};
+
+use kadakas_core::command::Editor;
+use kadakas_core::model::Document;
+use kadakas_io::{Context, Format, ImportOptions, Source, importer};
+use support::corpus;
+
+/// The longest time that one file may take in a debug build.
+const LIMIT: Duration = Duration::from_secs(60);
+
+/// What happened to one file.
+enum Outcome {
+    /// Imported: objects, skipped entities, entities read, and the skipped lines and notes for the
+    /// verbose output.
+    Imported(usize, usize, usize, Vec<String>),
+    /// Refused with a message.
+    Refused(String),
+}
+
+fn run(data: &[u8], opts: &ImportOptions) -> Result<Outcome, String> {
+    let src = Source {
+        name: "corpus".into(),
+        data: data.to_vec(),
+        extra: Default::default(),
+    };
+    let doc = Document::with_sequential_ids();
+    let start = Instant::now();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        importer(Format::Dxf).import(&src, &Context::of(&doc), opts)
+    }))
+    .map_err(|_| "panic in the importer".to_string())?;
+    if start.elapsed() > LIMIT {
+        return Err(format!("took {:?}", start.elapsed()));
+    }
+    match result {
+        Err(e) => Ok(Outcome::Refused(e.to_string())),
+        Ok(r) => {
+            let rep = &r.report;
+            if rep.entities_read != rep.entities_imported + rep.entities_skipped {
+                return Err(format!(
+                    "entities are lost: read {} imported {} skipped {}",
+                    rep.entities_read, rep.entities_imported, rep.entities_skipped
+                ));
+            }
+            if rep.entities_skipped > rep.skipped_total() {
+                return Err(format!(
+                    "{} entities skipped but only {} lines in the report",
+                    rep.entities_skipped,
+                    rep.skipped_total()
+                ));
+            }
+            let mut ed = Editor::new(doc);
+            catch_unwind(AssertUnwindSafe(|| ed.execute(&r.command)))
+                .map_err(|_| "panic while the batch ran".to_string())?
+                .map_err(|e| format!("the batch failed: {e}"))?;
+            if !ed
+                .doc()
+                .objects
+                .values()
+                .all(|o| o.is_finite() && o.shape.is_in_range())
+            {
+                return Err("an object has a bad number".into());
+            }
+            let lines = rep
+                .skipped
+                .iter()
+                .map(|s| format!("  skipped {} x {}: {}", s.count, s.entity, s.reason))
+                .chain(rep.notes.iter().map(|n| format!("  note: {n}")))
+                .collect();
+            Ok(Outcome::Imported(
+                rep.total(),
+                rep.entities_skipped,
+                rep.entities_read,
+                lines,
+            ))
+        }
+    }
+}
+
+#[test]
+fn every_public_file_imports_or_is_refused_cleanly_and_is_accounted_for() {
+    let files = corpus::all();
+    let wanted: Vec<_> = files.iter().map(|(_, r, p)| (*r, p.as_str())).collect();
+    corpus::prefetch(&wanted);
+    let mut bad: Vec<String> = Vec::new();
+    let (mut imported, mut refused, mut skipped_files) = (0, 0, 0);
+    for (label, repo, path) in &files {
+        let Some(data) = corpus::fetch(*repo, path) else {
+            skipped_files += 1;
+            continue;
+        };
+        match run(&data, &ImportOptions::default()) {
+            Ok(Outcome::Imported(objects, skipped, read, lines)) => {
+                imported += 1;
+                eprintln!("{label}: {objects} objects, {skipped} of {read} entities skipped");
+                if std::env::var_os("KADAKAS_CORPUS_VERBOSE").is_some() {
+                    for l in lines {
+                        eprintln!("{l}");
+                    }
+                }
+            }
+            Ok(Outcome::Refused(why)) => {
+                refused += 1;
+                eprintln!("{label}: refused: {why}");
+                if why.trim().is_empty() {
+                    bad.push(format!("{label}: refused without a message"));
+                }
+            }
+            Err(why) => bad.push(format!("{label}: {why}")),
+        }
+    }
+    eprintln!("corpus: {imported} imported, {refused} refused, {skipped_files} not available");
+    if skipped_files == files.len() {
+        eprintln!("SKIP: no corpus file is available (offline or KADAKAS_CORPUS=off)");
+        return;
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// The filled area of solid hatches equals the area that the ezdxf reader finds (outer paths
+/// minus islands), and the number of boundary paths is the same. The numbers come from
+/// `ezdxf.path.from_hatch_boundary_path` on the same files.
+#[test]
+fn hatch_areas_equal_the_ezdxf_reader() {
+    use kadakas_core::model::Shape;
+    // (file, solid, boundary paths, net area)
+    let cases: [(&str, bool, usize, f64); 4] = [
+        ("hatches_1.dxf", true, 19, 852.256),
+        ("hatches_2.dxf", true, 2, 2537.118),
+        ("clockwise_arcs_hatch.dxf", true, 2, 2820.533),
+        ("hatch_issues.dxf", false, 8, 150.663),
+    ];
+    for (name, solid, loops, area) in cases {
+        let Some(data) = corpus::ezdxf(name) else {
+            continue;
+        };
+        let (ed, _) = support::import_with(
+            &data,
+            &ImportOptions {
+                origin: kadakas_io::OriginMode::File,
+                unit: Some(kadakas_io::Unit::Mm),
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        let hatch: Vec<_> = ed
+            .doc()
+            .objects
+            .values()
+            .filter(|o| o.data.get("import").and_then(|t| t["kind"].as_str()) == Some("HATCH"))
+            .collect();
+        assert_eq!(hatch.len(), loops, "{name}: boundary paths");
+        // The unit is forced to 1 mm, so the areas are in drawing units, like those of ezdxf.
+        let net: f64 = hatch
+            .iter()
+            .map(|o| match &o.shape {
+                Shape::Polyline { points, .. } => {
+                    let a = kadakas_core::curve::area(points).abs();
+                    if o.data.contains_key("hatch_island") {
+                        -a
+                    } else {
+                        a
+                    }
+                }
+                _ => 0.0,
+            })
+            .sum();
+        if solid {
+            assert!(
+                (net - area).abs() / area < 0.005,
+                "{name}: {net} against {area}"
+            );
+            assert!(hatch.iter().all(|o| o.attrs.fill.is_some()), "{name}");
+        } else {
+            // A pattern hatch has no fill and no island marks: the loops are outlines.
+            assert!(
+                hatch.iter().all(|o| !o.data.contains_key("hatch_island")),
+                "{name}"
+            );
+        }
+    }
+}
+
+/// The reader finds the same entities as the ezdxf reader: the entities of the model space, with
+/// the attributes of block references (our reader lists an ATTRIB as an entity of its own), the
+/// INSERTs, and the entities of paper space. The numbers are in
+/// `fixtures/dxf_public_counts.json`, made by `tests/data/make_public_counts.py`.
+#[test]
+fn the_reader_finds_the_entities_that_the_ezdxf_reader_finds() {
+    let counts: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/dxf_public_counts.json")).unwrap();
+    let files = corpus::all();
+    let wanted: Vec<_> = files.iter().map(|(_, r, p)| (*r, p.as_str())).collect();
+    corpus::prefetch(&wanted);
+    let (mut checked, mut bad) = (0, Vec::new());
+    for (label, repo, path) in &files {
+        let key = format!(
+            "{}:{}",
+            repo.name,
+            path.trim_start_matches("autotest/ogr/data/dxf/")
+        );
+        let key = if repo.name == "gdal" {
+            format!(
+                "gdal:autotest/ogr/data/dxf/{}",
+                path.rsplit('/').next().unwrap()
+            )
+        } else {
+            key
+        };
+        // MTEXT with columns: ezdxf merges the entities of the columns into one. A DIMENSION
+        // without its block is dropped by ezdxf.
+        if label.contains("columns") || label.contains("mtext_") || label.ends_with("assorted.dxf")
+        {
+            continue;
+        }
+        let Some(expected) = counts.get(&key).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let Some(data) = corpus::fetch(*repo, path) else {
+            continue;
+        };
+        let Ok(dxf) = kadakas_io::dxf::parse::parse(&data) else {
+            continue;
+        };
+        checked += 1;
+        let top = |paper: bool| {
+            dxf.entities
+                .iter()
+                .filter(|e| (e.int(67) == Some(1)) == paper)
+                .count() as u64
+        };
+        let want = |k: &str| expected[k].as_u64().unwrap();
+        let model = top(false);
+        if model != want("model") + want("attribs") {
+            bad.push(format!(
+                "{label}: model {model}, ezdxf {} + {} attributes",
+                want("model"),
+                want("attribs")
+            ));
+        }
+        let inserts = dxf
+            .entities
+            .iter()
+            .filter(|e| e.kind == "INSERT" && e.int(67) != Some(1))
+            .count() as u64;
+        if inserts != want("inserts") {
+            bad.push(format!(
+                "{label}: {inserts} INSERTs, ezdxf {}",
+                want("inserts")
+            ));
+        }
+    }
+    eprintln!("{checked} files compared with the ezdxf reader");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// One file for each entity of the list of research gap 3: each gives objects or a line with the
+/// name of the entity in the report, never a silent loss.
+#[test]
+fn the_entities_of_research_gap_3_are_imported_or_named() {
+    let imp = |data: Vec<u8>| support::import(&data).unwrap().1;
+    if let Some(d) = corpus::gdal("wipeout.dxf") {
+        let rep = imp(d);
+        assert!(
+            rep.notes.iter().any(|n| n.contains("WIPEOUT")),
+            "{:?}",
+            rep.notes
+        );
+        assert!(rep.objects.get("polyline").copied().unwrap_or(0) >= 1);
+    }
+    if let Some(d) = corpus::gdal("BINARY_wipeout.dxf") {
+        let rep = imp(d);
+        assert!(
+            rep.notes.iter().any(|n| n.contains("WIPEOUT")),
+            "{:?}",
+            rep.notes
+        );
+    }
+    if let Some(d) = corpus::gdal("dimension.dxf") {
+        let rep = imp(d);
+        assert!(rep.total() >= 15, "{:?}", rep.objects);
+        assert!(
+            !rep.skipped.iter().any(|s| s.entity == "DIMENSION"),
+            "{:?}",
+            rep.skipped
+        );
+    }
+    if let Some(d) = corpus::gdal("dimension-entities-only.dxf") {
+        // Dimensions without blocks: named in the report.
+        let rep = imp(d);
+        let s = rep
+            .skipped
+            .iter()
+            .find(|s| s.entity == "DIMENSION")
+            .expect("DIMENSION is named");
+        assert_eq!(s.count, 3);
+    }
+    if let Some(d) = corpus::gdal("leader-mleader.dxf") {
+        let rep = imp(d);
+        let names: Vec<_> = rep.skipped.iter().map(|s| s.entity.as_str()).collect();
+        assert!(
+            names.contains(&"MULTILEADER") || names.contains(&"MLEADER"),
+            "{names:?}"
+        );
+        assert!(
+            rep.notes.iter().any(|n| n.contains("LEADER")),
+            "{:?}",
+            rep.notes
+        );
+    }
+    if let Some(d) = corpus::gdal("solid.dxf") {
+        let (ed, _) = support::import(&d).unwrap();
+        let o = ed.doc().objects.values().next().unwrap();
+        assert!(
+            o.attrs.fill.is_some_and(|f| f.0[3] > 0),
+            "a SOLID is filled"
+        );
+    }
+    if let Some(d) = corpus::ezdxf("image/images.dxf") {
+        let rep = imp(d);
+        let image = rep
+            .skipped
+            .iter()
+            .filter(|s| s.entity == "IMAGE")
+            .collect::<Vec<_>>();
+        assert!(!image.is_empty());
+        assert!(image.iter().all(|s| s.reason.contains("image")));
+        assert!(
+            image.iter().any(|s| s.reason.contains("image1.jpg")),
+            "the file of the image is named"
+        );
+    }
+    if let Some(d) = corpus::gdal("insert-recursive-pair.dxf") {
+        let rep = imp(d);
+        assert!(
+            rep.skipped
+                .iter()
+                .any(|s| s.reason.contains("nested too deep")),
+            "{:?}",
+            rep.skipped
+        );
+    }
+}

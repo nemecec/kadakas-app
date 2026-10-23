@@ -145,6 +145,9 @@ pub struct Dxf {
     pub entities: Vec<Entity>,
     /// The GEODATA object of the file (the georeference), if it has one.
     pub geodata: Option<GeoData>,
+    /// Objects of the OBJECTS section that the importer reads: LAYOUT (paper space layouts) and
+    /// IMAGEDEF (the file of a raster image).
+    pub objects: Vec<Entity>,
     /// The file ended before `EOF`.
     pub truncated: bool,
 }
@@ -306,22 +309,25 @@ pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
             "HEADER" => read_header(&mut dxf, body),
             "TABLES" => read_tables(&mut dxf, body),
             "BLOCKS" => read_blocks(&mut dxf, body),
-            "ENTITIES" => dxf.entities = nest_polylines(records(body)),
+            // A file that was joined from several files can have more than one section.
+            "ENTITIES" => dxf.entities.extend(nest_polylines(records(body))),
             "OBJECTS" => {
-                dxf.geodata = records(body)
-                    .iter()
-                    .find(|e| e.kind == "GEODATA")
-                    .map(|e| GeoData {
-                        design: [e.fd(10, 0.0), e.fd(20, 0.0)],
-                        reference: [e.fd(11, 0.0), e.fd(21, 0.0)],
-                        north: [e.fd(12, 0.0), e.fd(22, 1.0)],
-                        definition: e
-                            .items
-                            .iter()
-                            .filter(|(c, _)| *c == 301 || *c == 303)
-                            .map(|(_, v)| v.as_str())
-                            .collect(),
-                    });
+                let recs = records(body);
+                dxf.geodata = recs.iter().find(|e| e.kind == "GEODATA").map(|e| GeoData {
+                    design: [e.fd(10, 0.0), e.fd(20, 0.0)],
+                    reference: [e.fd(11, 0.0), e.fd(21, 0.0)],
+                    north: [e.fd(12, 0.0), e.fd(22, 1.0)],
+                    definition: e
+                        .items
+                        .iter()
+                        .filter(|(c, _)| *c == 301 || *c == 303)
+                        .map(|(_, v)| v.as_str())
+                        .collect(),
+                });
+                dxf.objects = recs
+                    .into_iter()
+                    .filter(|e| matches!(e.kind.as_str(), "LAYOUT" | "IMAGEDEF"))
+                    .collect();
             }
             _ => {}
         }

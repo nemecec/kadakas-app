@@ -1,0 +1,1441 @@
+{
+ "ezdxf:examples_dxf/3dface.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 71,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/Minimal_DXF_AC1006.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/Minimal_DXF_AC1009.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/Minimal_DXF_AC1021.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1021",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/VP4.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 6,
+  "paper": 21,
+  "version": "AC1027",
+  "viewports": 5
+ },
+ "ezdxf:examples_dxf/acad_table_simple.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/acad_table_with_blk_ref.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/caret_encoding.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 61,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/circle_radius_le_0.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/clockwise_arcs_hatch.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/colors.dxf": {
+  "attribs": 0,
+  "inserts": 4,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 28,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/columns_R2007.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 52,
+  "paper": 0,
+  "version": "AC1021",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/columns_R2018.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 52,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/dimension_in_block.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/dimension_in_nested_blocks.dxf": {
+  "attribs": 0,
+  "inserts": 4,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatch_issues.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 12,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatch_text_box_in_fill.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatch_text_box_in_hole.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatch_text_box_overlapping_fill_and_hole.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatches_1.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 32,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/hatches_2.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 11,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/image/images.dxf": {
+  "attribs": 0,
+  "inserts": 5,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 233,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/image/viewports.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 17,
+  "paper": 19,
+  "version": "AC1027",
+  "viewports": 12
+ },
+ "ezdxf:examples_dxf/insert_bricscad_level_1.dxf": {
+  "attribs": 0,
+  "inserts": 6,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 24,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/mtext_columns_R2000.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/mtext_columns_R2007.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1021",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/mtext_columns_R2018.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/mtext_complex_inline_codes.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 12,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/multi_insert_with_attribs.dxf": {
+  "attribs": 3,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text.dxf": {
+  "attribs": 4,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 222,
+  "paper": 4,
+  "version": "AC1032",
+  "viewports": 4
+ },
+ "ezdxf:examples_dxf/text_alignments.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 58,
+  "paper": 0,
+  "version": "AC1018",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_fonts.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1344,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_in_viewports.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 8,
+  "paper": 17,
+  "version": "AC1027",
+  "viewports": 7
+ },
+ "ezdxf:examples_dxf/text_mirror_shx_font.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 672,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_mirror_true_type_font.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 672,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_negative_extrusion.dxf": {
+  "attribs": 4,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 222,
+  "paper": 4,
+  "version": "AC1032",
+  "viewports": 4
+ },
+ "ezdxf:examples_dxf/text_oblique_rotate.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 317,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_stacked_shx_font.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 439,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/text_stacked_true_type_font.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 439,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/transform_hatch_pattern.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 24,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/uncommon.dxf": {
+  "attribs": 1,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 82,
+  "paper": 2,
+  "version": "AC1032",
+  "viewports": 2
+ },
+ "ezdxf:examples_dxf/valid_lineweights.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 50,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/viewport_frozen_layers.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 4,
+  "paper": 7,
+  "version": "AC1027",
+  "viewports": 4
+ },
+ "ezdxf:examples_dxf/visibility.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 6,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/wipeout_door.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 149,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/wipeout_random.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 31,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:examples_dxf/xclip.dxf": {
+  "attribs": 0,
+  "inserts": 9,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 18,
+  "paper": 9,
+  "version": "AC1027",
+  "viewports": 9
+ },
+ "ezdxf:integration_tests/data/AC1003_LINE_Example.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 22,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/ASCII_R12.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/Leica_Disto_S910.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 32,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/MODEL.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/POLI-ALL210_12.DXF": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 31,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/R12_with_trash_beyond_EOF.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/bin_dxf_r12.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/bin_dxf_r13.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/bin_dxf_r14.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/bin_dxf_r2000.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/cc_dxflib.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/custom_blocks.dxf": {
+  "attribs": 0,
+  "inserts": 3,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 5,
+  "paper": 0,
+  "version": "AC1024",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/duplicate_handles.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 145,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/dxf_unicode.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/empty_handles.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 8,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/groups.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 13,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/issue1106.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 10,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/issue_1359_1.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/issue_1359_2.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/layout_broken_links.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/layout_broken_links_2.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/layout_missing_block_definition.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/layout_missing_block_record.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/mtext_framed_columns.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/mtext_text_frame.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/no_layouts.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1021",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/r12_blocks_with_no_names.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/r2000_blocks_with_no_name_and_no_block_record.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/r2000_blocks_with_no_names.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/recover01.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1504,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/recover02.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "ISO A4 Size",
+   "Letter Size"
+  ],
+  "model": 95,
+  "paper": 4,
+  "version": "AC1032",
+  "viewports": 4
+ },
+ "ezdxf:integration_tests/data/small_r13.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 16,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "ezdxf:integration_tests/data/small_r14.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/3d.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 5,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/3dface.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/BINARY_wipeout.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "AEP 2"
+  ],
+  "model": 2,
+  "paper": 1,
+  "version": "AC1032",
+  "viewports": 1
+ },
+ "gdal:autotest/ogr/data/dxf/LWPOLYLINE-OCS.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 13,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/additional-entities.dxf": {
+  "attribs": 1,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 9,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/assorted.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 7,
+  "paper": 1,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/attrib-nested.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/attrib.dxf": {
+  "attribs": 4,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/bin_dxf_r12.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/bin_dxf_r2000.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/block-basepoint.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/block-hidden-entities.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/block-insert-order.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/byblock-bylayer-new.dxf": {
+  "attribs": 0,
+  "inserts": 9,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 18,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/byblock-bylayer.dxf": {
+  "attribs": 0,
+  "inserts": 3,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 5,
+  "paper": 1,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/circle.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/closed_polyline_with_bulge.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/clusterfuzz-testcase-minimized-dxf_fuzzer-5400376672124928.dxf": null,
+ "gdal:autotest/ogr/data/dxf/clusterfuzz-testcase-minimized-shape_fuzzer-6126814756995072.dxf": null,
+ "gdal:autotest/ogr/data/dxf/dimension-entities-only.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/dimension.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/ellipse_z_extrusion_minus_1.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/elliptical-arc-hatch-min.dxf": null,
+ "gdal:autotest/ogr/data/dxf/entities_only.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/frozen-off.dxf": {
+  "attribs": 0,
+  "inserts": 4,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 8,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/hatch.dxf": null,
+ "gdal:autotest/ogr/data/dxf/hatch_as_multipolygon.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "\u041b\u0438\u0441\u04421",
+   "\u041b\u0438\u0441\u04422"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1032",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/hatch_pattern_generated_by_gdal.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 7,
+  "paper": 0,
+  "version": "AC1018",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/header_extended.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1018",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/insert-recursive-pair.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/insert-too-many-errors.dxf": null,
+ "gdal:autotest/ogr/data/dxf/insert_only.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/insert_only_col_count_zero.dxf": {
+  "attribs": 0,
+  "inserts": 1,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/leader-mleader.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 18,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/linetypes.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/lwpolyline_smooth.dxf": null,
+ "gdal:autotest/ogr/data/dxf/mtext-ocs-reduced.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 6,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/ocs2wcs1.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 52,
+  "paper": 2,
+  "version": "AC1027",
+  "viewports": 2
+ },
+ "gdal:autotest/ogr/data/dxf/ocs2wcs2.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 68,
+  "paper": 2,
+  "version": "AC1027",
+  "viewports": 2
+ },
+ "gdal:autotest/ogr/data/dxf/ocs2wcs3.dxf": {
+  "attribs": 0,
+  "inserts": 6,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 10,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/polyline_smooth.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/solid-less-than-4-vertices.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 5,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/solid-vertex-ordering.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/solid.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/spline_closed.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 2,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/spline_qcad.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1",
+   "Layout2"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1015",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/spline_weight.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/spline_with_very_close_neg_to_zero_knot.dxf": null,
+ "gdal:autotest/ogr/data/dxf/text-block-transform.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 3,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/text-fancy.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 4,
+  "paper": 0,
+  "version": "AC1027",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/text.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 0,
+  "paper": 0,
+  "version": "AC1009",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/transparency.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1018",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/utf-8.dxf": {
+  "attribs": 0,
+  "inserts": 0,
+  "layouts": [
+   "Layout1"
+  ],
+  "model": 1,
+  "paper": 0,
+  "version": "AC1018",
+  "viewports": 0
+ },
+ "gdal:autotest/ogr/data/dxf/wipeout.dxf": {
+  "attribs": 0,
+  "inserts": 2,
+  "layouts": [
+   "AEP 2"
+  ],
+  "model": 2,
+  "paper": 1,
+  "version": "AC1032",
+  "viewports": 1
+ }
+}

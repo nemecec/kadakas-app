@@ -29,6 +29,17 @@ pub struct Report {
     /// DXF: the release of the file that was read, for example `AC1015 (release 2000)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// DXF: how many entities the import visited. Every copy of an exploded block counts. A file
+    /// is accounted for when this equals `entities_imported + entities_skipped`: no entity is
+    /// lost without a line in `skipped`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub entities_read: usize,
+    /// DXF: entities that gave at least one object (or part of a mesh).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub entities_imported: usize,
+    /// DXF: entities that gave nothing. Each one has a line in `skipped`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub entities_skipped: usize,
     /// True if the import set or used a georeference.
     pub georeferenced: bool,
     /// DXF and DWG: the drawing and revision that the objects carry in `data.import` (IOP-22).
@@ -41,6 +52,10 @@ pub struct Report {
     /// source) or `none`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Report {

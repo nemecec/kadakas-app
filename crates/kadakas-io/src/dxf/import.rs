@@ -1,9 +1,11 @@
 //! DXF entities to Kadakas shapes.
 //!
 //! Supported: LINE, LWPOLYLINE, POLYLINE (2D and 3D), ARC, CIRCLE, ELLIPSE,
-//! SPLINE, TEXT, MTEXT, POINT, 3DFACE, HATCH and INSERT (exploded).
+//! SPLINE, TEXT, MTEXT, ATTRIB, POINT, 3DFACE, SOLID, TRACE, HATCH, WIPEOUT, MESH, LEADER and INSERT
+//! (exploded). DIMENSION and ACAD_TABLE are exploded from their anonymous block.
 //! A bulge becomes an exact `PointOnArc` vertex at the middle of the arc.
 //! Ellipses and splines become polylines, within the tolerance of the options.
+//! Every entity is counted: it is imported, or it has a line in `report.skipped`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::{PI, TAU};
@@ -15,8 +17,16 @@ use kadakas_core::georef::Georeference;
 use kadakas_core::mesh3d::Mesh3d;
 use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
+mod approx;
+mod extra;
+mod tilted;
+
+use approx::Tally;
+use tilted::Plane;
+
 use super::parse::{self, Dxf, Entity, LayerDef};
 use super::source::{Path, Tracking};
+use super::text::{clean_mtext, decode_percent, decode_text};
 use super::{aci_rgb, true_color};
 use super::{hash, revision};
 use crate::BaseMode;
@@ -401,6 +411,7 @@ fn walk(
         faces: Default::default(),
         repeated_closed: 0,
         repeated_gap_mm: 0.0,
+        tally: Tally::default(),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -419,6 +430,9 @@ fn walk(
             "{} {} (largest gap {:.3e} mm)",
             w.repeated_closed, REPEATED_NOTE, w.repeated_gap_mm
         );
+        w.b.report.note(&note);
+    }
+    for note in w.tally.notes(opts.tolerance) {
         w.b.report.note(&note);
     }
     // The layouts of paper space are not part of the model: the sheets of the drawing. Their
@@ -521,6 +535,10 @@ struct Cx {
 struct Item {
     shape: Shape,
     fill: Option<Color>,
+    /// The fill is the pen color of the entity (a SOLID, a solid HATCH).
+    fill_pen: bool,
+    /// A pen that replaces the one of the entity (a wipeout has none).
+    pen: Option<Color>,
     /// Object data. Text keeps its rotation here (`rotation_deg`), because a text shape has none.
     data: BTreeMap<String, serde_json::Value>,
 }
@@ -530,6 +548,8 @@ impl Item {
         Item {
             shape,
             fill: None,
+            fill_pen: false,
+            pen: None,
             data: BTreeMap::new(),
         }
     }
@@ -558,6 +578,8 @@ struct Walker<'a> {
     /// that this closed, in mm.
     repeated_closed: usize,
     repeated_gap_mm: f64,
+    /// What was approximated or changed, for the notes of the report.
+    tally: Tally,
 }
 
 /// Vertices and triangles of the 3D faces of one layer.
@@ -748,9 +770,25 @@ impl Walker<'_> {
         self.repeated_gap_mm = self.repeated_gap_mm.max(gap_mm);
     }
 
+    /// An entity that gave nothing, with the reason in the report.
+    fn skip_entity(&mut self, e: &Entity, why: &str) {
+        self.b.report.entities_skipped += 1;
+        self.b.report.skip(&e.kind, why);
+    }
+
     fn entity(&mut self, e: &Entity, cx: &Cx) {
         self.visits += 1;
-        if self.visits > MAX_VISITS || self.b.is_full() || self.overflow {
+        if self.overflow {
+            return;
+        }
+        if self.visits > MAX_VISITS || self.b.is_full() {
+            let why = if self.b.is_full() {
+                "object limit reached"
+            } else {
+                "import stopped: too many entities"
+            };
+            self.b.report.entities_read += 1;
+            self.skip_entity(e, why);
             return;
         }
         if cx.depth > 0 {
@@ -760,23 +798,49 @@ impl Walker<'_> {
                 return;
             }
         }
+        self.b.report.entities_read += 1;
         if e.int(67) == Some(1) {
-            self.b.report.skip(&e.kind, "in paper space");
+            self.skip_entity(e, "in paper space");
             return;
         }
         if e.int(60) == Some(1) {
-            self.b.report.skip(&e.kind, "invisible");
+            self.skip_entity(e, "invisible");
             return;
         }
-        if e.kind == "INSERT" {
-            self.insert(e, cx);
+        // The points of a dimension that lie on the layer Defpoints do not plot.
+        if e.kind == "POINT" && e.layer().eq_ignore_ascii_case("defpoints") {
+            self.skip_entity(
+                e,
+                "definition point of a dimension (the layer Defpoints does not plot)",
+            );
             return;
+        }
+        match e.kind.as_str() {
+            "INSERT" => {
+                let ok = self.insert(e, cx);
+                self.count(ok);
+                return;
+            }
+            // These entities are drawn by the CAD program from their data. Their anonymous block
+            // holds the lines and text that it drew.
+            "DIMENSION" | "ARC_DIMENSION" | "LARGE_RADIAL_DIMENSION" | "ACAD_TABLE" => {
+                let ok = self.block_proxy(e, cx);
+                self.count(ok);
+                return;
+            }
+            "IMAGE" => {
+                let why = extra::image_reason(e, self.dxf);
+                self.skip_entity(e, &why);
+                return;
+            }
+            _ => {}
         }
         let mut items = Vec::new();
         if let Err(why) = self.convert(e, cx, &mut items) {
-            self.b.report.skip(&e.kind, why);
+            self.skip_entity(e, why);
             return;
         }
+        self.b.report.entities_imported += 1;
         let layer_name = match (&cx.layer, e.layer()) {
             (Some(l), "0") => l.clone(),
             (_, l) => l.to_string(),
@@ -786,8 +850,14 @@ impl Walker<'_> {
         let parts = items.len();
         for (n, mut item) in items.into_iter().enumerate() {
             let mut a = attrs.clone();
+            if item.fill_pen {
+                a.fill = Some(a.pen.unwrap_or(Color::BLACK));
+            }
             if item.fill.is_some() {
                 a.fill = item.fill;
+            }
+            if item.pen.is_some() {
+                a.pen = item.pen;
             }
             if let Some(t) = self.tracking {
                 let part = (parts > 1).then_some(n as u32);
@@ -797,6 +867,46 @@ impl Walker<'_> {
             }
             self.b.add(&e.kind, item.shape, layer, class, a, item.data);
         }
+    }
+
+    /// Counts an entity as imported or skipped (the reason is in the report already).
+    fn count(&mut self, imported: bool) {
+        if imported {
+            self.b.report.entities_imported += 1;
+        } else {
+            self.b.report.entities_skipped += 1;
+        }
+    }
+
+    /// A DIMENSION (or table) is drawn from its anonymous block: it is inserted like a block
+    /// reference at the origin. Without the block there is nothing to draw.
+    fn block_proxy(&mut self, e: &Entity, cx: &Cx) -> bool {
+        let name = e.get(2).unwrap_or("");
+        if name.is_empty() || !self.dxf.blocks.contains_key(name) {
+            self.b.report.skip(
+                &e.kind,
+                "has no geometry block in the file, so there is nothing to draw (the CAD program draws it from its data)",
+            );
+            return false;
+        }
+        let mut items: Vec<(i32, String)> = vec![
+            (2, name.to_string()),
+            (8, e.layer().to_string()),
+            (10, "0".into()),
+            (20, "0".into()),
+            (30, "0".into()),
+        ];
+        for code in [5, 62, 420, 370] {
+            if let Some(v) = e.get(code) {
+                items.push((code, v.to_string()));
+            }
+        }
+        let proxy = Entity {
+            kind: "INSERT".into(),
+            items,
+            children: vec![],
+        };
+        self.insert(&proxy, cx)
     }
 
     /// Adds the merged 3D faces as mesh objects, one per DXF layer.
@@ -854,20 +964,21 @@ impl Walker<'_> {
         }
     }
 
-    fn insert(&mut self, e: &Entity, cx: &Cx) {
+    /// Expands a block reference. False when nothing was inserted (the reason is in the report).
+    fn insert(&mut self, e: &Entity, cx: &Cx) -> bool {
         if !self.opts.explode_blocks {
             self.b
                 .report
                 .skip("INSERT", "blocks are not exploded (option)");
-            return;
+            return false;
         }
         let Some(name) = e.get(2) else {
             self.b.report.skip("INSERT", "no block name");
-            return;
+            return false;
         };
         let Some(block) = self.dxf.blocks.get(name) else {
             self.b.report.skip("INSERT", "block is not defined");
-            return;
+            return false;
         };
         if block.flags & 12 != 0 {
             // An external reference holds no geometry in this file: say which file it needs.
@@ -880,15 +991,18 @@ impl Walker<'_> {
                 "INSERT",
                 &format!("external reference (XREF) '{name}' to {path} is not loaded: import that file too"),
             );
-            return;
+            return false;
         }
         if cx.depth >= MAX_DEPTH {
             self.b.report.skip("INSERT", "blocks are nested too deep");
-            return;
+            return false;
         }
         let Ok(flip) = ocs_flip(e) else {
-            self.b.report.skip("INSERT", "tilted extrusion direction");
-            return;
+            self.b.report.skip(
+                "INSERT",
+                "tilted extrusion direction: a block in a tilted plane is not placed",
+            );
+            return false;
         };
         let (sx, sy, sz) = (e.fd(41, 1.0), e.fd(42, 1.0), e.fd(43, 1.0));
         let rot = e.fd(50, 0.0).to_radians();
@@ -897,7 +1011,7 @@ impl Walker<'_> {
         let rows_n = e.int(71).unwrap_or(1).clamp(1, MAX_ARRAY);
         if cols_n * rows_n > MAX_ARRAY {
             self.b.report.skip("INSERT", "array is too large");
-            return;
+            return false;
         }
         let (dx, dy) = (e.fd(44, 0.0), e.fd(45, 0.0));
         let (sin, cos) = rot.sin_cos();
@@ -949,6 +1063,7 @@ impl Walker<'_> {
                 }
             }
         }
+        true
     }
 
     fn convert(&mut self, e: &Entity, cx: &Cx, out: &mut Vec<Item>) -> Result<(), Skip> {
@@ -974,7 +1089,7 @@ impl Walker<'_> {
                 }
             }
             "LWPOLYLINE" => {
-                let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
+                let plane = Plane::of(e);
                 let mut pts: Vec<(DVec2, f64)> = Vec::new();
                 for (code, value) in &e.items {
                     let Some(v) = parse::parse_f64(value) else {
@@ -1000,6 +1115,27 @@ impl Walker<'_> {
                     self.repeated(g * xf.length_scale());
                 }
                 let elevation = e.fd(38, 0.0);
+                let flip = match plane {
+                    Plane::Flat { flip } => flip,
+                    Plane::Tilted(ocs) => {
+                        if pts.len() < 2 {
+                            return Err("fewer than 2 vertices");
+                        }
+                        let ring = tilted::polyline_points(
+                            &ocs,
+                            &pts,
+                            closed,
+                            elevation,
+                            tol / xf.length_scale().max(1e-12),
+                        );
+                        self.tally.tilted += 1;
+                        out.push(Item::new(Shape::Polyline3d {
+                            points: ring.iter().map(|p| world3(xf, *p)).collect(),
+                            closed,
+                        }));
+                        return Ok(());
+                    }
+                };
                 out.push(Item::new(polyline_from(
                     &pts, closed, flip, elevation, xf, tol,
                 )?));
@@ -1031,13 +1167,33 @@ impl Walker<'_> {
                     }
                     out.push(Item::new(Shape::Polyline3d { points, closed }));
                 } else {
-                    let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
                     let mut pts: Vec<(DVec2, f64)> = verts
                         .map(|v| (DVec2::new(v.fd(10, 0.0), v.fd(20, 0.0)), v.fd(42, 0.0)))
                         .collect();
                     if let Some(g) = close_repeated(&mut pts, &mut closed, |p| p.0.extend(0.0)) {
                         self.repeated(g * xf.length_scale());
                     }
+                    let flip = match Plane::of(e) {
+                        Plane::Flat { flip } => flip,
+                        Plane::Tilted(ocs) => {
+                            if pts.len() < 2 {
+                                return Err("fewer than 2 vertices");
+                            }
+                            let ring = tilted::polyline_points(
+                                &ocs,
+                                &pts,
+                                closed,
+                                e.fd(30, 0.0),
+                                tol / xf.length_scale().max(1e-12),
+                            );
+                            self.tally.tilted += 1;
+                            out.push(Item::new(Shape::Polyline3d {
+                                points: ring.iter().map(|p| world3(xf, *p)).collect(),
+                                closed,
+                            }));
+                            return Ok(());
+                        }
+                    };
                     out.push(Item::new(polyline_from(
                         &pts,
                         closed,
@@ -1049,11 +1205,30 @@ impl Walker<'_> {
                 }
             }
             "CIRCLE" => {
-                let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
                 let (c, r) = (
                     DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)),
                     e.f(40).ok_or("no radius")?,
                 );
+                let flip = match Plane::of(e) {
+                    Plane::Flat { flip } => flip,
+                    Plane::Tilted(ocs) => {
+                        let ring = tilted::circle_points(
+                            &ocs,
+                            c.extend(e.fd(30, 0.0)),
+                            r,
+                            tol / xf.length_scale().max(1e-12),
+                        );
+                        self.tally.tilted += 1;
+                        out.push(Item::new(Shape::Polyline3d {
+                            points: ring.iter().map(|p| world3(xf, *p)).collect(),
+                            closed: true,
+                        }));
+                        return Ok(());
+                    }
+                };
+                if !xf.is_similarity() {
+                    self.tally.scaled_arcs += 1;
+                }
                 if xf.is_similarity() {
                     out.push(Item::new(Shape::Circle {
                         center: xf.apply(flipx(c, flip)),
@@ -1077,7 +1252,6 @@ impl Walker<'_> {
                 }
             }
             "ARC" => {
-                let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
                 let (c, r) = (
                     DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)),
                     e.f(40).ok_or("no radius")?,
@@ -1086,6 +1260,28 @@ impl Walker<'_> {
                 let mut sweep = (a1 - a0).rem_euclid(TAU);
                 if sweep == 0.0 {
                     sweep = TAU;
+                }
+                let flip = match Plane::of(e) {
+                    Plane::Flat { flip } => flip,
+                    Plane::Tilted(ocs) => {
+                        let pts = tilted::arc_points(
+                            &ocs,
+                            c.extend(e.fd(30, 0.0)),
+                            r,
+                            a0,
+                            sweep,
+                            tol / xf.length_scale().max(1e-12),
+                        );
+                        self.tally.tilted += 1;
+                        out.push(Item::new(Shape::Polyline3d {
+                            points: pts.iter().map(|p| world3(xf, *p)).collect(),
+                            closed: false,
+                        }));
+                        return Ok(());
+                    }
+                };
+                if !xf.is_similarity() {
+                    self.tally.scaled_arcs += 1;
                 }
                 if xf.is_similarity() {
                     let at = |a: f64| xf.apply(flipx(c + DVec2::from_angle(a) * r, flip));
@@ -1131,6 +1327,31 @@ impl Walker<'_> {
                 if sweep == 0.0 || (t1 - t0).abs() >= TAU - 1e-9 {
                     sweep = TAU;
                 }
+                self.tally.ellipses += 1;
+                if let Plane::Tilted(ocs) = Plane::of(e) {
+                    // The center and the major axis are world points; the minor axis lies in the
+                    // plane of the extrusion direction.
+                    let ring = tilted::ellipse_world(
+                        DVec3::new(e.fd(10, 0.0), e.fd(20, 0.0), e.fd(30, 0.0)),
+                        DVec3::new(e.fd(11, 0.0), e.fd(21, 0.0), e.fd(31, 0.0)),
+                        ocs.z,
+                        ratio,
+                        t0,
+                        sweep,
+                        tol / xf.length_scale().max(1e-12),
+                    );
+                    let full = sweep >= TAU - 1e-9;
+                    let mut points: Vec<DVec3> = ring.iter().map(|p| world3(xf, *p)).collect();
+                    if full && points.len() > 1 {
+                        points.pop();
+                    }
+                    self.tally.tilted += 1;
+                    out.push(Item::new(Shape::Polyline3d {
+                        points,
+                        closed: full,
+                    }));
+                    return Ok(());
+                }
                 let nz = if e.fd(230, 1.0) < 0.0 { -1.0 } else { 1.0 };
                 let pts = ellipse_points(
                     c,
@@ -1148,9 +1369,19 @@ impl Walker<'_> {
                     closed: full,
                 }));
             }
-            "SPLINE" => out.push(Item::new(spline(e, xf)?)),
-            "TEXT" | "MTEXT" => {
-                let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
+            "SPLINE" => out.push(Item::new(spline(
+                e,
+                xf,
+                tol / xf.length_scale().max(1e-12),
+                &mut self.tally,
+            )?)),
+            "TEXT" | "MTEXT" | "ATTRIB" => {
+                let flip = ocs_flip(e).map_err(
+                    |_| "tilted extrusion direction: text in a tilted plane is not placed",
+                )?;
+                if e.kind == "ATTRIB" && e.int(70).unwrap_or(0) & 1 != 0 {
+                    return Err("invisible attribute");
+                }
                 let mtext = e.kind == "MTEXT";
                 let raw: String = if mtext {
                     e.items
@@ -1165,7 +1396,7 @@ impl Walker<'_> {
                 let text = if mtext {
                     clean_mtext(&raw)
                 } else {
-                    decode_percent(&raw)
+                    decode_text(&raw)
                 };
                 if text.trim().is_empty() {
                     return Err("empty text");
@@ -1249,7 +1480,11 @@ impl Walker<'_> {
                 if !self.opts.hatches {
                     return Err("hatches are not imported (option)");
                 }
-                let flip = ocs_flip(e).map_err(|_| "tilted extrusion direction")?;
+                let plane = Plane::of(e);
+                let flip = match plane {
+                    Plane::Flat { flip } => flip,
+                    Plane::Tilted(_) => false,
+                };
                 let (loops, dropped) = hatch_loops(e, tol / xf.length_scale().max(1e-12));
                 for _ in 0..dropped {
                     self.b.report.skip(
@@ -1264,37 +1499,117 @@ impl Walker<'_> {
                     }
                     return Err("hatch without usable boundary");
                 }
+                if let Plane::Tilted(ocs) = plane {
+                    // A fill cannot lie in a tilted plane: the boundary paths are 3D polylines.
+                    let elevation = e.fd(30, 0.0);
+                    for l in loops {
+                        let ring = kadakas_core::curve::flatten(
+                            &l,
+                            true,
+                            tol / xf.length_scale().max(1e-12),
+                        );
+                        let mut points: Vec<DVec3> = ring
+                            .iter()
+                            .map(|p| world3(xf, ocs.world(p.extend(elevation))))
+                            .collect();
+                        if points.len() > 1 && points.first() == points.last() {
+                            points.pop();
+                        }
+                        out.push(Item::new(Shape::Polyline3d {
+                            points,
+                            closed: true,
+                        }));
+                    }
+                    self.tally.tilted_hatches += 1;
+                    return Ok(());
+                }
                 let solid = e.int(70) == Some(1);
-                let fill = solid
+                let gradient = solid && e.int(450) == Some(1);
+                if !solid {
+                    let name = e.get(2).unwrap_or("").trim();
+                    let name = if name.is_empty() { "(no name)" } else { name };
+                    *self
+                        .tally
+                        .pattern_hatches
+                        .entry(name.to_string())
+                        .or_default() += 1;
+                }
+                // A gradient has two colors; the first one is the flat fill. A plain solid hatch
+                // fills with its pen color.
+                let fill = gradient
                     .then(|| {
-                        e.int(420)
+                        self.tally.gradient_hatches += 1;
+                        e.int(421)
                             .and_then(|v| u32::try_from(v).ok())
                             .map(true_color)
                             .or_else(|| {
-                                e.int(62)
+                                e.int(63)
                                     .and_then(|i| u8::try_from(i).ok())
                                     .and_then(aci_rgb)
                                     .map(|[r, g, b]| Color([r, g, b, 255]))
                             })
                     })
                     .flatten();
-                for l in loops {
+                // The outlines with their curves cut into short chords, to test which loop lies in which.
+                let corner_points: Vec<Vec<DVec2>> = loops
+                    .iter()
+                    .map(|l| {
+                        kadakas_core::curve::flatten(
+                            l,
+                            true,
+                            tol / 50.0 / xf.length_scale().max(1e-12),
+                        )
+                    })
+                    .collect();
+                let island = if solid && e.int(75).unwrap_or(0) != 2 {
+                    extra::islands(&corner_points, tol / 10.0 / xf.length_scale().max(1e-12))
+                } else {
+                    vec![false; loops.len()]
+                };
+                for (l, is_island) in loops.into_iter().zip(island) {
                     let pts: Vec<Vertex> = l
                         .into_iter()
                         .map(|v| Vertex::new(xf.apply(flipx(v.p, flip)), v.kind))
                         .collect();
-                    out.push(Item {
-                        shape: Shape::Polyline {
-                            points: pts,
-                            closed: true,
-                        },
-                        fill,
-                        data: BTreeMap::new(),
+                    let mut item = Item::new(Shape::Polyline {
+                        points: pts,
+                        closed: true,
                     });
+                    if is_island {
+                        // A filled shape has no hole: the island is the color of the paper.
+                        item.fill = Some(extra::PAPER);
+                        item.data.insert("hatch_island".into(), true.into());
+                        self.tally.hatch_islands += 1;
+                    } else if solid {
+                        item.fill = fill;
+                        item.fill_pen = fill.is_none();
+                    }
+                    out.push(item);
                 }
             }
-            "ATTRIB" | "ATTDEF" | "VIEWPORT" => return Err("not drawing geometry"),
-            _ => return Err("unsupported entity type"),
+            "WIPEOUT" => {
+                out.push(extra::wipeout(e, xf)?);
+                self.tally.wipeouts += 1;
+            }
+            "SOLID" | "TRACE" => {
+                let plane = Plane::of(e);
+                if let Plane::Tilted(_) = plane {
+                    self.tally.tilted += 1;
+                }
+                out.push(extra::solid(e, xf, &plane)?);
+            }
+            "MESH" => {
+                let (mesh, subdivided) = extra::mesh(e, xf)?;
+                if subdivided {
+                    self.tally.subdivided_meshes += 1;
+                }
+                out.push(Item::new(Shape::Mesh3d(Box::new(mesh))));
+            }
+            "LEADER" => {
+                out.push(extra::leader(e, xf)?);
+                self.tally.leaders += 1;
+            }
+            other => return Err(extra::reason(other).unwrap_or("unsupported entity type")),
         }
         Ok(())
     }
@@ -1320,6 +1635,11 @@ fn close_repeated<T>(pts: &mut Vec<T>, closed: &mut bool, at: impl Fn(&T) -> DVe
     pts.pop();
     *closed = true;
     Some(gap)
+}
+
+/// A world point through the transform of the block it is in: x and y by the 2D transform, z by the scale and move of z.
+fn world3(xf: &Xf, p: DVec3) -> DVec3 {
+    xf.apply(p.truncate()).extend(xf.z(p.z))
 }
 
 fn flipx(p: DVec2, flip: bool) -> DVec2 {
@@ -1676,7 +1996,7 @@ fn hatch_edge(
                     weights.push(next(i, 42)?);
                 }
             }
-            let pts = bspline_points(degree, &ctrl, &knots, &weights)?;
+            let pts = bspline_points(degree, &ctrl, &knots, &weights, tol)?;
             Some(corners(
                 &pts.iter().map(|p| p.truncate()).collect::<Vec<_>>(),
             ))
@@ -1717,13 +2037,15 @@ fn basis(span: usize, t: f64, p: usize, knots: &[f64]) -> Vec<f64> {
     n
 }
 
-/// Points on a (rational) B-spline from its control points, knots and weights. `None` when the
-/// data do not make a spline.
+/// Points on a (rational) B-spline from its control points, knots and weights. The curve is cut
+/// until no chord is more than `tol` from the curve (in drawing units). `None` when the data do
+/// not make a spline.
 fn bspline_points(
     degree: usize,
     ctrl: &[DVec3],
     knots: &[f64],
     weights: &[f64],
+    tol: f64,
 ) -> Option<Vec<DVec3>> {
     let n = ctrl.len();
     let valid = n > degree
@@ -1734,11 +2056,7 @@ fn bspline_points(
     if !valid {
         return None;
     }
-    let samples = (n * 12).clamp(24, 4000);
-    let (t0, t1) = (knots[degree], knots[n]);
-    let mut pts = Vec::with_capacity(samples + 1);
-    for k in 0..=samples {
-        let t = t0 + (t1 - t0) * k as f64 / samples as f64;
+    let at = |t: f64| -> Option<DVec3> {
         // The last knot span that starts at or before t, but not past the end.
         let mut span = degree;
         while span + 1 < n && knots[span + 1] <= t {
@@ -1752,14 +2070,60 @@ fn bspline_points(
             acc += ctrl[idx] * (nj * w);
             wsum += nj * w;
         }
-        if wsum.abs() > 1e-300 {
-            pts.push(acc / wsum);
+        (wsum.abs() > 1e-300).then(|| acc / wsum)
+    };
+    let (t0, t1) = (knots[degree], knots[n]);
+    // A first cut into equal steps, then the middle of every piece is checked against its chord,
+    // and a piece that is too far off is cut in two.
+    let base = (n * 4).clamp(16, 1000);
+    let mut pts: Vec<DVec3> = Vec::new();
+    let mut prev: Option<(f64, DVec3)> = None;
+    for k in 0..=base {
+        let t = t0 + (t1 - t0) * k as f64 / base as f64;
+        let Some(p) = at(t) else { continue };
+        if let Some((tp, pp)) = prev {
+            refine(&at, (tp, pp), (t, p), tol.max(1e-9), 0, &mut pts);
         }
+        prev = Some((t, p));
+    }
+    if let Some((_, p)) = prev {
+        pts.push(p);
     }
     (pts.len() >= 2).then_some(pts)
 }
 
-fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
+/// Adds the start of the piece `a` to `b` of a curve, after cutting it where it is farther than
+/// `tol` from its chord.
+fn refine(
+    at: &impl Fn(f64) -> Option<DVec3>,
+    a: (f64, DVec3),
+    b: (f64, DVec3),
+    tol: f64,
+    depth: u32,
+    out: &mut Vec<DVec3>,
+) {
+    if depth < 14
+        && out.len() < 200_000
+        && let Some(pm) = at((a.0 + b.0) / 2.0)
+    {
+        let chord = b.1 - a.1;
+        let len2 = chord.length_squared();
+        let off = if len2 < 1e-300 {
+            (pm - a.1).length()
+        } else {
+            (pm - a.1 - chord * ((pm - a.1).dot(chord) / len2).clamp(0.0, 1.0)).length()
+        };
+        if off > tol {
+            let m = ((a.0 + b.0) / 2.0, pm);
+            refine(at, a, m, tol, depth + 1, out);
+            refine(at, m, b, tol, depth + 1, out);
+            return;
+        }
+    }
+    out.push(a.1);
+}
+
+fn spline(e: &Entity, xf: &Xf, tol: f64, tally: &mut Tally) -> Result<Shape, Skip> {
     let degree = e.int(71).unwrap_or(3).clamp(1, 16) as usize;
     let point_list = |cx: i32| -> Vec<DVec3> {
         let mut pts: Vec<DVec3> = Vec::new();
@@ -1801,7 +2165,8 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
             }
         }
     };
-    if let Some(mut pts) = bspline_points(degree, &ctrl, &knots, &weights) {
+    if let Some(mut pts) = bspline_points(degree, &ctrl, &knots, &weights, tol) {
+        tally.splines += 1;
         let end_closed = closed
             && pts
                 .first()
@@ -1813,6 +2178,7 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
         return Ok(make(pts, end_closed));
     }
     if fit.len() >= 2 && fit.iter().all(|p| p.z == 0.0) {
+        tally.spline_fit += 1;
         let last = fit.len() - 1;
         let points = fit
             .iter()
@@ -1832,89 +2198,8 @@ fn spline(e: &Entity, xf: &Xf) -> Result<Shape, Skip> {
     if pts.len() < 2 {
         return Err("spline without points");
     }
+    tally.spline_polygon += 1;
     Ok(make(pts, closed))
-}
-
-/// Replaces `%%d`, `%%p` and `%%c` (degree, plus-minus, diameter) and `\U+XXXX`.
-pub fn decode_percent(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '%' && chars.get(i + 1) == Some(&'%') {
-            match chars.get(i + 2).map(|c| c.to_ascii_lowercase()) {
-                Some('d') => out.push('\u{b0}'),
-                Some('p') => out.push('\u{b1}'),
-                Some('c') => out.push('\u{d8}'),
-                Some('%') => out.push('%'),
-                Some(other) => {
-                    out.push_str("%%");
-                    out.push(other);
-                }
-                None => out.push_str("%%"),
-            }
-            i += 3.min(chars.len() - i);
-        } else if chars[i] == '\\'
-            && matches!(chars.get(i + 1), Some('U') | Some('u'))
-            && chars.get(i + 2) == Some(&'+')
-        {
-            let hex: String = chars[i + 3..].iter().take(4).collect();
-            match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                Some(c) if hex.len() == 4 => {
-                    out.push(c);
-                    i += 7;
-                }
-                _ => {
-                    out.push('\\');
-                    i += 1;
-                }
-            }
-        } else {
-            out.push(chars[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// Plain text of MTEXT: line breaks kept, formatting codes removed.
-pub fn clean_mtext(s: &str) -> String {
-    let s = decode_percent(s);
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        match c {
-            '{' | '}' => {}
-            '\\' => match it.next() {
-                Some('P') | Some('p') | Some('X') => out.push('\n'),
-                Some('~') => out.push(' '),
-                Some(c @ ('\\' | '{' | '}')) => out.push(c),
-                Some('L' | 'l' | 'O' | 'o' | 'K' | 'k') => {}
-                Some('S') => {
-                    // Stacked text: keep the numerator and denominator.
-                    let mut body = String::new();
-                    for c in it.by_ref() {
-                        if c == ';' {
-                            break;
-                        }
-                        body.push(c);
-                    }
-                    out.push_str(&body.replace(['^', '#'], "/"));
-                }
-                Some(_) => {
-                    // A code with arguments, such as \fArial|b0;
-                    for c in it.by_ref() {
-                        if c == ';' {
-                            break;
-                        }
-                    }
-                }
-                None => {}
-            },
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -2080,13 +2365,24 @@ mod tests {
 0\nCIRCLE\n10\n0\n20\n0\n";
         let (doc, report) = run(&dxf_text("", "", "", ents), &ImportOptions::default());
         let s = shapes(&doc);
-        assert_eq!(s.len(), 2);
+        assert_eq!(s.len(), 3);
         assert!(matches!(s[0], Shape::Polyline3d { points, .. } if points[0].z == 12.0));
         let Shape::Polyline { points, .. } = s[1] else {
             panic!()
         };
         assert_eq!(points[0].p, DVec2::new(-1.0, 0.0));
-        assert_eq!(report.skipped_total(), 3);
+        // The circle in the plane x = 0 stands up as a closed 3D polyline.
+        let Shape::Polyline3d { points, closed } = s[2] else {
+            panic!()
+        };
+        assert!(
+            *closed
+                && points
+                    .iter()
+                    .all(|p| p.x.abs() < 1e-9 && p.y.abs() <= 1.0 + 1e-9)
+        );
+        assert!(points.iter().any(|p| p.z.abs() > 0.99));
+        assert_eq!(report.skipped_total(), 2);
     }
 
     #[test]
@@ -2173,17 +2469,6 @@ mod tests {
             1
         );
         assert!(report.notes.iter().all(|n| !n.contains("rotation")));
-    }
-
-    #[test]
-    fn decode_edge_cases() {
-        assert_eq!(decode_percent("100%%%"), "100%");
-        assert_eq!(decode_percent("%%x %%"), "%%x %%");
-        assert_eq!(decode_percent("%"), "%");
-        assert_eq!(decode_percent("\\U+12"), "\\U+12");
-        assert_eq!(decode_percent("\\U+zzzz"), "\\U+zzzz");
-        assert_eq!(clean_mtext("a\\"), "a");
-        assert_eq!(clean_mtext("\\pA\\Xb"), "\nA\nb");
     }
 
     #[test]
@@ -2401,7 +2686,7 @@ mod tests {
         };
         assert_eq!((polys[0].len(), arcs(polys[0])), (4, 2));
         assert!(polys[1].len() > 16 && arcs(polys[1]) == 0);
-        assert!(polys[2].len() > 20 && polys[3].len() > 20);
+        assert!(polys[2].len() > 4 && polys[3].len() > 4);
         assert_eq!(report.skipped_total(), 1);
         assert!(report.skipped[0].reason.contains("boundary path"));
         // The ellipse of 1000 by 500 has the area pi * 500,000 (the chords are within 2 mm).

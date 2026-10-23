@@ -15,6 +15,7 @@ pub mod link;
 pub mod parse;
 pub mod revision;
 mod source;
+pub mod text;
 pub mod units;
 pub mod update;
 pub mod version;
