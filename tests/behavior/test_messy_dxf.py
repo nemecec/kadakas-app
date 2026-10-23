@@ -32,11 +32,14 @@ def classes(cad):
 
 
 def objects_of(cad, class_names):
+    """The objects of the classes on design layers. Paper space is imported as sheet layers (IOP-16),
+    and its objects can share a class with the model, so they are left out here."""
     cls = classes(cad)
+    sheets = {la["id"] for la in cad.result("document.summary")["layers"] if la["kind"] == "sheet"}
     out = []
     for n in class_names:
         assert n in cls, (n, sorted(cls))
-        out += cad.result("objects.list", {"class": cls[n]})
+        out += [o for o in cad.result("objects.list", {"class": cls[n]}) if o["layer"] not in sheets]
     return out
 
 
