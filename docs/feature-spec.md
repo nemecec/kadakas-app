@@ -419,6 +419,7 @@ Crate `kadakas-irrigation` (pure, wasm-compatible) holds the hydraulic model. Th
 | IOP-12 | Point cloud import. | P2 | planned |
 | IOP-13 | Native `.vwx`. | Deferred | planned |
 | IOP-14 | Import report that lists dropped or approximated items. | P1 | done: `report.skipped` has the entity, the reason and a count for everything that is not imported, and `report.notes` the approximations. Real CAD files (`tests/behavior/fixtures/messy`, `test_messy_dxf.py`) added these lines: an XREF (`external reference (XREF) 'NAME' to PATH is not loaded`), every entity of a paper space layout (`in paper space`, also those in the layout blocks `*Paper_Space*`), a HATCH boundary path that cannot be read, a polyline with the closed flag off whose last point equals its first (imported as closed, noted), and the unit that was assumed (`the drawing has no unit: assuming millimeters`). |
+| IOP-15 | Research of real-world DXF, from public sources only (Vectorworks documentation and help pages, forum posts, the Autodesk DXF reference, ezdxf and other open-source notes, public sample files with a clear licence). Which DXF releases, entities, units, code pages and layer conventions does Vectorworks write and read? Result: `docs/research/dxf-real-world.md` with the source of every claim, then a test corpus of public sample files, import and export checks against it, and fixes. The product is neither downloaded nor used (clean-room rule). Soon: next after MOD-13. | P1 | planned |
 
 ### 4.17 Agent API
 
