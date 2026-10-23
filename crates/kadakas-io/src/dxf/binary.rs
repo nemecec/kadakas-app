@@ -97,8 +97,13 @@ fn take(data: &[u8], pos: usize, n: usize, code: i32) -> Result<&[u8], IoError> 
     })
 }
 
-/// Reads all pairs. The text values are decoded with `decode`.
-fn read_raw(data: &[u8]) -> Result<(Vec<(i32, Raw<'_>)>, bool), IoError> {
+/// Reads the pairs one by one and hands each to `f`, which says whether to go on. Returns the
+/// number of pairs read and whether the last one is `0 EOF`. Nothing is kept, so the memory is
+/// that of the caller.
+fn scan<'a>(
+    data: &'a [u8],
+    mut f: impl FnMut(i32, Raw<'a>) -> bool,
+) -> Result<(usize, bool), IoError> {
     if !data.starts_with(SENTINEL) {
         return Err(damaged(0, "the marker at the start is missing"));
     }
@@ -110,10 +115,16 @@ fn read_raw(data: &[u8]) -> Result<(Vec<(i32, Raw<'_>)>, bool), IoError> {
         ));
     }
     let mut pos = MARKER_LEN;
-    // Release 12 files have a one-byte code: the first pair is "0 SECTION", so the byte after the
-    // code is a letter. Newer files have a zero byte there.
-    let wide = data.get(pos + 1) == Some(&0);
-    let mut out: Vec<(i32, Raw)> = Vec::new();
+    // Release 12 files have a one-byte code, newer files two. The first pair is usually
+    // "0 SECTION": a zero byte and a letter (narrow), or two zero bytes (wide). A comment (999)
+    // can come first: in the narrow form it starts with 255, in the wide form with 231 and 3.
+    let wide = match (data.get(pos), data.get(pos + 1)) {
+        (Some(0), Some(b)) => *b == 0,
+        (Some(255), _) => false,
+        (Some(_), Some(b)) => *b < 32,
+        _ => false,
+    };
+    let (mut count, mut at_eof) = (0usize, false);
     while pos < data.len() {
         let start = pos;
         let Ok((code, after)) = read_code(data, pos, wide) else {
@@ -121,7 +132,7 @@ fn read_raw(data: &[u8]) -> Result<(Vec<(i32, Raw<'_>)>, bool), IoError> {
             return Err(damaged(start, "the file ends inside a group code"));
         };
         pos = after;
-        if out.len() >= MAX_PAIRS {
+        if count >= MAX_PAIRS {
             return Err(damaged(
                 start,
                 &format!("more than {MAX_PAIRS} pairs (a file of this kind is refused)"),
@@ -189,34 +200,39 @@ fn read_raw(data: &[u8]) -> Result<(Vec<(i32, Raw<'_>)>, bool), IoError> {
                 Raw::Done(b.iter().map(|x| format!("{x:02X}")).collect())
             }
         };
-        out.push((code, raw));
-    }
-    let early = !is_end_of_file(out.last());
-    Ok((out, early))
-}
-
-fn is_end_of_file(last: Option<&(i32, Raw)>) -> bool {
-    matches!(last, Some((0, Raw::Text(t))) if t.trim_ascii() == b"EOF")
-}
-
-/// The code page that the header names (`$DWGCODEPAGE`), from the raw pairs.
-fn code_page(pairs: &[(i32, Raw)]) -> Option<crate::encoding::Codec> {
-    let at = pairs.iter().position(|(c, v)| {
-        *c == 9 && matches!(v, Raw::Text(t) if t.trim_ascii() == b"$DWGCODEPAGE")
-    })?;
-    match pairs.get(at + 1) {
-        Some((3, Raw::Text(t))) => {
-            crate::encoding::codec_from_dwg_code_page(&String::from_utf8_lossy(t))
+        count += 1;
+        at_eof = code == 0 && matches!(&raw, Raw::Text(t) if t.trim_ascii() == b"EOF");
+        if !f(code, raw) {
+            break;
         }
-        _ => None,
     }
+    Ok((count, at_eof))
+}
+
+/// The code page that the header names (`$DWGCODEPAGE`). The scan stops at the end of the header.
+fn code_page(data: &[u8]) -> Option<crate::encoding::Codec> {
+    let mut found: Option<crate::encoding::Codec> = None;
+    let mut after_key = false;
+    let _ = scan(data, |code, v| {
+        let Raw::Text(t) = v else {
+            after_key = false;
+            return true;
+        };
+        if after_key && code == 3 {
+            found = crate::encoding::codec_from_dwg_code_page(&String::from_utf8_lossy(t));
+            return false;
+        }
+        after_key = code == 9 && t.trim_ascii() == b"$DWGCODEPAGE";
+        // The first ENDSEC is the end of the header.
+        !(code == 0 && t.trim_ascii() == b"ENDSEC")
+    });
+    found
 }
 
 /// Reads the pairs of a binary DXF file as text pairs. The second value is true when the file has
 /// no `EOF` at the end (it ends early).
 pub fn read_pairs(data: &[u8]) -> Result<(Vec<(i32, String)>, bool), IoError> {
-    let (raw, early) = read_raw(data)?;
-    let page = code_page(&raw);
+    let page = code_page(data);
     let text = |bytes: &[u8]| -> String {
         match std::str::from_utf8(bytes) {
             Ok(s) => s.to_string(),
@@ -226,14 +242,16 @@ pub fn read_pairs(data: &[u8]) -> Result<(Vec<(i32, String)>, bool), IoError> {
             },
         }
     };
-    let pairs = raw
-        .into_iter()
-        .map(|(c, v)| match v {
+    // One pass, and the pairs are made once: the memory is that of the result.
+    let mut pairs: Vec<(i32, String)> = Vec::new();
+    let (_, at_eof) = scan(data, |c, v| {
+        pairs.push(match v {
             Raw::Text(t) => (c, text(t)),
             Raw::Done(s) => (c, s),
-        })
-        .collect();
-    Ok((pairs, early))
+        });
+        true
+    })?;
+    Ok((pairs, !at_eof))
 }
 
 /// Writes pairs as a binary DXF file (`wide`: two-byte group codes of release 13 and newer).
@@ -349,6 +367,17 @@ mod tests {
             let (pairs, early) = read_pairs(&bytes).unwrap();
             assert!(!early);
             assert_eq!(pairs, norm(&sample()), "wide {wide}");
+        }
+    }
+
+    #[test]
+    fn a_comment_before_the_first_section_does_not_confuse_the_width() {
+        for wide in [false, true] {
+            let mut pairs = vec![(999, "made by a test".to_string())];
+            pairs.extend(sample());
+            let (read, _) = read_pairs(&write_pairs(&pairs, wide)).unwrap();
+            assert_eq!(read[0], (999, "made by a test".to_string()), "wide {wide}");
+            assert_eq!(read.len(), pairs.len());
         }
     }
 

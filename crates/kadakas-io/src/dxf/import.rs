@@ -1419,11 +1419,16 @@ impl Walker<'_> {
                 tol / xf.length_scale().max(1e-12),
                 &mut self.tally,
             )?)),
-            "TEXT" | "MTEXT" | "ATTRIB" => {
+            "TEXT" | "MTEXT" | "ATTRIB" | "ATTDEF" => {
+                // An attribute definition shows only when it is constant (flag 2): its value is
+                // the text. Any other definition is the template of the attribute of an INSERT.
+                if e.kind == "ATTDEF" && e.int(70).unwrap_or(0) & 2 == 0 {
+                    return Err(extra::reason("ATTDEF").unwrap_or("attribute definition"));
+                }
                 let flip = ocs_flip(e).map_err(
                     |_| "tilted extrusion direction: text in a tilted plane is not placed",
                 )?;
-                if e.kind == "ATTRIB" && e.int(70).unwrap_or(0) & 1 != 0 {
+                if (e.kind == "ATTRIB" || e.kind == "ATTDEF") && e.int(70).unwrap_or(0) & 1 != 0 {
                     return Err("invisible attribute");
                 }
                 let mtext = e.kind == "MTEXT";

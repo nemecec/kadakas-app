@@ -136,7 +136,7 @@ This section is about real-world DXF files. The research with its sources is `do
 
 - Text DXF and binary DXF, from release 12 (`AC1009`) to 2018 (`AC1032`). `report.release` names the release of the file.
 - A binary file starts with `AutoCAD Binary DXF`. Release 12 writes group codes in one byte, newer releases in two. The reader finds the width from the first pair. A damaged binary file is refused with the byte where it is damaged and the advice to save a text DXF.
-- Limits that protect the import: the file size (`max_bytes`), 100 million pairs, 20 million records, 1 MiB for one value, 12 levels of blocks, 5 million visits and `max_exploded` objects from blocks. Each limit gives a refusal or a line in the report.
+- Limits that protect the import: the file size (`max_bytes`), 40 million pairs, 20 million records, 1 MiB for one value, 12 levels of blocks, 5 million visits and `max_exploded` objects from blocks. Each limit gives a refusal or a line in the report. The memory is not bound by the file size alone: a pair takes about 70 bytes, so a text file needs up to 15 times its size, and a file at the pair limit needs about 3 GB.
 - Text is UTF-8 when it is valid. Else the code page of `$DWGCODEPAGE` is used (`ANSI_1250` to `ANSI_1258`, `ANSI_932`, `ANSI_936`, `ANSI_949`, `ANSI_950`, `DOS437` and the other DOS pages, `ISO8859-n`, `MAC-ROMAN`). Else the text is Latin-1.
 
 ### Units
@@ -154,7 +154,7 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 |---|---|
 | LINE, ARC, CIRCLE, LWPOLYLINE, POLYLINE, POINT, TEXT, 3DFACE, INSERT | As before (IOP-01, IOP-09). |
 | ATTRIB | Visible text. An invisible attribute and an ATTDEF are reported. |
-| MTEXT, TEXT | The codes `%%c`, `%%d`, `%%p`, `%%nnn`, `\U+XXXX`, the caret codes (`^J`) and the MTEXT codes for fonts, heights, colors, stacks and paragraphs. The text equals the plain text of the ezdxf reader. |
+| MTEXT, TEXT | The codes `%%c`, `%%d`, `%%p`, `%%nnn`, `\U+XXXX`, the caret codes (`^J`) and the MTEXT codes for fonts, heights, colors, stacks and paragraphs. The text equals the plain text of the ezdxf reader for the corpus files. |
 | SOLID, TRACE | A filled polygon (fill = pen color). The corners are in the order 1, 2, 4, 3. |
 | HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch is an outline, and a note counts the pattern names. |
 | WIPEOUT | A white polygon with no line and `data.wipeout`, above what was drawn before it. |
@@ -186,6 +186,8 @@ A viewport that is off, has no size or is not valid is reported. A twist and a p
 
 The export writes the reverse. A sheet layer is a layout with the paper, the viewport of the paper, the viewports, the annotations of the viewports, the title block (lines and text) and the objects of the sheet. The first layout is in the section ENTITIES with the flag `67 1`, the others in their blocks `*Paper_Space0` and so on. The option `sheets` is `false` to leave sheets out. Release 12 has no layouts. The update of a drawing (IOP-23) does not import paper space.
 
+The default export writes sheet layers as layouts (IOP-16), and the report says which (`N sheet layers were written as layouts: names`). Set `sheets` to `false` for the old behavior.
+
 ### Export releases
 
 The option `version` of `export.file`:
@@ -201,7 +203,7 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 
 ### Test files
 
-- Public sample files of ezdxf (MIT licence) and GDAL (MIT style licence) are fetched with `curl` from a fixed commit into `tests/data/dxf-public/`. Git ignores that folder. The tests skip when there is no network, or when `KADAKAS_CORPUS=off` is set. No LibreCAD file (GPL) is used.
+- Public sample files of ezdxf (MIT licence) and GDAL (MIT style licence) are fetched with `curl` from a fixed commit into `tests/data/dxf-public/`. Git ignores that folder. Each file is checked against its SHA-256 (`crates/kadakas-io/tests/fixtures/dxf_public_sha256.json`). The tests skip when there is no network. An HTTP error while the network works fails the test. `KADAKAS_CORPUS=off` fetches nothing. In CI (the variable `CI` is set) nothing is fetched unless `KADAKAS_CORPUS=fetch` opts in. Files in the cache are used in every case. No LibreCAD file (GPL) is used.
 - Every corpus file goes through the import. It must not panic, it must end in time, and its report must account for every entity. The counts of entities, layouts, viewports and MTEXT texts are compared with the ezdxf reader (`crates/kadakas-io/tests/fixtures/dxf_public_counts.json`, made by `tests/data/make_public_counts.py`).
 - Our own small files are in `tests/data/dxf-own/` (made by `tests/data/make_own_files.py`). They run offline.
 - The tests for damaged and hostile files are in `crates/kadakas-io/tests/dxf_hostile.rs`.

@@ -370,6 +370,19 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         ));
     }
     let layout_names = sheets::layout_names(full, &sheet_ids);
+    if !sheet_ids.is_empty() {
+        let n = sheet_ids.len();
+        report.note(&format!(
+            "{n} {} written as {}: {}",
+            if n == 1 {
+                "sheet layer was"
+            } else {
+                "sheet layers were"
+            },
+            if n == 1 { "a layout" } else { "layouts" },
+            layout_names.join(", ")
+        ));
+    }
     let mut sheet_outs: Vec<sheets::SheetOut> = Vec::new();
     for (i, id) in sheet_ids.iter().enumerate() {
         let (record, layout, block, endblk) = if i == 0 {

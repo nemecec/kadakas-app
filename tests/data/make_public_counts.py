@@ -15,6 +15,7 @@ import ezdxf
 from ezdxf import recover
 
 ROOT = Path(__file__).resolve().parent / "dxf-public"
+SUMS = Path(__file__).resolve().parents[2] / "crates/kadakas-io/tests/fixtures/dxf_public_sha256.json"
 OUT = Path(__file__).resolve().parents[2] / "crates/kadakas-io/tests/fixtures/dxf_public_counts.json"
 
 
@@ -66,6 +67,16 @@ def main():
                 if e.dxftype() == "SPLINE" and "spline" in rel
             ],
         }
+    # The SHA-256 of every file, for the check of the tests.
+    import hashlib
+
+    sums = {}
+    for path in sorted(ROOT.glob("*/*/**/*")):
+        if path.suffix.lower() == ".dxf" and path.is_file():
+            repo = path.relative_to(ROOT).parts[0]
+            rel = "/".join(path.relative_to(ROOT).parts[2:])
+            sums[f"{repo}:{rel}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    SUMS.write_text(json.dumps(sums, indent=1, sort_keys=True) + "\n")
     OUT.write_text(json.dumps(counts, indent=1, sort_keys=True) + "\n")
     print(f"{len(counts)} files, {sum(1 for v in counts.values() if v is None)} unreadable", file=sys.stderr)
 

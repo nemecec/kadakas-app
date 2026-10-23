@@ -201,11 +201,17 @@ pub(super) fn mesh(e: &Entity, xf: &Xf) -> Result<(Mesh3d, bool), Skip> {
     if size == 0 || size > MAX_MESH * 5 {
         return Err("mesh with a wrong face list");
     }
+    // A negative or unreadable number makes the list wrong.
     let ints: Vec<usize> = e.items[at93 + 1..]
         .iter()
         .filter(|(c, _)| *c == 90)
         .take(size)
-        .map(|(_, v)| v.trim().parse::<i64>().unwrap_or(-1).max(-1) as usize)
+        .map_while(|(_, v)| {
+            v.trim()
+                .parse::<i64>()
+                .ok()
+                .and_then(|n| usize::try_from(n).ok())
+        })
         .collect();
     if ints.len() != size {
         return Err("mesh with a wrong face list");
@@ -214,10 +220,12 @@ pub(super) fn mesh(e: &Entity, xf: &Xf) -> Result<(Mesh3d, bool), Skip> {
     let mut i = 0;
     while i < ints.len() {
         let k = ints[i];
-        let ids = ints
-            .get(i + 1..i + 1 + k)
+        let end = i
+            .checked_add(1)
+            .and_then(|n| n.checked_add(k))
             .ok_or("mesh with a wrong face list")?;
-        i += 1 + k;
+        let ids = ints.get(i + 1..end).ok_or("mesh with a wrong face list")?;
+        i = end;
         if ids.iter().any(|v| *v >= vertices.len()) {
             return Err("mesh face with a vertex that does not exist");
         }
@@ -312,7 +320,9 @@ pub(super) fn reason(kind: &str) -> Option<&'static str> {
         "LIGHT" | "SUN" | "CAMERA" => "light, sun and camera are not geometry",
         "HELIX" => "helix is not imported",
         "ACAD_PROXY_ENTITY" => "proxy entity (a custom object without its program) is not imported",
-        "ATTDEF" => "attribute definition: the visible text is the ATTRIB of the INSERT",
+        "ATTDEF" => {
+            "attribute definition: the visible text is the ATTRIB of the INSERT (a constant definition shows its value)"
+        }
         "VIEWPORT" => "viewport in model space is not geometry",
         _ => return None,
     })

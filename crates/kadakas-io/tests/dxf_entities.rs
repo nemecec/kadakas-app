@@ -405,3 +405,21 @@ fn the_object_limit_is_accounted_for_too() {
     assert_eq!(rep.entities_read, 20);
     assert_eq!(rep.total(), 5);
 }
+
+#[test]
+fn a_constant_attribute_definition_shows_its_value() {
+    let ents = "0\nATTDEF\n8\nT\n10\n0\n20\n0\n40\n5\n1\nFixed value\n2\nTAG\n70\n2\n\
+0\nATTDEF\n8\nT\n10\n0\n20\n10\n40\n5\n1\nTemplate\n2\nTAG\n70\n0\n\
+0\nATTDEF\n8\nT\n10\n0\n20\n20\n40\n5\n1\nHidden constant\n2\nTAG\n70\n3\n";
+    let (ed, rep) = import(doc(ents).as_bytes()).unwrap();
+    accounted(&rep);
+    let t: Vec<String> = shapes_of(&ed)
+        .into_iter()
+        .map(|s| match s {
+            Shape::Text { text, .. } => text,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(t, vec!["Fixed value"]);
+    assert_eq!(rep.entities_skipped, 2);
+}

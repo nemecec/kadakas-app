@@ -2,9 +2,14 @@
 //!
 //! The files are NOT in the repository. A test asks for a file by repository and path. The helper
 //! downloads it with `curl` from a fixed commit into `tests/data/dxf-public/` (a folder that git
-//! ignores) and reads it from there the next time. When there is no network (or no `curl`), or
-//! when the environment variable `KADAKAS_CORPUS=off` is set, `fetch` returns `None` and the test
-//! prints `SKIP` and ends. A missing network never fails a test.
+//! ignores) and reads it from there the next time. Every file is checked against the SHA-256 in
+//! `tests/fixtures/dxf_public_sha256.json`.
+//!
+//! When there is no network (or no `curl`), `fetch` returns `None` and the test prints `SKIP` and
+//! ends. A missing network never fails a test. A network that answers with an HTTP error does:
+//! the pinned list is wrong. Variables: `KADAKAS_CORPUS=off` fetches nothing. In CI (the variable
+//! `CI` is set) nothing is fetched either, unless `KADAKAS_CORPUS=fetch` opts in. Files in the
+//! cache are always used.
 //!
 //! Sources, both with a clear licence:
 //! - ezdxf (https://github.com/mozman/ezdxf), MIT licence: `examples_dxf` and `integration_tests/data`.
@@ -43,9 +48,27 @@ pub fn cache_dir() -> PathBuf {
 
 static OFFLINE: AtomicBool = AtomicBool::new(false);
 
+/// The SHA-256 of each file of the pinned commits, in `fixtures/dxf_public_sha256.json` (key
+/// `<repo>:<path>`). A file is read from the cache or the network only when its hash is right.
+fn known_hashes() -> &'static serde_json::Value {
+    static HASHES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    HASHES.get_or_init(|| {
+        serde_json::from_str(include_str!("../fixtures/dxf_public_sha256.json")).unwrap()
+    })
+}
+
+/// True when no file is fetched from the network: after a network failure, with
+/// `KADAKAS_CORPUS=off`, and in CI (the variable `CI` is set) unless `KADAKAS_CORPUS=fetch` opts in.
+/// Files that are in the cache are used all the same.
 pub fn disabled() -> bool {
-    OFFLINE.load(Ordering::Relaxed)
-        || std::env::var("KADAKAS_CORPUS").is_ok_and(|v| v.eq_ignore_ascii_case("off"))
+    if OFFLINE.load(Ordering::Relaxed) {
+        return true;
+    }
+    match std::env::var("KADAKAS_CORPUS") {
+        Ok(v) if v.eq_ignore_ascii_case("off") => true,
+        Ok(v) if v.eq_ignore_ascii_case("fetch") => false,
+        _ => std::env::var_os("CI").is_some(),
+    }
 }
 
 fn local(repo: Repo, path: &str) -> PathBuf {
@@ -55,12 +78,36 @@ fn local(repo: Repo, path: &str) -> PathBuf {
         .join(path)
 }
 
-/// The bytes of a file of a repository, or `None` when it cannot be had (offline, disabled, or
-/// the file does not exist at that commit).
+fn expected_hash(repo: Repo, path: &str) -> String {
+    known_hashes()[format!("{}:{path}", repo.name)]
+        .as_str()
+        .unwrap_or_else(|| {
+            panic!(
+                "{} {path} has no SHA-256 in fixtures/dxf_public_sha256.json",
+                repo.name
+            )
+        })
+        .to_string()
+}
+
+fn checked(repo: Repo, path: &str, bytes: Vec<u8>) -> Vec<u8> {
+    let got = kadakas_core::picture::sha256_hex(&bytes);
+    assert_eq!(
+        got,
+        expected_hash(repo, path),
+        "{} {path}: the file does not have the SHA-256 of the pinned commit (delete it from tests/data/dxf-public to fetch it again)",
+        repo.name
+    );
+    bytes
+}
+
+/// The bytes of a file of a repository, or `None` when the network is not there (offline or
+/// disabled). A file that the server does not have, or an answer with an HTTP error while the
+/// network works, FAILS the test: the pinned list is wrong. So does a file with a wrong hash.
 pub fn fetch(repo: Repo, path: &str) -> Option<Vec<u8>> {
     let file = local(repo, path);
     if let Ok(bytes) = std::fs::read(&file) {
-        return Some(bytes);
+        return Some(checked(repo, path, bytes));
     }
     if disabled() {
         return None;
@@ -70,24 +117,42 @@ pub fn fetch(repo: Repo, path: &str) -> Option<Vec<u8>> {
         "https://raw.githubusercontent.com/{}/{}/{}",
         repo.slug, repo.commit, path
     );
-    let part = file.with_extension("part");
-    let status = Command::new("curl")
+    // A name of its own for each download: tests run in threads of one process, and in
+    // several processes.
+    let part = file.with_extension(format!(
+        "part-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let out = Command::new("curl")
         .args(["-fsSL", "--connect-timeout", "8", "-m", "90", "-o"])
         .arg(&part)
         .arg(&url)
         .output();
-    match status {
+    match out {
         Ok(out) if out.status.success() => {
-            std::fs::rename(&part, &file).ok()?;
-            std::fs::read(&file).ok()
+            let bytes = std::fs::read(&part).ok();
+            let _ = std::fs::remove_file(&part);
+            let bytes = checked(repo, path, bytes?);
+            // Another test may have written the file in the meantime: the same bytes.
+            let tmp = file.with_extension(format!(
+                "done-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            if std::fs::write(&tmp, &bytes).is_ok() {
+                let _ = std::fs::rename(&tmp, &file);
+            }
+            Some(bytes)
         }
         Ok(out) => {
             let _ = std::fs::remove_file(&part);
-            // Exit code 22: the server answered with an error (no such file). Anything else is
-            // the network.
-            if out.status.code() != Some(22) {
-                OFFLINE.store(true, Ordering::Relaxed);
+            // curl exit code 22: the server answered with an HTTP error (a 404 for a file that
+            // is not there). The network works, so the pinned list is wrong: fail.
+            if out.status.code() == Some(22) {
+                panic!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim());
             }
+            OFFLINE.store(true, Ordering::Relaxed);
             None
         }
         Err(_) => {
@@ -102,7 +167,7 @@ pub fn need(repo: Repo, path: &str) -> Option<Vec<u8>> {
     let r = fetch(repo, path);
     if r.is_none() {
         eprintln!(
-            "SKIP: {} {path} is not available (offline or KADAKAS_CORPUS=off)",
+            "SKIP: {} {path} is not available (offline, KADAKAS_CORPUS=off, or CI without KADAKAS_CORPUS=fetch)",
             repo.name
         );
     }

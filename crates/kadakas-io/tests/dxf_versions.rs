@@ -597,3 +597,47 @@ fn release_12_handles_classes_text_georeference_and_hidden_layers() {
         .unwrap();
     assert_eq!(r.report.objects.get("plant"), None);
 }
+
+#[test]
+fn release_12_writes_an_annotation_as_lines_and_text_and_notes_the_patterns() {
+    use kadakas_core::annot::{Annot, Axis, DimMode, Dimension};
+    let mut ed = editor_with(vec![]);
+    ed.execute(&kadakas_core::command::Command::AddObject {
+        shape: Shape::Annotation(Box::new(Annot::Dimension(Dimension {
+            mode: DimMode::Linear {
+                axis: Axis::Horizontal,
+            },
+            points: vec![DVec2::new(0.0, 0.0), DVec2::new(3000.0, 0.0)],
+            offset: 5.0,
+            anchors: vec![],
+            style: None,
+            text: None,
+            detached: false,
+        }))),
+        layer: None,
+        class: None,
+        attrs: kadakas_core::model::Attributes::default(),
+    })
+    .unwrap();
+    let r = DxfFormat
+        .export(
+            ed.doc(),
+            &ExportOptions {
+                version: DxfVersion::R12,
+                patterns: kadakas_io::PatternExport::Gaps,
+                ..ExportOptions::default()
+            },
+        )
+        .unwrap();
+    let t = String::from_utf8_lossy(&r.bytes).into_owned();
+    assert!(
+        t.contains("\nTEXT\n") && (t.contains("\nLINE\n") || t.contains("\nPOLYLINE\n")),
+        "{t}"
+    );
+    assert!(r.report.skipped.is_empty(), "{:?}", r.report.skipped);
+    assert!(
+        r.report.notes.iter().any(|n| n.contains("unit patterns")),
+        "{:?}",
+        r.report.notes
+    );
+}

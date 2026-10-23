@@ -75,6 +75,16 @@ fn layout_from<'a>(
             mm
         });
     }
+    // The custom print scale (codes 142 and 143): paper units per unit of the drawing. It sets
+    // what a coordinate of paper space is on paper. The paper itself keeps its size.
+    if let (Some(n), Some(d)) = (o.f(142), o.f(143))
+        && n > 0.0
+        && d > 0.0
+        && (n / d).is_finite()
+        && (n / d - 1.0).abs() > 1e-12
+    {
+        l.unit_mm *= n / d;
+    }
     if let (Some(x0), Some(y0), Some(x1), Some(y1)) = (o.f(10), o.f(20), o.f(11), o.f(21))
         && x1 > x0
         && y1 > y0
@@ -468,12 +478,27 @@ impl Walker<'_> {
         let xf = &cx.xf;
         let pts: Vec<DVec2> = match clip.kind.as_str() {
             "LWPOLYLINE" => {
-                let mut v: Vec<DVec2> = Vec::new();
+                let mut raw: Vec<(DVec2, f64)> = Vec::new();
                 for (code, value) in &clip.items {
                     match code {
-                        10 => v.push(DVec2::new(parse::parse_f64(value)?, 0.0)),
-                        20 => v.last_mut()?.y = parse::parse_f64(value)?,
+                        10 => raw.push((DVec2::new(parse::parse_f64(value)?, 0.0), 0.0)),
+                        20 => raw.last_mut()?.0.y = parse::parse_f64(value)?,
+                        42 => raw.last_mut()?.1 = parse::parse_f64(value)?,
                         _ => {}
+                    }
+                }
+                // An arc (a bulge) is cut into short chords, within the tolerance of the import.
+                let tol = self.opts.tolerance / xf.length_scale().max(1e-12);
+                let n = raw.len();
+                let mut v: Vec<DVec2> = Vec::new();
+                for i in 0..n {
+                    v.push(raw[i].0);
+                    let (a, b) = (raw[i].0, raw[(i + 1) % n].0);
+                    if raw[i].1.abs() > 1e-9 && a.distance(b) > 1e-12 && n >= 2 {
+                        let seg = bulge_points(a, b, raw[i].1, tol);
+                        if seg.len() > 2 {
+                            v.extend(seg[1..seg.len() - 1].iter().copied());
+                        }
                     }
                 }
                 v

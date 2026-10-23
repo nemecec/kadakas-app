@@ -122,6 +122,14 @@ These tools build, test or check Kadakas. They are not part of the installers.
 - cargo-llvm-cov (Apache-2.0 OR MIT), cargo-deny (Apache-2.0 OR MIT), cargo-about (Apache-2.0 OR MIT), cargo-packager (Apache-2.0 OR MIT), trunk (Apache-2.0 OR MIT), wasi-sdk (Apache-2.0 WITH LLVM-exception; see the section on the JavaScript script engine)
 - Optional DWG converters that the user installs: the ODA File Converter (Open Design Alliance, own license) and LibreDWG (GPL-3.0). Kadakas only starts them as separate programs. See `docs/dwg.md`.
 
+## DXF test data and the AutoCAD color table (IOP-15)
+
+- The table of the 256 AutoCAD colors in `crates/kadakas-io/src/dxf/aci.rs` has the values 1 to 248 of the table of the ezdxf library (https://github.com/mozman/ezdxf, MIT, Copyright (c) 2020 Manfred Moitzi). It is compiled into Kadakas. The MIT notice is in `THIRD_PARTY_NOTICES.txt`.
+- Some of the DXF import follows the way that ezdxf works: the outline of a WIPEOUT, uniform knots for a spline without knots, and the decoding of caret codes. The code is written for Kadakas. ezdxf is not linked and not shipped.
+- The tests fetch public sample files at run time from fixed commits of ezdxf (MIT) and GDAL (https://github.com/OSGeo/gdal, MIT style licence, `LICENSE.TXT` of that repository). They go into `tests/data/dxf-public/`, which git ignores. They are not in the repository and not shipped. Nothing of LibreCAD (GPL) is used.
+- `crates/kadakas-io/tests/fixtures/dxf_public_counts.json` is derived from those files with the ezdxf reader (`tests/data/make_public_counts.py`): counts of entities, layouts and viewports, short MTEXT strings, and points on splines. It holds numbers and short strings, no drawing.
+- The files in `tests/data/dxf-own/` are our own work (`tests/data/make_own_files.py`), under the project license.
+
 ## Keep this page current
 
 Every new dependency, asset, dataset or cited formula changes this page. For a crate, run `scripts/notices.sh`. For anything else, edit `docs/notices-extra.txt` too.

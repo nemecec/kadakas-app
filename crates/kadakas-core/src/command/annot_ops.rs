@@ -69,6 +69,10 @@ impl Tx<'_> {
                     }
                 }
             }
+            // Data changes make no geometry. In a batch the annotations that follow the object are
+            // brought up to date once, when the batch ends (its `annot_after` looks at everything
+            // that the batch touched). This keeps a batch of many `SetData` linear.
+            Command::SetData { .. } if self.batch_depth > 0 => {}
             // Label positions of data tags are paper offsets, so a new scale moves them.
             Command::ModifyLayer {
                 id, scale: Some(_), ..

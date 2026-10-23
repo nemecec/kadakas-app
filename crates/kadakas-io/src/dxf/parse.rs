@@ -9,8 +9,11 @@ use std::collections::HashMap;
 
 use crate::IoError;
 
-/// Most pairs (group code and value) of one file, text or binary.
-pub const MAX_PAIRS: usize = 100_000_000;
+/// Most pairs (group code and value) of one file, text or binary. A pair in memory is about 70
+/// bytes (the group code, the text and its allocation), so a file at the limit needs about 3 GB
+/// for its pairs. The file size limit (`max_bytes`) does not bound the memory by itself: a text
+/// file makes about 15 bytes of memory for each byte of the file.
+pub const MAX_PAIRS: usize = 40_000_000;
 /// Longest value of one pair, in bytes. A real value is under 2,100 bytes. Long XML text of a
 /// GEODATA object is the largest.
 pub const MAX_STRING: usize = 1 << 20;

@@ -216,6 +216,13 @@ fn the_sheets_are_layouts_with_viewports() {
     let p = pairs(&t);
     assert!(p.iter().filter(|(c, v)| *c == 67 && v == "1").count() >= 8);
     assert_eq!(rep.objects.get("viewport"), Some(&2));
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n == "2 sheet layers were written as layouts: Site plan, Details"),
+        "{:?}",
+        rep.notes
+    );
     // The clip outline of the cropped viewport is an LWPOLYLINE on Defpoints.
     assert!(p.iter().any(|(c, v)| *c == 8 && v == "Defpoints"));
 }

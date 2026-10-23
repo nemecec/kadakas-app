@@ -87,6 +87,9 @@ fn huge_counts_in_entities_do_not_make_the_import_run_long() {
         format!("0\nHATCH\n70\n1\n91\n1\n92\n1\n93\n{big}\n72\n4\n94\n3\n73\n0\n74\n0\n95\n{big}\n96\n{big}\n40\n0\n"),
         format!("0\nSPLINE\n70\n8\n71\n{big}\n72\n{big}\n73\n{big}\n74\n{big}\n40\n0\n10\n0\n20\n0\n"),
         String::from("0\nSPLINE\n70\n8\n71\n3\n73\n4\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n10\n0\n20\n0\n10\n1\n20\n1\n10\n2\n20\n0\n10\n3\n20\n1\n42\n1e300\n"),
+        // A negative face count, and a count near the largest number.
+        "0\nMESH\n92\n3\n10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n10\n0\n20\n1\n30\n0\n93\n2\n90\n-1\n90\n0\n".to_string(),
+        "0\nMESH\n92\n3\n10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n10\n0\n20\n1\n30\n0\n93\n2\n90\n9223372036854775807\n90\n0\n".to_string(),
         format!("0\nMESH\n92\n{big}\n10\n0\n20\n0\n30\n0\n93\n{big}\n90\n{big}\n"),
         format!("0\nPOLYLINE\n70\n16\n71\n{big}\n72\n{big}\n0\nVERTEX\n10\n0\n20\n0\n0\nSEQEND\n"),
         format!("0\nPOLYLINE\n70\n64\n71\n{big}\n72\n{big}\n0\nVERTEX\n70\n192\n10\n0\n20\n0\n0\nVERTEX\n70\n128\n71\n{big}\n72\n1\n73\n2\n0\nSEQEND\n"),

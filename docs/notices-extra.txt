@@ -491,6 +491,39 @@ Drawn for this project from written ideas. They are covered by the project licen
 The application icons in packaging/icons/ are our own work, under the same license.
 
 --------------------------------------------------------------------------------
+ezdxf: the table of the 256 AutoCAD colors (MIT)
+--------------------------------------------------------------------------------
+Used by: crates/kadakas-io/src/dxf/aci.rs
+
+The colors 1 to 248 of the AutoCAD Color Index in that file are the values of the table in the
+ezdxf library (https://github.com/mozman/ezdxf). Some of the code of the DXF import follows the
+way that ezdxf reads a WIPEOUT outline, makes uniform knots for a spline without knots and
+decodes caret codes. The code is written for Kadakas. The tests also read public sample files of
+ezdxf and GDAL at run time (they are not part of Kadakas and not shipped).
+
+MIT License
+
+Copyright (c) 2020 Manfred Moitzi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
 Trademarks
 --------------------------------------------------------------------------------
 Vectorworks is a trademark of Vectorworks, Inc. Kadakas is an independent project and is not

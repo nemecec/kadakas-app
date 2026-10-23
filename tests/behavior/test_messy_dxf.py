@@ -31,15 +31,19 @@ def classes(cad):
     return {c["name"]: c["id"] for c in cad.result("document.summary")["classes"]}
 
 
-def objects_of(cad, class_names):
-    """The objects of the classes on design layers. Paper space is imported as sheet layers (IOP-16),
-    and its objects can share a class with the model, so they are left out here."""
-    cls = classes(cad)
+def design_only(cad, objs):
+    """The objects on design layers. Paper space is imported as sheet layers (IOP-16), and its
+    objects can share a class with the model, so a search for the lot leaves them out."""
     sheets = {la["id"] for la in cad.result("document.summary")["layers"] if la["kind"] == "sheet"}
+    return [o for o in objs if o["layer"] not in sheets]
+
+
+def objects_of(cad, class_names):
+    cls = classes(cad)
     out = []
     for n in class_names:
         assert n in cls, (n, sorted(cls))
-        out += [o for o in cad.result("objects.list", {"class": cls[n]}) if o["layer"] not in sheets]
+        out += design_only(cad, cad.result("objects.list", {"class": cls[n]}))
     return out
 
 
@@ -63,7 +67,7 @@ def find_lot(cad, entry):
     elif how == "hatch":
         objs = objects_of(cad, ["HATCH"])
     else:
-        objs = [o for o in cad.result("objects.list") if o["shape"]["kind"] in GEOMETRY]
+        objs = [o for o in design_only(cad, cad.result("objects.list")) if o["shape"]["kind"] in GEOMETRY]
     return [o["id"] for o in objs if o["shape"]["kind"] in GEOMETRY]
 
 

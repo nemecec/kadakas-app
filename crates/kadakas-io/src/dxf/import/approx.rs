@@ -135,7 +135,7 @@ impl Tally {
         }
         if self.hatch_islands > 0 {
             out.push(format!(
-                "{} of solid hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes",
+                "{} of solid hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes: they cover what lies below them",
                 plural(self.hatch_islands, "island", "islands"),
                 if self.hatch_islands == 1 { "is" } else { "are" }
             ));

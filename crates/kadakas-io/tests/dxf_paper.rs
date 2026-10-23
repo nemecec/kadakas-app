@@ -462,3 +462,35 @@ fn a_layout_without_a_block_takes_its_name_from_the_layout_object() {
             .any(|l| l.kind == LayerKind::Sheet && l.name == "Sheet one")
     );
 }
+
+#[test]
+fn the_custom_plot_scale_of_a_layout_sets_the_size_of_a_paper_unit() {
+    // 2 paper units for each unit of the drawing: a coordinate of 100 is 200 mm. The paper stays
+    // 420 x 297 mm.
+    let layout = layout_object("50", "3A", "Scaled", 1, 420.0, 297.0, 1)
+        .replace("\n72\n1\n", "\n142\n2\n143\n1\n72\n1\n");
+    let text = format!(
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n5\n30\n330\n3A\n8\n0\n2\n*Paper_Space\n70\n0\n10\n0\n20\n0\n0\nENDBLK\n0\nENDSEC\n\
+0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n67\n1\n10\n0\n20\n0\n11\n100\n21\n0\n0\nENDSEC\n0\nSECTION\n2\nOBJECTS\n{layout}0\nENDSEC\n0\nEOF\n"
+    );
+    let (ed, _) = import(text.as_bytes()).unwrap();
+    let sheet = ed
+        .doc()
+        .layers
+        .iter()
+        .find(|l| l.kind == LayerKind::Sheet)
+        .unwrap();
+    let Shape::Line { b, .. } = ed
+        .doc()
+        .objects
+        .values()
+        .find(|o| o.layer == sheet.id)
+        .unwrap()
+        .shape
+    else {
+        panic!()
+    };
+    assert!((b.x - 200.0).abs() < 1e-9, "{b:?}");
+    let s = ed.doc().sheet(sheet.id).unwrap();
+    assert_eq!(s.paper, PaperSize::A3);
+}

@@ -9,7 +9,7 @@ use super::parse::{Dxf, parse_int};
 use super::version::Release;
 
 /// The size of a unit in mm, and its name, for a `$INSUNITS` code. `None` for 0 (unitless) and for
-/// the astronomical units (17 to 20), which no drawing of a site uses.
+/// the astronomical units (17 to 20, gigameters and up), which no drawing of a site uses.
 pub fn insunits_mm(code: i64) -> Option<(f64, &'static str)> {
     Some(match code {
         1 => (25.4, "inches"),

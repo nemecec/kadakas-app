@@ -235,6 +235,39 @@ impl Out<'_> {
                     }
                 }
             }
+            // An annotation (dimension, callout, tag) is written as the lines and the text that it draws.
+            Shape::Annotation(_) => {
+                use kadakas_core::annot::draw::{Prim, text_width};
+                let doc = self.doc;
+                for p in kadakas_annot::prims(doc, o) {
+                    match p {
+                        Prim::Poly { pts, closed, .. } => {
+                            let v: Vec<_> = pts.iter().map(|q| (q.x, q.y, 0.0, 0.0)).collect();
+                            if v.len() == 2 && !closed {
+                                self.head("LINE", o, &layer);
+                                self.pt(10, v[0].0, v[0].1, 0.0);
+                                self.pt(11, v[1].0, v[1].1, 0.0);
+                            } else if v.len() >= 2 {
+                                self.polyline(o, &layer, &v, closed, false);
+                            }
+                        }
+                        Prim::Text {
+                            at,
+                            text,
+                            height,
+                            center,
+                            ..
+                        } => {
+                            let x = if center {
+                                at.x - text_width(&text, height) / 2.0
+                            } else {
+                                at.x
+                            };
+                            self.text(o, &layer, DVec2::new(x, at.y), height, &text);
+                        }
+                    }
+                }
+            }
             Shape::Plant { at, spread, .. } | Shape::ExistingTree { at, spread, .. } => {
                 self.circle(o, &layer, *at, spread / 2.0);
             }
@@ -291,6 +324,11 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         "release 12 stores no unit: the coordinates are in {} (option unit)",
         crate::dxf::units::unit_name(opts.unit)
     ));
+    if opts.patterns != crate::options::PatternExport::None {
+        report.note(
+            "release 12: the unit patterns of hardscapes (option patterns) are not written, only the outlines",
+        );
+    }
     let mut out = Out {
         doc,
         mode: opts.layer_mode,

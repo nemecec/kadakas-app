@@ -71,17 +71,6 @@ impl Release {
     pub fn has_units(&self) -> bool {
         self.number >= 1015
     }
-
-    /// True from release 2007 on: the text of the file is UTF-8. Older text is in the code page of
-    /// `$DWGCODEPAGE`.
-    pub fn is_unicode(&self) -> bool {
-        self.number >= 1021
-    }
-
-    /// True for release 12 and older. These files have no LWPOLYLINE, no layouts and no units.
-    pub fn is_r12_or_older(&self) -> bool {
-        self.number < 1012
-    }
 }
 
 #[cfg(test)]
@@ -106,13 +95,6 @@ mod tests {
         assert!(!r("AC1009").has_units());
         assert!(!r("AC1014").has_units());
         assert!(r("AC1015").has_units());
-        assert!(!r("AC1018").is_unicode());
-        assert!(r("AC1021").is_unicode());
-        assert!(r("AC1032").is_unicode());
-        assert!(r("AC1006").is_r12_or_older());
-        assert!(r("AC1009").is_r12_or_older());
-        assert!(!r("AC1012").is_r12_or_older());
-        assert!(r("AC1.50").is_r12_or_older());
     }
 
     #[test]

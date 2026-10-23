@@ -1297,6 +1297,10 @@ struct Tx<'a> {
     added_set: HashSet<ObjectId>,
     /// Pre-existing objects that the command removed: (index before the command, ID), ascending.
     removed: Vec<(usize, ObjectId)>,
+    /// How many `Batch` commands are running (nested). A batch brings the annotations up to date
+    /// once, at its end, so a command that changes only data (`SetData`) does not scan all objects
+    /// each time.
+    batch_depth: usize,
 }
 
 impl<'a> Tx<'a> {
@@ -1307,6 +1311,7 @@ impl<'a> Tx<'a> {
             added: Vec::new(),
             added_set: HashSet::new(),
             removed: Vec::new(),
+            batch_depth: 0,
         }
     }
 
@@ -2227,9 +2232,11 @@ impl<'a> Tx<'a> {
                 }
             }
             Command::Batch { commands } => {
+                self.batch_depth += 1;
                 for c in commands {
                     self.run(c, out)?;
                 }
+                self.batch_depth -= 1;
             }
         }
         self.annot_after(cmd)?;

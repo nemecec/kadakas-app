@@ -102,20 +102,32 @@ pub fn decode_caret(s: &str) -> String {
                 it.next();
                 out.push('^');
             }
-            Some(n @ ('?'..='_' | 'a'..='z')) => {
-                it.next();
-                match (n as u8) ^ 0x40 {
-                    10 => out.push('\n'),
-                    9 => out.push(' '),
-                    // The other control characters have no place in a drawing text.
-                    0..=31 | 0x7f => {}
-                    code => out.push(code as char),
+            Some(n) => match caret_char(n) {
+                Some(code) => {
+                    it.next();
+                    out.extend(code);
                 }
-            }
-            _ => out.push('^'),
+                None => out.push('^'),
+            },
+            None => out.push('^'),
         }
     }
     out
+}
+
+/// The meaning of the character after a caret: `None` when the caret is a plain caret, `Some(None)`
+/// for a control character that is dropped, `Some(Some(c))` for a character.
+fn caret_char(n: char) -> Option<Option<char>> {
+    if !('?'..='_').contains(&n) {
+        return None;
+    }
+    Some(match (n as u8) ^ 0x40 {
+        10 => Some('\n'),
+        9 => Some(' '),
+        // The other control characters have no place in a drawing text.
+        0..=31 | 0x7f => None,
+        code => Some(code as char),
+    })
 }
 
 /// The text of a TEXT, ATTRIB or MTEXT string without the codes (caret, percent and `\U+`).
@@ -128,7 +140,8 @@ pub fn decode_text(s: &str) -> String {
 /// code, and it stays in the text as it is, like the ezdxf reader does. So does a backslash
 /// before a character that is not a code.
 pub fn clean_mtext(s: &str) -> String {
-    let s = decode_text(s);
+    // The caret codes are decoded in the loop, because the text of a stack (`\S1^2;`) keeps its caret.
+    let s = decode_percent(s);
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -137,6 +150,20 @@ pub fn clean_mtext(s: &str) -> String {
         i += 1;
         match c {
             '{' | '}' => {}
+            '^' => match chars.get(i).copied() {
+                Some(' ') => {
+                    i += 1;
+                    out.push('^');
+                }
+                Some(n) => match caret_char(n) {
+                    Some(code) => {
+                        i += 1;
+                        out.extend(code);
+                    }
+                    None => out.push('^'),
+                },
+                None => out.push('^'),
+            },
             '\\' => {
                 let Some(&code) = chars.get(i) else {
                     break;
@@ -154,7 +181,7 @@ pub fn clean_mtext(s: &str) -> String {
                     'S' => match end {
                         Some(e) => {
                             let body: String = chars[i..e].iter().collect();
-                            out.push_str(&body.replace('#', "/"));
+                            out.push_str(&body.replace("^ ", "^").replace('#', "/"));
                             i = e + 1;
                         }
                         None => {
@@ -223,8 +250,12 @@ mod tests {
         assert_eq!(decode_caret("a^Mb"), "ab");
         assert_eq!(decode_caret("a^ b"), "a^b");
         assert_eq!(decode_caret("x^2"), "x^2");
-        assert_eq!(decode_caret("abc^adef^b"), "abc!def\"");
-        assert_eq!(decode_caret("^z"), ":");
+        // The small letters are no codes: x^n stays.
+        assert_eq!(decode_caret("abc^adef^b x^n"), "abc^adef^b x^n");
+        assert_eq!(
+            clean_mtext("x^n and \\Sm^n; and a^Jb"),
+            "x^n and m^n and a\nb"
+        );
         assert_eq!(decode_caret("end^"), "end^");
         assert_eq!(decode_caret("^@^[^_^?"), "");
         assert_eq!(decode_text("1^J%%c5"), "1\n\u{d8}5");
