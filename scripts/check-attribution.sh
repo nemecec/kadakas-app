@@ -13,11 +13,10 @@ here="$(pwd)"
 if [[ "${1:-}" != "--table" && -z "${ATTR_METADATA:-}" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  cargo metadata --format-version 1 --locked --offline > "$tmp/metadata.json"
-  # The crates that ship: no dev dependencies, the five targets of about.toml.
-  for t in x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-gnu wasm32-unknown-unknown; do
-    cargo tree --workspace -e normal,build --target "$t" --prefix none --locked --offline --charset ascii
-  done | awk '{print $1}' | sort -u > "$tmp/tree.txt"
+  "$here/scripts/attribution-cargo-data.sh" "$tmp"
   export ATTR_METADATA="$tmp/metadata.json" ATTR_TREE="$tmp/tree.txt"
 fi
-exec python3 -I "$here/scripts/check_attribution.py" "$@"
+# No exec: the trap must run.
+code=0
+python3 -I "$here/scripts/check_attribution.py" "$@" || code=$?
+exit "$code"

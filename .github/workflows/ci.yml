@@ -103,8 +103,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          targets: wasm32-unknown-unknown
       # The script reads Cargo data offline. Fetch the sources first.
       - run: cargo fetch --locked
       - run: scripts/check-attribution.sh

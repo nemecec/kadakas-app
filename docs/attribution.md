@@ -132,47 +132,57 @@ These tools build, test or check Kadakas. They are not part of the installers.
 
 ## Asset list (checked by CI)
 
-The table below is the same list as `docs/attribution-assets.tsv`. The script `scripts/check-attribution.sh` fails when a file, a row or a licence id does not fit. Make the table with `scripts/check-attribution.sh --table`. Own work has the author "Kadakas project". Rows with the licence UNKNOWN wait for a decision. They are listed in `docs/attribution-open.txt`. A path that starts with `crate:` is data inside a Cargo crate. A path that starts with `ext:` is data that is not in the repository.
+The table below is the same list as `docs/attribution-assets.tsv`. The script `scripts/check-attribution.sh` fails when a file, a row or a licence id does not fit. Make the table with `scripts/check-attribution.sh --table`. Own work has the author "Kadakas project". Rows with the licence UNKNOWN wait for a decision. Each file of such a row is named in `docs/attribution-open.txt`. The column Use says `ships` for what goes into the installers and `test` for the rest. A path that starts with `crate:` is data inside a Cargo crate. A path that starts with `ext:` is data that is not in the repository.
 
-| Item | Path | Author | Licence | Source |
-|---|---|---|---|---|
-| Tabler Icons | `assets/icons/tabler/**` | Paweł Kuna | MIT | https://tabler.io/icons |
-| quickjs-ng | `crates/kadakas-script-js/quickjs/**` | Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé | MIT | https://github.com/quickjs-ng/quickjs |
-| ezdxf | `crates/kadakas-io/src/dxf/aci.rs` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf |
-| Ubuntu-Light | `crate:epaint_default_fonts` | Canonical Ltd. | Ubuntu-font-1.0 | https://design.ubuntu.com/font |
-| Hack | `crate:epaint_default_fonts` | Source Foundry Authors | MIT | https://sourcefoundry.org/hack/ |
-| Noto Emoji | `crate:epaint_default_fonts` | Google Inc. | OFL-1.1 | https://github.com/googlefonts/noto-emoji |
-| emoji-icon-font | `crate:epaint_default_fonts` | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font |
-| EPSG Geodetic Parameter Dataset | `crate:crs-definitions` | IOGP | CC0-1.0 | https://epsg.org |
-| GeographicLib geodesic routines | `crate:proj4rs-geodesic` | Charles Karney | MIT | https://geographiclib.sourceforge.io/ |
-| wasi-libc | `ext:wasi-libc` | WebAssembly community and contributors | Apache-2.0 WITH LLVM-exception | https://github.com/WebAssembly/wasi-libc |
-| ezdxf public sample files | `ext:ezdxf-public-dxf` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf |
-| GDAL public sample files | `ext:gdal-public-dxf` | OSGeo and contributors | MIT | https://github.com/OSGeo/gdal |
-| buildingSMART BCF schemas | `tests/behavior/bcf_schemas/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML |
-| buildingSMART BCF 2.1 test files | `tests/behavior/bcf_cases/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML |
-| Kadakas icons | `assets/icons/kadakas/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Kadakas modeler icons | `assets/icons/modeler/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Kadakas application icons | `packaging/icons/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Kadakas macOS bundle files | `packaging/macos/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Kadakas translations | `crates/kadakas-l10n/locales/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Kadakas workspace profiles | `crates/kadakas-ui-core/profiles/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Plant sample catalog | `crates/kadakas-plants/src/sample_catalog.csv` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Update manifest public keys | `crates/kadakas-launcher/trusted-keys.txt` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Plug-in test modules | `crates/kadakas-plugin/tests/fixtures/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Messy DXF test corpus | `tests/behavior/fixtures/messy/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Parking lot DXF test files | `tests/behavior/fixtures/parking_lot*.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Parking lot DXF scripts | `tests/behavior/fixtures/make_parking_lot*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
-| Test picture red_blue.jpg | `crates/kadakas-render/testdata/red_blue.jpg` | UNKNOWN | UNKNOWN | UNKNOWN |
-| Test file site.dxf | `crates/kadakas-io/tests/fixtures/site.dxf` | UNKNOWN | UNKNOWN | UNKNOWN |
-| Test file trees.geojson | `crates/kadakas-io/tests/fixtures/trees.geojson` | UNKNOWN | UNKNOWN | UNKNOWN |
-| Test files survey_rev1.dxf and survey_rev2.dxf | `tests/behavior/fixtures/survey_rev?.dxf` | UNKNOWN | UNKNOWN | UNKNOWN |
+| Item | Path | Author | Licence | Source | Use |
+|---|---|---|---|---|---|
+| Tabler Icons | `assets/icons/tabler/**` | Paweł Kuna | MIT | https://tabler.io/icons | ships |
+| quickjs-ng | `crates/kadakas-script-js/quickjs/**` | Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé | MIT | https://github.com/quickjs-ng/quickjs | ships |
+| ezdxf | `crates/kadakas-io/src/dxf/aci.rs` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf | ships |
+| Ubuntu-Light | `crate:epaint_default_fonts` | Canonical Ltd. | Ubuntu-font-1.0 | https://design.ubuntu.com/font | ships |
+| Hack | `crate:epaint_default_fonts` | Source Foundry Authors (built on DejaVu and Bitstream Vera Sans Mono) | MIT AND Bitstream-Vera | https://sourcefoundry.org/hack/ | ships |
+| Noto Emoji | `crate:epaint_default_fonts` | Google Inc. | OFL-1.1 | https://github.com/googlefonts/noto-emoji | ships |
+| emoji-icon-font | `crate:epaint_default_fonts` | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font | ships |
+| EPSG Geodetic Parameter Dataset | `crate:crs-definitions` | crs-definitions crate (definitions derived from the EPSG dataset of IOGP) | CC0-1.0 AND LicenseRef-EPSG-Terms | https://tangled.org/rwell.org/crs-definitions | ships |
+| GeographicLib geodesic routines | `crate:proj4rs-geodesic` | Charles Karney | MIT | https://geographiclib.sourceforge.io/ | ships |
+| wasi-libc | `ext:wasi-libc` | WebAssembly community and contributors | (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) | https://github.com/WebAssembly/wasi-libc | ships |
+| musl | `ext:wasi-libc-musl` | musl authors (inside wasi-libc) | MIT | https://musl.libc.org/ | ships |
+| cloudlibc | `ext:wasi-libc-cloudlibc` | Nuxi (inside wasi-libc) | BSD-2-Clause | https://github.com/NuxiNL/cloudlibc | ships |
+| dlmalloc | `ext:wasi-libc-dlmalloc` | Doug Lea (inside wasi-libc) | CC0-1.0 | https://gee.cs.oswego.edu/dl/html/malloc.html | ships |
+| emmalloc | `ext:wasi-libc-emmalloc` | Emscripten authors (inside wasi-libc) | MIT | https://github.com/emscripten-core/emscripten | ships |
+| musl-fts | `ext:wasi-libc-musl-fts` | Void Linux contributors (inside wasi-libc) | BSD-3-Clause | https://github.com/void-linux/musl-fts | ships |
+| compiler-rt | `ext:compiler-rt` | LLVM project | Apache-2.0 WITH LLVM-exception | https://github.com/llvm/llvm-project | ships |
+| ezdxf public sample files | `ext:ezdxf-public-dxf` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf | test |
+| GDAL public sample files (MIT-style general terms, verified in LICENSE.TXT at the pinned commit 739fcf03, terms of single files not verified) | `ext:gdal-public-dxf` | OSGeo and contributors | MIT | https://github.com/OSGeo/gdal | test |
+| buildingSMART BCF schemas | `tests/behavior/bcf_schemas/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML | test |
+| buildingSMART BCF 2.1 test files | `tests/behavior/bcf_cases/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML | test |
+| Kadakas icons | `assets/icons/kadakas/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas modeler icons | `assets/icons/modeler/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas application icons | `packaging/icons/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas macOS bundle files | `packaging/macos/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas web page | `web/index.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Script engine prelude | `crates/kadakas-script-js/c/prelude.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas translations | `crates/kadakas-l10n/locales/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Kadakas workspace profiles | `crates/kadakas-ui-core/profiles/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Plant sample catalog | `crates/kadakas-plants/src/sample_catalog.csv` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Update manifest public keys | `crates/kadakas-launcher/trusted-keys.txt` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Plug-in test modules | `crates/kadakas-plugin/tests/fixtures/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
+| Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Messy DXF test corpus | `tests/behavior/fixtures/messy/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Parking lot DXF test files | `tests/behavior/fixtures/parking_lot*.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Parking lot DXF scripts | `tests/behavior/fixtures/make_parking_lot*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| glTF validation script | `tests/behavior/gltf_validate.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Icon gallery | `docs/icons.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Test picture red_blue.jpg | `crates/kadakas-render/testdata/red_blue.jpg` | UNKNOWN | UNKNOWN | UNKNOWN | test |
+| Test file site.dxf | `crates/kadakas-io/tests/fixtures/site.dxf` | UNKNOWN | UNKNOWN | UNKNOWN | test |
+| Test file trees.geojson | `crates/kadakas-io/tests/fixtures/trees.geojson` | UNKNOWN | UNKNOWN | UNKNOWN | test |
+| Test files survey_rev1.dxf and survey_rev2.dxf | `tests/behavior/fixtures/survey_rev?.dxf` | UNKNOWN | UNKNOWN | UNKNOWN | test |
 
 ## Keep this page current
 

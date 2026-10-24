@@ -7,11 +7,12 @@ Environment (the shell script and the tests set these):
   ATTR_ROOT        repository root (default: the parent of this folder)
   ATTR_TSV         asset table
   ATTR_LICENCES    allow-list of licence ids
-  ATTR_OPEN        list of rows that may have the licence UNKNOWN
+  ATTR_OPEN        list of files that may have the licence UNKNOWN
   ATTR_ATTRIBUTION docs/attribution.md
   ATTR_NOTICES     THIRD_PARTY_NOTICES.txt
   ATTR_METADATA    output of cargo metadata (JSON file)
   ATTR_TREE        crate names that ship, one per line (from cargo tree)
+  GITHUB_ACTIONS   "true" prints ::warning annotations for the UNKNOWN rows
 """
 import json
 import os
@@ -34,24 +35,34 @@ NOTICES = path("ATTR_NOTICES", "THIRD_PARTY_NOTICES.txt")
 
 # Files with these extensions are assets wherever they are.
 ASSET_EXT = {
-    "svg", "png", "jpg", "jpeg", "gif", "ico", "icns", "ttf", "otf", "woff", "woff2",
-    "ftl", "csv", "json", "geojson", "dxf", "dwg", "ifc", "bcf", "bcfzip", "xsd",
-    "wasm", "wat", "kad", "plist",
+    "svg", "png", "jpg", "jpeg", "gif", "ico", "icns", "ttf", "ttc", "otf", "woff", "woff2",
+    "ftl", "csv", "json", "geojson", "dxf", "dwg", "ifc", "bcf", "bcfzip", "xsd", "wasm", "wat",
+    "kad", "plist", "pat", "lin", "shx", "hdr", "exr", "ktx2", "webp", "bmp", "tif", "tiff",
+    "gltf", "glb", "obj", "stl", "pdf", "xml", "bin", "dat", "wgsl", "glsl", "spv",
+    "js", "css", "html",
 }
 # Every file in a folder with one of these names is an asset (except Rust and Markdown files).
 ASSET_DIRS = {
-    "assets", "data", "testdata", "fixtures", "locales", "profiles", "icons",
-    "vendor", "third_party", "third-party",
+    "assets", "data", "testdata", "fixtures", "locales", "profiles", "icons", "fonts", "web",
+    "static", "res", "resources", "shaders", "vendor", "third_party", "third-party",
 }
+# In these folders Rust and Markdown files are vendored code too, so they need a row.
+VENDOR_DIRS = {"vendor", "third_party", "third-party", "web"}
 # include_bytes! and include_str! targets with these extensions are our own code or text.
 EMBED_SKIP_EXT = {"rs", "md", "py"}
 EMBED_SKIP_FILES = {"THIRD_PARTY_NOTICES.txt"}
 # Header scan (check 5): files that are ours by definition.
-HEADER_SKIP_PREFIX = ("docs/", "scripts/", "target")
+HEADER_SKIP_PREFIX = ("docs/", "scripts/", "target/")
 HEADER_SKIP_FILES = {"LICENSE-MIT", "LICENSE-APACHE", "THIRD_PARTY_NOTICES.txt", "about.hbs"}
-HEADER_RE = re.compile(rb"Copyright \(c\)|SPDX-License-Identifier")
+HEADER_RE = re.compile(
+    r"copyright\s*(?:\(c\)|©)|copyright\s+(?:\d{4}|by\b)|licensed under|spdx-license-identifier",
+    re.IGNORECASE,
+)
+# A header line that names the project or the project licence is ours.
+HEADER_OWN = re.compile(r"kadakas|apache-2\.0 or mit|mit or apache-2\.0", re.IGNORECASE)
 HEADER_BYTES = 4096
 OWN = "Kadakas project"
+UNKNOWN_DIRS = {"tests", "testdata", "fixtures"}
 
 failures = []
 warnings = []
@@ -66,7 +77,7 @@ def read_lines(p):
         fail("setup", "missing file: %s" % os.path.relpath(p, ROOT))
         return []
     out = []
-    with open(p, encoding="utf-8") as f:
+    with open(p, encoding="utf-8", errors="surrogateescape") as f:
         for line in f:
             line = line.rstrip("\n")
             if line.strip() and not line.lstrip().startswith("#"):
@@ -78,9 +89,21 @@ def list_files():
     out = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=ROOT, capture_output=True, check=True,
-    ).stdout.decode("utf-8")
-    files = [f for f in out.split("\0") if f and os.path.isfile(os.path.join(ROOT, f))]
-    return sorted(set(files))
+    ).stdout.decode("utf-8", errors="surrogateescape")
+    files = []
+    for f in sorted(set(out.split("\0"))):
+        if not f:
+            continue
+        full = os.path.join(ROOT, f)
+        if os.path.islink(full):
+            real = os.path.realpath(full)
+            root = os.path.realpath(ROOT)
+            if real != root and not real.startswith(root + os.sep):
+                fail("symlink", "%s: a symbolic link to a place outside the repository" % f)
+                continue
+        if os.path.isfile(full):
+            files.append(f)
+    return files
 
 
 def glob_re(pattern):
@@ -105,21 +128,99 @@ def glob_re(pattern):
     return re.compile("^" + out + "$")
 
 
+COLUMNS = ("path", "name", "author", "licence", "source", "use")
+
+
 def parse_tsv():
     rows = []
-    for n, line in enumerate(read_lines(TSV), 1):
+    for line in read_lines(TSV):
         cols = line.split("\t")
-        if len(cols) != 5:
-            fail("table", "docs/attribution-assets.tsv: a row needs 5 tab separated columns, got %d: %r" % (len(cols), line[:70]))
+        if len(cols) != len(COLUMNS):
+            fail("table", "docs/attribution-assets.tsv: a row needs %d tab separated columns, got %d: %r" % (len(COLUMNS), len(cols), line[:70]))
             continue
-        cols = [c.strip() for c in cols]
-        rows.append(dict(path=cols[0], name=cols[1], author=cols[2], licence=cols[3], source=cols[4]))
+        rows.append(dict(zip(COLUMNS, [c.strip() for c in cols])))
     return rows
 
 
-def licence_ids(expr):
-    expr = expr.replace("(", " ").replace(")", " ")
-    return [t for t in re.split(r"\s+(?:OR|AND|WITH)\s+|\s+", expr.strip()) if t and t not in ("OR", "AND", "WITH")]
+def parse_licence(expr):
+    """Parse an SPDX expression. Return (list of (id, exception or None), error or None)."""
+    toks = re.findall(r"\(|\)|[^\s()]+", expr)
+    pos = [0]
+    ops = ("OR", "AND", "WITH")
+
+    def peek():
+        return toks[pos[0]] if pos[0] < len(toks) else None
+
+    def take():
+        t = peek()
+        pos[0] += 1
+        return t
+
+    def term():
+        t = take()
+        if t is None:
+            raise ValueError("the expression ends where an id is needed")
+        if t == "(":
+            r = expr_()
+            if take() != ")":
+                raise ValueError("a bracket is not closed")
+            return r
+        if t == ")" or t in ops:
+            raise ValueError("unexpected %r" % t)
+        if peek() == "WITH":
+            take()
+            e = take()
+            if e is None or e in ops or e in "()":
+                raise ValueError("WITH needs an exception id")
+            return [(t, e)]
+        return [(t, None)]
+
+    def expr_():
+        out = term()
+        while peek() in ("OR", "AND"):
+            take()
+            out = out + term()
+        return out
+
+    if not toks:
+        return [], "the licence is empty"
+    try:
+        r = expr_()
+        if peek() is not None:
+            raise ValueError("unexpected %r" % peek())
+    except ValueError as e:
+        return [], str(e)
+    return r, None
+
+
+def load_licences():
+    """id -> kind: '' (normal), 'test-only' or 'exception'."""
+    out = {}
+    for line in read_lines(LICENCES):
+        parts = line.split()
+        out[parts[0]] = parts[1] if len(parts) > 1 else ""
+    return out
+
+
+def licence_problems(expr, allowed, ships):
+    ids, err = parse_licence(expr)
+    if err:
+        return ["licence %r: %s" % (expr, err)]
+    probs = []
+    for lid, exc in ids:
+        kind = allowed.get(lid)
+        if kind is None:
+            probs.append("licence id %r is not in docs/attribution-licences.txt" % lid)
+        elif kind == "exception":
+            probs.append("%r is an exception, use it as `<licence> WITH %s`" % (lid, lid))
+        elif kind == "test-only" and ships:
+            probs.append("licence %r is allowed for test-only rows only" % lid)
+        if exc is not None:
+            if allowed.get(exc) is None:
+                probs.append("exception id %r is not in docs/attribution-licences.txt" % exc)
+            elif allowed[exc] != "exception":
+                probs.append("%r is not marked `exception` in docs/attribution-licences.txt" % exc)
+    return probs
 
 
 def is_path_row(row):
@@ -134,7 +235,10 @@ def rule_ext_dir(f):
         return False
     if ext in ASSET_EXT:
         return True
-    if any(p in ASSET_DIRS for p in parts[:-1]) and ext not in ("rs", "md") and base not in (".gitignore", ".gitkeep"):
+    in_dir = [p for p in parts[:-1] if p in ASSET_DIRS]
+    if in_dir and not base.startswith(".git"):
+        if ext in ("rs", "md") and not any(p in VENDOR_DIRS for p in in_dir):
+            return False
         return True
     return False
 
@@ -206,27 +310,61 @@ def header_hits(files):
             continue
         if b"\0" in head:
             continue
-        if HEADER_RE.search(head):
-            hits.append(f)
+        for line in head.decode("utf-8", errors="replace").splitlines():
+            if HEADER_RE.search(line) and not HEADER_OWN.search(line):
+                hits.append(f)
+                break
     return hits
 
 
+def table_lines(rows):
+    out = ["| Item | Path | Author | Licence | Source | Use |", "|---|---|---|---|---|---|"]
+    for r in rows:
+        out.append("| %s | `%s` | %s | %s | %s | %s |" % (r["name"], r["path"], r["author"], r["licence"], r["source"], r["use"]))
+    return out
+
+
+def table_block(text):
+    lines = text.split("\n")
+    for i, l in enumerate(lines):
+        if l.startswith("| Item | Path | Author | Licence | Source | Use |"):
+            j = i
+            while j < len(lines) and lines[j].startswith("|"):
+                j += 1
+            return lines[i:j]
+    return []
+
+
+def notice_has(notices, name):
+    return re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", notices) is not None
+
+
+def annotation(file, msg):
+    esc = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    f = file.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A").replace(",", "%2C")
+    return "::warning file=%s::%s" % (f, esc)
+
+
+def under_unknown_dir(p):
+    return any(seg in UNKNOWN_DIRS for seg in p.split("/")[:-1])
+
+
 def main():
-    table_mode = "--table" in sys.argv
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except AttributeError:
+        pass
     rows = parse_tsv()
-    if table_mode:
-        print("| Item | Path | Author | Licence | Source |")
-        print("|---|---|---|---|---|")
-        for r in rows:
-            print("| %s | `%s` | %s | %s | %s |" % (r["name"], r["path"], r["author"], r["licence"], r["source"]))
+    if "--table" in sys.argv:
+        print("\n".join(table_lines(rows)))
         return 0
 
     files = list_files()
-    allowed = set(read_lines(LICENCES))
-    allowed = {a.split()[0] for a in allowed}
-    open_rows = {l.split("\t")[0].strip() for l in read_lines(OPEN)}
+    fileset = set(files)
+    allowed = load_licences()
+    open_lines = read_lines(OPEN)
+    open_files = [l.split("\t")[0].strip() for l in open_lines]
 
-    # Metadata of Cargo.
     meta_path = os.environ.get("ATTR_METADATA")
     packages = []
     if meta_path and os.path.exists(meta_path):
@@ -236,34 +374,38 @@ def main():
     crate_names = {p["name"] for p in packages}
 
     # Check 2: the rows themselves.
+    seen_keys = set()
     unknown_rows = []
-    seen_open = set()
     for r in rows:
         where = "row %r (%s)" % (r["path"], r["name"])
+        key = (r["path"], r["name"])
+        if key in seen_keys:
+            fail("row", "%s: the same path and name are in the table twice" % where)
+        seen_keys.add(key)
+        if r["path"].startswith("::") or r["name"].startswith("::"):
+            fail("row", "%s: a path or name must not start with '::'" % where)
         if not r["name"] or not r["author"]:
             fail("row", "%s: name and author must not be empty" % where)
-        unknown = r["licence"] == "UNKNOWN"
+        if r["use"] not in ("ships", "test"):
+            fail("row", "%s: the column use is `ships` or `test`, got %r" % (where, r["use"]))
+        ships = r["use"] != "test"
+        unknown = r["licence"] == "UNKNOWN" or r["source"] == "UNKNOWN" or r["author"] == "UNKNOWN"
         if not r["licence"]:
             fail("row", "%s: no licence" % where)
-        elif not unknown:
-            for lid in licence_ids(r["licence"]):
-                if lid not in allowed:
-                    fail("row", "%s: licence id %r is not in docs/attribution-licences.txt" % (where, lid))
+        elif r["licence"] != "UNKNOWN":
+            for p in licence_problems(r["licence"], allowed, ships):
+                fail("row", "%s: %s" % (where, p))
         if not r["source"]:
             fail("row", "%s: no source URL" % where)
         elif r["source"] != "UNKNOWN" and not re.match(r"https?://\S+$", r["source"]):
             fail("row", "%s: the source must be an http(s) URL, got %r" % (where, r["source"]))
-        elif r["source"] == "UNKNOWN" and not unknown:
-            fail("row", "%s: source UNKNOWN is only valid together with licence UNKNOWN" % where)
-        if unknown or r["source"] == "UNKNOWN":
-            if r["path"] in open_rows:
-                warnings.append("%s: licence or source UNKNOWN, listed in docs/attribution-open.txt" % where)
-                seen_open.add(r["path"])
+        if r["path"].startswith("ext:") and not re.match(r"ext:[A-Za-z0-9._-]+$", r["path"]):
+            fail("row", "%s: an ext: id has letters, digits, dot, dash and underscore only" % where)
+        if unknown:
+            if not (is_path_row(r) and under_unknown_dir(r["path"])):
+                fail("row", "%s: UNKNOWN is only allowed for a path under tests/, testdata/ or fixtures/" % where)
             else:
-                fail("row", "%s: licence UNKNOWN and not listed in docs/attribution-open.txt" % where)
-            unknown_rows.append(r)
-    for p in sorted(open_rows - seen_open):
-        fail("open", "docs/attribution-open.txt lists %r but no UNKNOWN row has that path (remove the line)" % p)
+                unknown_rows.append(r)
 
     # Check 3: stale rows. Also build the matchers.
     matchers = []
@@ -272,17 +414,44 @@ def main():
         if p.startswith("crate:"):
             if p[6:] not in crate_names:
                 fail("stale", "row %r: the crate %r is not in cargo metadata" % (p, p[6:]))
-        elif p.startswith("ext:"):
-            if not re.match(r"ext:[A-Za-z0-9._-]+$", p):
-                fail("row", "row %r: an ext: id has letters, digits, dot, dash and underscore only" % p)
-        else:
+        elif not p.startswith("ext:"):
             rx = glob_re(p)
-            matchers.append((rx, p))
+            matchers.append((rx, r))
             if not any(rx.match(f) for f in files):
                 fail("stale", "row %r (%s): the path or glob matches no file" % (p, r["name"]))
 
-    def covered(f):
-        return any(rx.match(f) for rx, _ in matchers)
+    # The open list: exact files, no duplicates, each matched by an UNKNOWN row.
+    seen = set()
+    for o in open_files:
+        if re.search(r"[*?\[\]]", o):
+            fail("open", "docs/attribution-open.txt: %r is a glob, name the exact file" % o)
+        if o in seen:
+            fail("open", "docs/attribution-open.txt: %r is listed twice" % o)
+        seen.add(o)
+        if o not in fileset:
+            fail("open", "docs/attribution-open.txt: %r is not a file of the repository (remove the line)" % o)
+    unknown_files = {}
+    for r in unknown_rows:
+        rx = glob_re(r["path"])
+        for f in files:
+            if rx.match(f):
+                unknown_files[f] = r
+                if f not in seen:
+                    fail("open", "%s: UNKNOWN row %r matches this file but docs/attribution-open.txt does not name it" % (f, r["path"]))
+    for o in sorted(seen - set(unknown_files)):
+        if o in fileset and not re.search(r"[*?\[\]]", o):
+            fail("open", "docs/attribution-open.txt: %r is matched by no UNKNOWN row (remove the line)" % o)
+    gha = os.environ.get("GITHUB_ACTIONS") == "true"
+    for f in sorted(unknown_files):
+        if f in seen:
+            r = unknown_files[f]
+            msg = "licence, source or author UNKNOWN (%s)" % r["name"]
+            warnings.append("%s: %s" % (f, msg))
+            if gha:
+                warnings.append(annotation(f, msg))
+
+    def row_cover(f):
+        return [r for rx, r in matchers if rx.match(f)]
 
     # Check 1: files that need a row.
     need = {}
@@ -294,14 +463,17 @@ def main():
         ext = base.rsplit(".", 1)[-1] if "." in base else ""
         if ext not in EMBED_SKIP_EXT and base not in EMBED_SKIP_FILES:
             need.setdefault(f, "embedded with include_bytes! or include_str!")
-    # Check 5: third-party header.
-    for f in header_hits(files):
-        need[f] = "has a Copyright (c) or SPDX-License-Identifier header"
+    hits = set(header_hits(files))
+    for f in hits:
+        need.setdefault(f, "has a copyright, licence or SPDX header")
     for f in sorted(need):
-        if not covered(f):
+        cover = row_cover(f)
+        if not cover:
             fail("missing", "%s: %s, no row in docs/attribution-assets.tsv" % (f, need[f]))
+        elif f in hits and all(r["author"].startswith(OWN) for r in cover):
+            fail("missing", "%s: has a third-party header but only a row of own work covers it" % f)
 
-    # Check 6: attribution.md and the licence list.
+    # Check 6: attribution.md, the notices and the licence list.
     try:
         att = open(ATTRIBUTION, encoding="utf-8").read()
     except OSError:
@@ -312,16 +484,12 @@ def main():
     except OSError:
         notices = ""
         fail("setup", "missing file: THIRD_PARTY_NOTICES.txt")
-    said = set()
+    if table_block(att) != table_lines(rows):
+        fail("doc", "the asset table in docs/attribution.md is not the output of scripts/check-attribution.sh --table (paste the new table)")
     for r in rows:
-        for what in ("name", "path"):
-            if r[what] not in att and (what, r[what]) not in said:
-                said.add((what, r[what]))
-                fail("doc", "docs/attribution.md does not mention the %s %r (run scripts/check-attribution.sh --table)" % (what, r[what]))
-        third = not r["author"].startswith(OWN) and r["licence"] != "UNKNOWN"
-        test_only = r["path"].startswith(("tests/", "ext:")) or "/tests/" in r["path"]
-        if third and not test_only and r["name"] not in notices:
-            fail("notices", "THIRD_PARTY_NOTICES.txt does not mention %r (add it to docs/notices-extra.txt and run scripts/notices.sh)" % r["name"])
+        third = not r["author"].startswith(OWN)
+        if third and r["use"] == "ships" and not notice_has(notices, r["name"]):
+            fail("notices", "THIRD_PARTY_NOTICES.txt does not name %r (add it to docs/notices-extra.txt and run scripts/notices.sh)" % r["name"])
 
     # Check 4: Cargo dependencies.
     for p in packages:
@@ -338,7 +506,7 @@ def main():
         fail("setup", "ATTR_TREE is not set: run scripts/check-attribution.sh")
 
     for w in warnings:
-        print("WARN  " + w)
+        print(w if w.startswith("::") else "WARN  " + w)
     if failures:
         by = {}
         for s, t in failures:
@@ -350,8 +518,9 @@ def main():
                 print("      - " + t)
         print("\nattribution check failed: %d problem(s). See docs/dev-guide.md, 'Add an asset'." % len(failures))
         return 1
-    print("attribution check passed: %d rows, %d files checked, %d open warning(s)." % (len(rows), len(files), len(warnings)))
+    print("attribution check passed: %d rows, %d files checked, %d UNKNOWN row(s) covering %d file(s)." % (len(rows), len(files), len(unknown_rows), len(unknown_files)))
     return 0
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())
