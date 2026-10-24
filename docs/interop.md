@@ -164,7 +164,8 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | SPLINE, ELLIPSE | Polylines within the tolerance. A note counts them. A spline without knots gets uniform knots, as in the ezdxf reader. |
 | Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). TEXT, MTEXT and INSERT in a tilted plane are reported. |
 | IMAGE, 3DSOLID, BODY, REGION, SURFACE, MLEADER, XLINE, RAY, MLINE, OLE2FRAME, XREF | Reported by name with the reason. An IMAGE names its file, an XREF its path. |
-| XCLIP of a block reference, transparency | Not applied. A note counts them. |
+| XCLIP of a block reference | The geometry of the block is cut by the polygon of the clip (IOP-27, see Block clips). |
+| Transparency | Not applied. A note counts them. |
 
 ### Pattern hatches (IOP-27)
 
@@ -191,6 +192,23 @@ The export writes a hatch fill as a HATCH entity.
 - The numbers follow the unit, the origin and the scale of the layer (paper units).
 - A fill with a color or a weight on one of its lines stays plain LINE entities. So does a tile. Release 12 has no HATCH.
 - The report says how many HATCH entities were written, by name.
+
+### Block clips (IOP-27)
+
+A block reference with a clip (XCLIP) has an extension dictionary. It leads to a SPATIAL_FILTER object. Kadakas explodes blocks, so it has no symbol with a stencil. The import cuts the geometry of each entity of the block by the polygon, in the plane.
+
+- The polygon is in the space of the reference. The inverse matrix of the filter (the last 24 numbers of code 40, the first 12) gives it in the coordinates of the block. Two points are a rectangle by its corners.
+- The turn, the scale and the place of the reference apply, also in arrays (every copy is cut) and in nested blocks (all clips of the references around apply).
+- A line or a polyline is cut at the edge of the polygon. The cut points are exact. A concave polygon can cut a line in many pieces.
+- A line that lies on the edge of the polygon stays.
+- A curve (a circle, an arc, a bulge) that lies entirely inside stays exact. A curve that is cut becomes chords within the tolerance. A note counts these.
+- A filled shape (a solid, a hatch loop, a wipeout) becomes the polygon boolean of the shape and the clip. The pattern of a hatch stays. A hole becomes a white island, as in a hatch.
+- A text, a point and a 3D point stay or go whole by their point. A mesh stays or goes whole by its vertices. A note counts these.
+- An entity that is entirely outside is not imported. Its line in `report.skipped` says `outside the clip (XCLIP) of its block reference`, and the accounting stays exact.
+- An inverted clip keeps the part outside. The filter holds the outer polygon, and an XRECORD in its dictionary holds the part that is cut away. The area is the outer polygon without that part.
+- A clip that is switched off (code 71 is 0), or that cannot be read, shows the whole block. A note counts them.
+- A front or back clip plane (3D) is not applied. Only the polygon is. A note counts them.
+- The clip is in the plane. A 3D polyline is cut by its plan, and its height is interpolated.
 
 ### The report
 
@@ -237,7 +255,7 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 
 ### Not done
 
-- Block clips (XCLIP) and transparency are not applied.
+- Transparency is not applied.
 - The islands of a pattern hatch are white filled outlines on top of the hatch. A polyline has no holes, so the lines of the pattern still run under the island. The export writes the island as its own polyline and not as a hole of the HATCH.
 - A hatch in a tilted plane has no fill, only its boundary as 3D polylines.
 - A pattern hatch with an associative boundary (code 330 to the entities) loses the association. The boundary becomes polylines.

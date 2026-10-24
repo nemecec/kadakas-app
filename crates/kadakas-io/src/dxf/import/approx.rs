@@ -65,8 +65,19 @@ pub(super) struct Tally {
     pub viewport_clip_lost: usize,
     /// 3D polylines in paper space that were flattened.
     pub flattened: usize,
-    /// Block references with a clip (XCLIP): the clip is not applied.
-    pub xclip: usize,
+    /// Block references with a clip (XCLIP) that was applied (IOP-27).
+    pub xclip_applied: usize,
+    /// Of those, the clips that are inverted, and the clips with a front or back plane (the plane is not applied).
+    pub xclip_inverted: usize,
+    pub xclip_planes: usize,
+    /// Clips that are switched off in the file (the block shows whole), and clips that cannot be read.
+    pub xclip_off: usize,
+    pub xclip_unreadable: usize,
+    /// Items that a clip cut, and of those the ones with curves (cut into chords).
+    pub xclip_cut: usize,
+    pub xclip_curves: usize,
+    /// Items that a clip kept or dropped whole by their point (text, points, meshes).
+    pub xclip_whole: usize,
     /// Entities with a transparency (group code 440): drawn opaque.
     pub transparent: usize,
 }
@@ -289,10 +300,63 @@ impl Tally {
                 plural(self.viewport_clip_lost, "viewport is", "viewports are")
             ));
         }
-        if self.xclip > 0 {
+        if self.xclip_applied > 0 {
+            let mut text = format!(
+                "{} a clip (XCLIP) that was applied: the geometry of the block is cut by the polygon",
+                plural(
+                    self.xclip_applied,
+                    "block reference has",
+                    "block references have"
+                )
+            );
+            if self.xclip_cut > 0 {
+                text += &format!(
+                    ". {} cut at the edge of the clip (the cut points are exact{})",
+                    plural(self.xclip_cut, "object was", "objects were"),
+                    if self.xclip_curves > 0 {
+                        format!(
+                            ". {} with curves became chords within {tol} mm",
+                            self.xclip_curves
+                        )
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+            if self.xclip_whole > 0 {
+                text += &format!(
+                    ". {} (text, points, meshes) stayed or went whole, by their point or their vertices",
+                    plural(self.xclip_whole, "object", "objects")
+                );
+            }
+            out.push(text);
+        }
+        if self.xclip_inverted > 0 {
             out.push(format!(
-                "{} a clip (XCLIP) that is not applied: the whole block shows",
-                plural(self.xclip, "block reference has", "block references have")
+                "{} inverted (the part inside the polygon is cut away)",
+                plural(self.xclip_inverted, "clip is", "clips are")
+            ));
+        }
+        if self.xclip_planes > 0 {
+            out.push(format!(
+                "{} a front or back clip plane (3D) that is not applied: only the polygon is",
+                plural(self.xclip_planes, "clip has", "clips have")
+            ));
+        }
+        if self.xclip_off > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) that is switched off in the file: the whole block shows",
+                plural(
+                    self.xclip_off,
+                    "block reference has",
+                    "block references have"
+                )
+            ));
+        }
+        if self.xclip_unreadable > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) that cannot be read (too few points, no matrix or no area): the whole block shows",
+                plural(self.xclip_unreadable, "block reference has", "block references have")
             ));
         }
         if self.transparent > 0 {
@@ -335,7 +399,14 @@ mod tests {
             hatch_islands: 5,
             tilted: 6,
             tilted_hatches: 2,
-            xclip: 2,
+            xclip_applied: 2,
+            xclip_inverted: 1,
+            xclip_planes: 1,
+            xclip_off: 3,
+            xclip_unreadable: 1,
+            xclip_cut: 4,
+            xclip_curves: 2,
+            xclip_whole: 5,
             transparent: 3,
             wipeouts: 1,
             subdivided_meshes: 2,
@@ -352,7 +423,7 @@ mod tests {
         t.pattern_fills.insert("EARTH".into(), 4);
         t.pattern_fills.insert("ANSI32 x2".into(), 1);
         let notes = t.notes(1.5);
-        assert_eq!(notes.len(), 20);
+        assert_eq!(notes.len(), 24);
         let all = notes.join("\n");
         for needle in [
             "2 splines became polylines within 1.5 mm",

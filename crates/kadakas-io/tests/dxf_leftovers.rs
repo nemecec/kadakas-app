@@ -112,3 +112,57 @@ fn pattern_hatches_of_public_files_have_the_lines_of_the_ezdxf_reader() {
         assert!(filled >= hatches.len(), "{key}: {filled}");
     }
 }
+
+/// The length of what a drawing shows as lines: lines, polylines, circles and arcs.
+fn drawn_length(ed: &kadakas_core::command::Editor) -> f64 {
+    use kadakas_core::model::Shape;
+    ed.doc()
+        .objects
+        .values()
+        .map(|o| match &o.shape {
+            Shape::Line { a, b } => a.distance(*b),
+            Shape::Polyline { points, closed } => {
+                let pts = kadakas_core::curve::flatten(points, *closed, 0.001);
+                let n = pts.len();
+                let segs = if *closed { n } else { n.saturating_sub(1) };
+                (0..segs).map(|i| pts[i].distance(pts[(i + 1) % n])).sum()
+            }
+            Shape::Circle { radius, .. } => std::f64::consts::TAU * radius,
+            Shape::Arc {
+                radius, start, end, ..
+            } => radius * kadakas_core::model::arc_sweep(*start, *end),
+            _ => 0.0,
+        })
+        .sum()
+}
+
+#[test]
+fn block_clips_of_the_ezdxf_example_cut_the_same_length_as_shapely() {
+    let facts = facts();
+    let Some(data) = corpus::need(corpus::EZDXF, "examples_dxf/xclip.dxf") else {
+        return;
+    };
+    let opts = ImportOptions {
+        tolerance: 0.001,
+        ..raw_units()
+    };
+    let (ed, rep) = support::import_with(&data, &opts).unwrap();
+    accounted(&rep);
+    let expected = facts["xclip"]["total_length"].as_f64().unwrap();
+    let got = drawn_length(&ed);
+    assert!(
+        (got - expected).abs() / expected < 0.01,
+        "{got} against {expected}"
+    );
+    // The notes count the references: 8 clipped (2 of them inverted), 1 switched off.
+    let all = rep.notes.join("\n");
+    assert!(
+        all.contains("8 block references have a clip (XCLIP) that was applied"),
+        "{all}"
+    );
+    assert!(all.contains("2 clips are inverted"), "{all}");
+    assert!(
+        all.contains("1 block reference has a clip (XCLIP) that is switched off"),
+        "{all}"
+    );
+}

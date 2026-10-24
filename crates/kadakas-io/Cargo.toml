@@ -12,6 +12,7 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 encoding_rs = "0.8.42"
+i_overlay = "9.0.1"
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

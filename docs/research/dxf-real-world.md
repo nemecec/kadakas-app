@@ -190,7 +190,7 @@ Rank = chance that a real Vectorworks or AutoCAD file hits it, times the harm. E
    - Test: `insert-recursive-pair.dxf`, `block-basepoint.dxf`, `block-insert-order.dxf`, `multi_insert_with_attribs.dxf` and `xclip.dxf`.
    - Recursion must stop with a report line.
    - Insert counts must match ezdxf.
-   - Done, except that a block clip (XCLIP) is not applied. A note counts the clipped references. The INSERT counts equal the ezdxf reader. The recursion stops with the line `blocks are nested too deep`.
+   - Done (IOP-27 added the block clip). The geometry of a clipped reference is cut by the polygon, with the inverted clips and the arrays. The cut length of `xclip.dxf` equals the length that shapely finds. The INSERT counts equal the ezdxf reader. The recursion stops with the line `blocks are nested too deep`.
 9. Colours and weights: ACI (including 0 ByBlock and 256 ByLayer), true colour, layer colour, and the lineweight table of Vectorworks (nearest value).
    - Test: `colors.dxf`, `valid_lineweights.dxf`, `byblock-bylayer.dxf` and `transparency.dxf`.
    - Check the colour per entity and the 0.40 mm mapping.

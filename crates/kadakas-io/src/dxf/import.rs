@@ -18,6 +18,7 @@ use kadakas_core::mesh3d::Mesh3d;
 use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 mod approx;
+mod clip;
 mod extra;
 mod hatch;
 mod paper;
@@ -418,6 +419,7 @@ fn walk(
         sheet: None,
         class_vis: HashMap::new(),
         hatches: hatch::HatchLib::new(&hatches),
+        object_index: clip::handle_index(&dxf.objects),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -426,6 +428,7 @@ fn walk(
         weight: None,
         depth: 0,
         path: Path::default(),
+        clips: Vec::new(),
     };
     // Paper space has its own pass; with the option off, or in an update, it is skipped and counted.
     let paper = opts.paper_space && opts.lineage.is_none() && !w.b.is_probe();
@@ -534,8 +537,11 @@ struct Cx {
     depth: usize,
     /// The block and the INSERTs that led here, for the source tags.
     path: Path,
+    /// The clips (XCLIP) of the block references that led here, in the drawing (IOP-27).
+    clips: Vec<std::rc::Rc<clip::Region>>,
 }
 
+#[derive(Clone)]
 struct Item {
     shape: Shape,
     fill: Option<Color>,
@@ -593,6 +599,8 @@ struct Walker<'a> {
     class_vis: HashMap<String, (ClassId, bool)>,
     /// The hatch fills of the document and of this import (IOP-27).
     hatches: hatch::HatchLib,
+    /// The objects of the file by handle, for the clips of block references (IOP-27).
+    object_index: HashMap<String, usize>,
 }
 
 /// Vertices and triangles of the 3D faces of one layer.
@@ -824,10 +832,8 @@ impl Walker<'_> {
         }
         match e.kind.as_str() {
             "INSERT" => {
-                if self.has_clip(e) {
-                    self.tally.xclip += 1;
-                }
-                let ok = self.insert(e, cx);
+                let clip = self.read_clip(e);
+                let ok = self.insert(e, cx, clip.as_ref());
                 self.count(ok);
                 return;
             }
@@ -849,6 +855,13 @@ impl Walker<'_> {
         if let Err(why) = self.convert(e, cx, &mut items) {
             self.skip_entity(e, why);
             return;
+        }
+        if !cx.clips.is_empty() && !items.is_empty() {
+            items = clip::apply(items, &cx.clips, self.opts.tolerance, &mut self.tally);
+            if items.is_empty() {
+                self.skip_entity(e, "outside the clip (XCLIP) of its block reference");
+                return;
+            }
         }
         if self.sheet.is_some() {
             items = self.sheet_items(items);
@@ -901,29 +914,6 @@ impl Walker<'_> {
         }
     }
 
-    /// True if the block reference has a clip (XCLIP): its extension dictionary has the entry
-    /// ACAD_FILTER.
-    fn has_clip(&self, e: &Entity) -> bool {
-        let Some(at) = e
-            .items
-            .iter()
-            .position(|(c, v)| *c == 102 && v.trim() == "{ACAD_XDICTIONARY")
-        else {
-            return false;
-        };
-        let Some(handle) = e.items[at + 1..]
-            .iter()
-            .find(|(c, _)| *c == 360)
-            .and_then(|(_, h)| hash::normal_handle(h))
-        else {
-            return false;
-        };
-        self.dxf
-            .objects
-            .iter()
-            .any(|o| o.kind == "DICTIONARY" && o.handle().as_deref() == Some(handle.as_str()))
-    }
-
     /// Counts an entity as imported or skipped (the reason is in the report already).
     fn count(&mut self, imported: bool) {
         if imported {
@@ -961,7 +951,7 @@ impl Walker<'_> {
             items,
             children: vec![],
         };
-        self.insert(&proxy, cx)
+        self.insert(&proxy, cx, None)
     }
 
     /// Adds the merged 3D faces as mesh objects, one per DXF layer.
@@ -1020,7 +1010,7 @@ impl Walker<'_> {
     }
 
     /// Expands a block reference. False when nothing was inserted (the reason is in the report).
-    fn insert(&mut self, e: &Entity, cx: &Cx) -> bool {
+    fn insert(&mut self, e: &Entity, cx: &Cx, clip: Option<&clip::ClipRead>) -> bool {
         if !self.opts.explode_blocks {
             self.b
                 .report
@@ -1105,13 +1095,20 @@ impl Walker<'_> {
                     }
                     None => Path::default(),
                 };
+                let xf = cx.xf.after(&local);
+                // The clip of the reference joins the clips of the references around it.
+                let mut clips = cx.clips.clone();
+                if let Some(read) = clip {
+                    clips.extend(self.clip_region(read, &xf, r == 0 && c == 0));
+                }
                 let inner = Cx {
-                    xf: cx.xf.after(&local),
+                    xf,
                     layer: layer.clone(),
                     pen: own_pen,
                     weight: cx.weight,
                     depth: cx.depth + 1,
                     path,
+                    clips,
                 };
                 for sub in &block.entities {
                     self.entity(sub, &inner);

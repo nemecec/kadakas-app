@@ -239,6 +239,7 @@ impl Walker<'_> {
             weight: None,
             depth: 0,
             path: Path::default(),
+            clips: Vec::new(),
         };
         // What the sheet needs from the walker: no offset (paper is not shifted), no source tags,
         // and the sheet layer as the target of every object.

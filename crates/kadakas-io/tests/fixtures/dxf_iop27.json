@@ -765,5 +765,55 @@
    "inserts": 0,
    "insunits": 1
   }
+ },
+ "xclip": {
+  "inserts": [
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 22.484347631761676
+   },
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 21.751739248240817
+   },
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 24.289116623684837
+   },
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 21.75129199651859
+   },
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 24.28857702128449
+   },
+   {
+    "clipped": false,
+    "inverted": false,
+    "length": 63.993680984406765
+   },
+   {
+    "clipped": true,
+    "inverted": true,
+    "length": 57.99944024539803
+   },
+   {
+    "clipped": true,
+    "inverted": false,
+    "length": 18.524572671361803
+   },
+   {
+    "clipped": true,
+    "inverted": true,
+    "length": 45.46910831304498
+   }
+  ],
+  "total_length": 300.551874735702
  }
 }

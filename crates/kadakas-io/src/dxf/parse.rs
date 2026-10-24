@@ -330,15 +330,27 @@ pub fn parse(bytes: &[u8]) -> Result<Dxf, IoError> {
                         .map(|(_, v)| v.as_str())
                         .collect(),
                 });
-                dxf.objects = recs
-                    .into_iter()
-                    .filter(|e| match e.kind.as_str() {
-                        "LAYOUT" | "IMAGEDEF" => true,
-                        // The dictionary of a clipped block reference (XCLIP) has the entry ACAD_FILTER.
-                        "DICTIONARY" => e.items.iter().any(|(c, v)| *c == 3 && v == "ACAD_FILTER"),
-                        _ => false,
-                    })
-                    .collect();
+                dxf.objects =
+                    recs.into_iter()
+                        .filter(|e| match e.kind.as_str() {
+                            "LAYOUT" | "IMAGEDEF" => true,
+                            // The objects of a clipped block reference (XCLIP): its dictionary has the entry
+                            // ACAD_FILTER, that one has SPATIAL, and the filter may have a dictionary with
+                            // the XRECORD of an inverted clip.
+                            "DICTIONARY" => e.items.iter().any(|(c, v)| {
+                                *c == 3
+                                    && matches!(
+                                        v.as_str(),
+                                        "ACAD_FILTER" | "SPATIAL" | "ACAD_XREC_ROUNDTRIP"
+                                    )
+                            }),
+                            "SPATIAL_FILTER" => true,
+                            "XRECORD" => e.items.iter().any(|(c, v)| {
+                                *c == 102 && v.trim() == "ACAD_INVERTEDCLIP_ROUNDTRIP"
+                            }),
+                            _ => false,
+                        })
+                        .collect();
             }
             _ => {}
         }
