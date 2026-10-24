@@ -212,6 +212,8 @@ struct Acc {
     by_color: BTreeMap<Option<[u8; 4]>, Soup>,
     exact: Option<ExactSolid>,
     exact_ok: bool,
+    /// Why a body of the part has no exact data, when it is more than "given as triangles".
+    lost: Option<&'static str>,
 }
 
 /// Why an entity type was not used.
@@ -268,7 +270,6 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     let file = part21::parse_limited(&text, opts.step.max_entities, opts.step.max_parse_memory)
         .map_err(|e| match e {
             part21::ParseError::TooManyEntities { limit } => MeshError::TooManyEntities {
-                count: limit as u64 + 1,
                 limit: limit as u64,
             },
             part21::ParseError::TooMuchMemory { estimate, limit } => MeshError::TooMuchMemory {
@@ -290,7 +291,6 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     drop(text);
     if file.entities.len() > opts.step.max_entities {
         return Err(MeshError::TooManyEntities {
-            count: file.entities.len() as u64,
             limit: opts.step.max_entities as u64,
         });
     }
@@ -377,6 +377,7 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
                         by_color: BTreeMap::new(),
                         exact: None,
                         exact_ok: true,
+                        lost: None,
                     });
                     groups.last_mut().expect("just pushed")
                 }
@@ -392,7 +393,10 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
                     Some(have) => have.merge(x),
                     None => g.exact = Some(x.clone()),
                 },
-                None => g.exact_ok = false,
+                None => {
+                    g.exact_ok = false;
+                    g.lost = g.lost.or(b.exact_lost);
+                }
             }
         }
         for g in groups {
@@ -405,6 +409,12 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
                         value: far,
                         limit: opts.limits.max_coord_mm,
                     });
+                }
+                // The weld hashes every vertex and every triangle of every copy.
+                match c.charge(pos.len() as u64 * 3 + tris.len() as u64 * 2) {
+                    Ok(()) => {}
+                    Err(Fail::Abort(e)) => return Err(e),
+                    Err(Fail::Skip(why)) => return Err(MeshError::Unsupported(why)),
                 }
                 let (positions, triangles, w, d, x) = weld(&pos, &tris, weld_eps);
                 welded += w;
@@ -421,9 +431,13 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
                 // The exact data of this color.
                 let payload = match (&g.exact, g.exact_ok, opts.keep_exact) {
                     (_, _, false) => Err("the option keep_exact is off".to_string()),
-                    (None, _, _) | (_, false, _) => Err(
-                        "the part has triangles that were given, not cut from surfaces".to_string(),
-                    ),
+                    (None, _, _) | (_, false, _) => Err(g.lost.map_or_else(
+                        || {
+                            "the part has triangles that were given, not cut from surfaces"
+                                .to_string()
+                        },
+                        str::to_string,
+                    )),
                     (Some(x), true, true) => {
                         let mut x = x.clone();
                         x.retain_faces(|f| f.color == color);

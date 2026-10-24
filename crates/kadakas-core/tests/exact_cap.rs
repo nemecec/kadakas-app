@@ -74,9 +74,7 @@ fn a_copy_over_the_cap_of_the_document_keeps_the_triangles_only() {
     assert!(kept(&ed, new));
     let out = copy(&mut ed, first);
     assert!(
-        out.notes
-            .iter()
-            .any(|n| n.contains("keep their triangles only")),
+        out.notes.iter().any(|n| n.contains("triangles only")),
         "{:?}",
         out.notes
     );
@@ -196,9 +194,7 @@ fn ten_array_copies_of_an_unusable_payload_do_not_pass_the_cap() {
         .count();
     assert!(kept <= 8, "{kept} copies keep 7 MiB each");
     assert!(
-        out.notes
-            .iter()
-            .any(|n| n.contains("keep their triangles only")),
+        out.notes.iter().any(|n| n.contains("triangles only")),
         "{:?}",
         out.notes
     );

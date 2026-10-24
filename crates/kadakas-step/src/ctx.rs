@@ -82,8 +82,16 @@ pub struct Ctx<'a> {
     pub extra_bytes: u64,
     /// Bodies that copies have made (instances after the first, mapped items).
     pub bodies_copied: u64,
+    /// Triangles that were cut from surfaces: only these earn more work (`work_per_triangle`).
+    /// A copy of a triangle, or a triangle that the file gives, costs next to nothing.
+    pub earned: u64,
     /// Representations that a mapped item has used.
     pub mapped_used: HashSet<u64>,
+    /// The representations that a plain relationship ties to each representation, both ways.
+    pub rep_links: HashMap<u64, Vec<u64>>,
+    /// The representations whose geometry already has a user: the geometry was counted when it
+    /// was read, so its first use costs no count. Every use after it is a copy and pays.
+    pub first_use: HashSet<u64>,
     pub clock: Clock,
 }
 
@@ -156,7 +164,10 @@ impl<'a> Ctx<'a> {
             work: 0,
             extra_bytes: 0,
             bodies_copied: 0,
+            earned: 0,
             mapped_used: HashSet::new(),
+            rep_links: HashMap::new(),
+            first_use: HashSet::new(),
             clock: Clock::default(),
         }
     }
@@ -257,7 +268,7 @@ impl<'a> Ctx<'a> {
         let allowed = self
             .limits
             .max_work
-            .saturating_add(self.limits.work_per_triangle.saturating_mul(self.triangles));
+            .saturating_add(self.limits.work_per_triangle.saturating_mul(self.earned));
         if self.work > allowed {
             return Err(Fail::Abort(MeshError::TooMuchWork {
                 units: self.work,

@@ -39,7 +39,7 @@ fn every_error_has_a_kind_details_and_text() {
         MeshError::Unsupported("u".into()),
         MeshError::Empty,
         MeshError::TooMuchWork { units: 5, limit: 4 },
-        MeshError::TooManyEntities { count: 5, limit: 4 },
+        MeshError::TooManyEntities { limit: 4 },
         MeshError::TooManyInstances { count: 5, limit: 4 },
         MeshError::TooManyCopies { count: 5, limit: 4 },
         MeshError::TooMuchTime {
@@ -57,7 +57,7 @@ fn every_error_has_a_kind_details_and_text() {
     assert_eq!(kinds.len(), all.len(), "each kind has its own name");
     assert_eq!(all.iter().filter(|e| e.is_limit()).count(), 10);
     assert_eq!(all[12].details()["units"], 5);
-    assert_eq!(all[13].details()["count"], 5);
+    assert_eq!(all[13].details()["limit"], 4);
     assert_eq!(all[16].details()["millis"], 5);
     assert_eq!(all[0].details()["limit"], 4);
     assert_eq!(all[5].details()["need"], 2);

@@ -499,7 +499,7 @@ impl ExactSolid {
                     let outward = f.same_sense != f.flip;
                     // The face looks along the normal of the surface (outward) or against it,
                     // and the normal of the surface turns with the handedness of the frame.
-                    let handed = f.surface.as_ref().is_none_or(Surface::natural_outward);
+                    let handed = f.surface.as_ref().and_then(Surface::natural_outward);
                     if m.get("kind") == Some(&json!("plane")) {
                         if !outward && let Some(n) = m.get("normal").and_then(|n| n.as_array()) {
                             let neg: Vec<Value> = n
@@ -508,7 +508,7 @@ impl ExactSolid {
                                 .collect();
                             m.insert("normal".into(), Value::Array(neg));
                         }
-                    } else if outward != handed {
+                    } else if handed.is_some_and(|h| outward != h) {
                         // A hole: the face looks into the surface (a cylinder bore).
                         m.insert("concave".into(), json!(true));
                     }

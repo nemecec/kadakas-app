@@ -45,8 +45,9 @@ struct Graph<'g> {
 /// What the walk keeps between its two runs.
 #[derive(Default)]
 struct Walk {
-    used_reps: HashSet<u64>,
     visits: usize,
+    /// The products that the walk reached.
+    reached: HashSet<u64>,
 }
 
 struct Place {
@@ -74,7 +75,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Millimeters per unit of a representation, and the angle unit; sets the tolerance.
-    fn enter_rep(&mut self, context: u64) -> f64 {
+    fn enter_rep(&mut self, context: u64) -> R<f64> {
         let (len, ang) = self.context_units(context);
         self.angle_unit = ang;
         let scale = match (self.opts.unit, len) {
@@ -89,20 +90,20 @@ impl<'a> Ctx<'a> {
         if !self.unit_scales.contains(&scale) {
             self.unit_scales.push(scale);
         }
-        let tol_mm = self
-            .opts
-            .tolerance_mm
-            .unwrap_or_else(|| (self.diag_mm(scale) / 2000.0).clamp(0.01, 0.5));
+        let tol_mm = self.opts.tolerance_mm.map_or_else(
+            || Ok((self.diag_mm(scale)? / 2000.0).clamp(0.01, 0.5)),
+            Ok::<f64, Fail>,
+        )?;
         self.tol = tol_mm / scale;
         self.tol_mm.get_or_insert(tol_mm);
         self.angle = self.opts.angle_deg.to_radians().clamp(0.02, 1.5);
-        scale
+        Ok(scale)
     }
 
     /// The size of the file: the diagonal of the box around all points, in millimeters. The box
     /// is found once for the file and the scan is charged to the work counter. The unit of
     /// each representation only scales it.
-    fn diag_mm(&mut self, scale: f64) -> f64 {
+    fn diag_mm(&mut self, scale: f64) -> R<f64> {
         let (lo, hi) = match self.bbox {
             Some(b) => b,
             None => {
@@ -120,16 +121,16 @@ impl<'a> Ctx<'a> {
                         }
                     }
                 }
-                let _ = self.charge(self.file.entities.len() as u64 / 4 + 1);
+                self.charge(self.file.entities.len() as u64 / 4 + 1)?;
                 self.bbox = Some((lo, hi));
                 (lo, hi)
             }
         };
-        if lo.x > hi.x {
+        Ok(if lo.x > hi.x {
             1000.0
         } else {
             ((hi - lo).length() * scale).max(1.0)
-        }
+        })
     }
 
     /// The geometry of the items of one representation, in millimeters.
@@ -146,7 +147,7 @@ impl<'a> Ctx<'a> {
             return skip("representations are nested too deep");
         }
         let (items, context) = self.rep_parts(rep)?;
-        let scale = self.enter_rep(context);
+        let scale = self.enter_rep(context)?;
         let mut geom = RepGeom::default();
         // Items that place another representation.
         let mut plain = Vec::new();
@@ -169,7 +170,7 @@ impl<'a> Ctx<'a> {
                 Err(f) => return Err(f),
             }
             // The tolerance and units of this representation again.
-            self.enter_rep(context);
+            self.enter_rep(context)?;
         }
         let g = Rc::new(geom);
         cache.insert(rep, g.clone());
@@ -191,13 +192,34 @@ impl<'a> Ctx<'a> {
         let origin = self.axis2(reference(attr(map, 0)?).unwrap_or(0))?;
         let target = self.axis2(reference(attr(e, 2)?).unwrap_or(0))?;
         let (_, ctx_id) = self.rep_parts(rep)?;
-        let inner = self.rep_geometry(rep, cache, depth + 1)?;
+        let mut inner = self.rep_geometry(rep, cache, depth + 1)?;
         self.mapped_used.insert(rep);
+        // A representation with no geometry of its own that a plain relationship ties to
+        // others: the mapped item places their geometry.
+        if inner.is_empty() {
+            let related = self.rep_links.get(&rep).cloned().unwrap_or_default();
+            let mut all = RepGeom::default();
+            for r in related {
+                if let Ok(g) = self.rep_geometry(r, cache, depth + 1) {
+                    let copy = g.transformed(&DAffine3::IDENTITY);
+                    all.bodies.extend(copy.bodies);
+                    all.curves.extend(copy.curves);
+                    self.mapped_used.insert(r);
+                }
+            }
+            if !all.is_empty() {
+                inner = Rc::new(all);
+            }
+        }
         let (inner_len, _) = self.context_units(ctx_id);
         let inner_scale = self.opts.unit.map_or(inner_len.unwrap_or(1.0), |u| u.mm());
         let m = mm_frame(target, scale) * mm_frame(origin, inner_scale).inverse();
         // The copy is paid for before it is made.
-        inner.charge_copy(self)?;
+        if self.first_use.insert(rep) {
+            inner.charge_first_use(self)?;
+        } else {
+            inner.charge_copy(self)?;
+        }
         Ok(inner.transformed(&m))
     }
 
@@ -281,6 +303,8 @@ impl<'a> Ctx<'a> {
             .flat_map(|(pd, rs)| rs.iter().map(move |r| (*r, *pd)))
             .collect();
         for (a, b) in &srr {
+            self.rep_links.entry(*a).or_default().push(*b);
+            self.rep_links.entry(*b).or_default().push(*a);
             match (rep_owner.get(a), rep_owner.get(b)) {
                 (Some(pd), None) => pd_reps.entry(*pd).or_default().push(*b),
                 (None, Some(pd)) => pd_reps.entry(*pd).or_default().push(*a),
@@ -312,11 +336,52 @@ impl<'a> Ctx<'a> {
             .filter(|(_, rs)| rs.iter().any(|r| mapped_targets.contains(r)))
             .map(|(p, _)| *p)
             .collect();
+        // A usage whose parent has a mapped item of a representation of the child is placed by
+        // that mapped item. The usage is not placed a second time. A usage of the same product
+        // by another parent, with a placement of its own, is a use as always.
+        let mut maps_of: HashMap<u64, HashSet<u64>> = HashMap::new();
+        for e in &file.entities {
+            if !is_rep(e) {
+                continue;
+            }
+            let rep = e.id;
+            let items = match e.name.as_str() {
+                n if n == COMPLEX => e.part("REPRESENTATION").and_then(|a| a.get(1)).map(refs),
+                _ => e.attrs.get(1).map(refs),
+            };
+            for it in items.unwrap_or_default() {
+                if let Some(m) = self.peek(it).filter(|m| m.name == "MAPPED_ITEM")
+                    && let Some(map) = m
+                        .attrs
+                        .get(1)
+                        .and_then(reference)
+                        .and_then(|x| self.peek(x))
+                    && map.name == "REPRESENTATION_MAP"
+                    && let Some(target) = map.attrs.get(1).and_then(reference)
+                {
+                    maps_of.entry(rep).or_default().insert(target);
+                }
+            }
+        }
+        let carried: HashSet<u64> = usages
+            .iter()
+            .filter(|u| {
+                let kids: Vec<u64> = pd_reps.get(&u.child).cloned().unwrap_or_default();
+                pd_reps.get(&u.parent).is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        maps_of
+                            .get(r)
+                            .is_some_and(|m| kids.iter().any(|k| m.contains(k)))
+                    })
+                })
+            })
+            .map(|u| u.nauo)
+            .collect();
         // Transform of each usage.
         let mut tf: HashMap<u64, DAffine3> = HashMap::new();
         let (mut missing, mut unreadable) = (0u64, 0u64);
         for u in &usages {
-            if mapped_prod.contains(&u.child) {
+            if carried.contains(&u.nauo) {
                 continue;
             }
             let Some(pl) = pds_of_nauo.get(&u.nauo).and_then(|pds| places.get(pds)) else {
@@ -342,7 +407,7 @@ impl<'a> Ctx<'a> {
         }
         let children: HashSet<u64> = usages.iter().map(|u| u.child).collect();
         let mut kids: HashMap<u64, Vec<&Usage>> = HashMap::new();
-        for u in usages.iter().filter(|u| !mapped_prod.contains(&u.child)) {
+        for u in usages.iter().filter(|u| !carried.contains(&u.nauo)) {
             kids.entry(u.parent).or_default().push(u);
         }
         let mut roots: Vec<u64> = pd_name
@@ -370,9 +435,10 @@ impl<'a> Ctx<'a> {
         let lost: Vec<(u64, DAffine3, usize, Vec<u64>)> = held_back
             .into_iter()
             .filter(|pd| {
-                !pd_reps
-                    .get(pd)
-                    .is_some_and(|rs| rs.iter().any(|r| self.mapped_used.contains(r)))
+                !state.reached.contains(pd)
+                    && !pd_reps
+                        .get(pd)
+                        .is_some_and(|rs| rs.iter().any(|r| self.mapped_used.contains(r)))
             })
             .map(|pd| (pd, DAffine3::IDENTITY, 0, vec![pd]))
             .collect();
@@ -413,6 +479,7 @@ impl<'a> Ctx<'a> {
                 ));
                 continue;
             }
+            st.reached.insert(pd);
             let name = g.pd_name.get(&pd).cloned().unwrap_or_default();
             for rep in g.pd_reps.get(&pd).cloned().unwrap_or_default() {
                 let geom = match self.rep_geometry(rep, cache, 0) {
@@ -432,7 +499,9 @@ impl<'a> Ctx<'a> {
                         limit: self.limits.max_instances as u64,
                     }));
                 }
-                if !st.used_reps.insert(rep) {
+                if self.first_use.insert(rep) {
+                    geom.charge_first_use(self)?;
+                } else {
                     geom.charge_copy(self)?;
                 }
                 out.instances.push(Instance {
@@ -486,7 +555,7 @@ impl<'a> Ctx<'a> {
             .iter()
             .find(|e| e.is("GLOBAL_UNIT_ASSIGNED_CONTEXT"))
             .map_or(0, |e| e.id);
-        let scale = self.enter_rep(ctx_id);
+        let scale = self.enter_rep(ctx_id)?;
         let mut geom = RepGeom::default();
         self.read_items(&items, scale, &mut geom)?;
         if !geom.is_empty() {

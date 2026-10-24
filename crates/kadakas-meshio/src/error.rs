@@ -18,8 +18,8 @@ pub enum MeshError {
         "reading the file needs more work than the limit allows: {units} steps, the limit is {limit}"
     )]
     TooMuchWork { units: u64, limit: u64 },
-    #[error("the file has {count} entities, more than the limit of {limit}")]
-    TooManyEntities { count: u64, limit: u64 },
+    #[error("the file has more than {limit} entities")]
+    TooManyEntities { limit: u64 },
     #[error("the assembly uses products {count} times, more than the limit of {limit}")]
     TooManyInstances { count: u64, limit: u64 },
     #[error("the file would copy {count} bodies, more than the limit of {limit}")]
@@ -101,9 +101,9 @@ impl MeshError {
             MeshError::TooManyTriangles { count, limit }
             | MeshError::TooManyVertices { count, limit }
             | MeshError::TooManyParts { count, limit }
-            | MeshError::TooManyEntities { count, limit }
             | MeshError::TooManyInstances { count, limit }
             | MeshError::TooManyCopies { count, limit } => json!({"count": count, "limit": limit}),
+            MeshError::TooManyEntities { limit } => json!({"limit": limit}),
             MeshError::TooMuchTime { millis, limit } => json!({"millis": millis, "limit": limit}),
             MeshError::TooMuchMemory { bytes, limit } => json!({"bytes": bytes, "limit": limit}),
             MeshError::TooMuchWork { units, limit } => json!({"units": units, "limit": limit}),

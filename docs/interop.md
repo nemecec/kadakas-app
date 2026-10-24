@@ -199,22 +199,32 @@ A STEP file is not trusted. These limits hold:
 - a curve has at most 200,000 points, and an assembly has at most 32 levels
 - an assembly has at most 20,000 instances. Every use of a product counts, also in a product that has no shape
 - the copies of mapped items are counted before they are made
-- a counter of work stops files that ask for much time and make little output. A step is about 65 ns on a current computer. A surface evaluation takes a few steps and a triangle of a curved face about 50. A file gets 60 million steps, and 100 more for each triangle it makes (`max_work` and `work_per_triangle`). A file with 8 million triangles gets 860 million. Faces that give no triangles count too, and so does the scan for the size of the file (once). The error is `mesh_too_much_work`
+- a counter of work stops files that ask for much time and make little output. A step is about 50 ns on a current computer. A surface evaluation takes a few steps and a triangle of a curved face about 50. A file gets 60 million steps, and 100 more for each triangle that the reader cut from surfaces (`max_work` and `work_per_triangle`). A copy of a triangle, or a triangle that the file gives, earns nothing. A file with 8 million triangles gets 860 million. Faces that give no triangles count too, and so does the scan for the size of the file (once). The error is `mesh_too_much_work`
 - a clock is a guard next to the counter: 60 seconds (`max_millis`), `mesh_too_much_time`. It is for slow computers and for builds without optimisation. The browser build has no clock and uses the counter only.
 - the measured numbers are in the table below
 
-Measured on a release build (`tests/release_probes.rs` and the `probe` example):
+Measured on a release build (`tests/release_probes.rs` and the `probe` example, memory with `/usr/bin/time -l`):
 
 | File | Time | Result |
 |---|---|---|
 | 5 MB with 20,000 mapped items of an empty representation and 100,000 points | 35 ms (was 39.8 s) | no triangles |
-| 19.5 MB with 2,500 plates with a hole, 475,000 triangles | 1.3 s (was 8.8 s) | read, 29.6 million steps |
-| 360 KB with 200 faces of 4,800 points on one loop | 0.8 s | read, 29.9 million steps |
+| 19.5 MB with 2,500 plates with a hole, 475,000 triangles | 1.4 s (was 8.8 s) | read, 26.6 million steps |
+| the same at a tolerance of 0.005 mm, 1.2 million triangles | 4.7 s | read, 92 million steps (it was refused after 3.8 s) |
+| the same at 0.002 mm, 1.9 million triangles | 8.8 s | read, 182 million steps |
+| 360 KB with 200 faces of 4,800 points on one loop | 0.8 s | read, 33 million steps |
+| a face with 100 x 100 square holes (2.8 MB) | 0.15 s (was 4.0 s) | read, 60,000 triangles |
+| a face with 140 x 140 square holes (5.6 MB) | 0.27 s (was 15.7 s) | read, 117,600 triangles |
+| a face with 30,000 triangular holes (7 MB) | 0.4 s (was 30 s) | read, 150,000 triangles |
+| a face with 100,000 triangular holes (24 MB) | 1.4 s, 487 MB (was 530 s, 1.2 GB) | read, 500,000 triangles |
+| 30,000 holes in one cell of the grid, in a face of 1,000 km | 0.15 s | cut or refused |
+| 32 MB with 6 mapped copies of a mesh of a million triangles, then 60,000 faces that give nothing | 4.6 s (was 54 s) | `mesh_too_much_work` |
 | 1.4 MB with 30,000 faces on a revolution of a line, none cut | 0.5 s | `mesh_too_much_work` |
 | 3,000 faces on a revolution of a spline with 2,000 control points | 4.4 s | `mesh_too_much_work` |
 | the same, with no counter | 60 s | `mesh_too_much_time` |
 
-A curved face costs 10 to 19 thousand steps for each millisecond (a sphere, a torus, a revolved solid and a B-spline patch, at three tolerances), a planar face 40 thousand. So 60 million steps are about 4 seconds of work with no output, and the 100 steps for each triangle are about 6 microseconds, which is more than a triangle takes (3 to 7 microseconds on a curved face, under 1 on a plane).
+The holes of a face are joined to its outline with a grid of all the segments. A hole costs the cells around its bridge, not the size of the polygon. The cost is counted before it is spent and the joining stops at four times the count.
+
+One step is about 50 ns on curved faces (10 to 19 thousand steps for each millisecond on a sphere, a torus, a revolved solid and a B-spline patch, at three tolerances) and 20 to 40 thousand steps for each millisecond on planes and on the plates. So 60 million steps are about 4 seconds of work with no output. The 100 steps for each triangle are about 5 microseconds, which is about what a triangle takes (3 to 7 microseconds on a curved face, under 1 on a plane).
 
 References that point to themselves end. Numbers that are not finite or larger than 1e12 are not used. A number that the file defines twice uses the first definition, and a note counts these. The tests cut files in many places, damage bytes, make cycles and use huge counts.
 

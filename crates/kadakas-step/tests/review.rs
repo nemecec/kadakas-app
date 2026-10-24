@@ -586,3 +586,171 @@ fn a_planar_face_with_holes_in_a_column_a_row_or_a_block_is_cut() {
         );
     }
 }
+
+#[test]
+fn a_face_that_is_left_out_is_always_in_a_note() {
+    // Two faces of a solid: a triangle, and a face of three points on a line, which has no
+    // plane and cannot be cut.
+    let r = run(
+        "#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=CARTESIAN_POINT('',(10.,0.,0.));\n#3=CARTESIAN_POINT('',(0.,10.,0.));\n\
+         #4=CARTESIAN_POINT('',(5.,0.,0.));\n#5=CARTESIAN_POINT('',(7.,0.,0.));\n\
+         #6=POLY_LOOP('',(#1,#2,#3));\n#7=FACE_OUTER_BOUND('',#6,.T.);\n#8=FACE('',(#7));\n\
+         #9=POLY_LOOP('',(#1,#4,#5));\n#10=FACE_OUTER_BOUND('',#9,.T.);\n#11=FACE('',(#10));\n\
+         #12=CLOSED_SHELL('',(#8,#11));\n#13=FACETED_BREP('b',#12);\n",
+    );
+    assert_eq!(r.set.parts[0].triangles.len(), 1);
+    assert!(
+        r.set
+            .notes
+            .iter()
+            .any(|n| n.contains("1 faces were not cut") || n.contains("not cut")),
+        "{:?}",
+        r.set.notes
+    );
+}
+
+#[test]
+fn a_solid_far_from_the_origin_keeps_all_its_faces() {
+    // The plate with a hole 10 km from the origin and turned, with the locations of its planes
+    // at the feet of the perpendiculars from the origin: the parameters of its faces are far
+    // from zero. The area of a loop lost all its digits there, and two planar faces were left
+    // out (166 triangles of 190 and an open solid).
+    let near = load("plate_hole.step");
+    let far = load("plate_far.step");
+    let measure = |i: &StepImport| {
+        let p = &i.set.parts[0];
+        let o = glam::DVec3::from(p.positions[0]);
+        let (mut vol, mut area) = (0.0, 0.0);
+        for t in &p.triangles {
+            let q = |k: u32| glam::DVec3::from(p.positions[k as usize]) - o;
+            vol += q(t[0]).dot(q(t[1]).cross(q(t[2]))) / 6.0;
+            area += (q(t[1]) - q(t[0])).cross(q(t[2]) - q(t[0])).length() / 2.0;
+        }
+        (vol, area)
+    };
+    let (v0, a0) = measure(&near);
+    let (v1, a1) = measure(&far);
+    assert!((v1 - v0).abs() < 0.01 * v0, "{v1} {v0}");
+    assert!((a1 - a0).abs() < 0.01 * a0, "{a1} {a0}");
+    assert!(
+        far.report
+            .tessellated
+            .iter()
+            .any(|t| t.0.contains("PLANE") && t.1 == 6)
+    );
+    assert!(
+        far.set.notes.iter().all(|n| !n.contains("not cut")),
+        "{:?}",
+        far.set.notes
+    );
+}
+
+#[test]
+fn seven_mapped_copies_of_a_mesh_count_seven_times_not_eight() {
+    // The mesh is read once and each mapped item makes a copy of it. The mesh itself is not in
+    // the result, so the vertices of the result are seven times the vertices of the mesh.
+    let g = 142usize;
+    let mut w = String::from(HEAD);
+    w.push_str(
+        "#1=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#2)) REPRESENTATION_CONTEXT('',''));\n\
+         #2=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));\n\
+         #3=CARTESIAN_POINT('',(0.,0.,0.));\n#4=AXIS2_PLACEMENT_3D('',#3,$,$);\n",
+    );
+    let pts: Vec<String> = (0..g * g)
+        .map(|k| format!("({}.,{}.,{}.)", k % g, k / g, (k % g * (k / g)) % 7))
+        .collect();
+    w.push_str(&format!(
+        "#10=COORDINATES_LIST('',{},({}));\n",
+        g * g,
+        pts.join(",")
+    ));
+    let mut tris = Vec::new();
+    for j in 0..g - 1 {
+        for i in 0..g - 1 {
+            let a = j * g + i + 1;
+            tris.push(format!("({a},{},{})", a + 1, a + g));
+            tris.push(format!("({},{},{})", a + 1, a + g + 1, a + g));
+        }
+    }
+    w.push_str(&format!(
+        "#11=TRIANGULATED_FACE('',#10,{},(),$,(),({}));\n",
+        g * g,
+        tris.join(",")
+    ));
+    w.push_str("#12=SHAPE_REPRESENTATION('mesh',(#4,#11),#1);\n#13=REPRESENTATION_MAP(#4,#12);\n");
+    let mut items = Vec::new();
+    for k in 0..7 {
+        let target = 100 + 2 * k;
+        w.push_str(&format!(
+            "#{}=CARTESIAN_POINT('',({}.,0.,0.));\n#{}=AXIS2_PLACEMENT_3D('',#{},$,$);\n#{}=MAPPED_ITEM('',#13,#{});\n",
+            target,
+            k * 1000,
+            target + 1,
+            target,
+            200 + k,
+            target + 1
+        ));
+        items.push(format!("#{}", 200 + k));
+    }
+    w.push_str(&format!(
+        "#300=SHAPE_REPRESENTATION('top',({}),#1);\n#301=APPLICATION_CONTEXT('x');\n#302=PRODUCT_CONTEXT('',#301,'m');\n\
+         #303=PRODUCT('top','top','',(#302));\n#304=PRODUCT_DEFINITION_FORMATION('','',#303);\n\
+         #305=PRODUCT_DEFINITION_CONTEXT('p',#301,'d');\n#306=PRODUCT_DEFINITION('d','',#304,#305);\n\
+         #307=PRODUCT_DEFINITION_SHAPE('','',#306);\n#308=SHAPE_DEFINITION_REPRESENTATION(#307,#300);\n{TAIL}",
+        items.join(",")
+    ));
+    let opts = StepOptions {
+        limits: kadakas_meshio::Limits {
+            max_vertices: 7 * (g * g) as u64 + 100,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = read(w.as_bytes(), &opts).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.set.totals.vertices, 7 * (g * g) as u64);
+}
+
+#[test]
+fn a_product_that_one_frame_maps_and_another_assembly_places_is_in_both_places() {
+    // Loss A: the plate is mapped twice by the frame and placed once by a usage with a
+    // transformation: three plates of 12 triangles.
+    let r = load("mapped_and_placed.step");
+    let triangles: usize = r.set.parts.iter().map(|p| p.triangles.len()).sum();
+    assert_eq!(
+        triangles,
+        36,
+        "{:?}",
+        r.set
+            .parts
+            .iter()
+            .map(|p| (&p.name, p.triangles.len()))
+            .collect::<Vec<_>>()
+    );
+    let far = r
+        .set
+        .parts
+        .iter()
+        .any(|p| p.positions.iter().any(|v| v[0] >= 500.0));
+    assert!(far, "the plate that the usage places at x = 500 is missing");
+    assert!(
+        !r.set.notes.iter().any(|n| n.contains("no placement")),
+        "{:?}",
+        r.set.notes
+    );
+}
+
+#[test]
+fn a_mapped_representation_without_geometry_follows_its_relationship() {
+    // Loss B: the plate's representation is empty and a plain relationship ties it to the one
+    // with the box. The frame maps the empty one twice: two plates.
+    let r = load("mapped_related.step");
+    let triangles: usize = r.set.parts.iter().map(|p| p.triangles.len()).sum();
+    assert_eq!(triangles, 24, "{:?}", r.set.notes);
+    let xs: Vec<f64> = r
+        .set
+        .parts
+        .iter()
+        .flat_map(|p| p.positions.iter().map(|v| v[0]))
+        .collect();
+    assert!(xs.iter().cloned().fold(f64::INFINITY, f64::min) > 40.0);
+}

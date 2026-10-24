@@ -6,6 +6,7 @@ panels-exact-capped = The exact data of { $count } { $count ->
    *[other] objects are
 } not kept, because it is over the size limit. The triangles are kept.
 panels-command-notes = Done. { $notes }
+panels-command-notes-count = Done, with { $count } notes.
 panels-file = File
 panels-new = New
 panels-open = Open...

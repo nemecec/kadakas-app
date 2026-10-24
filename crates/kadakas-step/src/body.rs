@@ -21,6 +21,8 @@ pub struct Body {
     /// The exact surfaces of the triangles, in millimeters, when the body comes from a
     /// boundary representation.
     pub exact: Option<ExactSolid>,
+    /// Why the body has no exact data when it had some (a placement the surfaces cannot follow).
+    pub exact_lost: Option<&'static str>,
 }
 
 impl Body {
@@ -34,6 +36,12 @@ impl Body {
         Body {
             name: self.name.clone(),
             exact: self.exact.as_ref().and_then(|e| e.transformed(m).ok()),
+            exact_lost: self.exact_lost.or_else(|| {
+                self.exact
+                    .as_ref()
+                    .and_then(|e| e.transformed(m).err())
+                    .map(|_| "the placement of the instance is not a move, a turn, a mirror and a uniform scale, so the surfaces cannot follow it")
+            }),
             positions: self
                 .positions
                 .iter()
@@ -109,6 +117,12 @@ impl RepGeom {
             (self.bodies.len() + self.curves.len()) as u64,
             self.payload_bytes(),
         )
+    }
+
+    /// Charges the first use of this geometry: it was counted when it was read, so only the
+    /// work of moving it counts.
+    pub fn charge_first_use(&self, ctx: &mut Ctx) -> R<()> {
+        ctx.charge(self.vertices() + self.triangles())
     }
 
     pub fn transformed(&self, m: &DAffine3) -> RepGeom {
@@ -216,7 +230,10 @@ impl<'a> Ctx<'a> {
         let t = {
             let mut spend = |c: Cost| -> Result<(), MeshError> {
                 let r = match c {
-                    Cost::Output(v, t) => self.count(v, t),
+                    Cost::Output(v, t) => {
+                        self.earned += t;
+                        self.count(v, t)
+                    }
                     Cost::Work(n) => self.charge(n),
                 };
                 match r {
@@ -233,6 +250,12 @@ impl<'a> Ctx<'a> {
         let t = t.map_err(|e| count_error.take().unwrap_or(Fail::Abort(e)))?;
         for (fi, why) in &t.skipped {
             self.skip_id(solid.faces[*fi].source, &format!("face not read: {why}"));
+        }
+        if let Some((_, why)) = t.skipped.first() {
+            self.note(format!(
+                "{} faces were not cut into triangles and are left out, so the solid has holes ({why})",
+                t.skipped.len()
+            ));
         }
         for n in &t.notes {
             self.note(n.clone());
@@ -263,6 +286,7 @@ impl<'a> Ctx<'a> {
             positions: t.positions,
             groups: t.groups,
             exact: Some(solid),
+            exact_lost: None,
         })
     }
 
@@ -384,6 +408,8 @@ impl<'a> Ctx<'a> {
                 "{bad} tessellated triangles name a point that does not exist and were left out"
             ));
         }
+        // Reading and copying the given triangles: next to nothing for each, but not nothing.
+        self.charge(tris.len() as u64 * 2 + pts.len() as u64 * 2)?;
         self.count(pts.len() as u64, tris.len() as u64)?;
         self.tessellated_face("TESSELLATED (given triangles)", tris.len() as u64);
         let color = self.colors.get(&e.id).copied();
@@ -394,6 +420,7 @@ impl<'a> Ctx<'a> {
             positions: pts,
             groups,
             exact: None,
+            exact_lost: None,
         })
     }
 
@@ -509,4 +536,39 @@ fn text_of(e: &Entity) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kadakas_core::exact;
+
+    #[test]
+    fn a_placement_that_the_surfaces_cannot_follow_says_so() {
+        let solid = ExactSolid {
+            version: exact::VERSION,
+            product: "p".into(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: vec![],
+            edges: vec![],
+            shells: vec![],
+            faces: vec![],
+            mesh_hash: 0,
+            extra: Default::default(),
+        };
+        let body = Body {
+            exact: Some(solid),
+            ..Default::default()
+        };
+        let moved = body.transformed(&DAffine3::from_translation(DVec3::X));
+        assert!(moved.exact.is_some() && moved.exact_lost.is_none());
+        let stretched = body.transformed(&DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)));
+        assert!(stretched.exact.is_none());
+        assert!(stretched.exact_lost.unwrap().contains("uniform scale"));
+        // The reason stays through a second move.
+        let again = stretched.transformed(&DAffine3::from_translation(DVec3::Y));
+        assert!(again.exact_lost.is_some());
+    }
 }

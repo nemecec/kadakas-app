@@ -937,6 +937,14 @@ impl Tessellator<'_> {
         let n_bound = points.uv.len();
         points.scale = metric(surface, &points);
         let max_tris = self.p.max_face_triangles.min(self.left_triangles() + 1);
+        // The joining of the holes takes steps for each hole (cells around its bridge) and a few
+        // for the size of the polygon. It is paid for before it is done, and stops at four
+        // times the price.
+        let holes = loop_ix.len().saturating_sub(1) as u64;
+        let lg = u64::from(64 - (points.uv.len() as u64).leading_zeros());
+        let est_ops = holes * (40 + 4 * lg) + points.uv.len() as u64 * 4;
+        let fuel = 200_000 + 4 * est_ops;
+        self.work(est_ops / 3)?;
         let refine = Refine {
             surface,
             tol: self.p.tol,
@@ -944,6 +952,7 @@ impl Tessellator<'_> {
             // the angle step is not cut again for the rounding of the last digit.
             angle: self.p.angle * 1.1,
             max_triangles: max_tris.max(8),
+            fuel,
         };
         let seed = crate::mesh2d::seed_cost(&points, &loop_ix);
         // A seed grid over the limit is not made, and costs nothing. One test of a point against
@@ -951,7 +960,7 @@ impl Tessellator<'_> {
         let seed_units = if seed > crate::mesh2d::SEED_MAX_COST {
             0
         } else {
-            seed / 64
+            seed / 256
         };
         let n = points.uv.len() as u64;
         // Ear clipping is quadratic in the worst case.
@@ -959,8 +968,17 @@ impl Tessellator<'_> {
         self.work(n * (lg + 1) / 2)?;
         self.work(n * n / 4096)?;
         self.work(seed_units)?;
-        let Some((tris, truncated)) = mesh_face(&mut points, &loop_ix, &refine) else {
-            return skip("the outline of the face cannot be cut into triangles");
+        let (tris, truncated, _ops) = match mesh_face(&mut points, &loop_ix, &refine) {
+            Ok(r) => r,
+            Err(crate::mesh2d::Cut::Cannot) => {
+                return skip("the outline of the face cannot be cut into triangles");
+            }
+            Err(crate::mesh2d::Cut::Fuel(ops)) => {
+                return Err(TErr::Abort(MeshError::TooMuchWork {
+                    units: ops,
+                    limit: fuel,
+                }));
+            }
         };
         self.work(
             tris.len() as u64

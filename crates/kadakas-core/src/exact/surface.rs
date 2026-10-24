@@ -183,8 +183,9 @@ impl Surface {
     /// Does the normal `dP/du x dP/dv` point away from the inside of the surface (away from the
     /// axis of a cylinder or a revolution, from the centre of a sphere, from the centre of
     /// curvature of a patch)? A face whose normal points the other way is a bore or a hollow.
-    /// A plane has no inside: it answers true.
-    pub fn natural_outward(&self) -> bool {
+    /// `None` when the surface has no inside to tell by: a plane, a patch or a revolution that
+    /// is flat to the precision of its numbers (a mirror must not make it hollow by rounding).
+    pub fn natural_outward(&self) -> Option<bool> {
         // The side of `radial` that the normal is on at some sample, the first one that tells.
         let side = |samples: &mut dyn Iterator<Item = (f64, f64, DVec3)>| -> Option<bool> {
             for (u, v, radial) in samples {
@@ -193,7 +194,7 @@ impl Surface {
                 let d = n.dot(radial);
                 if n.is_finite()
                     && radial.is_finite()
-                    && d.abs() > 1e-9 * n.length() * radial.length()
+                    && d.abs() > 1e-6 * n.length() * radial.length()
                 {
                     return Some(d > 0.0);
                 }
@@ -201,11 +202,11 @@ impl Surface {
             None
         };
         match self {
-            Surface::Plane { .. } => true,
+            Surface::Plane { .. } => None,
             Surface::Cylinder { .. }
             | Surface::Cone { .. }
             | Surface::Sphere { .. }
-            | Surface::Torus { .. } => self.right_handed(),
+            | Surface::Torus { .. } => Some(self.right_handed()),
             Surface::Revolution { curve, o, axis } => {
                 // A line has no natural range: its parameter starts at its point.
                 let (a, b) = curve.natural_range().unwrap_or((0.0, 1.0));
@@ -215,7 +216,6 @@ impl Surface {
                     let rel = self.eval(0.0, v) - *o;
                     (0.0, v, rel - ax * rel.dot(ax))
                 }))
-                .unwrap_or(true)
             }
             Surface::Extrusion { curve, dir } => {
                 let (a, b) = curve.natural_range().unwrap_or((0.0, 1.0));
@@ -229,7 +229,6 @@ impl Surface {
                     let rel = self.eval(u, 0.0) - centre;
                     (u, 0.0, rel - d * rel.dot(d))
                 }))
-                .unwrap_or(true)
             }
             Surface::Spline(s) => {
                 let ((u0, u1), (v0, v1)) = s.domain();
@@ -245,13 +244,25 @@ impl Surface {
                 let (e, f, g) = (pu.dot(pu), pu.dot(pv), pv.dot(pv));
                 let det = e * g - f * f;
                 if det <= 0.0 {
-                    return true;
+                    return None;
                 }
                 // The mean curvature vector points to the centre of curvature.
                 let h = (g * puu - 2.0 * f * puv + e * pvv) / (2.0 * det);
                 let n = pu.cross(pv);
+                if !(n.is_finite() && h.is_finite()) {
+                    return None;
+                }
+                // Flat: the curvature times the size of the patch is under a ten-thousandth.
+                // The second differences of numbers that are far from zero carry rounding.
+                let size = (p(u1 - u, v1 - v) - p(u0 - u, v0 - v)).length();
+                if h.length() * size < 1e-4 {
+                    return None;
+                }
                 let d = n.dot(h);
-                !(n.is_finite() && h.is_finite() && d > 1e-9 * n.length() * h.length())
+                if d.abs() <= 1e-6 * n.length() * h.length() {
+                    return None;
+                }
+                Some(d <= 0.0)
             }
         }
     }
@@ -279,7 +290,7 @@ impl Surface {
     }
 
     /// About how many steps of work one call of `eval` takes, for the work budget of an import
-    /// (one step is about 40 ns on a current computer).
+    /// (one step is about 50 ns on a current computer).
     pub fn eval_cost(&self) -> u64 {
         match self {
             Surface::Plane { .. } => 1,
@@ -673,9 +684,9 @@ mod tests {
     /// A mirror turns the normal of a surface that keeps its parameters, and the answer of
     /// `natural_outward` follows it, so a face (which turns its sense too) keeps its answer.
     fn assert_follows_mirror(s: &Surface, outward: bool) {
-        assert_eq!(s.natural_outward(), outward, "{}", s.kind());
+        assert_eq!(s.natural_outward(), Some(outward), "{}", s.kind());
         let m = s.transformed(&mirror_x());
-        assert_eq!(m.natural_outward(), !outward, "{} mirrored", s.kind());
+        assert_eq!(m.natural_outward(), Some(!outward), "{} mirrored", s.kind());
     }
 
     #[test]
@@ -709,7 +720,7 @@ mod tests {
             let (n1, n2) = (left.normal(u, v).unwrap(), right.normal(u2, v2).unwrap());
             assert!(near(n1, -n2), "{}", s.kind());
         }
-        assert!(Surface::Plane { f }.natural_outward());
+        assert_eq!(Surface::Plane { f }.natural_outward(), None);
         // A revolution of a line that runs along the axis: the line one way or the other.
         let line = |d: DVec3| {
             Arc::new(Curve::Line {
@@ -768,11 +779,39 @@ mod tests {
         let (up, down) = (patch(2.0, false), patch(-2.0, false));
         assert_ne!(up.natural_outward(), down.natural_outward());
         assert_ne!(up.natural_outward(), patch(2.0, true).natural_outward());
-        assert!(
+        assert_eq!(
             patch(0.0, false).natural_outward(),
+            None,
             "a flat patch has no inside"
         );
-        assert_follows_mirror(&up, up.natural_outward());
+        assert_follows_mirror(&up, up.natural_outward().unwrap());
+        // A flat patch far from the origin and turned: rounding does not give it an inside.
+        let far = |m: &crate::exact::Similarity| match patch(0.0, false) {
+            Surface::Spline(mut s) => {
+                for p in &mut s.points {
+                    *p = m.point(*p + DVec3::new(1e7, 3.7e6, 250.0));
+                }
+                Surface::Spline(s)
+            }
+            _ => unreachable!(),
+        };
+        for mm in [
+            crate::exact::Similarity::of(&DAffine3::from_rotation_z(0.5)).unwrap(),
+            mirror_x(),
+        ] {
+            assert_eq!(far(&mm).natural_outward(), None);
+        }
+        // A flat revolution (a disc) the same.
+        let disc = Surface::Revolution {
+            curve: Arc::new(Curve::Line {
+                o: DVec3::ZERO,
+                d: DVec3::X,
+            }),
+            o: DVec3::ZERO,
+            axis: DVec3::Z,
+        };
+        assert_eq!(disc.natural_outward(), None);
+        assert_eq!(disc.transformed(&mirror_x()).natural_outward(), None);
     }
 
     fn near(a: DVec3, b: DVec3) -> bool {

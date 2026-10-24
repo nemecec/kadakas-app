@@ -145,7 +145,12 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
             if out.exact_capped > 0 {
                 *status = tr!("panels-exact-capped", count = out.exact_capped);
             } else if !out.notes.is_empty() {
-                *status = tr!("panels-command-notes", notes = out.notes.join(" "));
+                // The notes of the core are English. Another language gets the count.
+                *status = if kadakas_l10n::language().starts_with("en") {
+                    tr!("panels-command-notes", notes = out.notes.join(" "))
+                } else {
+                    tr!("panels-command-notes-count", count = out.notes.len())
+                };
             }
             Some(out)
         }
@@ -2095,9 +2100,12 @@ mod tests {
         assert!(status.contains("1 object is not kept"), "{status}");
         let et = kadakas_l10n::with_language("et", || tr!("panels-exact-capped", count = 2));
         assert!(et.contains("2 objekti"), "{et}");
-        // A note of another kind is shown too.
+        // A note of another kind is shown too: in words in English, as a count in the other
+        // languages, whose people cannot read the English notes of the core.
         let note = tr!("panels-command-notes", notes = "x moved");
         assert!(note.contains("x moved"));
+        let et = kadakas_l10n::with_language("et", || tr!("panels-command-notes-count", count = 2));
+        assert!(et.contains('2') && !et.contains("Done"), "{et}");
     }
 
     #[test]

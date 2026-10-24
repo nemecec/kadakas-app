@@ -366,7 +366,7 @@ fn a_face_that_cannot_be_cut_any_more_does_not_open_a_closed_solid() {
 }
 
 /// The kinds of surface of the fixtures, to mirror one by one.
-const MIRROR_FILES: [&str; 16] = [
+const MIRROR_FILES: [&str; 18] = [
     "box.step",
     "cylinder.step",
     "sphere.step",
@@ -380,6 +380,8 @@ const MIRROR_FILES: [&str; 16] = [
     "hollow.step",
     "patch_rational.step",
     "patch_bump.step",
+    "patch_flat.step",
+    "plate_far.step",
     "no_seam.step",
     "bead.step",
     "inverted.step",

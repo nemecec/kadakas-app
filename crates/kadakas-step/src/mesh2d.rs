@@ -47,30 +47,47 @@ fn cross(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
 
-/// The signed area of a loop (positive when it runs counterclockwise).
+/// The signed area of a loop (positive when it runs counterclockwise). The numbers are taken
+/// from the first point of the loop: far from the origin the sum of products of big numbers
+/// would lose all the digits of a small loop.
 pub fn area(uv: &[[f64; 2]], l: &[usize]) -> f64 {
+    let Some(&first) = l.first() else {
+        return 0.0;
+    };
+    let o = uv[first];
     let n = l.len();
     (0..n)
         .map(|i| {
             let (a, b) = (uv[l[i]], uv[l[(i + 1) % n]]);
-            a[0] * b[1] - b[0] * a[1]
+            (a[0] - o[0]) * (b[1] - o[1]) - (b[0] - o[0]) * (a[1] - o[1])
         })
         .sum::<f64>()
         / 2.0
 }
 
+/// Why a polygon was not cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cut {
+    /// The polygon cannot be cut into triangles.
+    Cannot,
+    /// The joining of the holes took more steps than its budget (`fuel`).
+    Fuel(u64),
+}
+
 /// Triangles for the outline `loops[0]` (counterclockwise) and the holes `loops[1..]`
-/// (clockwise), as indices of `uv`. `None` when the polygon cannot be cut.
+/// (clockwise), as indices of `uv`, and the steps of work that the joining of the holes took.
+/// `fuel` is the most steps that it may take: a polygon over it is not cut.
 pub fn ear_clip(
     uv: &[[f64; 2]],
     xyz: &[DVec3],
     scale: [f64; 2],
     loops: &[Vec<usize>],
-) -> Option<Vec<[u32; 3]>> {
-    let mut poly: Vec<usize> = loops.first()?.clone();
+    fuel: u64,
+) -> Result<(Vec<[u32; 3]>, u64), Cut> {
+    let outline = loops.first().ok_or(Cut::Cannot)?;
     let total: usize = loops.iter().map(Vec::len).sum();
-    if poly.len() < 3 || total > MAX_POLYGON_POINTS {
-        return None;
+    if outline.len() < 3 || total > MAX_POLYGON_POINTS {
+        return Err(Cut::Cannot);
     }
     // Holes, the one with the largest x first.
     let mut holes: Vec<&Vec<usize>> = loops[1..].iter().filter(|h| h.len() >= 3).collect();
@@ -80,10 +97,18 @@ pub fn ear_clip(
             .fold(f64::NEG_INFINITY, f64::max)
     };
     holes.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
-    for (k, h) in holes.iter().enumerate() {
-        poly = bridge(uv, poly, h, &holes[k + 1..])?;
-    }
+    let (poly, ops) = if holes.is_empty() {
+        (outline.clone(), 0)
+    } else {
+        let mut m = Merger::new(uv, outline, &holes, fuel);
+        for k in 0..holes.len() {
+            m.join(k)?;
+        }
+        (m.polygon(), m.ops)
+    };
     clip(uv, xyz, scale, &poly)
+        .map(|t| (t, ops))
+        .ok_or(Cut::Cannot)
 }
 
 fn cross0(u: [f64; 2], v: [f64; 2]) -> f64 {
@@ -142,116 +167,469 @@ fn segments_meet(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
         || (o4 == 0.0 && on_segment(a, b, q))
 }
 
-/// Joins a hole to the polygon by two coincident edges between the rightmost point of the
-/// hole and a point of the polygon that it can see. The point comes from the ray to the right
-/// (and the corners in the triangle, as usual). Every choice is checked: the bridge must run
-/// inside the polygon at both ends, and must not meet any edge of the merged polygon (with
-/// the bridges that are in it already), of the holes that wait, or of the hole itself. A
-/// corner that the polygon has twice (a bridge made it) is taken at the copy that has the
-/// bridge inside its angle. When the usual point does not fit, the nearest corner that fits
-/// is taken.
-fn bridge(
-    uv: &[[f64; 2]],
-    poly: Vec<usize>,
-    hole: &[usize],
-    waiting: &[&Vec<usize>],
-) -> Option<Vec<usize>> {
-    let (mi, _) = hole
-        .iter()
-        .enumerate()
-        .max_by(|a, b| uv[*a.1][0].total_cmp(&uv[*b.1][0]))?;
-    let m = uv[hole[mi]];
-    let n = poly.len();
-    let h = hole.len();
-    // The edges that the bridge must not meet.
-    let mut edges: Vec<([f64; 2], [f64; 2])> = Vec::with_capacity(n + h + 16);
-    for i in 0..n {
-        edges.push((uv[poly[i]], uv[poly[(i + 1) % n]]));
-    }
-    for i in 0..h {
-        edges.push((uv[hole[i]], uv[hole[(i + 1) % h]]));
-    }
-    for w in waiting {
-        for i in 0..w.len() {
-            edges.push((uv[w[i]], uv[w[(i + 1) % w.len()]]));
+/// A segment of the outline, a hole or a bridge.
+struct Seg {
+    a: [f64; 2],
+    b: [f64; 2],
+    /// The indices of the ends in `uv`.
+    va: usize,
+    vb: usize,
+    /// True once the segment is an edge of the merged polygon (not of a hole that waits).
+    merged: bool,
+}
+
+/// The merged polygon as a ring of corners (a corner that a bridge doubles is two nodes), with
+/// all segments in a grid, so that a hole finds its neighbours without looking at the rest.
+/// A hole is joined by a bridge between its rightmost corner and a corner of the polygon that
+/// it can see. The corner comes from the ray to the right and the corners inside the triangle
+/// of the ray, as usual. Every choice is checked: the bridge must run inside the polygon at both
+/// ends and must not meet any segment (the merged polygon with its bridges, the holes that
+/// wait, the hole itself). A corner that the polygon has twice is taken at the copy that has the
+/// bridge inside its angle. When the usual corner does not fit, the nearest one that fits is
+/// taken. The cost of a hole is the cells around its bridge, not the size of the polygon.
+struct Merger<'a> {
+    uv: &'a [[f64; 2]],
+    holes: &'a [&'a Vec<usize>],
+    /// The ring: the index in `uv` of each node and its neighbours.
+    vert: Vec<usize>,
+    next: Vec<u32>,
+    prev: Vec<u32>,
+    /// The nodes of each corner: the first, and the next of the same corner.
+    first: HashMap<usize, u32>,
+    same: Vec<u32>,
+    segs: Vec<Seg>,
+    lo: [f64; 2],
+    size: [f64; 2],
+    n: usize,
+    cells: Vec<Vec<u32>>,
+    /// Steps taken (cells visited, segments tested) and the most that are allowed.
+    pub ops: u64,
+    fuel: u64,
+    /// The start node of the ring.
+    head: u32,
+    /// The segments of each hole are `hole_segs[k]..hole_segs[k + 1]`.
+    hole_segs: Vec<usize>,
+}
+
+const NONE: u32 = u32::MAX;
+
+impl<'a> Merger<'a> {
+    fn new(uv: &'a [[f64; 2]], outline: &[usize], holes: &'a [&'a Vec<usize>], fuel: u64) -> Self {
+        let edges = outline.len() + holes.iter().map(|h| h.len()).sum::<usize>();
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for &i in outline.iter().chain(holes.iter().flat_map(|h| h.iter())) {
+            for k in 0..2 {
+                lo[k] = lo[k].min(uv[i][k]);
+                hi[k] = hi[k].max(uv[i][k]);
+            }
         }
-    }
-    let (hp, hn) = (uv[hole[(mi + h - 1) % h]], uv[hole[(mi + 1) % h]]);
-    let fits = |k: usize| -> bool {
-        let v = uv[poly[k]];
-        if v == m {
-            return false;
-        }
-        let (pp, pn) = (uv[poly[(k + n - 1) % n]], uv[poly[(k + 1) % n]]);
-        if !in_wedge(v, pn, pp, m) || !in_wedge(m, hn, hp, v) {
-            return false;
-        }
-        edges
-            .iter()
-            .all(|&(a, b)| a == m || b == m || a == v || b == v || !segments_meet(m, v, a, b))
-    };
-    // The usual point: the edge that the ray to the right hits first.
-    let mut best: Option<(f64, usize)> = None;
-    for i in 0..n {
-        let (a, b) = (uv[poly[i]], uv[poly[(i + 1) % n]]);
-        if (a[1] - m[1]) * (b[1] - m[1]) > 0.0 || a[1] == b[1] {
-            continue;
-        }
-        let x = a[0] + (m[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]);
-        if x >= m[0] - 1e-12 && best.is_none_or(|(bx, _)| x < bx) {
-            best = Some((x, i));
-        }
-    }
-    let mut usual: Option<usize> = None;
-    if let Some((ix, ei)) = best {
-        let (a, b) = (poly[ei], poly[(ei + 1) % n]);
-        let p_idx = if uv[a][0] > uv[b][0] {
-            ei
-        } else {
-            (ei + 1) % n
+        let n = ((edges as f64).sqrt().ceil() as usize).clamp(1, 1024);
+        let size = [
+            ((hi[0] - lo[0]) / n as f64).max(1e-300),
+            ((hi[1] - lo[1]) / n as f64).max(1e-300),
+        ];
+        let mut m = Merger {
+            uv,
+            holes,
+            vert: Vec::with_capacity(edges + 2 * holes.len() + 2),
+            next: Vec::new(),
+            prev: Vec::new(),
+            first: HashMap::new(),
+            same: Vec::new(),
+            segs: Vec::with_capacity(edges + holes.len()),
+            lo,
+            size,
+            n,
+            cells: vec![Vec::new(); n * n],
+            ops: 0,
+            fuel,
+            head: 0,
+            hole_segs: Vec::new(),
         };
-        let ipt = [ix, m[1]];
-        let ppt = uv[poly[p_idx]];
-        let mut vi = p_idx;
-        // A corner inside the triangle (M, I, P) that blocks the view: take the one with the
-        // smallest angle to the ray.
-        let mut best_ang = f64::INFINITY;
-        for (k, &q) in poly.iter().enumerate() {
-            let t = uv[q];
-            if q == poly[p_idx] || !in_triangle(m, ipt, ppt, t) {
-                continue;
+        let o = m.ring(outline);
+        m.head = o;
+        m.add_ring_segments(outline, true);
+        for h in holes {
+            m.hole_segs.push(m.segs.len());
+            m.add_ring_segments(h, false);
+        }
+        m.hole_segs.push(m.segs.len());
+        m
+    }
+
+    /// Makes the nodes of a loop in a ring and returns the first.
+    fn ring(&mut self, l: &[usize]) -> u32 {
+        let base = self.vert.len() as u32;
+        let k = l.len() as u32;
+        for (j, &v) in l.iter().enumerate() {
+            let id = base + j as u32;
+            self.vert.push(v);
+            self.next.push(base + (j as u32 + 1) % k);
+            self.prev.push(base + (j as u32 + k - 1) % k);
+            self.same.push(NONE);
+            self.link_same(v, id);
+        }
+        base
+    }
+
+    fn link_same(&mut self, v: usize, id: u32) {
+        let head = self.first.entry(v).or_insert(NONE);
+        self.same[id as usize] = *head;
+        *head = id;
+    }
+
+    fn node(&mut self, v: usize) -> u32 {
+        let id = self.vert.len() as u32;
+        self.vert.push(v);
+        self.next.push(NONE);
+        self.prev.push(NONE);
+        self.same.push(NONE);
+        self.link_same(v, id);
+        id
+    }
+
+    fn add_ring_segments(&mut self, l: &[usize], merged: bool) {
+        for j in 0..l.len() {
+            let (va, vb) = (l[j], l[(j + 1) % l.len()]);
+            self.add_seg(va, vb, merged);
+        }
+    }
+
+    fn cell_of(&self, p: [f64; 2]) -> (usize, usize) {
+        let f = |k: usize| {
+            (((p[k] - self.lo[k]) / self.size[k]).floor().max(0.0) as usize).min(self.n - 1)
+        };
+        (f(0), f(1))
+    }
+
+    /// Calls `f` with each cell on the way from `a` to `b` (a grid walk). `f` says when to stop.
+    fn walk(&self, a: [f64; 2], b: [f64; 2], mut f: impl FnMut(usize, usize) -> bool) {
+        let (mut cx, mut cy) = self.cell_of(a);
+        let (ex, ey) = self.cell_of(b);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let step = |d: f64| if d > 0.0 { 1isize } else { -1 };
+        let (sx, sy) = (step(dx), step(dy));
+        let tmax = |c: usize, s: isize, d: f64, k: usize| {
+            if d == 0.0 {
+                f64::INFINITY
+            } else {
+                let edge = self.lo[k] + (c as isize + isize::from(s > 0)) as f64 * self.size[k];
+                (edge - a[k]) / d
             }
-            let ang = (t[1] - m[1]).abs().atan2(t[0] - m[0]);
-            let closer = ang < best_ang - 1e-12
-                || ((ang - best_ang).abs() <= 1e-12 && dist2(m, t) < dist2(m, uv[poly[vi]]));
-            if closer {
-                best_ang = ang;
-                vi = k;
+        };
+        let mut tx = tmax(cx, sx, dx, 0);
+        let mut ty = tmax(cy, sy, dy, 1);
+        let tdx = if dx == 0.0 {
+            f64::INFINITY
+        } else {
+            self.size[0] / dx.abs()
+        };
+        let tdy = if dy == 0.0 {
+            f64::INFINITY
+        } else {
+            self.size[1] / dy.abs()
+        };
+        let mut left = (cx.abs_diff(ex) + cy.abs_diff(ey)) + 2;
+        loop {
+            if !f(cx, cy) || (cx == ex && cy == ey) || left == 0 {
+                break;
+            }
+            left -= 1;
+            if tx < ty {
+                let nx = cx as isize + sx;
+                if nx < 0 || nx >= self.n as isize {
+                    break;
+                }
+                cx = nx as usize;
+                tx += tdx;
+            } else {
+                let ny = cy as isize + sy;
+                if ny < 0 || ny >= self.n as isize {
+                    break;
+                }
+                cy = ny as usize;
+                ty += tdy;
             }
         }
-        usual = Some(vi);
     }
-    // The positions to try: the copies of the usual corner, then all corners by distance.
-    let mut tries: Vec<usize> = Vec::new();
-    if let Some(vi) = usual {
-        tries.extend((0..n).filter(|&k| poly[k] == poly[vi]));
-    }
-    let k = match tries.iter().copied().find(|&k| fits(k)) {
-        Some(k) => k,
-        None => {
-            let mut all: Vec<usize> = (0..n).collect();
-            all.sort_by(|&a, &b| dist2(m, uv[poly[a]]).total_cmp(&dist2(m, uv[poly[b]])));
-            all.into_iter().find(|&k| fits(k))?
+
+    fn add_seg(&mut self, va: usize, vb: usize, merged: bool) {
+        let id = self.segs.len() as u32;
+        let (a, b) = (self.uv[va], self.uv[vb]);
+        self.segs.push(Seg {
+            a,
+            b,
+            va,
+            vb,
+            merged,
+        });
+        // In the cells on its way and their neighbours: a segment that only touches the edge
+        // of a cell is still found from the next cell.
+        let mut cells: Vec<usize> = Vec::new();
+        let n = self.n;
+        self.walk(a, b, |cx, cy| {
+            for y in cy.saturating_sub(1)..=(cy + 1).min(n - 1) {
+                for x in cx.saturating_sub(1)..=(cx + 1).min(n - 1) {
+                    cells.push(y * n + x);
+                }
+            }
+            true
+        });
+        cells.sort_unstable();
+        cells.dedup();
+        self.ops += cells.len() as u64;
+        for c in cells {
+            self.cells[c].push(id);
         }
-    };
-    let mut out = Vec::with_capacity(poly.len() + hole.len() + 2);
-    out.extend_from_slice(&poly[..=k]);
-    for j in 0..=h {
-        out.push(hole[(mi + j) % h]);
     }
-    out.push(poly[k]);
-    out.extend_from_slice(&poly[k + 1..]);
-    Some(out)
+
+    fn spend(&mut self, n: u64) -> Result<(), Cut> {
+        self.ops += n;
+        if self.ops > self.fuel {
+            Err(Cut::Fuel(self.ops))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Does the open segment from `m` to `v` meet a segment of the polygon, of a waiting hole
+    /// or of the hole itself, other than the ones that end at `m` or `v`?
+    fn blocked(&mut self, m: [f64; 2], v: [f64; 2]) -> Result<bool, Cut> {
+        let mut hit = false;
+        let mut cells: Vec<usize> = Vec::new();
+        let n = self.n;
+        self.walk(m, v, |cx, cy| {
+            cells.push(cy * n + cx);
+            true
+        });
+        self.spend(cells.len() as u64)?;
+        for c in cells {
+            for k in 0..self.cells[c].len() {
+                let s = &self.segs[self.cells[c][k] as usize];
+                let (a, b) = (s.a, s.b);
+                if a == m || b == m || a == v || b == v {
+                    continue;
+                }
+                if segments_meet(m, v, a, b) {
+                    hit = true;
+                    break;
+                }
+            }
+            self.ops += self.cells[c].len() as u64;
+            if hit {
+                break;
+            }
+        }
+        self.spend(0)?;
+        Ok(hit)
+    }
+
+    /// Can the hole corner `m` (with neighbours `hp` and `hn` in its loop) be joined to the node
+    /// `k`? The bridge must run into the inside at both ends and meet no segment.
+    fn fits(&mut self, k: u32, m: [f64; 2], hp: [f64; 2], hn: [f64; 2]) -> Result<bool, Cut> {
+        let v = self.uv[self.vert[k as usize]];
+        if v == m {
+            return Ok(false);
+        }
+        let (pp, pn) = (
+            self.uv[self.vert[self.prev[k as usize] as usize]],
+            self.uv[self.vert[self.next[k as usize] as usize]],
+        );
+        if !in_wedge(v, pn, pp, m) || !in_wedge(m, hn, hp, v) {
+            return Ok(false);
+        }
+        Ok(!self.blocked(m, v)?)
+    }
+
+    fn nodes_of(&self, v: usize) -> Vec<u32> {
+        let mut out = Vec::new();
+        let mut at = self.first.get(&v).copied().unwrap_or(NONE);
+        while at != NONE {
+            out.push(at);
+            at = self.same[at as usize];
+        }
+        out
+    }
+
+    /// The first segment of the merged polygon that the ray to the right of `m` meets, by
+    /// the grid walk: its crossing and its end with the larger x.
+    fn ray(&mut self, m: [f64; 2]) -> Result<Option<(f64, usize)>, Cut> {
+        let far = [self.lo[0] + self.size[0] * (self.n as f64 + 1.0), m[1]];
+        let mut best: Option<(f64, usize)> = None;
+        let mut visited: Vec<(usize, usize)> = Vec::new();
+        self.walk(m, far, |cx, cy| {
+            visited.push((cx, cy));
+            true
+        });
+        for (cx, cy) in visited {
+            let right = self.lo[0] + (cx + 1) as f64 * self.size[0];
+            self.spend(1 + self.cells[cy * self.n + cx].len() as u64)?;
+            for &id in &self.cells[cy * self.n + cx] {
+                let s = &self.segs[id as usize];
+                let (a, b) = (s.a, s.b);
+                if !s.merged || (a[1] - m[1]) * (b[1] - m[1]) > 0.0 || a[1] == b[1] {
+                    continue;
+                }
+                let x = a[0] + (m[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]);
+                if x >= m[0] - 1e-12 && x <= right && best.is_none_or(|(bx, _)| x < bx) {
+                    best = Some((x, id as usize));
+                }
+            }
+            if best.is_some() {
+                break;
+            }
+        }
+        Ok(best)
+    }
+
+    /// Joins the hole `k` to the polygon.
+    fn join(&mut self, k: usize) -> Result<(), Cut> {
+        let hole = self.holes[k];
+        let h = hole.len();
+        let (mi, _) = hole
+            .iter()
+            .enumerate()
+            .max_by(|a, b| self.uv[*a.1][0].total_cmp(&self.uv[*b.1][0]))
+            .ok_or(Cut::Cannot)?;
+        let m = self.uv[hole[mi]];
+        let (hp, hn) = (self.uv[hole[(mi + h - 1) % h]], self.uv[hole[(mi + 1) % h]]);
+        let mut tries: Vec<usize> = Vec::new();
+        if let Some((ix, si)) = self.ray(m)? {
+            let s = &self.segs[si];
+            let (p, pv) = if s.a[0] > s.b[0] {
+                (s.a, s.va)
+            } else {
+                (s.b, s.vb)
+            };
+            let ipt = [ix, m[1]];
+            // The corners inside the triangle (M, I, P) block the view: the one with the
+            // smallest angle to the ray is the candidate.
+            let mut blockers: Vec<(f64, f64, usize)> = Vec::new();
+            let (lo, hi) = (
+                self.cell_of([m[0], m[1].min(p[1])]),
+                self.cell_of([ix.max(p[0]), m[1].max(p[1])]),
+            );
+            if (hi.0 - lo.0 + 1) * (hi.1 - lo.1 + 1) <= 4096 {
+                self.spend(((hi.0 - lo.0 + 1) * (hi.1 - lo.1 + 1)) as u64)?;
+                let mut seen: Vec<usize> = Vec::new();
+                for cy in lo.1..=hi.1 {
+                    for cx in lo.0..=hi.0 {
+                        for &id in &self.cells[cy * self.n + cx] {
+                            let s = &self.segs[id as usize];
+                            if !s.merged {
+                                continue;
+                            }
+                            for (q, qv) in [(s.a, s.va), (s.b, s.vb)] {
+                                if qv != pv && in_triangle(m, ipt, p, q) && !seen.contains(&qv) {
+                                    seen.push(qv);
+                                    let ang = (q[1] - m[1]).abs().atan2(q[0] - m[0]);
+                                    blockers.push((ang, dist2(m, q), qv));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            blockers.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            tries.extend(blockers.iter().take(8).map(|b| b.2));
+            tries.push(pv);
+        }
+        let mut found: Option<u32> = None;
+        'usual: for v in tries {
+            for node in self.nodes_of(v) {
+                if self.fits(node, m, hp, hn)? {
+                    found = Some(node);
+                    break 'usual;
+                }
+            }
+        }
+        if found.is_none() {
+            found = self.nearest_fit(m, hp, hn)?;
+        }
+        let node = found.ok_or(Cut::Cannot)?;
+        self.splice(node, hole, mi);
+        // The hole's own segments are part of the polygon from now on.
+        for s in self.hole_segs[k]..self.hole_segs[k + 1] {
+            self.segs[s].merged = true;
+        }
+        // The bridge is two edges of the polygon.
+        let v = self.vert[node as usize];
+        self.add_seg(v, hole[mi], true);
+        self.spend(0)
+    }
+
+    /// The nearest corner of the polygon that the corner `m` can be joined to: rings of cells
+    /// around `m`, each ring by distance.
+    fn nearest_fit(&mut self, m: [f64; 2], hp: [f64; 2], hn: [f64; 2]) -> Result<Option<u32>, Cut> {
+        let (cx, cy) = self.cell_of(m);
+        let n = self.n;
+        let mut tested: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for r in 0..=n {
+            let mut ring: Vec<(f64, usize)> = Vec::new();
+            for y in cy.saturating_sub(r)..=(cy + r).min(n - 1) {
+                for x in cx.saturating_sub(r)..=(cx + r).min(n - 1) {
+                    if x.abs_diff(cx).max(y.abs_diff(cy)) != r {
+                        continue;
+                    }
+                    for &id in &self.cells[y * n + x] {
+                        let s = &self.segs[id as usize];
+                        if !s.merged {
+                            continue;
+                        }
+                        for (q, qv) in [(s.a, s.va), (s.b, s.vb)] {
+                            if tested.insert(qv) {
+                                ring.push((dist2(m, q), qv));
+                            }
+                        }
+                    }
+                }
+            }
+            self.spend(1 + ring.len() as u64)?;
+            ring.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, v) in ring {
+                for node in self.nodes_of(v) {
+                    if self.fits(node, m, hp, hn)? {
+                        return Ok(Some(node));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Puts the hole into the ring after `node`: the node, the hole from its corner `mi` round
+    /// to the corner again, and the node again.
+    fn splice(&mut self, node: u32, hole: &[usize], mi: usize) {
+        let h = hole.len();
+        let after = self.next[node as usize];
+        let rotated: Vec<usize> = (0..=h).map(|j| hole[(mi + j) % h]).collect();
+        let mut prev = node;
+        for v in rotated {
+            let id = self.node(v);
+            self.next[prev as usize] = id;
+            self.prev[id as usize] = prev;
+            prev = id;
+        }
+        let again = self.node(self.vert[node as usize]);
+        self.next[prev as usize] = again;
+        self.prev[again as usize] = prev;
+        self.next[again as usize] = after;
+        self.prev[after as usize] = again;
+    }
+
+    /// The corners of the ring in order, from the head.
+    fn polygon(&self) -> Vec<usize> {
+        let mut out = Vec::with_capacity(self.vert.len());
+        let mut at = self.head;
+        loop {
+            out.push(self.vert[at as usize]);
+            at = self.next[at as usize];
+            if at == self.head {
+                break;
+            }
+        }
+        out
+    }
 }
 
 fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -516,6 +894,8 @@ pub struct Refine<'s> {
     pub tol: f64,
     pub angle: f64,
     pub max_triangles: usize,
+    /// The most steps that the joining of the holes may take (see [`ear_clip`]).
+    pub fuel: u64,
 }
 
 /// Cuts the face: the triangles of the polygon, then refined. Returns the triangles and
@@ -524,8 +904,8 @@ pub fn mesh_face(
     pts: &mut Points,
     loops: &[Vec<usize>],
     refine: &Refine,
-) -> Option<(Vec<[u32; 3]>, bool)> {
-    let tris = ear_clip(&pts.uv, &pts.xyz, pts.scale, loops)?;
+) -> Result<(Vec<[u32; 3]>, bool, u64), Cut> {
+    let (tris, ops) = ear_clip(&pts.uv, &pts.xyz, pts.scale, loops, refine.fuel)?;
     let mut topo = Topo::new(tris);
     remove_flat(&mut topo, pts);
     // First a pass of flips on every edge.
@@ -587,7 +967,7 @@ pub fn mesh_face(
         .filter(|(_, a)| **a)
         .map(|(t, _)| *t)
         .collect();
-    Some((tris, truncated))
+    Ok((tris, truncated, ops))
 }
 
 /// A triangle with no area whose middle point lies on the long side is joined to the triangle
@@ -1061,6 +1441,16 @@ mod tests {
         uv.iter().map(|p| DVec3::new(p[0], p[1], 0.0)).collect()
     }
 
+    /// The triangles of a polygon with holes, with no limit on the steps.
+    fn clip_polygon(
+        uv: &[[f64; 2]],
+        xyz: &[DVec3],
+        scale: [f64; 2],
+        loops: &[Vec<usize>],
+    ) -> Option<Vec<[u32; 3]>> {
+        ear_clip(uv, xyz, scale, loops, u64::MAX).ok().map(|r| r.0)
+    }
+
     fn loop_pts(pts: &[[f64; 2]]) -> (Vec<[f64; 2]>, Vec<usize>) {
         (pts.to_vec(), (0..pts.len()).collect())
     }
@@ -1074,7 +1464,7 @@ mod tests {
     #[test]
     fn square_and_concave_polygons() {
         let (uv, l) = loop_pts(&[[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]);
-        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[l]).unwrap();
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &[l]).unwrap();
         assert_eq!(t.len(), 2);
         assert!((area_of(&uv, &t) - 16.0).abs() < 1e-9);
         // An L shape, and a point on a straight line.
@@ -1087,10 +1477,10 @@ mod tests {
             [2.0, 4.0],
             [0.0, 4.0],
         ]);
-        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[l]).unwrap();
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &[l]).unwrap();
         assert!((area_of(&uv, &t) - 12.0).abs() < 1e-9);
-        assert!(ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[]).is_none());
-        assert!(ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[vec![0, 1]]).is_none());
+        assert!(clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &[]).is_none());
+        assert!(clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &[vec![0, 1]]).is_none());
     }
 
     /// A rectangle with a grid of square holes (clockwise), some of them jittered or left out.
@@ -1137,9 +1527,19 @@ mod tests {
     /// The triangles cover the region once: positive areas, the area of the region, and every
     /// edge is used by one triangle on each side, except the edges of the loops.
     fn assert_covers(uv: &[[f64; 2]], loops: &[Vec<usize>], want: f64, t: &[[u32; 3]]) {
+        assert_covers_to(1e-9, uv, loops, want, t);
+    }
+
+    fn assert_covers_to(
+        tol: f64,
+        uv: &[[f64; 2]],
+        loops: &[Vec<usize>],
+        want: f64,
+        t: &[[u32; 3]],
+    ) {
         let got = area_of(uv, t);
         assert!(
-            (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+            (got - want).abs() <= tol * want.abs().max(1.0),
             "{got} {want}"
         );
         let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
@@ -1203,7 +1603,7 @@ mod tests {
             for jitter in [0.0, 0.3] {
                 for seed in [1u64, 7] {
                     let (uv, loops, want) = grid_holes(nx, ny, jitter, seed, 0);
-                    let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops)
+                    let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops)
                         .unwrap_or_else(|| panic!("{nx}x{ny} jitter {jitter}"));
                     assert_covers(&uv, &loops, want, &t);
                 }
@@ -1212,10 +1612,39 @@ mod tests {
     }
 
     #[test]
+    fn polygons_far_from_the_origin_are_cut_like_the_ones_near_it() {
+        for (dx, dy) in [(1e7, 3.7e6), (-2.5e8, 4e8), (1e9, 1e9)] {
+            let (mut uv, loops, want) = grid_holes(4, 3, 0.2, 5, 0);
+            let (s, c) = (0.5f64, 0.866_025_403_784_438_6f64);
+            for p in &mut uv {
+                *p = [c * p[0] - s * p[1] + dx, s * p[0] + c * p[1] + dy];
+            }
+            let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops)
+                .unwrap_or_else(|| panic!("offset {dx} {dy}"));
+            // The numbers have 7 digits after the point at 1e9: the areas agree to 1e-6.
+            assert_covers_to(1e-6, &uv, &loops, want, &t);
+        }
+    }
+
+    #[test]
+    fn joining_holes_stops_at_its_fuel() {
+        let (uv, loops, _) = grid_holes(10, 10, 0.0, 1, 0);
+        let r = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops, 50);
+        assert!(
+            matches!(r, Err(Cut::Fuel(n)) if n > 50),
+            "{:?}",
+            r.map(|x| x.1)
+        );
+        // With enough fuel the steps are counted.
+        let (_, ops) = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops, u64::MAX).unwrap();
+        assert!(ops > 100 && ops < 1_000_000, "{ops}");
+    }
+
+    #[test]
     fn a_big_grid_of_holes_is_cut() {
         let (uv, loops, want) = grid_holes(45, 45, 0.2, 3, 0);
         let start = std::time::Instant::now();
-        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).expect("45x45 holes");
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops).expect("45x45 holes");
         assert_covers(&uv, &loops, want, &t);
         assert!(start.elapsed().as_secs() < 60, "{:?}", start.elapsed());
     }
@@ -1252,7 +1681,7 @@ mod tests {
             want -= 4.0 * s * s;
             loops.push((base..base + 4).collect());
         }
-        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
         assert_covers(&uv, &loops, want, &t);
     }
 
@@ -1267,7 +1696,7 @@ mod tests {
             skip in 0u64..5,
         ) {
             let (uv, loops, want) = grid_holes(nx, ny, jitter, seed, skip);
-            let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops);
+            let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops);
             proptest::prop_assert!(t.is_some(), "{}x{} jitter {} seed {} skip {}", nx, ny, jitter, seed, skip);
             assert_covers(&uv, &loops, want, &t.unwrap());
         }
@@ -1289,7 +1718,7 @@ mod tests {
             ]);
             loops.push((base..base + 4).collect());
         }
-        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
         let want = 100.0 - 4.0 - 9.0 - 2.56;
         assert!(
             (area_of(&uv, &t) - want).abs() < 1e-9,
@@ -1312,7 +1741,7 @@ mod tests {
             [7.0, 4.0],
         ];
         let l2 = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]];
-        let t2 = ear_clip(&uv2, &flat3(&uv2), [1.0, 1.0], &l2).unwrap();
+        let t2 = clip_polygon(&uv2, &flat3(&uv2), [1.0, 1.0], &l2).unwrap();
         assert!((area_of(&uv2, &t2) - 92.0).abs() < 1e-9);
         // A hole that is not inside: no bridge.
         let uv3 = vec![
@@ -1326,7 +1755,7 @@ mod tests {
             [6.0, 0.5],
         ];
         assert!(
-            ear_clip(
+            clip_polygon(
                 &uv3,
                 &flat3(&uv3),
                 [1.0, 1.0],
@@ -1367,8 +1796,9 @@ mod tests {
             tol: 0.05,
             angle: 0.3,
             max_triangles: 10_000,
+            fuel: u64::MAX,
         };
-        let (t, cut) = mesh_face(&mut pts, std::slice::from_ref(&ids), &r).unwrap();
+        let (t, cut, _) = mesh_face(&mut pts, std::slice::from_ref(&ids), &r).unwrap();
         assert!(!cut);
         assert!(t.len() >= 20, "{}", t.len());
         // All points lie on the cylinder.
@@ -1393,9 +1823,10 @@ mod tests {
         }
         let r2 = Refine {
             max_triangles: 10,
+            fuel: u64::MAX,
             ..r
         };
-        let (_, cut2) = mesh_face(&mut pts2, &[ids], &r2).unwrap();
+        let (_, cut2, _) = mesh_face(&mut pts2, &[ids], &r2).unwrap();
         assert!(cut2);
     }
 
@@ -1427,8 +1858,9 @@ mod tests {
             tol: 0.1,
             angle: 0.3,
             max_triangles: 20_000,
+            fuel: u64::MAX,
         };
-        let (t, _) = mesh_face(&mut pts, &[l], &r).unwrap();
+        let (t, _, _) = mesh_face(&mut pts, &[l], &r).unwrap();
         assert!(t.len() > n);
     }
 }

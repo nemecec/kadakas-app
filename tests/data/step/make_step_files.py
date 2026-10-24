@@ -727,6 +727,7 @@ class Step:
             npds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{nauo})")
             rel = self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{rep},#{arep})")
             self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
+        return pd, rep, origin
 
     def related_representations(self, name="Related"):
         """A product whose shape representation holds no geometry. The geometry is in another
@@ -745,6 +746,36 @@ class Step:
         self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{empty})")
         self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{empty},#{geo})")
 
+
+    def mapped_related(self, name="Plate", count=2):
+        """A frame that maps the representation of a plate twice. That representation holds no
+        geometry: a plain relationship ties it to the one that has the plate."""
+        ctx = self.context()
+        box = self.box(10, 10, 5, name="plate")
+        app = self.add("APPLICATION_CONTEXT('automotive design')")
+        pc = self.add(f"PRODUCT_CONTEXT('',#{app},'mechanical')")
+
+        def product(label):
+            prod = self.add(f"PRODUCT('{label}','{label}','',(#{pc}))")
+            pf = self.add(f"PRODUCT_DEFINITION_FORMATION('','',#{prod})")
+            dc = self.add(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')")
+            pd = self.add(f"PRODUCT_DEFINITION('design','',#{pf},#{dc})")
+            return pd, self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{pd})")
+
+        _, plate_pds = product(name)
+        origin = self.axis()
+        empty = self.add(f"SHAPE_REPRESENTATION('empty',(#{origin}),#{ctx})")
+        geo = self.add(f"ADVANCED_BREP_SHAPE_REPRESENTATION('geo',(#{self.axis()},#{box}),#{ctx})")
+        self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{plate_pds},#{empty})")
+        self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{empty},#{geo})")
+        _, frame_pds = product("Frame")
+        rmap = self.add(f"REPRESENTATION_MAP(#{origin},#{empty})")
+        items = []
+        for k in range(count):
+            target = self.axis((50.0 * (k + 1), 0, 0), (0, 0, 1), (1, 0, 0) if k == 0 else (0, 1, 0))
+            items.append(self.add(f"MAPPED_ITEM('',#{rmap},#{target})"))
+        arep = self.add("SHAPE_REPRESENTATION('Frame',(" + ",".join(f"#{i}" for i in items) + f"),#{ctx})")
+        self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{frame_pds},#{arep})")
 
     def sphere_zone(self, r, z, name="bead"):
         """The part of a ball between the planes z = -z and z = +z: a spherical face with two
@@ -815,6 +846,59 @@ def single(maker, name, unit="mm", schema="AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1
     return s
 
 
+def moved(step, shift, degrees, project_planes=False):
+    """Turns every point and direction of a file about Z and moves the points: the same solid
+    far from the origin (the parameters of the faces are far from zero)."""
+    import re
+
+    c, s_ = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+
+    def turn(v):
+        return (c * v[0] - s_ * v[1], s_ * v[0] + c * v[1], v[2])
+
+    def fix(m):
+        kind = m.group(1)
+        v = tuple(float(x) for x in m.group(2).replace("E", "e").split(","))
+        v = turn(v)
+        if kind == "CARTESIAN_POINT":
+            v = tuple(a + b for a, b in zip(v, shift))
+        return f"{kind}('',{vec(v)})"
+
+    step.lines = [
+        re.sub(r"(CARTESIAN_POINT|DIRECTION)\('',\(([^)]*)\)\)", fix, line) for line in step.lines
+    ]
+    step.pts = {}
+    if project_planes:
+        # The location of a plane is the foot of the perpendicular from the origin, as some
+        # systems write it: the parameters of the face are then as far from zero as the plane.
+        by_id = {}
+        for line in step.lines:
+            m = re.match(r"#(\d+)=(.*);$", line)
+            if m:
+                by_id[int(m.group(1))] = m.group(2)
+        extra = []
+        next_id = max(by_id) + 1
+        for idx, line in enumerate(step.lines):
+            m = re.match(r"#(\d+)=PLANE\('',#(\d+)\);$", line)
+            if not m:
+                continue
+            axis = int(m.group(2))
+            am = re.match(r"AXIS2_PLACEMENT_3D\('',#(\d+),#(\d+),#(\d+)\)", by_id[axis])
+            pt = [float(x) for x in re.search(r",\(([^)]*)\)\)", by_id[int(am.group(1))]).group(1).replace("E", "e").split(",")]
+            nz = [float(x) for x in re.search(r",\(([^)]*)\)\)", by_id[int(am.group(2))]).group(1).replace("E", "e").split(",")]
+            d = sum(a * b for a, b in zip(pt, nz))
+            foot = tuple(d * b for b in nz)
+            extra.append(f"#{next_id}=CARTESIAN_POINT('',{vec(foot)});")
+            by_id[axis] = f"AXIS2_PLACEMENT_3D('',#{next_id},#{am.group(2)},#{am.group(3)})"
+            next_id += 1
+        step.lines = [
+            f"#{k}={by_id[k]};" if k in by_id and re.match(r"#(\d+)=AXIS2_PLACEMENT_3D", ln) else ln
+            for ln in step.lines
+            for k in [int(re.match(r"#(\d+)", ln).group(1)) if re.match(r"#(\d+)", ln) else -1]
+        ] + extra
+    return step
+
+
 def fixtures():
     out = {}
     out["box.step"] = single(lambda s: s.box(20, 30, 40), "Box", color=(1.0, 0.0, 0.0))
@@ -868,6 +952,14 @@ def fixtures():
     s = Step()
     s.mapped_assembly(count=5)
     out["mapped5.step"] = s
+    # The plate is mapped by one frame and also placed by another assembly with a transformation.
+    s = Step()
+    pd, rep, origin = s.mapped_assembly()
+    s.assembly("Other", [(pd, rep, origin, ((500, 0, 0), (0, 0, 1), (1, 0, 0)))])
+    out["mapped_and_placed.step"] = s
+    s = Step()
+    s.mapped_related()
+    out["mapped_related.step"] = s
     s = Step()
     s.related_representations()
     out["related.step"] = s
@@ -886,6 +978,11 @@ def fixtures():
     pd, rep, origin = s.product("Leg", [leg])
     s.assembly("Table", [(pd, rep, origin, ((100, 0, 0), (0, 0, 1), (1, 0, 0))), (pd, rep, origin, ((0, 200, 0), (0, 0, 1), (0, 1, 0)))])
     out["assembly.step"] = s
+    # The plate with a hole 10 km from the origin and turned: the parameters of its faces are
+    # far from zero, and the cutting must not lose the unit features to the size of the numbers.
+    out["plate_far.step"] = moved(
+        single(lambda s: s.plate_with_hole(60, 40, 8, 6), "Far plate"), (1e7, 3.7e6, 250.0), 30.0, project_planes=True
+    )
     # A child whose own frame is not the origin (item 1 is moved and turned), used with the
     # child as the first representation and then with the parent as the first one.
     s = Step()

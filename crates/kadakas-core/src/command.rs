@@ -2360,14 +2360,23 @@ impl<'a> Tx<'a> {
             }
         }
         self.exact_capped += over_object + over_document;
+        let who = |n: usize| {
+            if n == 1 {
+                "1 object keeps its triangles only".to_string()
+            } else {
+                format!("{n} objects keep their triangles only")
+            }
+        };
         if over_object > 0 {
             self.exact_notes.push(format!(
-                "{over_object} objects keep their triangles only: their exact data is over the limit of {MAX_OBJECT_BYTES} bytes for one object"
+                "{}: its exact data is over the limit of {MAX_OBJECT_BYTES} bytes for one object",
+                who(over_object)
             ));
         }
         if over_document > 0 {
             self.exact_notes.push(format!(
-                "{over_document} objects keep their triangles only: the exact data of the document would pass the limit of {MAX_DOCUMENT_BYTES} bytes"
+                "{}: the exact data of the document would pass the limit of {MAX_DOCUMENT_BYTES} bytes",
+                who(over_document)
             ));
         }
     }
