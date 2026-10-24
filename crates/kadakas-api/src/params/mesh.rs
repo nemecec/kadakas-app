@@ -542,7 +542,33 @@ pub struct MeshRenderParams {
     pub samples: Option<Int>,
 }
 
+// Parameters of `mesh3d.exact_info`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Mesh3dExactInfoParams {
+    /// a mesh object (shape kind mesh3d) from a STEP import
+    pub id: ObjectRef,
+    /// most faces listed, 1 to 5000, default 200
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Int>,
+}
+
+// Parameters of `mesh3d.retessellate`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Mesh3dRetessellateParams {
+    /// a mesh object (shape kind mesh3d) from a STEP import
+    pub id: ObjectRef,
+    /// mm, 0.001 to 1000: the largest distance of a triangle from its surface
+    pub tolerance: f64,
+    /// degrees, 1 to 90, default 15: the largest turn of the normal between neighbours
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
+}
+
 entries! {
+    "mesh3d.exact_info" => Mesh3dExactInfoParams,
+    "mesh3d.retessellate" => Mesh3dRetessellateParams,
     "mesh.summary" => MeshSummaryParams,
     "mesh.vertices" => MeshVerticesParams,
     "mesh.edges" => MeshEdgesParams,

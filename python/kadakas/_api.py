@@ -105,7 +105,7 @@ if TYPE_CHECKING:
     ReportAreasParams = TypedDict("ReportAreasParams", {}, total=False)
 
     ImportFileParams = TypedDict("ImportFileParams", {
-        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc', 'obj', 'stl', 'gltf', 'glb'] | None,
+        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc', 'obj', 'stl', 'gltf', 'glb', 'step'] | None,
         'options': dict[str, Any] | None,
         'path': Required[str],
     }, total=False)
@@ -903,6 +903,17 @@ if TYPE_CHECKING:
         'merge': bool | None,
         'soften_below_angle': float | None,
         'tolerance': float | None,
+    }, total=False)
+
+    Mesh3dExactInfoParams = TypedDict("Mesh3dExactInfoParams", {
+        'id': Required[str],
+        'limit': int | None,
+    }, total=False)
+
+    Mesh3dRetessellateParams = TypedDict("Mesh3dRetessellateParams", {
+        'angle': float | None,
+        'id': Required[str],
+        'tolerance': Required[float],
     }, total=False)
 
     MeshSolidParams = TypedDict("MeshSolidParams", {
@@ -3491,7 +3502,7 @@ class Api:
         return self._call("report.areas", params or None)
 
     def import_file(self, **params: "Unpack[ImportFileParams]") -> Any:
-        """Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC, or a triangle mesh (OBJ, STL, glTF or GLB). params: {path, format?: dxf|dwg|shp|geojson|ifc|obj|stl|gltf|glb (default: from the extension), options?}. See describe.io for the options of each format (describe.io.mesh_files.import for meshes: unit, up_axis, to_surface, soften_below_angle, preview). Returns {imported, skipped, report, georeference}. A mesh or IFC import also returns softened_edges (0 when nothing was softened), and report.to_surface when it converted meshes into surface models: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, notes, and the counts of what the conversion dropped}.
+        """Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC, or a triangle mesh (OBJ, STL, glTF or GLB), or a STEP file (.step, .stp). params: {path, format?: dxf|dwg|shp|geojson|ifc|obj|stl|gltf|glb|step (default: from the extension), options?}. See describe.io for the options of each format (describe.io.mesh_files.import for meshes: unit, up_axis, to_surface, soften_below_angle, preview). Returns {imported, skipped, report, georeference}. A mesh or IFC import also returns softened_edges (0 when nothing was softened), and report.to_surface when it converted meshes into surface models: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, notes, and the counts of what the conversion dropped}.
 
         JSON-RPC method ``import.file``."""
         return self._call("import.file", params or None)
@@ -4203,6 +4214,18 @@ class Api:
 
         JSON-RPC method ``mesh.to_surface``."""
         return self._call("mesh.to_surface", params or None)
+
+    def mesh3d_exact_info(self, **params: "Unpack[Mesh3dExactInfoParams]") -> Any:
+        """The exact data that a mesh object from a STEP import keeps next to its triangles. params: {id, limit? (faces listed, default 200, most 5000)}. Returns {id, state (fresh | stale), summary (for example 'Exact data kept: 12 faces (cylinder x 4, plane x 8)'), faces, by_kind, product, tolerance_mm, unit (mm), approx_bytes, list: [{face, kind, ...}], note?}. Each listed face has its kind (plane, cylinder, cone, sphere, torus, revolution, extrusion, spline) and the true sizes in millimeters: a plane has point and normal (the outward normal of the face), a cylinder origin, axis and radius, a cone also half_angle_deg, a sphere center and radius, a torus major_radius and minor_radius. A face that looks into its surface (a bore) has concave true. Use it for dimensions. A stale payload (the triangles were edited after the import) is still listed, with state stale. An object without exact data is refused with error_id no_exact_data.
+
+        JSON-RPC method ``mesh3d.exact_info``."""
+        return self._call("mesh3d.exact_info", params or None)
+
+    def mesh3d_retessellate(self, **params: "Unpack[Mesh3dRetessellateParams]") -> Any:
+        """Cut the triangles of a mesh object again from its exact data, in one undo step. params: {id, tolerance (mm, 0.001 to 1000: the largest distance of a triangle from its surface), angle? (degrees, 1 to 90, default 15: the largest turn of the normal between neighbours)}. A finer tolerance gives a closer cylinder, sphere or torus. Returns {id, tolerance_mm, angle_deg, vertices: {before, after}, triangles: {before, after}, volume_mm3, faces: [{surface, faces, triangles}], skipped_faces?, notes?}. The name and the color stay. A stale payload (the triangles were edited after the import) is refused with error_id exact_stale. An object without exact data is refused with error_id no_exact_data. A result over the limits of a mesh is refused with the counts and nothing changes.
+
+        JSON-RPC method ``mesh3d.retessellate``."""
+        return self._call("mesh3d.retessellate", params or None)
 
     def mesh_solid(self, **params: "Unpack[MeshSolidParams]") -> Any:
         """A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). Returns the change.
@@ -6186,6 +6209,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "mesh.soften",
     "mesh.soften_edges",
     "mesh.to_surface",
+    "mesh3d.exact_info",
+    "mesh3d.retessellate",
     "mesh.solid",
     "mesh.make_group",
     "mesh.make_component",

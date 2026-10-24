@@ -237,6 +237,8 @@ const TABLE: &[(&str, Class)] = &[
     ("mesh.to_surface", Edit),
     ("mesh.transform", Edit),
     ("mesh.vertices", Read),
+    ("mesh3d.exact_info", Read),
+    ("mesh3d.retessellate", Edit),
     ("north_arrow.add", Edit),
     ("notes_db.create", Edit),
     ("notes_db.delete", Edit),

@@ -558,7 +558,7 @@ pub const METHODS: &[(&str, &str)] = &[
     #[cfg(not(target_arch = "wasm32"))]
     (
         "import.file",
-        "Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC, or a triangle mesh (OBJ, STL, glTF or GLB). params: {path, format?: dxf|dwg|shp|geojson|ifc|obj|stl|gltf|glb (default: from the extension), options?}. See describe.io for the options of each format (describe.io.mesh_files.import for meshes: unit, up_axis, to_surface, soften_below_angle, preview). Returns {imported, skipped, report, georeference}. A mesh or IFC import also returns softened_edges (0 when nothing was softened), and report.to_surface when it converted meshes into surface models: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, notes, and the counts of what the conversion dropped}.",
+        "Import a file as one undo step: DXF, DWG (needs a converter), Shapefile, GeoJSON, IFC, or a triangle mesh (OBJ, STL, glTF or GLB), or a STEP file (.step, .stp). params: {path, format?: dxf|dwg|shp|geojson|ifc|obj|stl|gltf|glb|step (default: from the extension), options?}. See describe.io for the options of each format (describe.io.mesh_files.import for meshes: unit, up_axis, to_surface, soften_below_angle, preview). Returns {imported, skipped, report, georeference}. A mesh or IFC import also returns softened_edges (0 when nothing was softened), and report.to_surface when it converted meshes into surface models: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, notes, and the counts of what the conversion dropped}.",
     ),
     #[cfg(not(target_arch = "wasm32"))]
     (
@@ -705,6 +705,8 @@ pub const METHODS: &[(&str, &str)] = &[
     mesh_api::MESH_SOFTEN,
     mesh_api::MESH_SOFTEN_EDGES,
     mesh_api::MESH_TO_SURFACE,
+    mesh_api::MESH3D_EXACT_INFO,
+    mesh_api::MESH3D_RETESSELLATE,
     mesh_api::MESH_SOLID,
     mesh_api::MESH_MAKE_GROUP,
     mesh_api::MESH_MAKE_COMPONENT,

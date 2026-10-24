@@ -24,6 +24,7 @@ use crate::{RpcError, Session};
 
 mod convert;
 mod edit;
+mod exact;
 mod query;
 mod read;
 
@@ -124,6 +125,14 @@ pub const MESH_SOFTEN_EDGES: (&str, &str) = (
 pub const MESH_TO_SURFACE: (&str, &str) = (
     "mesh.to_surface",
     "Turn a mesh object (shape kind mesh3d, for example from import.file or an IFC import) into a surface model, in place and in one undo step. params: {id, tolerance? (mm, 0.001 to 1000, default 0.01: vertices closer than this weld), soften_below_angle? (degrees, 0 to 180, default off: edges between faces at an angle below it become soft and smooth, with the soften engine of mesh.soften_edges), merge? (default true: triangles in one plane merge into faces with holes; false keeps every triangle a face), dry_run? (convert nothing and answer with the report)}. The model must fit the limits of a surface model: 55,000 vertices, 150,000 edges, 100,000 faces and 300,000 loop vertices, counted after the merge. A mesh over a limit is refused with the counts (error_id mesh_too_large_for_surface, data over and counts) and nothing changes. Returns {id, kind: surface_model, softened_edges (0 when no angle was given), report: {source_vertices, source_triangles, welded_vertices, degenerate_triangles, duplicate_triangles, joined_slivers, vertices, edges, faces, faces_with_holes, merged_triangles, unmerged_regions, healed_vertices, tolerance_mm, border_edges, nonmanifold_edges, closed, area_mm2, volume_mm3?, considered_edges, softened_edges, soften_below_angle?}, notes?}. The color of the mesh becomes the fill of the object. The sides of the faces follow the winding of the triangles.",
+);
+pub const MESH3D_EXACT_INFO: (&str, &str) = (
+    "mesh3d.exact_info",
+    "The exact data that a mesh object from a STEP import keeps next to its triangles. params: {id, limit? (faces listed, default 200, most 5000)}. Returns {id, state (fresh | stale), summary (for example 'Exact data kept: 12 faces (cylinder x 4, plane x 8)'), faces, by_kind, product, tolerance_mm, unit (mm), approx_bytes, list: [{face, kind, ...}], note?}. Each listed face has its kind (plane, cylinder, cone, sphere, torus, revolution, extrusion, spline) and the true sizes in millimeters: a plane has point and normal (the outward normal of the face), a cylinder origin, axis and radius, a cone also half_angle_deg, a sphere center and radius, a torus major_radius and minor_radius. A face that looks into its surface (a bore) has concave true. Use it for dimensions. A stale payload (the triangles were edited after the import) is still listed, with state stale. An object without exact data is refused with error_id no_exact_data.",
+);
+pub const MESH3D_RETESSELLATE: (&str, &str) = (
+    "mesh3d.retessellate",
+    "Cut the triangles of a mesh object again from its exact data, in one undo step. params: {id, tolerance (mm, 0.001 to 1000: the largest distance of a triangle from its surface), angle? (degrees, 1 to 90, default 15: the largest turn of the normal between neighbours)}. A finer tolerance gives a closer cylinder, sphere or torus. Returns {id, tolerance_mm, angle_deg, vertices: {before, after}, triangles: {before, after}, volume_mm3, faces: [{surface, faces, triangles}], skipped_faces?, notes?}. The name and the color stay. A stale payload (the triangles were edited after the import) is refused with error_id exact_stale. An object without exact data is refused with error_id no_exact_data. A result over the limits of a mesh is refused with the counts and nothing changes.",
 );
 pub const MESH_SOLID: (&str, &str) = (
     "mesh.solid",
@@ -364,6 +373,14 @@ pub fn describe() -> Value {
 
 /// Handles a method of this module. `None` means that the method is not one of ours.
 pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, RpcError>> {
+    if let Some(op) = method.strip_prefix("mesh3d.") {
+        let p = if p.is_null() { json!({}) } else { p };
+        return Some(match op {
+            "exact_info" => exact::exact_info(s, p),
+            "retessellate" => exact::retessellate(s, p),
+            _ => Err(RpcError::method_not_found(method)),
+        });
+    }
     let op = method.strip_prefix("mesh.")?;
     let p = if p.is_null() { json!({}) } else { p };
     Some(match op {
