@@ -98,7 +98,7 @@ pub(super) fn retessellate(s: &mut Session, p: Value) -> Result<Value, RpcError>
         ..Default::default()
     };
     let r = kadakas_step::retessellate(&exact, q.tolerance, angle, &limits)
-        .map_err(|e| crate::meshio_api::mesh_rpc(&e))?;
+        .map_err(|e| crate::errors::mesh_rpc(&e))?;
     let mut mesh = Mesh3d {
         name: m.name.clone(),
         vertices: r.positions.iter().map(|p| glam::DVec3::from(*p)).collect(),

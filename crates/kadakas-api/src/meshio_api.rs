@@ -118,21 +118,7 @@ impl SurfaceAsk {
     }
 }
 
-/// An error of a mesh read as an API error: the limits are `limit` errors, the rest are
-/// validation errors, all with a stable reason and the counts.
-pub(crate) fn mesh_rpc(e: &MeshError) -> RpcError {
-    let err = if e.is_limit() {
-        RpcError::limit(e)
-    } else {
-        RpcError::validation(e)
-    };
-    let mut d = match e.details() {
-        Value::Object(m) => m,
-        _ => serde_json::Map::new(),
-    };
-    d.insert("error_id".into(), json!(e.kind()));
-    err.with_reason(e.kind()).with_details(Value::Object(d))
-}
+pub(crate) use crate::errors::mesh_rpc;
 
 /// The counts of the conversions of one import, for `report.to_surface`.
 pub(crate) struct Tally {

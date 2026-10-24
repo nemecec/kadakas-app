@@ -195,6 +195,8 @@ pub const ERROR_IDS: &[&str] = &[
     "not_a_mesh",
     "mesh_too_large_for_surface",
     "mesh_not_convertible",
+    "no_exact_data",
+    "exact_stale",
     "no_such_class",
     "no_such_resource",
 ];

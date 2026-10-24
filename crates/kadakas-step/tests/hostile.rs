@@ -20,7 +20,10 @@ fn head(schema: &str) -> String {
 const TAIL: &str = "ENDSEC;\nEND-ISO-10303-21;\n";
 
 fn run(body: &str) -> Result<kadakas_step::StepImport, MeshError> {
-    read(format!("{}{body}{TAIL}", head("AUTOMOTIVE_DESIGN")).as_bytes(), &StepOptions::default())
+    read(
+        format!("{}{body}{TAIL}", head("AUTOMOTIVE_DESIGN")).as_bytes(),
+        &StepOptions::default(),
+    )
 }
 
 /// A tiny xorshift for repeatable damage.
@@ -49,12 +52,23 @@ fn a_file_cut_anywhere_never_panics() {
     }
     // A file that stops inside the data section is a truncation.
     let half = &t[..t.find("ENDSEC;\nEND").unwrap()];
-    assert!(matches!(read(half.as_bytes(), &StepOptions::default()), Err(MeshError::Truncated { .. })));
+    assert!(matches!(
+        read(half.as_bytes(), &StepOptions::default()),
+        Err(MeshError::Truncated { .. })
+    ));
 }
 
 #[test]
 fn damaged_bytes_never_panic() {
-    for name in ["box.step", "sphere.step", "plate_hole.step", "patch_rational.step", "assembly.step", "tessellated.step", "torus.step"] {
+    for name in [
+        "box.step",
+        "sphere.step",
+        "plate_hole.step",
+        "patch_rational.step",
+        "assembly.step",
+        "tessellated.step",
+        "torus.step",
+    ] {
         let original = text(name).into_bytes();
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15 ^ name.len() as u64);
         for round in 0..60 {
@@ -84,7 +98,10 @@ fn numbers_that_are_not_finite_or_far_too_big_are_not_used() {
         match read(t.as_bytes(), &StepOptions::default()) {
             Ok(imp) => {
                 for p in &imp.set.parts {
-                    assert!(p.positions.iter().all(|v| v.iter().all(|x| x.is_finite())), "{bad}");
+                    assert!(
+                        p.positions.iter().all(|v| v.iter().all(|x| x.is_finite())),
+                        "{bad}"
+                    );
                 }
             }
             Err(e) => assert!(!e.to_string().is_empty()),
@@ -106,9 +123,7 @@ fn cycles_in_references_end() {
     );
     assert!(r.is_err());
     // A shell that holds itself, a face set inside a face set.
-    let r = run(
-        "#1=CLOSED_SHELL('',(#1));\n#2=MANIFOLD_SOLID_BREP('s',#1);\n",
-    );
+    let r = run("#1=CLOSED_SHELL('',(#1));\n#2=MANIFOLD_SOLID_BREP('s',#1);\n");
     assert!(r.is_err());
     let r = run("#1=ORIENTED_CLOSED_SHELL('',*,#1,.T.);\n#2=MANIFOLD_SOLID_BREP('s',#1);\n");
     assert!(r.is_err());
@@ -163,7 +178,9 @@ fn huge_degrees_counts_and_references_are_refused() {
     let r = run("#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=MANIFOLD_SOLID_BREP('s',#1);\n");
     assert!(r.is_err());
     // Two entities with one number, and a number that is huge.
-    let r = run("#1=CARTESIAN_POINT('',(0.,0.,0.));\n#1=CARTESIAN_POINT('',(1.,1.,1.));\n#18446744073709551615=CARTESIAN_POINT('',(1.,1.,1.));\n");
+    let r = run(
+        "#1=CARTESIAN_POINT('',(0.,0.,0.));\n#1=CARTESIAN_POINT('',(1.,1.,1.));\n#18446744073709551615=CARTESIAN_POINT('',(1.,1.,1.));\n",
+    );
     assert!(r.is_err());
     let r = run("#99999999999999999999999=CARTESIAN_POINT('',(1.,1.,1.));\n");
     assert!(matches!(r, Err(MeshError::Malformed(_))));
@@ -173,53 +190,149 @@ fn huge_degrees_counts_and_references_are_refused() {
 fn the_limits_stop_a_read_with_the_counts() {
     let cyl = text("cylinder.step");
     let bytes = cyl.as_bytes();
-    let o = |limits: Limits| StepOptions { limits, ..Default::default() };
-    let e = read(bytes, &o(Limits { max_bytes: 100, ..Default::default() })).unwrap_err();
+    let o = |limits: Limits| StepOptions {
+        limits,
+        ..Default::default()
+    };
+    let e = read(
+        bytes,
+        &o(Limits {
+            max_bytes: 100,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::FileTooLarge { limit: 100, .. }));
-    let e = read(bytes, &o(Limits { max_triangles: 10, ..Default::default() })).unwrap_err();
+    let e = read(
+        bytes,
+        &o(Limits {
+            max_triangles: 10,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::TooManyTriangles { limit: 10, .. }));
-    let e = read(bytes, &o(Limits { max_vertices: 10, ..Default::default() })).unwrap_err();
+    let e = read(
+        bytes,
+        &o(Limits {
+            max_vertices: 10,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::TooManyVertices { limit: 10, .. }));
-    let e = read(bytes, &o(Limits { max_memory: 1000, ..Default::default() })).unwrap_err();
+    let e = read(
+        bytes,
+        &o(Limits {
+            max_memory: 1000,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::TooMuchMemory { limit: 1000, .. }));
-    let step = |l: StepLimits| StepOptions { step: l, ..Default::default() };
-    let e = read(bytes, &step(StepLimits { max_entities: 5, ..Default::default() })).unwrap_err();
+    let step = |l: StepLimits| StepOptions {
+        step: l,
+        ..Default::default()
+    };
+    let e = read(
+        bytes,
+        &step(StepLimits {
+            max_entities: 5,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::TooManyParts { limit: 5, .. }));
     // The assembly limits.
     let asm = text("assembly.step");
-    let e = read(asm.as_bytes(), &step(StepLimits { max_instances: 1, ..Default::default() })).unwrap_err();
+    let e = read(
+        asm.as_bytes(),
+        &step(StepLimits {
+            max_instances: 1,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::TooManyParts { limit: 1, .. }));
     // With no depth at all the parts of the assembly are left out.
-    let e = read(asm.as_bytes(), &step(StepLimits { max_assembly_depth: 0, ..Default::default() })).unwrap_err();
+    let e = read(
+        asm.as_bytes(),
+        &step(StepLimits {
+            max_assembly_depth: 0,
+            ..Default::default()
+        }),
+    )
+    .unwrap_err();
     assert!(matches!(e, MeshError::Empty));
     // A face is cut at its own limit and the report says so.
     let sph = text("sphere.step");
-    let cut = read(sph.as_bytes(), &step(StepLimits { max_face_triangles: 300, ..Default::default() })).unwrap();
+    let cut = read(
+        sph.as_bytes(),
+        &step(StepLimits {
+            max_face_triangles: 300,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
     assert!(cut.set.totals.triangles > 0);
-    assert!(cut.set.notes.iter().any(|n| n.contains("limit of 300")), "{:?}", cut.set.notes);
+    assert!(
+        cut.set.notes.iter().any(|n| n.contains("limit of 300")),
+        "{:?}",
+        cut.set.notes
+    );
     // Control points over the limit skip the face.
     let patch = text("patch_flat.step");
-    let r = read(patch.as_bytes(), &step(StepLimits { max_control_points: 4, ..Default::default() }));
+    let r = read(
+        patch.as_bytes(),
+        &step(StepLimits {
+            max_control_points: 4,
+            ..Default::default()
+        }),
+    );
     assert!(matches!(r, Err(MeshError::Unsupported(_))), "{r:?}");
     let patch = text("patch_rational.step");
-    assert!(read(patch.as_bytes(), &step(StepLimits { max_control_points: 2, ..Default::default() })).is_err());
+    assert!(
+        read(
+            patch.as_bytes(),
+            &step(StepLimits {
+                max_control_points: 2,
+                ..Default::default()
+            })
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn files_that_are_not_step_say_so() {
     let o = StepOptions::default();
-    for junk in ["", "hello", "ISO-10303-21;", "ISO-10303-21;\nHEADER;", "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=A("] {
+    for junk in [
+        "",
+        "hello",
+        "ISO-10303-21;",
+        "ISO-10303-21;\nHEADER;",
+        "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=A(",
+    ] {
         let e = read(junk.as_bytes(), &o).unwrap_err();
         assert!(!e.to_string().is_empty(), "{junk:?}");
     }
     let bom = format!("\u{feff}{}", text("box.step"));
     assert!(read(bom.as_bytes(), &o).is_ok());
-    let latin1: Vec<u8> = text("box.step").replace("Kadakas test file", "Pähkinä").bytes().collect();
+    let latin1: Vec<u8> = text("box.step")
+        .replace("Kadakas test file", "Pähkinä")
+        .bytes()
+        .collect();
     assert!(read(&latin1, &o).is_ok());
     let nothing = format!("{}{TAIL}", head("SOMETHING_ELSE"));
-    assert!(matches!(read(nothing.as_bytes(), &o), Err(MeshError::Empty)));
+    assert!(matches!(
+        read(nothing.as_bytes(), &o),
+        Err(MeshError::Empty)
+    ));
     // An unknown schema is a note.
-    let other = text("box.step").replace("AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }", "MY_OWN_SCHEMA");
+    let other = text("box.step").replace(
+        "AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }",
+        "MY_OWN_SCHEMA",
+    );
     let imp = read(other.as_bytes(), &o).unwrap();
     assert!(imp.set.notes.iter().any(|n| n.contains("MY_OWN_SCHEMA")));
 }

@@ -15,7 +15,8 @@ struct W {
 
 impl W {
     fn add(&mut self, text: String) -> usize {
-        self.lines.push(format!("#{}={};", self.lines.len() + 1, text));
+        self.lines
+            .push(format!("#{}={};", self.lines.len() + 1, text));
         self.lines.len()
     }
     fn v(p: DVec3) -> String {
@@ -45,15 +46,35 @@ impl W {
         self.add(format!("EDGE_CURVE('',#{a},#{b},#{c},.T.)"))
     }
     fn oe(&mut self, e: usize, fwd: bool) -> usize {
-        self.add(format!("ORIENTED_EDGE('',*,*,#{e},{})", if fwd { ".T." } else { ".F." }))
+        self.add(format!(
+            "ORIENTED_EDGE('',*,*,#{e},{})",
+            if fwd { ".T." } else { ".F." }
+        ))
     }
     fn face(&mut self, loop_: Vec<usize>, surface: usize, same: bool) -> usize {
-        let l = self.add(format!("EDGE_LOOP('',({}))", loop_.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",")));
+        let l = self.add(format!(
+            "EDGE_LOOP('',({}))",
+            loop_
+                .iter()
+                .map(|i| format!("#{i}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
         let b = self.add(format!("FACE_OUTER_BOUND('',#{l},.T.)"));
-        self.add(format!("ADVANCED_FACE('',(#{b}),#{surface},{})", if same { ".T." } else { ".F." }))
+        self.add(format!(
+            "ADVANCED_FACE('',(#{b}),#{surface},{})",
+            if same { ".T." } else { ".F." }
+        ))
     }
     fn finish(mut self, faces: Vec<usize>) -> String {
-        let sh = self.add(format!("CLOSED_SHELL('',({}))", faces.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(",")));
+        let sh = self.add(format!(
+            "CLOSED_SHELL('',({}))",
+            faces
+                .iter()
+                .map(|i| format!("#{i}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
         self.add(format!("MANIFOLD_SOLID_BREP('s',#{sh})"));
         format!(
             "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n{}\nENDSEC;\nEND-ISO-10303-21;\n",
@@ -64,15 +85,32 @@ impl W {
 
 fn rotation(q: [f64; 4]) -> DMat3 {
     let q = DQuat::from_xyzw(q[0], q[1], q[2], q[3]);
-    let q = if q.length_squared() < 1e-6 { DQuat::IDENTITY } else { q.normalize() };
+    let q = if q.length_squared() < 1e-6 {
+        DQuat::IDENTITY
+    } else {
+        q.normalize()
+    };
     DMat3::from_quat(q)
 }
 
 /// A box with corners at the rotated and moved places.
 fn box_step(size: DVec3, r: DMat3, t: DVec3) -> String {
     let mut w = W { lines: Vec::new() };
-    let corner = |i: usize| t + r * DVec3::new((i & 1) as f64 * size.x, ((i >> 1) & 1) as f64 * size.y, ((i >> 2) & 1) as f64 * size.z);
-    let faces_idx = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+    let corner = |i: usize| {
+        t + r * DVec3::new(
+            (i & 1) as f64 * size.x,
+            ((i >> 1) & 1) as f64 * size.y,
+            ((i >> 2) & 1) as f64 * size.z,
+        )
+    };
+    let faces_idx = [
+        [0, 2, 3, 1],
+        [4, 5, 7, 6],
+        [0, 1, 5, 4],
+        [2, 6, 7, 3],
+        [0, 4, 6, 2],
+        [1, 3, 7, 5],
+    ];
     let mut vertices: HashMap<usize, usize> = HashMap::new();
     let mut edges: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
     let mut faces = Vec::new();
@@ -119,7 +157,12 @@ fn cylinder_step(radius: f64, height: f64, r: DMat3, t: DVec3) -> String {
     let seam = w.line(p0, p1);
     let es = w.edge(v0, v1, seam);
     let side = w.add(format!("CYLINDRICAL_SURFACE('',#{a0},{radius:?})"));
-    let (o0, os, o1, os2) = (w.oe(e0, true), w.oe(es, true), w.oe(e1, false), w.oe(es, false));
+    let (o0, os, o1, os2) = (
+        w.oe(e0, true),
+        w.oe(es, true),
+        w.oe(e1, false),
+        w.oe(es, false),
+    );
     let f_side = w.face(vec![o0, os, o1, os2], side, true);
     let top_s = w.add(format!("PLANE('',#{a1})"));
     let o = w.oe(e1, true);

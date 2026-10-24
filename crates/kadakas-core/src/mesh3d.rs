@@ -213,14 +213,31 @@ mod tests {
             tolerance_mm: 0.1,
             angle_deg: 15.0,
             vertices: m.vertices.clone(),
-            edges: vec![ExactEdge { curve: None, start: 0, end: 1, same_sense: true }],
-            shells: vec![ExactShell { closed: true, outward: None }],
+            edges: vec![ExactEdge {
+                curve: None,
+                start: 0,
+                end: 1,
+                same_sense: true,
+            }],
+            shells: vec![ExactShell {
+                closed: true,
+                outward: None,
+            }],
             faces: vec![ExactFace {
                 shell: 0,
-                surface: Some(Surface::Cylinder { f: DAffine3::IDENTITY, r: 2.0 }),
+                surface: Some(Surface::Cylinder {
+                    f: DAffine3::IDENTITY,
+                    r: 2.0,
+                }),
                 same_sense: true,
                 flip: false,
-                loops: vec![ExactLoop { outer: true, items: vec![LoopItem::Edge { edge: 0, forward: true }] }],
+                loops: vec![ExactLoop {
+                    outer: true,
+                    items: vec![LoopItem::Edge {
+                        edge: 0,
+                        forward: true,
+                    }],
+                }],
                 color: None,
                 source: 0,
             }],
@@ -279,7 +296,10 @@ mod tests {
         let mut v = serde_json::to_value(&m).unwrap();
         v["exact"]["later"] = serde_json::json!([1, 2, 3]);
         let back: Mesh3d = serde_json::from_value(v).unwrap();
-        assert_eq!(serde_json::to_value(&back).unwrap()["exact"]["later"], serde_json::json!([1, 2, 3]));
+        assert_eq!(
+            serde_json::to_value(&back).unwrap()["exact"]["later"],
+            serde_json::json!([1, 2, 3])
+        );
         assert_eq!(back.exact_state(), Some(exact::State::Fresh));
     }
 }

@@ -40,6 +40,9 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 schemars = "1"
 serde_path_to_error = "0.1.20"
 
+kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
+kadakas-step = { version = "0.1.0", path = "../kadakas-step" }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The clock of a script run in the browser.
 js-sys = "0.3"
@@ -50,8 +53,6 @@ kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
 kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
 kadakas-ifc = { version = "0.1.0", path = "../kadakas-ifc" }
 kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
-kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
-kadakas-step = { version = "0.1.0", path = "../kadakas-step" }
 kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
 kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
 tempfile = "3"

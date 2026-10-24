@@ -40,7 +40,11 @@ fn disabled() -> bool {
 fn fetch() -> Option<Vec<u8>> {
     let file = cache();
     if let Ok(b) = std::fs::read(&file) {
-        assert_eq!(sha256_hex(&b), SHA256, "the cached file has a wrong hash: delete it");
+        assert_eq!(
+            sha256_hex(&b),
+            SHA256,
+            "the cached file has a wrong hash: delete it"
+        );
         return Some(b);
     }
     if disabled() {
@@ -58,7 +62,11 @@ fn fetch() -> Option<Vec<u8>> {
     if !out.status.success() {
         let _ = std::fs::remove_file(&part);
         // curl 22 is an HTTP error while the network works: the pinned file is wrong.
-        assert_ne!(out.status.code(), Some(22), "the pinned file is not on the server");
+        assert_ne!(
+            out.status.code(),
+            Some(22),
+            "the pinned file is not on the server"
+        );
         return None;
     }
     let bytes = std::fs::read(&part).ok()?;
@@ -77,10 +85,18 @@ fn an_opencascade_file_with_two_colored_solids() {
     let imp = read(&bytes, &StepOptions::default()).unwrap();
     let r = &imp.report;
     assert_eq!(r.entities_read, r.entities_used + r.entities_skipped);
-    assert_eq!(imp.set.parts.len(), 2, "{:?}", imp.set.parts.iter().map(|p| &p.name).collect::<Vec<_>>());
+    assert_eq!(
+        imp.set.parts.len(),
+        2,
+        "{:?}",
+        imp.set.parts.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
     let colors: Vec<_> = imp.set.parts.iter().map(|p| p.color.unwrap()).collect();
     assert!(colors.iter().any(|c| c[0] > 180 && c[2] < 80), "{colors:?}");
-    assert!(colors.iter().any(|c| c[2] > 150 && c[0] < 100), "{colors:?}");
+    assert!(
+        colors.iter().any(|c| c[2] > 150 && c[0] < 100),
+        "{colors:?}"
+    );
     // Both are closed and have a positive volume.
     for p in &imp.set.parts {
         let mut edges: HashMap<(u32, u32), (i32, i32)> = HashMap::new();
@@ -95,9 +111,21 @@ fn an_opencascade_file_with_two_colored_solids() {
             }
         }
         assert!(vol > 0.0, "{}", p.name);
-        assert!(edges.values().all(|v| *v == (1, 1)), "{} is not closed", p.name);
+        assert!(
+            edges.values().all(|v| *v == (1, 1)),
+            "{} is not closed",
+            p.name
+        );
     }
     assert!(imp.exact.iter().all(Option::is_some));
-    let kinds: Vec<_> = imp.report.tessellated.iter().map(|t| t.0.as_str()).collect();
-    assert!(kinds.contains(&"PLANE") && kinds.contains(&"CYLINDRICAL_SURFACE"), "{kinds:?}");
+    let kinds: Vec<_> = imp
+        .report
+        .tessellated
+        .iter()
+        .map(|t| t.0.as_str())
+        .collect();
+    assert!(
+        kinds.contains(&"PLANE") && kinds.contains(&"CYLINDRICAL_SURFACE"),
+        "{kinds:?}"
+    );
 }

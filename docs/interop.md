@@ -11,6 +11,7 @@ The SketchUp file format is not read and not written. No program of that kind wa
 | OBJ | `import.file`, colors from the MTL file | `export.file` format `obj`, with an MTL file |
 | STL | binary and ASCII | binary (default) and ASCII |
 | glTF and GLB | `.gltf` with embedded or loaded buffers, and `.glb` | `gltf` and `glb` |
+| STEP | `.step` and `.stp` (IOP-11), AP203, AP214 and AP242 | not done |
 | IFC | the IFC import of IOP-03 | surface models as faceted solids |
 | DXF | 3DFACE, POLYFACE and polygon meshes (IOP-09) | 3DFACE, POLYFACE and MESH |
 
@@ -109,6 +110,98 @@ For an agent:
 - The IFC import takes the same options (`to_surface`, `soften_below_angle` and `surface_tolerance`) and converts the meshes it made.
 
 For a person, the import window of the app and of the modeler (File > Import) asks "Soften edges under an angle?" for a mesh file. It is off by default. The angle is 20 degrees. When it is on, the window shows how many edges would be softened. The count reads and converts the file in the window, so it runs only while the question is on, and only for files up to 32 MB. A bigger file is imported with the same softening and not counted before. The answer is kept when the person imports, not when the window is cancelled. It is kept in the prefs of the program (`import_soften` in `prefs.json` of the app and in `modeler.json` of the modeler) and comes back at the next import.
+
+## STEP files (IOP-11)
+
+A STEP file (ISO 10303-21 text) holds the exact geometry of a product from a manufacturer. `import.file` cuts it into triangles on load. Each result is a `mesh3d` object that also keeps the exact surfaces (see `docs/exact-solids.md`). Exports are not done.
+
+```json
+{"method": "import.file", "params": {"path": "/data/bench.step", "options": {"tolerance": 0.05}}}
+```
+
+The reader is the crate `kadakas-step`. It uses the public knowledge of the format and no CAD program. No third-party crate was added. `truck-stepio` and `ruststep` were not chosen. They add a large dependency tree. Our own reader is small and keeps to our limits.
+
+### What is read
+
+| Part of the file | Result |
+|---|---|
+| Schemas AUTOMOTIVE_DESIGN (AP214), CONFIG_CONTROL_DESIGN (AP203), AP242 | read. Another schema name gives a note and the file is read the same way |
+| MANIFOLD_SOLID_BREP, BREP_WITH_VOIDS, FACETED_BREP | solids. A closed shell with inward normals is turned |
+| SHELL_BASED_SURFACE_MODEL, FACE_BASED_SURFACE_MODEL | open surfaces |
+| TRIANGULATED_FACE, TRIANGULATED_FACE_SET, TRIANGULATED_SURFACE_SET, COMPLEX_TRIANGULATED_FACE and SURFACE_SET, TESSELLATED_SOLID, TESSELLATED_SHELL | the given triangles are taken. These meshes have no exact data |
+| GEOMETRIC_CURVE_SET, GEOMETRIC_SET | 3D polylines (`polyline3d`) |
+| PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE | exact |
+| SURFACE_OF_REVOLUTION, SURFACE_OF_LINEAR_EXTRUSION | the profile curve is a line, circle, ellipse, spline, polyline, trimmed or composite curve |
+| B_SPLINE_SURFACE_WITH_KNOTS, BEZIER, QUASI_UNIFORM and UNIFORM surfaces, also rational (complex entity with RATIONAL_B_SPLINE_SURFACE) | degree up to 25 |
+| RECTANGULAR_TRIMMED_SURFACE | the basis surface. The bounds of the faces cut it |
+| LINE, CIRCLE, ELLIPSE, B_SPLINE_CURVE_WITH_KNOTS (also rational), BEZIER, QUASI_UNIFORM and UNIFORM curves, POLYLINE, TRIMMED_CURVE, COMPOSITE_CURVE, SURFACE_CURVE, SEAM_CURVE | edge curves |
+| FACE_BOUND, FACE_OUTER_BOUND, ORIENTED_EDGE, ORIENTED_FACE, ORIENTED_CLOSED_SHELL, POLY_LOOP | holes and orientation flags are used |
+| PRODUCT, PRODUCT_DEFINITION, SHAPE_DEFINITION_REPRESENTATION | the product name is the name of the mesh |
+| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances |
+| MAPPED_ITEM with REPRESENTATION_MAP | an instance of a representation |
+| LENGTH_UNIT as SI_UNIT or CONVERSION_BASED_UNIT, PLANE_ANGLE_UNIT | millimeters, meters, inches and so on, for each representation |
+| STYLED_ITEM with COLOUR_RGB or a predefined colour, SURFACE_STYLE_TRANSPARENT | colour of a solid, a shell or a face. A part gets one mesh for each colour |
+
+### Not read
+
+- Hyperbolas, parabolas, offset curves and surfaces, and degenerate tori. The edge becomes a straight line or the face is skipped. The report says so.
+- Pcurves. Faces are cut from the 3D edges and the surface, not from the curves in the parameter space.
+- Wireframe edges without faces, points, vertex loops, product structure of kinematics, PMI, GD&T, layers and visibility.
+- Anchor and reference sections of AP242 edition 2. Only the data section is read.
+- A sphere or cone face with a loop around the axis is closed through the pole on its side.
+- A face with a loop around a torus in the v direction is skipped.
+
+### How faces are cut
+
+- The boundary of each face is cut first. An edge is cut once and both faces use the same points, so a closed solid has no cracks. Equal points are joined at the end (0.1 percent of the tolerance, at least 1 micrometer).
+- A plane is cut by ear clipping with the holes joined by bridges. Other surfaces are cut in the parameters (u, v) of the surface. The angle of a periodic surface is made continuous along each loop. A pole of a sphere or cone is a line in (u, v). It is cut into many points at one place.
+- A triangle is split where the surface leaves it by more than the tolerance. It is also split where the normal turns by more than the angle.
+- The points of the boundary never move.
+- Edges are flipped to keep the triangles round (Delaunay in a chart scaled to the size of the surface).
+- A B-spline face is cut the same way. The boundary is placed on the surface by a search with Newton steps. The limits are the degree (25), the control points (262,144 for a surface), and 200,000 triangles for a face. A face over its limit is cut as far as the limit allows, and a note says so.
+- The default tolerance is 1/2000 of the diagonal of the points of the file, between 0.01 and 0.5 mm. The default angle is 15 degrees. A larger tolerance gives fewer triangles.
+
+### Options
+
+| Option | Meaning |
+|---|---|
+| `unit` | The unit of the numbers. It replaces the unit of the file. Default: the file |
+| `tolerance` | mm, 0.001 to 1000. The largest distance of a triangle from its surface |
+| `angle` | degrees, 1 to 90, default 15 |
+| `per_product` | true (default): one mesh for each product and colour. false: one for each body and colour |
+| `join` | one mesh for the whole file |
+| `keep_exact` | true (default): the mesh keeps its exact surfaces |
+| `to_surface`, `soften_below_angle`, `preview`, `center`, `layer`, `name`, `max_*` | as for the other mesh formats. A part that becomes a surface model loses its exact data, and a note says so |
+
+### The report
+
+- `report.step.entities_read` equals `entities_used` plus `entities_skipped`. Every entity is in one of them.
+- `report.step.used` lists the entity types that were read.
+- `skipped` lists the others, each with a reason and a count.
+- `tessellated` lists the faces and triangles by kind of surface.
+- `products`, `instances`, `length_unit_mm`, `unit_from_file`, `tolerance_mm`, `angle_deg` and `welded_vertices` say what was done.
+- `length_unit_mm` has one value for each unit in the file.
+- `report.exact` says how many meshes keep their exact data and why some do not. `report.curves` counts the 3D polylines.
+- A file with nothing to read is refused with `mesh_unsupported` or `mesh_empty` and the reasons. Damaged files give `mesh_truncated` or `mesh_malformed`.
+
+### Guards
+
+A STEP file is not trusted. These limits hold:
+
+- values nest to 48 levels, and the file has at most 5 million entities
+- file size, vertices, triangles and memory have the limits of the other mesh formats
+- the degree and the control points are limited as above
+- a curve has at most 20,000 points, and an assembly has at most 32 levels
+
+References that point to themselves end. Numbers that are not finite or larger than 1e12 are not used. The tests cut files at every place, damage bytes, make cycles and use huge counts.
+
+### Tests
+
+- `tests/data/step/make_step_files.py` writes the test files. They hold a box, a cylinder, a sphere, a torus and a cone. They also hold a revolved solid, an extruded solid, a plate with a hole and B-spline patches. More files hold a faceted solid, an AP242 tessellated solid, curves, colours, units and an assembly with two placements.
+- The Rust tests compare volumes and areas with the analytic values and check that the solids are closed.
+- A property test uses random boxes and cylinders in random places.
+- A public file of CadQuery (Apache-2.0) is fetched at run time and is not in the repository. The test skips without a network.
+- `tests/behavior/test_step.py` compares with OpenCascade when `OCP` is installed and skips when it is not.
 
 ## Export
 
@@ -313,21 +406,27 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 | `mesh.to_surface` | `crates/kadakas-api/src/mesh_api/convert.rs` |
 | IFC export of surface models | `crates/kadakas-ifc/src/export/faceted.rs` |
 | DXF export of surface models | `crates/kadakas-io/src/dxf/export.rs` and `export/native.rs` |
+| STEP reader (Part 21, products, faces, tessellation) | `crates/kadakas-step` (`part21`, `read_brep`, `tess`, `mesh2d`, `assembly`) |
+| Exact surfaces and curves, the payload of a mesh | `crates/kadakas-core/src/exact` |
+| `mesh3d.exact_info`, `mesh3d.retessellate` | `crates/kadakas-api/src/mesh_api/exact.rs` |
 | The form of the windows | `crates/kadakas-ui-core/src/mesh_import.rs` |
 | The windows | `crates/kadakas-app/src/io_dialog.rs` and `crates/kadakas-modeler/src/interop.rs` |
 
-The parsers are written for Kadakas. No new third-party crate was added, so the notices and the About list have nothing new.
+The parsers are written for Kadakas. No new third-party crate was added, so the About list has nothing new. The notices only list the new workspace crate.
 
 ## Tests
 
 - `kadakas-meshio`: unit tests for every reader and the STL writer, damaged and hostile files, and a property test with random bytes.
 - `kadakas-core`: tests of the conversion with cubes, spheres, grids with holes, welds, slivers, limits and soften counts, a property test on random terrain and spheres, and the command tests (`tests/mesh_to_surface.rs`).
 - `kadakas-api/tests/meshio.rs`: a U shaped prism whose outline has corners on a line (watertight through every format), the place of the model after a round trip, hostile glTF files, round trips of a closed slab with a hole through OBJ, STL, ASCII STL, glTF and GLB (the same volume, area and face count), a property test on random prisms and terrain, options, guards, refusals and the path policy.
+- `kadakas-step`: the Part 21 reader, the test files, the hostile files and a property test (see STEP files).
+- `kadakas-api/tests/step.rs`: the import through the API, the report, the exact data, the two new methods, a move and a turn, stale data, the size caps and a save and load.
 - `kadakas-ifc` and `kadakas-io`: the entities of the surface export.
 - `tests/behavior/test_meshio.py`: the checks of IfcOpenShell (the IFC of surface models), ezdxf (the DXF) and glTF validation. They skip when the tool is missing.
 
 ## Not done
 
+- STEP export, PMI, GD&T and kinematics. Textures of STEP files. See the list in the STEP section.
 - Textures and materials of OBJ and glTF are not read. Only the base color is kept.
 - Colors of single triangles of an STL file, vertex colors and normals are not read.
 - glTF with Draco, Meshopt or quantized data, and sparse accessors, are refused.
