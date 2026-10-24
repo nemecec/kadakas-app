@@ -117,7 +117,7 @@ pub struct MeshSet {
 }
 
 impl MeshSet {
-    pub(crate) fn finish(
+    pub fn finish(
         format: Format,
         frame: Frame,
         mut parts: Vec<Part>,
