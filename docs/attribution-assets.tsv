@@ -58,3 +58,6 @@ crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf (written by an agen
 crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
 tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
 tests/behavior/fixtures/make_survey.py	Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/data/step/*	Own STEP test files and their generator	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+ext:cadquery-public-step	CadQuery STEP sample (red cube, blue cylinder)	CadQuery contributors	Apache-2.0	https://github.com/CadQuery/cadquery	test
+tests/behavior/step_occ_check.py	OpenCascade reference check for STEP tests	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test

@@ -1,6 +1,6 @@
 //! Length and angle units of a representation context, and colors of styled items.
 
-use crate::ctx::{Ctx, attr, enum_name, int, list, num, reference, text};
+use crate::ctx::{Ctx, enum_name, list, num, reference, text};
 use crate::part21::Value;
 use crate::tess::Rgba;
 
@@ -163,6 +163,10 @@ impl<'a> Ctx<'a> {
     pub fn read_colors(&mut self) {
         let file = self.file;
         for e in &file.entities {
+            // The representation that lists the styled items.
+            if e.name.ends_with("PRESENTATION_REPRESENTATION") {
+                self.use_id(e.id);
+            }
             if !matches!(
                 e.name.as_str(),
                 "STYLED_ITEM"
@@ -180,7 +184,5 @@ impl<'a> Ctx<'a> {
                 self.colors.entry(item).or_insert(c);
             }
         }
-        let _ = int;
-        let _ = attr;
     }
 }
