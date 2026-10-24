@@ -29,32 +29,32 @@ ext:ezdxf-public-dxf	ezdxf public sample files	Manfred Moitzi	MIT	https://github
 ext:gdal-public-dxf	GDAL public sample files (MIT-style general terms, verified in LICENSE.TXT at the pinned commit 739fcf03, terms of single files not verified)	OSGeo and contributors	MIT	https://github.com/OSGeo/gdal	test
 tests/behavior/bcf_schemas/**	buildingSMART BCF schemas	buildingSMART International Ltd.	CC-BY-ND-4.0	https://github.com/buildingSMART/BCF-XML	test
 tests/behavior/bcf_cases/**	buildingSMART BCF 2.1 test files	buildingSMART International Ltd.	CC-BY-ND-4.0	https://github.com/buildingSMART/BCF-XML	test
-assets/icons/kadakas/**	Kadakas icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-assets/icons/modeler/**	Kadakas modeler icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-packaging/icons/**	Kadakas application icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-packaging/macos/*	Kadakas macOS bundle files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-web/index.html	Kadakas web page	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-script-js/c/prelude.js	Script engine prelude	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-l10n/locales/**	Kadakas translations	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-ui-core/profiles/*	Kadakas workspace profiles	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-plants/src/sample_catalog.csv	Plant sample catalog	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-launcher/trusted-keys.txt	Update manifest public keys	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-plugin/tests/fixtures/**	Plug-in test modules	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
-crates/kadakas-api/tests/data/*.kad	Container golden files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-core/tests/command_schema.json	Command schema snapshot	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-io/tests/fixtures/dxf_public_*.json	Public DXF corpus counts and hashes	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-io/tests/fixtures/dxf_iop27.json	IOP-27 DXF facts from the ezdxf reader	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/data/dxf-own/*	Own DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/data/*.py	DXF test data scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/fixtures/ifc/*.ifc	Hand written IFC test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/fixtures/messy/*	Messy DXF test corpus	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/fixtures/parking_lot*.dxf	Parking lot DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/fixtures/make_parking_lot*.py	Parking lot DXF scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/gltf_validate.js	glTF validation script	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-docs/scripts/*.js	Example generator scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-docs/icons.html	Icon gallery	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-render/testdata/red_blue.jpg	Test picture red_blue.jpg (16x16, made by an agent with Python and sips)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-tests/behavior/fixtures/make_survey.py	Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+assets/icons/kadakas/**	Kadakas icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+assets/icons/modeler/**	Kadakas modeler icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+packaging/icons/**	Kadakas application icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+packaging/macos/*	Kadakas macOS bundle files	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+web/index.html	Kadakas web page	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-script-js/c/prelude.js	Script engine prelude	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-l10n/locales/**	Kadakas translations	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-ui-core/profiles/*	Kadakas workspace profiles	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-plants/src/sample_catalog.csv	Plant sample catalog	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-launcher/trusted-keys.txt	Update manifest public keys	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-plugin/tests/fixtures/**	Plug-in test modules	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	ships
+crates/kadakas-api/tests/data/*.kad	Container golden files	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-core/tests/command_schema.json	Command schema snapshot	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-io/tests/fixtures/dxf_public_*.json	Public DXF corpus counts and hashes	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-io/tests/fixtures/dxf_iop27.json	IOP-27 DXF facts from the ezdxf reader	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/data/dxf-own/*	Own DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/data/*.py	DXF test data scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/fixtures/ifc/*.ifc	Hand written IFC test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/fixtures/messy/*	Messy DXF test corpus	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/fixtures/parking_lot*.dxf	Parking lot DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/fixtures/make_parking_lot*.py	Parking lot DXF scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/gltf_validate.js	glTF validation script	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+docs/scripts/*.js	Example generator scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+docs/icons.html	Icon gallery	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-render/testdata/red_blue.jpg	Test picture red_blue.jpg (16x16, made by an agent with Python and sips)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tests/behavior/fixtures/make_survey.py	Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf)	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test

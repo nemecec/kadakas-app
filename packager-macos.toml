@@ -18,7 +18,7 @@ identifier = "net.kadakas.Kadakas"
 version = "0.1.0"
 description = "CAD for landscape architects"
 authors = ["The Kadakas authors"]
-homepage = "https://github.com/kadakas/kadakas"
+homepage = "https://github.com/nemecec/kadakas-app"
 license-file = "LICENSE-APACHE"
 category = "Graphics and Design"
 

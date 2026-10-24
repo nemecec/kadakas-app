@@ -158,35 +158,35 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | GDAL public sample files (MIT-style general terms, verified in LICENSE.TXT at the pinned commit 739fcf03, terms of single files not verified) | `ext:gdal-public-dxf` | OSGeo and contributors | MIT | https://github.com/OSGeo/gdal | test |
 | buildingSMART BCF schemas | `tests/behavior/bcf_schemas/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML | test |
 | buildingSMART BCF 2.1 test files | `tests/behavior/bcf_cases/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML | test |
-| Kadakas icons | `assets/icons/kadakas/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas modeler icons | `assets/icons/modeler/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas application icons | `packaging/icons/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas macOS bundle files | `packaging/macos/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas web page | `web/index.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Script engine prelude | `crates/kadakas-script-js/c/prelude.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas translations | `crates/kadakas-l10n/locales/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Kadakas workspace profiles | `crates/kadakas-ui-core/profiles/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Plant sample catalog | `crates/kadakas-plants/src/sample_catalog.csv` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Update manifest public keys | `crates/kadakas-launcher/trusted-keys.txt` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Plug-in test modules | `crates/kadakas-plugin/tests/fixtures/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | ships |
-| Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| IOP-27 DXF facts from the ezdxf reader | `crates/kadakas-io/tests/fixtures/dxf_iop27.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Messy DXF test corpus | `tests/behavior/fixtures/messy/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Parking lot DXF test files | `tests/behavior/fixtures/parking_lot*.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Parking lot DXF scripts | `tests/behavior/fixtures/make_parking_lot*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| glTF validation script | `tests/behavior/gltf_validate.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Icon gallery | `docs/icons.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Test picture red_blue.jpg (16x16, made by an agent with Python and sips) | `crates/kadakas-render/testdata/red_blue.jpg` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Test file site.dxf (written by an agent) | `crates/kadakas-io/tests/fixtures/site.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Test file trees.geojson (written by an agent) | `crates/kadakas-io/tests/fixtures/trees.geojson` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py) | `tests/behavior/fixtures/survey_rev?.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf) | `tests/behavior/fixtures/make_survey.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Kadakas icons | `assets/icons/kadakas/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas modeler icons | `assets/icons/modeler/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas application icons | `packaging/icons/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas macOS bundle files | `packaging/macos/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas web page | `web/index.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Script engine prelude | `crates/kadakas-script-js/c/prelude.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas translations | `crates/kadakas-l10n/locales/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Kadakas workspace profiles | `crates/kadakas-ui-core/profiles/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Plant sample catalog | `crates/kadakas-plants/src/sample_catalog.csv` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Update manifest public keys | `crates/kadakas-launcher/trusted-keys.txt` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Plug-in test modules | `crates/kadakas-plugin/tests/fixtures/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | ships |
+| Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| IOP-27 DXF facts from the ezdxf reader | `crates/kadakas-io/tests/fixtures/dxf_iop27.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Messy DXF test corpus | `tests/behavior/fixtures/messy/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Parking lot DXF test files | `tests/behavior/fixtures/parking_lot*.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Parking lot DXF scripts | `tests/behavior/fixtures/make_parking_lot*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| glTF validation script | `tests/behavior/gltf_validate.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Icon gallery | `docs/icons.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Test picture red_blue.jpg (16x16, made by an agent with Python and sips) | `crates/kadakas-render/testdata/red_blue.jpg` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Test file site.dxf (written by an agent) | `crates/kadakas-io/tests/fixtures/site.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Test file trees.geojson (written by an agent) | `crates/kadakas-io/tests/fixtures/trees.geojson` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py) | `tests/behavior/fixtures/survey_rev?.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf) | `tests/behavior/fixtures/make_survey.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 
 ## Keep this page current
 

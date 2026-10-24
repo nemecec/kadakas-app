@@ -38,7 +38,7 @@ const TRUSTED_KEYS: &str = include_str!("../trusted-keys.txt");
 /// to the release `update-manifests`. The variable `KADAKAS_UPDATE_URL` replaces this folder
 /// address (for tests). A changed address does not weaken the check: the signature still has to match.
 const DEFAULT_MANIFEST_BASE: &str =
-    "https://github.com/kadakas/kadakas/releases/download/update-manifests";
+    "https://github.com/nemecec/kadakas-app/releases/download/update-manifests";
 
 /// The version that the installer put next to the launcher, if the app is there. On Windows and
 /// Linux the program `kadakas-app` is next to the launcher. On macOS the launcher is the main

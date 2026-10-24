@@ -6,7 +6,7 @@ members = ["crates/*", "scripts/sign-manifest"]
 edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/kadakas/kadakas"
+repository = "https://github.com/nemecec/kadakas-app"
 version = "0.1.0"
 
 # Keep build folders small: line tables for our code, no debug info for dependencies.
