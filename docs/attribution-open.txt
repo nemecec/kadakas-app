@@ -1,0 +1,7 @@
+# Rows of docs/attribution-assets.tsv with the licence UNKNOWN. One path per line, as in the table.
+# The check prints a warning for each line and stays green. Fix the row, then remove its line here.
+# A line without a matching UNKNOWN row fails the check.
+crates/kadakas-render/testdata/red_blue.jpg
+crates/kadakas-io/tests/fixtures/site.dxf
+crates/kadakas-io/tests/fixtures/trees.geojson
+tests/behavior/fixtures/survey_rev?.dxf

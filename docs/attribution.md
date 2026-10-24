@@ -130,9 +130,53 @@ These tools build, test or check Kadakas. They are not part of the installers.
 - `crates/kadakas-io/tests/fixtures/dxf_public_counts.json` is derived from those files with the ezdxf reader (`tests/data/make_public_counts.py`): counts of entities, layouts and viewports, short MTEXT strings, and points on splines. It holds numbers and short strings, no drawing.
 - The files in `tests/data/dxf-own/` are our own work (`tests/data/make_own_files.py`), under the project license.
 
+## Asset list (checked by CI)
+
+The table below is the same list as `docs/attribution-assets.tsv`. The script `scripts/check-attribution.sh` fails when a file, a row or a licence id does not fit. Make the table with `scripts/check-attribution.sh --table`. Own work has the author "Kadakas project". Rows with the licence UNKNOWN wait for a decision. They are listed in `docs/attribution-open.txt`. A path that starts with `crate:` is data inside a Cargo crate. A path that starts with `ext:` is data that is not in the repository.
+
+| Item | Path | Author | Licence | Source |
+|---|---|---|---|---|
+| Tabler Icons | `assets/icons/tabler/**` | Paweł Kuna | MIT | https://tabler.io/icons |
+| quickjs-ng | `crates/kadakas-script-js/quickjs/**` | Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé | MIT | https://github.com/quickjs-ng/quickjs |
+| ezdxf | `crates/kadakas-io/src/dxf/aci.rs` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf |
+| Ubuntu-Light | `crate:epaint_default_fonts` | Canonical Ltd. | Ubuntu-font-1.0 | https://design.ubuntu.com/font |
+| Hack | `crate:epaint_default_fonts` | Source Foundry Authors | MIT | https://sourcefoundry.org/hack/ |
+| Noto Emoji | `crate:epaint_default_fonts` | Google Inc. | OFL-1.1 | https://github.com/googlefonts/noto-emoji |
+| emoji-icon-font | `crate:epaint_default_fonts` | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font |
+| EPSG Geodetic Parameter Dataset | `crate:crs-definitions` | IOGP | CC0-1.0 | https://epsg.org |
+| GeographicLib geodesic routines | `crate:proj4rs-geodesic` | Charles Karney | MIT | https://geographiclib.sourceforge.io/ |
+| wasi-libc | `ext:wasi-libc` | WebAssembly community and contributors | Apache-2.0 WITH LLVM-exception | https://github.com/WebAssembly/wasi-libc |
+| ezdxf public sample files | `ext:ezdxf-public-dxf` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf |
+| GDAL public sample files | `ext:gdal-public-dxf` | OSGeo and contributors | MIT | https://github.com/OSGeo/gdal |
+| buildingSMART BCF schemas | `tests/behavior/bcf_schemas/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML |
+| buildingSMART BCF 2.1 test files | `tests/behavior/bcf_cases/**` | buildingSMART International Ltd. | CC-BY-ND-4.0 | https://github.com/buildingSMART/BCF-XML |
+| Kadakas icons | `assets/icons/kadakas/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Kadakas modeler icons | `assets/icons/modeler/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Kadakas application icons | `packaging/icons/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Kadakas macOS bundle files | `packaging/macos/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Kadakas translations | `crates/kadakas-l10n/locales/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Kadakas workspace profiles | `crates/kadakas-ui-core/profiles/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Plant sample catalog | `crates/kadakas-plants/src/sample_catalog.csv` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Update manifest public keys | `crates/kadakas-launcher/trusted-keys.txt` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Plug-in test modules | `crates/kadakas-plugin/tests/fixtures/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Messy DXF test corpus | `tests/behavior/fixtures/messy/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Parking lot DXF test files | `tests/behavior/fixtures/parking_lot*.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Parking lot DXF scripts | `tests/behavior/fixtures/make_parking_lot*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas |
+| Test picture red_blue.jpg | `crates/kadakas-render/testdata/red_blue.jpg` | UNKNOWN | UNKNOWN | UNKNOWN |
+| Test file site.dxf | `crates/kadakas-io/tests/fixtures/site.dxf` | UNKNOWN | UNKNOWN | UNKNOWN |
+| Test file trees.geojson | `crates/kadakas-io/tests/fixtures/trees.geojson` | UNKNOWN | UNKNOWN | UNKNOWN |
+| Test files survey_rev1.dxf and survey_rev2.dxf | `tests/behavior/fixtures/survey_rev?.dxf` | UNKNOWN | UNKNOWN | UNKNOWN |
+
 ## Keep this page current
 
-Every new dependency, asset, dataset or cited formula changes this page. For a crate, run `scripts/notices.sh`. For anything else, edit `docs/notices-extra.txt` too.
+Every new dependency, asset, dataset or cited formula changes this page. For a crate, run `scripts/notices.sh`. For anything else, add a row to `docs/attribution-assets.tsv`, run `scripts/check-attribution.sh --table` and edit `docs/notices-extra.txt` too.
 
 ## Crash reports (PLAT-20, `kadakas-crash`)
 

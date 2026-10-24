@@ -1,0 +1,12 @@
+# Licence ids (SPDX) for docs/attribution-assets.tsv. One id per line.
+# An expression such as "Apache-2.0 OR MIT" is split at OR, AND and WITH. Each part is in this list.
+# Add an id only after you read the licence text and ship the notice that it asks for.
+Apache-2.0
+MIT
+BSD-2-Clause
+BSD-3-Clause
+CC0-1.0
+CC-BY-ND-4.0
+OFL-1.1
+Ubuntu-font-1.0
+LLVM-exception
