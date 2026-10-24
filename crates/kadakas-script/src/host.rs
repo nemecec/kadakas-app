@@ -384,7 +384,8 @@ impl ScriptHost {
     }
 }
 
-#[cfg(test)]
+// The tests run shell scripts (`sh`), so they are for Unix.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::Duration;

@@ -204,7 +204,8 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
 /// How long we wait for the output readers after the process has ended.
 const READER_GRACE: Duration = Duration::from_millis(500);
 
-#[cfg(test)]
+// The tests run shell scripts (`sh`), so they are for Unix.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
