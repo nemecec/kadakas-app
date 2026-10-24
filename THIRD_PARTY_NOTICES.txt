@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-459 crates: MIT License
+462 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -28,20 +28,20 @@ LICENSE TEXTS
 Apache License 2.0
 --------------------------------------------------------------------------------
 Used by:
-  - cranelift-bforest 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-codegen-meta 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-codegen-shared 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-codegen 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-control 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-entity 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-frontend 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-native 0.136.3 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-bforest 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-codegen-meta 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-codegen-shared 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-codegen 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-control 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-entity 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-frontend 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-native 0.136.4 (https://github.com/bytecodealliance/wasmtime)
   - regalloc2 0.15.2 (https://github.com/bytecodealliance/regalloc2)
   - target-lexicon 0.13.5 (https://github.com/bytecodealliance/target-lexicon)
-  - wasmtime-environ 49.0.3 (https://github.com/bytecodealliance/wasmtime)
-  - wasmtime-internal-cranelift 49.0.3 (https://github.com/bytecodealliance/wasmtime)
-  - wasmtime-internal-unwinder 49.0.3 (https://github.com/bytecodealliance/wasmtime)
-  - wasmtime 49.0.3 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-environ 49.0.4 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-internal-cranelift 49.0.4 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-internal-unwinder 49.0.4 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime 49.0.4 (https://github.com/bytecodealliance/wasmtime)
 
 
                                  Apache License
@@ -1808,22 +1808,22 @@ Apache License 2.0
 Used by:
   - ab_glyph 0.2.32 (https://github.com/alexheretic/ab-glyph)
   - ab_glyph_rasterizer 0.1.10 (https://github.com/alexheretic/ab-glyph)
-  - cranelift-assembler-x64-meta 0.136.3
-  - cranelift-assembler-x64 0.136.3
-  - cranelift-bitset 0.136.3 (https://github.com/bytecodealliance/wasmtime)
-  - cranelift-isle 0.136.3 (https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle)
-  - cranelift-srcgen 0.136.3 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-assembler-x64-meta 0.136.4
+  - cranelift-assembler-x64 0.136.4
+  - cranelift-bitset 0.136.4 (https://github.com/bytecodealliance/wasmtime)
+  - cranelift-isle 0.136.4 (https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle)
+  - cranelift-srcgen 0.136.4 (https://github.com/bytecodealliance/wasmtime)
   - gl_generator 0.14.0 (https://github.com/brendanzab/gl-rs/)
   - khronos_api 3.1.0 (https://github.com/brendanzab/gl-rs/)
   - owned_ttf_parser 0.25.1 (https://github.com/alexheretic/owned-ttf-parser)
-  - pulley-interpreter 49.0.3 (https://github.com/bytecodealliance/wasmtime/tree/main/pulley)
-  - pulley-macros 49.0.3 (https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros)
+  - pulley-interpreter 49.0.4 (https://github.com/bytecodealliance/wasmtime/tree/main/pulley)
+  - pulley-macros 49.0.4 (https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros)
   - ryu 1.0.23 (https://github.com/dtolnay/ryu)
   - spirv 0.4.0+sdk-1.4.341.0 (https://github.com/gfx-rs/rspirv)
-  - wasmtime-internal-component-util 49.0.3 (https://github.com/bytecodealliance/wasmtime)
-  - wasmtime-internal-core 49.0.3
-  - wasmtime-internal-jit-icache-coherence 49.0.3 (https://github.com/bytecodealliance/wasmtime)
-  - wasmtime-internal-versioned-export-macros 49.0.3 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-internal-component-util 49.0.4 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-internal-core 49.0.4
+  - wasmtime-internal-jit-icache-coherence 49.0.4 (https://github.com/bytecodealliance/wasmtime)
+  - wasmtime-internal-versioned-export-macros 49.0.4 (https://github.com/bytecodealliance/wasmtime)
 
 Apache License
 Version 2.0, January 2004
@@ -2341,7 +2341,7 @@ express Statement of Purpose.
 Community Data License Agreement Permissive 2.0
 --------------------------------------------------------------------------------
 Used by:
-  - webpki-roots 1.0.9 (https://github.com/rustls/webpki-roots)
+  - webpki-roots 1.0.10 (https://github.com/rustls/webpki-roots)
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -2971,7 +2971,7 @@ THIS SOFTWARE.
 ISC License
 --------------------------------------------------------------------------------
 Used by:
-  - rustls-webpki 0.103.15 (https://github.com/rustls/webpki)
+  - rustls-webpki 0.103.16 (https://github.com/rustls/webpki)
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -7459,6 +7459,8 @@ Used by:
   - kadakas-irrigation 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-l10n 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-launcher 0.1.0 (https://github.com/kadakas/kadakas)
+  - kadakas-meshio 0.1.0 (https://github.com/kadakas/kadakas)
+  - kadakas-modeler 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-plants 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-plugin 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-plugin-abi 0.1.0 (https://github.com/kadakas/kadakas)
@@ -7473,6 +7475,7 @@ Used by:
   - kadakas-ui-core 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-units 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-update 0.1.0 (https://github.com/kadakas/kadakas)
+  - kadakas-view3d 0.1.0 (https://github.com/kadakas/kadakas)
   - kadakas-x3d 0.1.0 (https://github.com/kadakas/kadakas)
   - accesskit 0.24.1 (https://github.com/AccessKit/accesskit)
   - block2 0.5.1 (https://github.com/madsmtm/objc2)
@@ -9655,6 +9658,17 @@ Drawn for this project from written ideas. They are covered by the project licen
 The application icons in packaging/icons/ are our own work, under the same license.
 
 --------------------------------------------------------------------------------
+compiler-rt builtins (libclang_rt.builtins, LLVM project)
+--------------------------------------------------------------------------------
+Used by: the script engine. When the build finds wasi-runtimes (crates/kadakas-script-js/build.rs), the
+library libclang_rt.builtins.a of the LLVM project is linked into the WebAssembly module of the
+script engine (128 bit arithmetic). https://github.com/llvm/llvm-project (folder compiler-rt)
+
+compiler-rt is part of the LLVM project and is licensed under the Apache License v2.0 with LLVM
+Exceptions. The text of the Apache License 2.0 is part of THIRD_PARTY_NOTICES.txt above. The LLVM
+exceptions are in the entry of wasi-libc.
+
+--------------------------------------------------------------------------------
 ezdxf: the table of the 256 AutoCAD colors and the table of hatch patterns (MIT)
 --------------------------------------------------------------------------------
 Used by: crates/kadakas-io/src/dxf/aci.rs and crates/kadakas-io/src/dxf/hatch/std_patterns.txt
@@ -9662,7 +9676,9 @@ Used by: crates/kadakas-io/src/dxf/aci.rs and crates/kadakas-io/src/dxf/hatch/st
 The colors 1 to 248 of the AutoCAD Color Index in the first file are the values of the table in the
 ezdxf library (https://github.com/mozman/ezdxf). The second file holds the lines of 106 standard
 hatch patterns from the metric pattern table of that library (tests/data/make_std_patterns.py
-makes it). Some of the code of the DXF import follows the
+makes it). ezdxf says that the table was collected from various DXF files. The numbers are generic
+line-family definitions. The table is one separate file, so it can be removed in one step. Some of the
+code of the DXF import follows the
 way that ezdxf reads a WIPEOUT outline, makes uniform knots for a spline without knots, decodes
 caret codes, reads the clip of a block reference and turns a viewport. The code is written for Kadakas. The tests also read public sample files of
 ezdxf and GDAL at run time (they are not part of Kadakas and not shipped).

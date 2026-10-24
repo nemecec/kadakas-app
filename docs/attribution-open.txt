@@ -1,0 +1,8 @@
+# Files that have the licence, source or author UNKNOWN in docs/attribution-assets.tsv.
+# One exact path per line, no globs, no duplicates. The check prints a warning for each line and stays green.
+# Fix the row, then remove its line here. A file of an UNKNOWN row that is not named here fails the check.
+crates/kadakas-render/testdata/red_blue.jpg
+crates/kadakas-io/tests/fixtures/site.dxf
+crates/kadakas-io/tests/fixtures/trees.geojson
+tests/behavior/fixtures/survey_rev1.dxf
+tests/behavior/fixtures/survey_rev2.dxf
