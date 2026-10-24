@@ -252,3 +252,13 @@ Facts are from 2026-10-24. The clone is shallow with one commit, so history and 
 - Own the name and the domain with a legal entity before launch. SolidCraft changed its repo name and feed addresses three times.
 - Watch the unofficial paid hosting around SolidCraft. A third party sells the hosted service while the project does not. Plan trademark rules for Kadakas.
 - Fund through sponsors and a paid collab server. A paid server fits the separate repo plan and keeps the client free.
+
+### Update: the official page and the paid service
+
+- The official page is https://solidcraft.io/. Its footer says "© Tangency Labs" and "Independent open-source software".
+- The official page names no funding, no paid product, no account and no sharing feature. It links to a free browser version at solidcraft.io/app.
+- The official page says SolidCore is a Rust port of NVIDIA's open-source SMLib. NVIDIA does not run the project. The licence of SMLib is not checked here. Check it before any reuse of the kernel code.
+- The paid service is PartBatch, at https://solidcraft.pro/online/pricing/. The pricing page says it is "an independent, unofficial service run by solidcraft.pro" and is "not affiliated with or endorsed by the SolidCraft project or Tangency Labs". It names no company.
+- PartBatch prices (one time, no subscription): free up to 3 variants per batch. A single batch of up to 50 variants costs 2.99 USD. Ten batches of up to 200 variants cost 8.99 USD. Fifty batches cost 24.99 USD.
+- Credits do not expire. Refunds are possible within 14 days. Payment goes through a merchant of record (Creem or Waffo). Credits belong to a Google account.
+- Sources: the two pages above, read on 2026-10-24.
