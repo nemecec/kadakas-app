@@ -162,7 +162,7 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | LEADER | An open polyline. The arrowhead is not drawn. |
 | DIMENSION, ARC_DIMENSION, ACAD_TABLE | The lines and text of the anonymous block. Without the block the entity is reported. The definition points on the layer `Defpoints` are reported. |
 | SPLINE, ELLIPSE | Polylines within the tolerance. A note counts them. A spline without knots gets uniform knots, as in the ezdxf reader. |
-| Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). TEXT, MTEXT and INSERT in a tilted plane are reported. |
+| Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). A TEXT, ATTRIB or MTEXT in a tilted plane is placed flat by its projection, and a block reference in a tilted plane is placed in 3D (IOP-27, see Tilted planes). |
 | IMAGE, 3DSOLID, BODY, REGION, SURFACE, MLEADER, XLINE, RAY, MLINE, OLE2FRAME, XREF | Reported by name with the reason. An IMAGE names its file, an XREF its path. |
 | XCLIP of a block reference | The geometry of the block is cut by the polygon of the clip (IOP-27, see Block clips). |
 | Transparency | Not applied. A note counts them. |
@@ -209,6 +209,21 @@ A block reference with a clip (XCLIP) has an extension dictionary. It leads to a
 - A clip that is switched off (code 71 is 0), or that cannot be read, shows the whole block. A note counts them.
 - A front or back clip plane (3D) is not applied. Only the polygon is. A note counts them.
 - The clip is in the plane. A 3D polyline is cut by its plan, and its height is interpolated.
+
+### Tilted planes (IOP-27)
+
+An entity lies in a plane when its extrusion direction (codes 210, 220 and 230) is not straight up or down. The axes of the plane come from the arbitrary axis algorithm of the DXF reference.
+
+- A block reference in a tilted plane is placed in 3D. The turn, the scale and the insertion point apply in the plane. The point of the insertion is the pivot of the tilt.
+- Lines, polylines, circles and arcs of the block become 3D polylines. Curves are cut within the tolerance. 3D polylines, points and meshes move in 3D.
+- A fill cannot lie in a tilted plane. The shape keeps its outline, and a note counts the fills that were lost. The white islands of hatches are left out and counted.
+- Nested references work. A tilted reference inside a block that turns or scales is tilted inside the block first.
+- An object of Kadakas has no work plane. A text has a point, a height and a turn on the drawing plane, and a symbol has the same. So a text in a tilted plane is placed flat by its projection onto the drawing plane.
+- The point of the text is the projected point. The turn is the turn of the projected baseline. The height is the height times the length of the projected height vector. A plane tilted by 60 degrees gives half the height.
+- A plane that stands nearly upright (a wall) would give a height of nothing. Then the text keeps its full height, and the turn follows the wall.
+- A plane that is seen from the back would mirror the text. A text cannot be mirrored, so the text is placed as it is and a note counts it.
+- A note counts the texts, the texts on upright planes and the texts seen from the back. The loss is the 3D position of the text. The export writes the text flat.
+- A block reference whose container cannot be inverted (a scale of 0) is skipped with that reason.
 
 ### The report
 
@@ -260,7 +275,6 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 - A hatch in a tilted plane has no fill, only its boundary as 3D polylines.
 - A pattern hatch with an associative boundary (code 330 to the entities) loses the association. The boundary becomes polylines.
 - A viewport with a twist keeps no twist.
-- TEXT, MTEXT and INSERT in a tilted plane are reported and not placed.
 - The releases 2013 and 2018 of the export are not opened in a CAD program. Release 12 is not opened in LibreCAD or a laser program by hand.
 - An import of a very large drawing is slow in the editor, because the batch of a few hundred thousand commands runs in quadratic time. The import itself is linear.
 

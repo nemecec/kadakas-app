@@ -22,6 +22,7 @@ mod clip;
 mod extra;
 mod hatch;
 mod paper;
+mod tilt;
 mod tilted;
 
 use approx::Tally;
@@ -429,6 +430,7 @@ fn walk(
         depth: 0,
         path: Path::default(),
         clips: Vec::new(),
+        tilt: None,
     };
     // Paper space has its own pass; with the option off, or in an update, it is skipped and counted.
     let paper = opts.paper_space && opts.lineage.is_none() && !w.b.is_probe();
@@ -539,6 +541,8 @@ struct Cx {
     path: Path,
     /// The clips (XCLIP) of the block references that led here, in the drawing (IOP-27).
     clips: Vec<std::rc::Rc<clip::Region>>,
+    /// The tilt of the block references in a tilted plane that led here (IOP-27).
+    tilt: tilt::Chain,
 }
 
 #[derive(Clone)]
@@ -549,6 +553,10 @@ struct Item {
     fill_pen: bool,
     /// The hatch fill of a pattern hatch (IOP-27).
     pattern: Option<kadakas_core::resource::ResourceId>,
+    /// The height of a flat shape in a tilted plane, before the tilt (IOP-27). Without one the shape is at the height of its block.
+    z: Option<f64>,
+    /// The tilt of the plane of the entity itself (a text in a tilted plane), applied before the tilt of the blocks around.
+    tilt: Option<kadakas_core::DAffine3>,
     /// A pen that replaces the one of the entity (a wipeout has none).
     pen: Option<Color>,
     /// Object data. Text keeps its rotation here (`rotation_deg`), because a text shape has none.
@@ -562,6 +570,8 @@ impl Item {
             fill: None,
             fill_pen: false,
             pattern: None,
+            z: None,
+            tilt: None,
             pen: None,
             data: BTreeMap::new(),
         }
@@ -863,6 +873,26 @@ impl Walker<'_> {
                 return;
             }
         }
+        if cx.tilt.is_some() || items.iter().any(|i| i.tilt.is_some()) {
+            let z0 = cx.xf.z(0.0);
+            let tol = self.opts.tolerance;
+            let mut moved = Vec::with_capacity(items.len());
+            for item in items {
+                let map = tilt::combined(item.tilt, &cx.tilt);
+                match map {
+                    Some(m) => moved.extend(tilt::apply(vec![item], &m, z0, tol, &mut self.tally)),
+                    None => moved.push(item),
+                }
+            }
+            items = moved;
+            if items.is_empty() {
+                self.skip_entity(
+                    e,
+                    "a white island of a hatch has no meaning in a tilted plane",
+                );
+                return;
+            }
+        }
         if self.sheet.is_some() {
             items = self.sheet_items(items);
             if items.is_empty() {
@@ -1042,13 +1072,22 @@ impl Walker<'_> {
             self.b.report.skip("INSERT", "blocks are nested too deep");
             return false;
         }
-        let Ok(flip) = ocs_flip(e) else {
-            self.b.report.skip(
-                "INSERT",
-                "tilted extrusion direction: a block in a tilted plane is not placed",
-            );
-            return false;
+        let (flip, own_tilt) = match Plane::of(e) {
+            Plane::Flat { flip } => (flip, None),
+            Plane::Tilted(ocs) => {
+                let Some(map) = tilt::map_of(&cx.xf, &ocs) else {
+                    self.b.report.skip(
+                        "INSERT",
+                        "tilted extrusion direction: the block cannot be placed, because the transform around it cannot be inverted",
+                    );
+                    return false;
+                };
+                (false, Some(map))
+            }
         };
+        if own_tilt.is_some() {
+            self.tally.tilted_blocks += 1;
+        }
         let (sx, sy, sz) = (e.fd(41, 1.0), e.fd(42, 1.0), e.fd(43, 1.0));
         let rot = e.fd(50, 0.0).to_radians();
         let ins = DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0));
@@ -1109,6 +1148,10 @@ impl Walker<'_> {
                     depth: cx.depth + 1,
                     path,
                     clips,
+                    tilt: match own_tilt {
+                        Some(map) => tilt::chain(&cx.tilt, map),
+                        None => cx.tilt.clone(),
+                    },
                 };
                 for sub in &block.entities {
                     self.entity(sub, &inner);
@@ -1433,9 +1476,10 @@ impl Walker<'_> {
                 if e.kind == "ATTDEF" && e.int(70).unwrap_or(0) & 2 == 0 {
                     return Err(extra::reason("ATTDEF").unwrap_or("attribute definition"));
                 }
-                let flip = ocs_flip(e).map_err(
-                    |_| "tilted extrusion direction: text in a tilted plane is not placed",
-                )?;
+                let (flip, ocs) = match Plane::of(e) {
+                    Plane::Flat { flip } => (flip, None),
+                    Plane::Tilted(ocs) => (false, Some(ocs)),
+                };
                 if (e.kind == "ATTRIB" || e.kind == "ATTDEF") && e.int(70).unwrap_or(0) & 1 != 0 {
                     return Err("invisible attribute");
                 }
@@ -1467,6 +1511,15 @@ impl Walker<'_> {
                     DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0))
                 };
                 let p = if mtext { p } else { flipx(p, flip) };
+                // In a tilted plane the text is placed in the plane first and projected after (see `tilt`).
+                // The point of a TEXT is in the OCS. The point and the direction of an MTEXT are in the drawing.
+                let mut elevation = e.fd(30, 0.0);
+                let mut p = p;
+                if let (Some(o), true) = (&ocs, mtext) {
+                    let w = DVec3::new(e.fd(10, 0.0), e.fd(20, 0.0), e.fd(30, 0.0));
+                    p = DVec2::new(o.x.dot(w), o.y.dot(w));
+                    elevation = o.z.dot(w);
+                }
                 let height = e
                     .f(40)
                     .filter(|h| *h > 0.0)
@@ -1475,7 +1528,17 @@ impl Walker<'_> {
                 // Direction of the baseline: MTEXT has a vector (11, 21) or an angle in radians, TEXT degrees.
                 let dir = if mtext {
                     match (e.f(11), e.f(21)) {
-                        (Some(x), Some(y)) if x != 0.0 || y != 0.0 => DVec2::new(x, y).normalize(),
+                        (Some(x), Some(y))
+                            if x != 0.0 || y != 0.0 || (ocs.is_some() && e.fd(31, 0.0) != 0.0) =>
+                        {
+                            let w = DVec3::new(x, y, e.fd(31, 0.0));
+                            match &ocs {
+                                Some(o) => {
+                                    DVec2::new(o.x.dot(w), o.y.dot(w)).normalize_or(DVec2::X)
+                                }
+                                None => DVec2::new(x, y).normalize(),
+                            }
+                        }
                         _ => DVec2::from_angle(e.fd(50, 0.0)),
                     }
                 } else {
@@ -1487,6 +1550,12 @@ impl Walker<'_> {
                     text,
                     height,
                 });
+                if let Some(o) = &ocs {
+                    item.tilt = Some(tilt::map_of(xf, o).ok_or(
+                        "tilted extrusion direction: the text cannot be placed, because the transform around it cannot be inverted",
+                    )?);
+                    item.z = Some(xf.z(elevation));
+                }
                 let deg = dir.y.atan2(dir.x).to_degrees();
                 if deg.is_finite() && deg.abs() > 1e-9 {
                     let deg = (deg * 1e6).round() / 1e6;
@@ -1713,16 +1782,6 @@ fn world3(xf: &Xf, p: DVec3) -> DVec3 {
 
 fn flipx(p: DVec2, flip: bool) -> DVec2 {
     if flip { DVec2::new(-p.x, p.y) } else { p }
-}
-
-/// Whether OCS X must be mirrored: the extrusion direction is -Z. Other directions are an error.
-fn ocs_flip(e: &Entity) -> Result<bool, ()> {
-    let n = e.normal();
-    if n[0].abs() < 1e-9 && n[1].abs() < 1e-9 {
-        Ok(n[2] < 0.0)
-    } else {
-        Err(())
-    }
 }
 
 fn drop_closing(mut pts: Vec<DVec2>) -> Vec<DVec2> {
@@ -2599,9 +2658,9 @@ mod tests {
 0\nINSERT\n2\nB\n210\n1\n220\n1\n230\n0\n\
 0\nINSERT\n2\nB\n230\n-1\n10\n5\n20\n0\n";
         let (doc, report) = run(&dxf_text("", "", blocks, ents), &ImportOptions::default());
-        // 3 shapes + inner point = 4 per insert: 1 + 4 + 1 (flipped) = 6 inserts of 4.
-        assert_eq!(doc.objects.len(), 4 * 6);
-        assert_eq!(report.skipped_total(), 2);
+        // 3 shapes + inner point = 4 per insert: 1 + 4 + 1 (tilted) + 1 (flipped) = 7 inserts of 4.
+        assert_eq!(doc.objects.len(), 4 * 7);
+        assert_eq!(report.skipped_total(), 1);
         let first = &shapes(&doc)[0];
         // Line (10,0)-(20,0) about base (10,0), scale 2, rotate 90 deg, at (100,100).
         assert!(
@@ -2619,7 +2678,7 @@ mod tests {
         // Layer "0" inside a block takes the layer of the insert, other layers stay.
         let site = doc.classes.iter().find(|c| c.name == "Site").unwrap().id;
         let fixed = doc.classes.iter().find(|c| c.name == "Fixed").unwrap().id;
-        assert_eq!(doc.objects.values().filter(|o| o.class == fixed).count(), 6);
+        assert_eq!(doc.objects.values().filter(|o| o.class == fixed).count(), 7);
         assert!(doc.objects.values().filter(|o| o.class == site).count() >= 6);
         // The flipped insert mirrors X: the line starts at (5,0) and goes to (-5,0)+...
         let last_line = doc

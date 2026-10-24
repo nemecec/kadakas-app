@@ -336,7 +336,7 @@ fn circles_arcs_and_polylines_in_a_tilted_plane_stand_up() {
     let (ed, rep) = import(doc(ents).as_bytes()).unwrap();
     accounted(&rep);
     let s = shapes_of(&ed);
-    assert_eq!(s.len(), 3);
+    assert_eq!(s.len(), 4);
     let Shape::Polyline3d { points, closed } = &s[0] else {
         panic!()
     };
@@ -353,13 +353,27 @@ fn circles_arcs_and_polylines_in_a_tilted_plane_stand_up() {
         panic!()
     };
     assert!((points[1] - DVec3::new(7.0, 1000.0, 500.0)).length() < 1e-6);
-    // The text is reported: it cannot lie in a tilted plane.
-    let t = rep.skipped.iter().find(|s| s.entity == "TEXT").unwrap();
-    assert!(t.reason.contains("tilted"));
+    // The text stands in the plane x = 0, an upright plane: it keeps its height, and its baseline
+    // (OCS x, the world Y axis) runs along Y.
+    let Shape::Text { text, height, at } = &s[3] else {
+        panic!("{:?}", s[3])
+    };
+    assert_eq!((text.as_str(), *height), ("flat", 5.0));
+    assert!(at.length() < 1e-9);
+    let t = ed.doc().objects.values().nth(3).unwrap();
+    assert_eq!(t.data["rotation_deg"], 90.0);
+    assert!(rep.skipped.is_empty(), "{:?}", rep.skipped);
     assert!(
         rep.notes
             .iter()
             .any(|n| n.contains("3 entities in a tilted plane were imported as 3D polylines")),
+        "{:?}",
+        rep.notes
+    );
+    assert!(
+        rep.notes.iter().any(|n| n.contains(
+            "1 text in a tilted plane was placed flat: the point, the turn and the height come from the projection onto the drawing plane. 1 stand in a nearly upright plane and keep their full height"
+        )),
         "{:?}",
         rep.notes
     );

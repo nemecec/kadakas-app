@@ -180,7 +180,7 @@ Rank = chance that a real Vectorworks or AutoCAD file hits it, times the harm. E
 6. Tilted extrusion (OCS) was refused. Real files have 3D rotated blocks and arcs from other programs.
    - Test: GDAL `ocs2wcs1.dxf`, `ocs2wcs2.dxf`, `ocs2wcs3.dxf`, `LWPOLYLINE-OCS.dxf` and `ellipse_z_extrusion_minus_1.dxf`.
    - Import must place geometry at the right 3D position.
-   - Done for circles, arcs, polylines, SOLID, ELLIPSE and the paths of a HATCH, with the arbitrary axis algorithm. TEXT, MTEXT and a block in a tilted plane are reported and not placed.
+   - Done for circles, arcs, polylines, SOLID, ELLIPSE and the paths of a HATCH, with the arbitrary axis algorithm. IOP-27 added the block reference (placed in 3D, checked against `virtual_entities` of ezdxf) and TEXT, ATTRIB and MTEXT (placed flat by their projection).
 7. Paper space and viewports were skipped. Vectorworks puts sheet layers in paper space and the plan in model space, so the model space data survived. Annotations and title blocks were lost.
    - Test: `VP4.dxf` and `viewport_frozen_layers.dxf` (ezdxf).
    - The report must say how many entities were in paper space and the layout names.

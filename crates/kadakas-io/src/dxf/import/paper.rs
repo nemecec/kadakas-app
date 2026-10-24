@@ -240,6 +240,7 @@ impl Walker<'_> {
             depth: 0,
             path: Path::default(),
             clips: Vec::new(),
+            tilt: None,
         };
         // What the sheet needs from the walker: no offset (paper is not shifted), no source tags,
         // and the sheet layer as the target of every object.

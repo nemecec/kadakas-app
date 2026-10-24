@@ -43,6 +43,17 @@ pub(super) struct Tally {
     pub tilted: usize,
     /// Hatches in a tilted plane: their boundaries became 3D polylines without a fill.
     pub tilted_hatches: usize,
+    /// Block references in a tilted plane (IOP-27) and the objects of them that were placed in 3D.
+    pub tilted_blocks: usize,
+    pub tilted_objects: usize,
+    /// Filled shapes in a tilted plane that lost their fill (a fill cannot lie in a tilted plane).
+    pub tilted_fills: usize,
+    /// White islands of hatches in a tilted plane that were left out.
+    pub tilted_islands: usize,
+    /// Texts in a tilted plane, placed flat by their projection. Of those the ones in a nearly upright plane (full height) and the ones seen from the back.
+    pub tilted_texts: usize,
+    pub tilted_texts_upright: usize,
+    pub tilted_texts_back: usize,
     /// WIPEOUT entities (a polygon with a white fill).
     pub wipeouts: usize,
     /// MESH entities with a subdivision level above 0 (imported as the control mesh).
@@ -227,6 +238,79 @@ impl Tally {
                     "3D polylines"
                 }
             ));
+        }
+        if self.tilted_blocks > 0 {
+            let mut text = format!(
+                "{} in a tilted plane: the content is placed in 3D",
+                plural(
+                    self.tilted_blocks,
+                    "block reference lies",
+                    "block references lie"
+                )
+            );
+            if self.tilted_objects > 0 {
+                text += &format!(
+                    ". {} became 3D polylines (curves within {tol} mm), 3D points or moved meshes",
+                    plural(self.tilted_objects, "object", "objects")
+                );
+            }
+            if self.tilted_fills > 0 {
+                text += &format!(
+                    ". {} lost {} because a fill cannot lie in a tilted plane",
+                    plural(self.tilted_fills, "filled shape", "filled shapes"),
+                    if self.tilted_fills == 1 {
+                        "its fill"
+                    } else {
+                        "their fill"
+                    }
+                );
+            }
+            if self.tilted_islands > 0 {
+                text += &format!(
+                    ". {} of hatches {} left out because there is no fill to cut them from",
+                    plural(self.tilted_islands, "island", "islands"),
+                    if self.tilted_islands == 1 {
+                        "was"
+                    } else {
+                        "were"
+                    }
+                );
+            }
+            out.push(text);
+        }
+        if self.tilted_texts > 0 {
+            let mut text = format!(
+                "{} in a tilted plane {} placed flat: the point, the turn and the height come from the projection onto the drawing plane",
+                plural(self.tilted_texts, "text", "texts"),
+                if self.tilted_texts == 1 {
+                    "was"
+                } else {
+                    "were"
+                }
+            );
+            if self.tilted_texts_upright > 0 {
+                text += &format!(
+                    ". {} stand in a nearly upright plane and keep their full height",
+                    self.tilted_texts_upright
+                );
+            }
+            if self.tilted_texts_back > 0 {
+                text += &format!(
+                    ". {} {} seen from the back and {} not mirrored",
+                    self.tilted_texts_back,
+                    if self.tilted_texts_back == 1 {
+                        "is"
+                    } else {
+                        "are"
+                    },
+                    if self.tilted_texts_back == 1 {
+                        "is"
+                    } else {
+                        "are"
+                    }
+                );
+            }
+            out.push(text);
         }
         if self.tilted_hatches > 0 {
             out.push(format!(
