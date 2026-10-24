@@ -870,6 +870,54 @@ pub(crate) mod tests {
         format!("{n}{}", std::env::consts::EXE_SUFFIX)
     }
 
+    /// Writes a program at `path` (the `.exe` ending is the caller's business) that the launch
+    /// tests start in place of the app: it writes `out.txt` in its current folder, one line
+    /// `ARGUMENTS|KADAKAS_VIA_LAUNCHER|KADAKAS_RUN_ID|KADAKAS_PROFILE` (the arguments after the
+    /// program name, joined by spaces). The program is compiled with the `rustc` of the toolchain
+    /// that built the tests (`CARGO` is its cargo), so it runs on every system: a shell script
+    /// would not run on Windows.
+    pub fn write_stub_app(path: &Path) {
+        let src = path.with_extension("stub.rs");
+        std::fs::write(
+            &src,
+            r#"fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    let line = format!(
+        "{}|{}|{}|{}",
+        args.join(" "),
+        var("KADAKAS_VIA_LAUNCHER"),
+        var("KADAKAS_RUN_ID"),
+        var("KADAKAS_PROFILE")
+    );
+    std::fs::write("out.txt", line).unwrap();
+}
+"#,
+        )
+        .unwrap();
+        let rustc = Path::new(env!("CARGO")).with_file_name(exe_name("rustc"));
+        let o = std::process::Command::new(&rustc)
+            .args([
+                "--edition",
+                "2021",
+                "--crate-name",
+                "stub",
+                "-C",
+                "debuginfo=0",
+                "-o",
+            ])
+            .arg(path)
+            .arg(&src)
+            .output()
+            .unwrap_or_else(|e| panic!("cannot run {}: {e}", rustc.display()));
+        assert!(
+            o.status.success(),
+            "the stub app did not compile: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        std::fs::remove_file(&src).unwrap();
+    }
+
     pub fn v(s: &str) -> Version {
         Version::parse(s).unwrap()
     }

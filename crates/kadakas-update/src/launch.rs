@@ -153,8 +153,7 @@ pub fn launch(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Child> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use crate::store::tests::tmp;
+    use crate::store::tests::{exe_name, tmp, write_stub_app};
     use std::ffi::OsStr;
 
     fn flavor() -> Flavor {
@@ -212,19 +211,12 @@ mod tests {
         assert_eq!(c.get_current_dir(), Some(Path::new("/v/1.0.0")));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_program_starts_the_main_app_next_to_it_with_a_file_and_no_run() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tmp("sibling");
-        let app = d.join("kadakas-app");
-        std::fs::write(
-            &app,
-            "#!/bin/sh\necho \"$2 $KADAKAS_VIA_LAUNCHER [$KADAKAS_RUN_ID]\" > out.txt\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let modeler = d.join("kadakas-modeler");
+        let app = d.join(exe_name("kadakas-app"));
+        write_stub_app(&app);
+        let modeler = d.join(exe_name("kadakas-modeler"));
         let files = [OsString::from("/a/b.kad")];
         let mut c = sibling_app_command(&modeler, &files).expect("the app is next to it");
         assert_eq!(c.get_program(), app.as_os_str());
@@ -245,20 +237,21 @@ mod tests {
         let mut child = c.spawn().unwrap();
         assert!(child.wait().unwrap().success());
         let out = std::fs::read_to_string(d.join("out.txt")).unwrap();
-        assert!(out.starts_with("/a/b.kad 1 []"), "{out}");
+        assert_eq!(
+            out, "-- /a/b.kad|1||",
+            "arguments, via the launcher, no run, no profile"
+        );
         // Without the app next to the program there is no command.
         let lone = tmp("sibling-none");
-        assert!(sibling_app_command(&lone.join("kadakas-modeler"), &files).is_none());
+        assert!(sibling_app_command(&lone.join(exe_name("kadakas-modeler")), &files).is_none());
         std::fs::remove_dir_all(&d).unwrap();
         std::fs::remove_dir_all(&lone).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_file_goes_to_a_sibling_program_or_is_refused() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tmp("sibling-open");
-        let exe = d.join("kadakas-app");
+        let exe = d.join(exe_name("kadakas-app"));
         let file = d.join("a.kad");
         // Not installed: refused, nothing starts.
         assert_eq!(
@@ -266,9 +259,7 @@ mod tests {
             Err(SiblingError::Missing)
         );
         assert!(!sibling_exists(&exe, "kadakas-modeler"));
-        let modeler = d.join("kadakas-modeler");
-        std::fs::write(&modeler, "#!/bin/sh\necho \"$2\" > out.txt\n").unwrap();
-        std::fs::set_permissions(&modeler, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_stub_app(&d.join(exe_name("kadakas-modeler")));
         assert!(sibling_exists(&exe, "kadakas-modeler"));
         let c = sibling_command(&exe, "kadakas-modeler", &[file.as_os_str().to_owned()]).unwrap();
         let envs: Vec<_> = c.get_envs().collect();
@@ -278,21 +269,19 @@ mod tests {
             open_in_sibling(None, "", &exe, "kadakas-modeler", &file),
             Ok(Sent::Spawned)
         );
+        // The program runs on its own: wait for the whole of its line.
         let out = d.join("out.txt");
-        for _ in 0..200 {
-            if out.exists() {
+        let want = format!("-- {}|||", file.to_string_lossy());
+        for _ in 0..500 {
+            if std::fs::read_to_string(&out).is_ok_and(|t| t == want) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(
-            std::fs::read_to_string(&out).unwrap().trim(),
-            file.to_string_lossy()
-        );
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), want);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_sibling_that_runs_gets_the_file_as_an_open_request_and_no_second_process() {
         use crate::handshake::{AppLink, ENV_ROOT, ENV_RUN};
@@ -304,7 +293,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        std::fs::write(d.join(&me), "x").unwrap();
+        std::fs::write(d.join(exe_name(&me)), "x").unwrap();
         let root = d.to_string_lossy().into_owned();
         let env = move |k: &str| match k {
             ENV_ROOT => Some(root.clone()),
@@ -314,7 +303,7 @@ mod tests {
         let link = AppLink::from_env(&env).unwrap();
         let _beat = link.start_heartbeat();
         let file = d.join("a.kad");
-        let exe = d.join("kadakas-app");
+        let exe = d.join(exe_name("kadakas-app"));
         assert_eq!(
             open_in_sibling(Some(&d), "2b-2", &exe, &me, &file),
             Ok(Sent::Asked)
@@ -338,23 +327,15 @@ mod tests {
         assert!(launch(Path::new("/v"), &flavor(), "../x").is_err());
     }
 
-    #[cfg(unix)]
     #[test]
     fn launch_runs_the_program() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tmp("launch");
-        let exe = d.join("kadakas-app");
-        std::fs::write(
-            &exe,
-            "#!/bin/sh\necho \"$1 $2 $KADAKAS_PROFILE\" > out.txt\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_stub_app(&d.join(exe_name("kadakas-app")));
         let mut child = launch(&d, &flavor(), "vw").unwrap();
         assert!(child.wait().unwrap().success());
         assert_eq!(
-            std::fs::read_to_string(d.join("out.txt")).unwrap().trim(),
-            "--profile vw vw"
+            std::fs::read_to_string(d.join("out.txt")).unwrap(),
+            "--profile vw|||vw"
         );
         // A missing program is an error.
         let gone = Flavor {

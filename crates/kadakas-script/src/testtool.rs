@@ -11,7 +11,15 @@ pub(crate) fn compile(src: &Path, out: &Path) {
     let rustc =
         Path::new(env!("CARGO")).with_file_name(format!("rustc{}", std::env::consts::EXE_SUFFIX));
     let o = Command::new(&rustc)
-        .args(["--edition", "2021", "-C", "debuginfo=0", "-o"])
+        .args([
+            "--edition",
+            "2021",
+            "--crate-name",
+            "stub",
+            "-C",
+            "debuginfo=0",
+            "-o",
+        ])
         .arg(out)
         .arg(src)
         .output()
