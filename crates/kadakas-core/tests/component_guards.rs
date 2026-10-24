@@ -1200,11 +1200,14 @@ fn many_small_parts_in_several_instances_weld_into_one_model() {
     assert_eq!(faces.iter().sum::<usize>(), 1_000);
 }
 
+const _: () = assert!(6 * component::MAX_EXPLODE_PARTS < component::MAX_EXPLODE_FACES);
+
 #[test]
-#[ignore = "slow in a debug build (7 s in a release build); run it with --ignored"]
-fn thousands_of_small_parts_near_the_limit_weld_into_one_model() {
-    // 3,333 cubes: 19,998 faces, two faces under the limit.
-    let (mut ed, inst) = explode_world(def_parts("cube", 3_333));
+#[ignore = "slow in a debug build (a real weld of 1,999 parts); run it with --ignored"]
+fn thousands_of_small_parts_just_under_the_part_limit_weld_into_one_model() {
+    // 1,999 cubes: 11,994 faces, one part under the limit of parts (2,000). The faces are far
+    // under their own limit (20,000): since the part limit came, it is the one that binds first.
+    let (mut ed, inst) = explode_world(def_parts("cube", component::MAX_EXPLODE_PARTS - 1));
     ed.execute(&Command::Explode { ids: vec![inst] }).unwrap();
     let faces: Vec<usize> = ed
         .doc()
@@ -1215,7 +1218,24 @@ fn thousands_of_small_parts_near_the_limit_weld_into_one_model() {
             _ => None,
         })
         .collect();
-    assert_eq!(faces, vec![19_998]);
+    assert_eq!(faces, vec![6 * (component::MAX_EXPLODE_PARTS - 1)]);
+}
+
+#[test]
+#[ignore = "builds 2,001 cubes; run it with --ignored"]
+fn cubes_over_the_part_limit_are_refused_before_any_work() {
+    // 2,001 cubes are 12,006 faces: the faces are allowed, the parts are not.
+    let (mut ed, inst) = explode_world(def_parts("cube", component::MAX_EXPLODE_PARTS + 1));
+    let (rev, n) = (ed.revision(), ed.doc().objects.len());
+    let e = ed
+        .execute(&Command::Explode { ids: vec![inst] })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("would weld 2,001 parts, the limit is 2,000"),
+        "{e}"
+    );
+    assert_eq!((ed.revision(), ed.doc().objects.len()), (rev, n));
 }
 
 #[test]
