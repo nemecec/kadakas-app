@@ -17,6 +17,8 @@ fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .ok()?;
+    // Shown with `--nocapture` and for a failing test: which adapter (and driver) drew the frame.
+    eprintln!("GPU adapter: {:?}", adapter.get_info());
     pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
@@ -1159,4 +1161,19 @@ fn the_silhouette_of_a_painted_cylinder_shows_no_back_color_on_the_gpu_or_the_cp
         })
         .count();
     assert_eq!(bluish_cpu, 0, "no sliver of the back color on the CPU");
+}
+
+#[test]
+fn the_texture_array_never_has_a_single_layer() {
+    // One layer is a plain 2D texture on the OpenGL backend, and the shader reads an array.
+    let layer = |v: u8| vec![v; (256 * 256 + 128 * 128 + 64 * 64) * 4];
+    let (size, mips, count, data) = array_data(&[layer(7)]);
+    assert_eq!((size, mips, count), (256, 9, 2));
+    assert_eq!(data.len(), 2 * layer(7).len());
+    assert_eq!(data[..layer(7).len()], layer(7)[..]);
+    assert_eq!(data[layer(7).len()..], layer(7)[..]);
+    // More layers stay as they are; none is the white pixel.
+    let (_, _, count, data) = array_data(&[layer(1), layer(2), layer(3)]);
+    assert_eq!((count, data.len()), (3, 3 * layer(1).len()));
+    assert_eq!(array_data(&[]), (1, 1, 2, vec![255; 8]));
 }
