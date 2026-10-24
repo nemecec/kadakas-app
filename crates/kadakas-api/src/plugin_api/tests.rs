@@ -814,6 +814,8 @@ fn downloaded(spy: &Spy) -> (Session, kadakas_core::uid::Uid, kadakas_core::uid:
     (s, def, g)
 }
 
+// The spy is a shell script, so the test needs a Unix shell.
+#[cfg(unix)]
 #[test]
 fn an_untrusted_definition_never_starts_python() {
     let spy = Spy::new("paths");

@@ -529,25 +529,39 @@ fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGrou
 
 /// A 1 by 1 white texture array, for scenes without textures.
 fn dummy_array(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
-    array_view(device, queue, &[], 1)
+    array_view(device, queue, &[])
+}
+
+/// The array has at least this many layers. The shader reads it as `texture_2d_array`. On the
+/// OpenGL backend a 2D texture with one layer is a plain `GL_TEXTURE_2D`, and a newer Mesa (25.2,
+/// the driver of the Linux CI runner) returns black when a `sampler2DArray` reads it: the first
+/// textured material would show black. So a lone layer gets a second one, a copy.
+const MIN_ARRAY_LAYERS: u32 = 2;
+
+/// The size, the number of mip levels, the number of layers and the bytes of the texture array:
+/// layers of `LAYER_SIZE` pixels with a full mip chain, padded to `MIN_ARRAY_LAYERS`. With no
+/// layers, white 1 by 1 pixels.
+fn array_data(layers: &[Vec<u8>]) -> (u32, u32, u32, Vec<u8>) {
+    let Some(last) = layers.last() else {
+        return (
+            1,
+            1,
+            MIN_ARRAY_LAYERS,
+            vec![255u8; 4 * MIN_ARRAY_LAYERS as usize],
+        );
+    };
+    let mut data: Vec<u8> = layers.iter().flatten().copied().collect();
+    let mut count = layers.len() as u32;
+    while count < MIN_ARRAY_LAYERS {
+        data.extend_from_slice(last);
+        count += 1;
+    }
+    (LAYER_SIZE, LAYER_SIZE.ilog2() + 1, count, data)
 }
 
 /// Uploads layers of `LAYER_SIZE` pixels with a full mip chain. With no layers, a white 1 by 1 one.
-fn array_view(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    layers: &[Vec<u8>],
-    count: u32,
-) -> wgpu::TextureView {
-    let (size, mips, data) = if layers.is_empty() {
-        (1, 1, vec![255u8; 4])
-    } else {
-        (
-            LAYER_SIZE,
-            LAYER_SIZE.ilog2() + 1,
-            layers.iter().flatten().copied().collect::<Vec<u8>>(),
-        )
-    };
+fn array_view(device: &wgpu::Device, queue: &wgpu::Queue, layers: &[Vec<u8>]) -> wgpu::TextureView {
+    let (size, mips, count, data) = array_data(layers);
     let texture = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
@@ -555,7 +569,7 @@ fn array_view(
             size: wgpu::Extent3d {
                 width: size,
                 height: size,
-                depth_or_array_layers: count.max(1),
+                depth_or_array_layers: count,
             },
             mip_level_count: mips,
             sample_count: 1,
@@ -1124,7 +1138,7 @@ impl Gpu3d {
         self.tex_view = if layers.is_empty() {
             dummy_array(device, queue)
         } else {
-            array_view(device, queue, &layers, layers.len() as u32)
+            array_view(device, queue, &layers)
         };
         self.rebuild_group(device);
     }

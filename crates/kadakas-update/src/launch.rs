@@ -153,6 +153,7 @@ pub fn launch(dir: &Path, flavor: &Flavor, profile: &str) -> Result<Child> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::store::tests::tmp;
     use std::ffi::OsStr;
 

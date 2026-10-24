@@ -319,7 +319,10 @@ fn sizes(var: &str, default: &[usize]) -> Vec<usize> {
 #[test]
 #[ignore = "timing test: run in release mode"]
 fn the_table_of_versions() {
-    let objects = sizes("KADAKAS_BENCH_OBJECTS", &[1_000, 10_000, 100_000]);
+    // PERF_SIZES (as for the other perf tests, and as the `perf` job of CI sets it) keeps the table
+    // short: the full table with 100,000 objects takes more than 10 minutes.
+    let perf = sizes("PERF_SIZES", &[1_000, 10_000, 100_000]);
+    let objects = sizes("KADAKAS_BENCH_OBJECTS", &perf);
     let versions = sizes("KADAKAS_BENCH_VERSIONS", &[10, 100, 1_000]);
     let mut rows = Vec::new();
     for &o in &objects {
