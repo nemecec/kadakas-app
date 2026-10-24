@@ -187,6 +187,9 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | Test file trees.geojson (written by an agent) | `crates/kadakas-io/tests/fixtures/trees.geojson` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 | Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py) | `tests/behavior/fixtures/survey_rev?.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 | Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf) | `tests/behavior/fixtures/make_survey.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Own STEP test files and their generator | `tests/data/step/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| CadQuery STEP sample (red cube, blue cylinder) | `ext:cadquery-public-step` | CadQuery contributors | Apache-2.0 | https://github.com/CadQuery/cadquery | test |
+| OpenCascade reference check for STEP tests | `tests/behavior/step_occ_check.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 
 ## Keep this page current
 
