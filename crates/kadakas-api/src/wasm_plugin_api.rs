@@ -271,6 +271,10 @@ fn list(s: &Session) -> Value {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_module(path: &std::path::Path, max: usize) -> Result<Vec<u8>, RpcError> {
     use std::io::Read;
+    // A directory cannot be opened as a file on Windows (access denied), so look at the path first.
+    if !std::fs::metadata(path).map_err(app)?.is_file() {
+        return Err(bad(format!("{} is not a file", path.display())));
+    }
     let file = std::fs::File::open(path).map_err(app)?;
     if !file.metadata().map_err(app)?.is_file() {
         return Err(bad(format!("{} is not a file", path.display())));
