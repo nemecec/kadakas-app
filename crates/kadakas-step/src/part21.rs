@@ -621,6 +621,9 @@ pub fn parse(text: &str) -> Result<StepFile, String> {
         if p.s[p.i..].starts_with("ENDSEC;") {
             break;
         }
+        if p.i >= p.s.len() {
+            return Err("unexpected end of file: ENDSEC is missing".into());
+        }
         if entities.len() >= MAX_ENTITIES {
             return Err(format!("the file has more than {MAX_ENTITIES} entities"));
         }

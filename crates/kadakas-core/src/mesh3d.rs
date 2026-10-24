@@ -163,6 +163,7 @@ impl Mesh3d {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exact::Surface;
 
     fn tetra() -> Mesh3d {
         Mesh3d {
@@ -200,5 +201,85 @@ mod tests {
         let m = tetra();
         let s = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<Mesh3d>(&s).unwrap(), m);
+    }
+
+    fn with_exact() -> Mesh3d {
+        use crate::exact::{ExactEdge, ExactFace, ExactLoop, ExactShell, LoopItem, Surface};
+        let mut m = tetra();
+        let solid = ExactSolid {
+            version: exact::VERSION,
+            product: "T".into(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: m.vertices.clone(),
+            edges: vec![ExactEdge { curve: None, start: 0, end: 1, same_sense: true }],
+            shells: vec![ExactShell { closed: true, outward: None }],
+            faces: vec![ExactFace {
+                shell: 0,
+                surface: Some(Surface::Cylinder { f: DAffine3::IDENTITY, r: 2.0 }),
+                same_sense: true,
+                flip: false,
+                loops: vec![ExactLoop { outer: true, items: vec![LoopItem::Edge { edge: 0, forward: true }] }],
+                color: None,
+                source: 0,
+            }],
+            mesh_hash: 0,
+            extra: Default::default(),
+        };
+        m.set_exact(solid);
+        m
+    }
+
+    #[test]
+    fn the_exact_data_follows_moves_and_turns_and_goes_stale_on_edits() {
+        use crate::exact::State;
+        let mut m = with_exact();
+        assert_eq!(m.exact_state(), Some(State::Fresh));
+        assert!(m.problem().is_none());
+        m.translate_xy(DVec2::new(10.0, -5.0));
+        assert_eq!(m.exact_state(), Some(State::Fresh));
+        assert_eq!(m.exact.as_ref().unwrap().vertices[1], m.vertices[1]);
+        m.rotate_z(DVec2::new(1.0, 1.0), 0.8);
+        assert_eq!(m.exact_state(), Some(State::Fresh));
+        assert!((m.exact.as_ref().unwrap().vertices[2] - m.vertices[2]).length() < 1e-9);
+        // A uniform scale and a mirror are kept, the radius scales.
+        let scale = DAffine3::from_scale(DVec3::splat(3.0));
+        assert!(m.transform(&scale).is_none());
+        assert_eq!(m.exact_state(), Some(State::Fresh));
+        let Some(Surface::Cylinder { r, .. }) = &m.exact.as_ref().unwrap().faces[0].surface else {
+            panic!()
+        };
+        assert!((r - 6.0).abs() < 1e-9);
+        // A stretch cannot be followed: the payload is dropped, with a note.
+        let mut t = m.clone();
+        let stretch = DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0));
+        assert!(t.transform(&stretch).is_some());
+        assert!(t.exact.is_none() && t.exact_state().is_none());
+        // An edit of the triangles makes the payload stale, and a move leaves it stale.
+        m.vertices[0].z += 1.0;
+        assert_eq!(m.exact_state(), Some(State::Stale));
+        m.translate_xy(DVec2::new(1.0, 1.0));
+        assert_eq!(m.exact_state(), Some(State::Stale));
+        // A payload with a damaged index is a problem of the mesh.
+        let mut bad = with_exact();
+        bad.exact.as_mut().unwrap().edges[0].end = 99;
+        assert!(bad.problem().unwrap().contains("exact data"));
+    }
+
+    #[test]
+    fn the_payload_is_optional_in_the_file_and_unknown_fields_survive() {
+        // A mesh from an older program has no payload.
+        let old = r#"{"name":"t","vertices":[[0,0,0],[1,0,0],[0,1,0]],"triangles":[[0,1,2]]}"#;
+        let m: Mesh3d = serde_json::from_str(old).unwrap();
+        assert!(m.exact.is_none() && m.exact_state().is_none());
+        assert!(!serde_json::to_string(&m).unwrap().contains("exact"));
+        // A mesh with a payload round-trips, and a field of a later version stays.
+        let m = with_exact();
+        let mut v = serde_json::to_value(&m).unwrap();
+        v["exact"]["later"] = serde_json::json!([1, 2, 3]);
+        let back: Mesh3d = serde_json::from_value(v).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap()["exact"]["later"], serde_json::json!([1, 2, 3]));
+        assert_eq!(back.exact_state(), Some(exact::State::Fresh));
     }
 }
