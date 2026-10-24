@@ -61,16 +61,26 @@ pub fn peak() -> usize {
     PEAK.load(Ordering::Relaxed)
 }
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn getrusage(who: i32, usage: *mut [i64; 18]) -> i32;
 }
 
-/// User plus system CPU seconds of this process so far.
+/// User plus system CPU seconds of this process so far. Where there is no `getrusage` (Windows),
+/// the wall time since the first call stands in for it.
 pub fn cpu() -> f64 {
-    let mut b = [0i64; 18];
-    unsafe { getrusage(0, &mut b) };
-    let t = |s: i64, us: i64| s as f64 + (us as i32) as f64 / 1e6;
-    t(b[0], b[1]) + t(b[2], b[3])
+    #[cfg(unix)]
+    {
+        let mut b = [0i64; 18];
+        unsafe { getrusage(0, &mut b) };
+        let t = |s: i64, us: i64| s as f64 + (us as i32) as f64 / 1e6;
+        t(b[0], b[1]) + t(b[2], b[3])
+    }
+    #[cfg(not(unix))]
+    {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64()
+    }
 }
 
 /// The resident set size now, in bytes (from `ps`).
@@ -90,9 +100,16 @@ pub fn rss() -> usize {
 
 /// The highest resident set size of this process so far, in bytes.
 pub fn max_rss() -> usize {
-    let mut b = [0i64; 18];
-    unsafe { getrusage(0, &mut b) };
-    b[4] as usize
+    #[cfg(unix)]
+    {
+        let mut b = [0i64; 18];
+        unsafe { getrusage(0, &mut b) };
+        b[4] as usize
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
 }
 
 /// Wall time, CPU time and the growth of the heap peak of a piece of work.
