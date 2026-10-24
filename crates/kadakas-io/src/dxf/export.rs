@@ -23,6 +23,7 @@ use super::nearest_aci;
 use crate::options::{DxfVersion, ExportOrigin, LayerMode};
 use crate::{ExportOptions, ExportResult, IoError, Report};
 
+mod hatch;
 mod kinds;
 mod native;
 pub mod patterns;
@@ -226,6 +227,8 @@ struct Ctx<'a> {
     tag_counts: kadakas_core::plants::tag::TagCounts,
     /// True once an object has written XDATA of the application `KADAKAS`.
     xdata: bool,
+    /// The HATCH entities of hatch fills (IOP-27), by the name of the pattern in the file.
+    hatch_names: BTreeMap<String, usize>,
 }
 
 impl Ctx<'_> {
@@ -336,6 +339,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         terrain: kadakas_site::SiteTerrain::new(&site_cache, 0, doc),
         tag_counts: kadakas_core::plants::tag::tag_counts(doc),
         xdata: false,
+        hatch_names: BTreeMap::new(),
     };
     // Real-world coordinates: the origin of the georeference goes back into the numbers (a rotation is not applied).
     let mut shift = DVec2::ZERO;
@@ -491,6 +495,20 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         } else {
             sheet_outs[i].text = sw.buf;
         }
+    }
+
+    if !cx.hatch_names.is_empty() {
+        let total: usize = cx.hatch_names.values().sum();
+        let names: Vec<String> = cx
+            .hatch_names
+            .iter()
+            .map(|(n, c)| format!("{n} {c}"))
+            .collect();
+        report.note(&format!(
+            "{total} hatch {} written as HATCH entities with their pattern lines: {}",
+            if total == 1 { "fill was" } else { "fills were" },
+            names.join(", ")
+        ));
     }
 
     // Layers. Names are unique without regard to case.
@@ -1275,14 +1293,19 @@ fn write_object(w: &mut W, cx: &mut Ctx, o: &Object, layer: &str, hidden: bool) 
         write_plain(w, cx, o, layer, hidden)
     };
     let Some(d) = decor else { return ok };
+    // A hatch fill is one HATCH entity with its pattern. Else its lines are plain LINE entities.
+    let fill = attrs.fill_pattern.map(|id| (id, scale));
+    let hatched = hatch::write(w, cx, o, layer, hidden, fill, &d);
     let line = |w: &mut W, cx: &mut Ctx, a: DVec2, b: DVec2| {
         common(w, "LINE", layer, o, hidden);
         w.pair(100, "AcDbLine");
         cx.pt3(w, 10, a.x, a.y, 0.0);
         cx.pt3(w, 11, b.x, b.y, 0.0);
     };
-    for seg in &d.fill {
-        line(w, cx, seg.a, seg.b);
+    if !hatched {
+        for seg in &d.fill {
+            line(w, cx, seg.a, seg.b);
+        }
     }
     for stroke in &d.strokes {
         for pair in stroke.windows(2) {

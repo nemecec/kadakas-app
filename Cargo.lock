@@ -2946,6 +2946,7 @@ name = "kadakas-io"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "i_overlay",
  "kadakas-annot",
  "kadakas-core",
  "kadakas-crs",

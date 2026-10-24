@@ -346,8 +346,22 @@ pub(super) fn image_reason(e: &Entity, dxf: &Dxf) -> String {
     }
 }
 
+/// The larger side of the box around the polygons (0 when there is no point).
+pub(super) fn extent(loops: &[Vec<DVec2>]) -> f64 {
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    for p in loops.iter().flatten() {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    if lo.x <= hi.x && lo.is_finite() && hi.is_finite() {
+        (hi.x - lo.x).max(hi.y - lo.y)
+    } else {
+        0.0
+    }
+}
+
 /// The area of a polygon, without a sign.
-fn area(pts: &[DVec2]) -> f64 {
+pub(super) fn area(pts: &[DVec2]) -> f64 {
     let n = pts.len();
     (0..n)
         .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))

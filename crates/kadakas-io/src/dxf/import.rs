@@ -18,8 +18,11 @@ use kadakas_core::mesh3d::Mesh3d;
 use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 mod approx;
+mod clip;
 mod extra;
+mod hatch;
 mod paper;
+mod tilt;
 mod tilted;
 
 use approx::Tally;
@@ -397,6 +400,7 @@ fn walk(
         ),
         _ => b.default_layer,
     };
+    let hatches = b.hatches.clone();
     let mut w = Walker {
         dxf,
         opts,
@@ -415,6 +419,8 @@ fn walk(
         tally: Tally::default(),
         sheet: None,
         class_vis: HashMap::new(),
+        hatches: hatch::HatchLib::new(&hatches),
+        object_index: clip::handle_index(&dxf.objects),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -423,6 +429,8 @@ fn walk(
         weight: None,
         depth: 0,
         path: Path::default(),
+        clips: Vec::new(),
+        tilt: None,
     };
     // Paper space has its own pass; with the option off, or in an update, it is skipped and counted.
     let paper = opts.paper_space && opts.lineage.is_none() && !w.b.is_probe();
@@ -531,13 +539,26 @@ struct Cx {
     depth: usize,
     /// The block and the INSERTs that led here, for the source tags.
     path: Path,
+    /// The clips (XCLIP) of the block references that led here, in the drawing (IOP-27).
+    clips: Vec<std::rc::Rc<clip::Region>>,
+    /// The tilt of the block references in a tilted plane that led here (IOP-27).
+    tilt: tilt::Chain,
 }
 
+#[derive(Clone)]
 struct Item {
     shape: Shape,
     fill: Option<Color>,
     /// The fill is the pen color of the entity (a SOLID, a solid HATCH).
     fill_pen: bool,
+    /// The hatch fill of a pattern hatch (IOP-27).
+    pattern: Option<kadakas_core::resource::ResourceId>,
+    /// The height of a flat shape in a tilted plane, before the tilt (IOP-27). Without one the shape is at the height of its block.
+    z: Option<f64>,
+    /// The hatch that this loop belongs to: the number of its outer loop. An island carries the number of the outer loop that holds it (IOP-27).
+    group: Option<u32>,
+    /// The tilt of the plane of the entity itself (a text in a tilted plane), applied before the tilt of the blocks around.
+    tilt: Option<kadakas_core::DAffine3>,
     /// A pen that replaces the one of the entity (a wipeout has none).
     pen: Option<Color>,
     /// Object data. Text keeps its rotation here (`rotation_deg`), because a text shape has none.
@@ -550,6 +571,10 @@ impl Item {
             shape,
             fill: None,
             fill_pen: false,
+            pattern: None,
+            z: None,
+            group: None,
+            tilt: None,
             pen: None,
             data: BTreeMap::new(),
         }
@@ -585,6 +610,10 @@ struct Walker<'a> {
     sheet: Option<LayerId>,
     /// The classes that the import made, by DXF layer name, and whether the layer shows.
     class_vis: HashMap<String, (ClassId, bool)>,
+    /// The hatch fills of the document and of this import (IOP-27).
+    hatches: hatch::HatchLib,
+    /// The objects of the file by handle, for the clips of block references (IOP-27).
+    object_index: HashMap<String, usize>,
 }
 
 /// Vertices and triangles of the 3D faces of one layer.
@@ -816,10 +845,8 @@ impl Walker<'_> {
         }
         match e.kind.as_str() {
             "INSERT" => {
-                if self.has_clip(e) {
-                    self.tally.xclip += 1;
-                }
-                let ok = self.insert(e, cx);
+                let clip = self.read_clip(e);
+                let ok = self.insert(e, cx, clip.as_ref());
                 self.count(ok);
                 return;
             }
@@ -841,6 +868,44 @@ impl Walker<'_> {
         if let Err(why) = self.convert(e, cx, &mut items) {
             self.skip_entity(e, why);
             return;
+        }
+        if !cx.clips.is_empty() && !items.is_empty() {
+            items = clip::apply(items, &cx.clips, self.opts.tolerance, &mut self.tally);
+            if items.is_empty() {
+                self.skip_entity(e, "outside the clip (XCLIP) of its block reference");
+                return;
+            }
+        }
+        if cx.tilt.is_some() || items.iter().any(|i| i.tilt.is_some()) {
+            let z0 = cx.xf.z(0.0);
+            let tol = self.opts.tolerance;
+            // A flat shape keeps its own elevation: it is its height above the plane of the block.
+            let elevation = if e.kind == "LWPOLYLINE" {
+                e.fd(38, 0.0)
+            } else {
+                e.fd(30, 0.0)
+            };
+            for item in &mut items {
+                if item.z.is_none() {
+                    item.z = Some(cx.xf.z(elevation));
+                }
+            }
+            let mut moved = Vec::with_capacity(items.len());
+            for item in items {
+                let map = tilt::combined(item.tilt, &cx.tilt);
+                match map {
+                    Some(m) => moved.extend(tilt::apply(vec![item], &m, z0, tol, &mut self.tally)),
+                    None => moved.push(item),
+                }
+            }
+            items = moved;
+            if items.is_empty() {
+                self.skip_entity(
+                    e,
+                    "a white island of a hatch has no meaning in a tilted plane",
+                );
+                return;
+            }
         }
         if self.sheet.is_some() {
             items = self.sheet_items(items);
@@ -869,7 +934,15 @@ impl Walker<'_> {
         };
         let attrs = self.attrs(e, cx, &defaults);
         let parts = items.len();
+        // The ids of the outer loops of pattern hatches, and the islands that belong to them.
+        let mut outers: HashMap<u32, kadakas_core::uid::Uid> = HashMap::new();
+        let mut holes: Vec<(kadakas_core::uid::Uid, Vec<kadakas_core::uid::Uid>)> = Vec::new();
         for (n, mut item) in items.into_iter().enumerate() {
+            let (group, is_island, is_pattern) = (
+                item.group,
+                item.data.contains_key("hatch_island"),
+                item.pattern.is_some(),
+            );
             let mut a = attrs.clone();
             if item.fill_pen {
                 a.fill = Some(a.pen.unwrap_or(Color::BLACK));
@@ -880,37 +953,43 @@ impl Walker<'_> {
             if item.pen.is_some() {
                 a.pen = item.pen;
             }
+            if item.pattern.is_some() {
+                a.fill_pattern = item.pattern;
+            }
             if let Some(t) = self.tracking {
                 let part = (parts > 1).then_some(n as u32);
                 if let Some(tag) = t.tag(e, &cx.path, part) {
                     item.data.insert(provenance::KEY.into(), tag);
                 }
             }
-            self.b.add(&e.kind, item.shape, layer, class, a, item.data);
+            let added = self.b.add(&e.kind, item.shape, layer, class, a, item.data);
+            if let (true, Some(g)) = (added && !self.b.is_probe(), group) {
+                let id = self.b.last_id();
+                if is_pattern && !is_island {
+                    outers.insert(g, id);
+                    holes.push((id, Vec::new()));
+                } else if let (true, Some(outer)) = (is_island, outers.get(&g))
+                    && let Some(h) = holes.iter_mut().find(|h| h.0 == *outer)
+                {
+                    h.1.push(id);
+                }
+            }
         }
-    }
-
-    /// True if the block reference has a clip (XCLIP): its extension dictionary has the entry
-    /// ACAD_FILTER.
-    fn has_clip(&self, e: &Entity) -> bool {
-        let Some(at) = e
-            .items
-            .iter()
-            .position(|(c, v)| *c == 102 && v.trim() == "{ACAD_XDICTIONARY")
-        else {
-            return false;
-        };
-        let Some(handle) = e.items[at + 1..]
-            .iter()
-            .find(|(c, _)| *c == 360)
-            .and_then(|(_, h)| hash::normal_handle(h))
-        else {
-            return false;
-        };
-        self.dxf
-            .objects
-            .iter()
-            .any(|o| o.kind == "DICTIONARY" && o.handle().as_deref() == Some(handle.as_str()))
+        // An outer loop knows its islands, so the export can write them as holes of one HATCH.
+        for (outer, islands) in holes {
+            if islands.is_empty() {
+                continue;
+            }
+            self.b.push(kadakas_core::command::Command::SetData {
+                id: kadakas_core::model::ObjectId(outer),
+                set: [(
+                    "hatch_islands".to_string(),
+                    serde_json::to_value(&islands).unwrap_or_default(),
+                )]
+                .into(),
+                remove: vec![],
+            });
+        }
     }
 
     /// Counts an entity as imported or skipped (the reason is in the report already).
@@ -950,7 +1029,7 @@ impl Walker<'_> {
             items,
             children: vec![],
         };
-        self.insert(&proxy, cx)
+        self.insert(&proxy, cx, None)
     }
 
     /// Adds the merged 3D faces as mesh objects, one per DXF layer.
@@ -1009,7 +1088,7 @@ impl Walker<'_> {
     }
 
     /// Expands a block reference. False when nothing was inserted (the reason is in the report).
-    fn insert(&mut self, e: &Entity, cx: &Cx) -> bool {
+    fn insert(&mut self, e: &Entity, cx: &Cx, clip: Option<&clip::ClipRead>) -> bool {
         if !self.opts.explode_blocks {
             self.b
                 .report
@@ -1041,13 +1120,22 @@ impl Walker<'_> {
             self.b.report.skip("INSERT", "blocks are nested too deep");
             return false;
         }
-        let Ok(flip) = ocs_flip(e) else {
-            self.b.report.skip(
-                "INSERT",
-                "tilted extrusion direction: a block in a tilted plane is not placed",
-            );
-            return false;
+        let (flip, own_tilt) = match Plane::of(e) {
+            Plane::Flat { flip } => (flip, None),
+            Plane::Tilted(ocs) => {
+                let Some(map) = tilt::map_of(&cx.xf, &ocs) else {
+                    self.b.report.skip(
+                        "INSERT",
+                        "tilted extrusion direction: the block cannot be placed, because the transform around it cannot be inverted",
+                    );
+                    return false;
+                };
+                (false, Some(map))
+            }
         };
+        if own_tilt.is_some() {
+            self.tally.tilted_blocks += 1;
+        }
         let (sx, sy, sz) = (e.fd(41, 1.0), e.fd(42, 1.0), e.fd(43, 1.0));
         let rot = e.fd(50, 0.0).to_radians();
         let ins = DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0));
@@ -1094,13 +1182,24 @@ impl Walker<'_> {
                     }
                     None => Path::default(),
                 };
+                let xf = cx.xf.after(&local);
+                // The clip of the reference joins the clips of the references around it.
+                let mut clips = cx.clips.clone();
+                if let Some(read) = clip {
+                    clips.extend(self.clip_region(read, &xf, r == 0 && c == 0));
+                }
                 let inner = Cx {
-                    xf: cx.xf.after(&local),
+                    xf,
                     layer: layer.clone(),
                     pen: own_pen,
                     weight: cx.weight,
                     depth: cx.depth + 1,
                     path,
+                    clips,
+                    tilt: match own_tilt {
+                        Some(map) => tilt::chain(&cx.tilt, map),
+                        None => cx.tilt.clone(),
+                    },
                 };
                 for sub in &block.entities {
                     self.entity(sub, &inner);
@@ -1425,9 +1524,10 @@ impl Walker<'_> {
                 if e.kind == "ATTDEF" && e.int(70).unwrap_or(0) & 2 == 0 {
                     return Err(extra::reason("ATTDEF").unwrap_or("attribute definition"));
                 }
-                let flip = ocs_flip(e).map_err(
-                    |_| "tilted extrusion direction: text in a tilted plane is not placed",
-                )?;
+                let (flip, ocs) = match Plane::of(e) {
+                    Plane::Flat { flip } => (flip, None),
+                    Plane::Tilted(ocs) => (false, Some(ocs)),
+                };
                 if (e.kind == "ATTRIB" || e.kind == "ATTDEF") && e.int(70).unwrap_or(0) & 1 != 0 {
                     return Err("invisible attribute");
                 }
@@ -1459,6 +1559,15 @@ impl Walker<'_> {
                     DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0))
                 };
                 let p = if mtext { p } else { flipx(p, flip) };
+                // In a tilted plane the text is placed in the plane first and projected after (see `tilt`).
+                // The point of a TEXT is in the OCS. The point and the direction of an MTEXT are in the drawing.
+                let mut elevation = e.fd(30, 0.0);
+                let mut p = p;
+                if let (Some(o), true) = (&ocs, mtext) {
+                    let w = DVec3::new(e.fd(10, 0.0), e.fd(20, 0.0), e.fd(30, 0.0));
+                    p = DVec2::new(o.x.dot(w), o.y.dot(w));
+                    elevation = o.z.dot(w);
+                }
                 let height = e
                     .f(40)
                     .filter(|h| *h > 0.0)
@@ -1467,7 +1576,17 @@ impl Walker<'_> {
                 // Direction of the baseline: MTEXT has a vector (11, 21) or an angle in radians, TEXT degrees.
                 let dir = if mtext {
                     match (e.f(11), e.f(21)) {
-                        (Some(x), Some(y)) if x != 0.0 || y != 0.0 => DVec2::new(x, y).normalize(),
+                        (Some(x), Some(y))
+                            if x != 0.0 || y != 0.0 || (ocs.is_some() && e.fd(31, 0.0) != 0.0) =>
+                        {
+                            let w = DVec3::new(x, y, e.fd(31, 0.0));
+                            match &ocs {
+                                Some(o) => {
+                                    DVec2::new(o.x.dot(w), o.y.dot(w)).normalize_or(DVec2::X)
+                                }
+                                None => DVec2::new(x, y).normalize(),
+                            }
+                        }
                         _ => DVec2::from_angle(e.fd(50, 0.0)),
                     }
                 } else {
@@ -1479,6 +1598,12 @@ impl Walker<'_> {
                     text,
                     height,
                 });
+                if let Some(o) = &ocs {
+                    item.tilt = Some(tilt::map_of(xf, o).ok_or(
+                        "tilted extrusion direction: the text cannot be placed, because the transform around it cannot be inverted",
+                    )?);
+                    item.z = Some(xf.z(elevation));
+                }
                 let deg = dir.y.atan2(dir.x).to_degrees();
                 if deg.is_finite() && deg.abs() > 1e-9 {
                     let deg = (deg * 1e6).round() / 1e6;
@@ -1574,15 +1699,6 @@ impl Walker<'_> {
                 }
                 let solid = e.int(70) == Some(1);
                 let gradient = solid && e.int(450) == Some(1);
-                if !solid {
-                    let name = e.get(2).unwrap_or("").trim();
-                    let name = if name.is_empty() { "(no name)" } else { name };
-                    *self
-                        .tally
-                        .pattern_hatches
-                        .entry(name.to_string())
-                        .or_default() += 1;
-                }
                 // A gradient has two colors; the first one is the flat fill. A plain solid hatch
                 // fills with its pen color.
                 let fill = gradient
@@ -1610,12 +1726,53 @@ impl Walker<'_> {
                         )
                     })
                     .collect();
-                let island = if solid && e.int(75).unwrap_or(0) != 2 {
+                // A pattern hatch becomes a hatch fill of the document (IOP-27).
+                let pattern = if solid {
+                    None
+                } else if cx.tilt.is_some() {
+                    // A fill cannot lie in a tilted plane, so the hatch stays an outline. No hatch
+                    // resource is made for it.
+                    self.tally.tilted_fills += 1;
+                    None
+                } else {
+                    let extent = extra::extent(&corner_points)
+                        * xf.cols[0].length().max(xf.cols[1].length());
+                    self.pattern_fill(e, xf, flip, extent)
+                };
+                let fills = solid || pattern.is_some();
+                let island = if fills && e.int(75).unwrap_or(0) != 2 {
                     extra::islands(&corner_points, tol / 10.0 / xf.length_scale().max(1e-12))
                 } else {
                     vec![false; loops.len()]
                 };
-                for (l, is_island) in loops.into_iter().zip(island) {
+                // An outer loop is drawn before the islands inside it.
+                let mut order: Vec<usize> = (0..loops.len()).collect();
+                if fills {
+                    let areas: Vec<f64> = corner_points.iter().map(|p| extra::area(p)).collect();
+                    order.sort_by(|a, b| areas[*b].total_cmp(&areas[*a]));
+                }
+                // The outer loop that holds each island: the smallest loop (not an island) around it.
+                let areas: Vec<f64> = corner_points.iter().map(|p| extra::area(p)).collect();
+                let holder: Vec<Option<usize>> = (0..loops.len())
+                    .map(|k| {
+                        if !island[k] {
+                            return None;
+                        }
+                        let at = *corner_points[k].first()?;
+                        (0..loops.len())
+                            .filter(|j| {
+                                !island[*j]
+                                    && areas[*j] > areas[k]
+                                    && kadakas_core::geom::point_in_polygon(at, &corner_points[*j])
+                            })
+                            .min_by(|a, b| areas[*a].total_cmp(&areas[*b]))
+                    })
+                    .collect();
+                let mut loops: Vec<Option<Vec<Vertex>>> = loops.into_iter().map(Some).collect();
+                for k in order {
+                    let (Some(l), is_island) = (loops[k].take(), island[k]) else {
+                        continue;
+                    };
                     let pts: Vec<Vertex> = l
                         .into_iter()
                         .map(|v| Vertex::new(xf.apply(flipx(v.p, flip)), v.kind))
@@ -1624,6 +1781,13 @@ impl Walker<'_> {
                         points: pts,
                         closed: true,
                     });
+                    if fills {
+                        item.group = Some(if is_island {
+                            holder[k].unwrap_or(k) as u32
+                        } else {
+                            k as u32
+                        });
+                    }
                     if is_island {
                         // A filled shape has no hole: the island is the color of the paper.
                         item.fill = Some(extra::PAPER);
@@ -1632,6 +1796,8 @@ impl Walker<'_> {
                     } else if solid {
                         item.fill = fill;
                         item.fill_pen = fill.is_none();
+                    } else {
+                        item.pattern = pattern;
                     }
                     out.push(item);
                 }
@@ -1693,16 +1859,6 @@ fn world3(xf: &Xf, p: DVec3) -> DVec3 {
 
 fn flipx(p: DVec2, flip: bool) -> DVec2 {
     if flip { DVec2::new(-p.x, p.y) } else { p }
-}
-
-/// Whether OCS X must be mirrored: the extrusion direction is -Z. Other directions are an error.
-fn ocs_flip(e: &Entity) -> Result<bool, ()> {
-    let n = e.normal();
-    if n[0].abs() < 1e-9 && n[1].abs() < 1e-9 {
-        Ok(n[2] < 0.0)
-    } else {
-        Err(())
-    }
 }
 
 fn drop_closing(mut pts: Vec<DVec2>) -> Vec<DVec2> {
@@ -2579,9 +2735,9 @@ mod tests {
 0\nINSERT\n2\nB\n210\n1\n220\n1\n230\n0\n\
 0\nINSERT\n2\nB\n230\n-1\n10\n5\n20\n0\n";
         let (doc, report) = run(&dxf_text("", "", blocks, ents), &ImportOptions::default());
-        // 3 shapes + inner point = 4 per insert: 1 + 4 + 1 (flipped) = 6 inserts of 4.
-        assert_eq!(doc.objects.len(), 4 * 6);
-        assert_eq!(report.skipped_total(), 2);
+        // 3 shapes + inner point = 4 per insert: 1 + 4 + 1 (tilted) + 1 (flipped) = 7 inserts of 4.
+        assert_eq!(doc.objects.len(), 4 * 7);
+        assert_eq!(report.skipped_total(), 1);
         let first = &shapes(&doc)[0];
         // Line (10,0)-(20,0) about base (10,0), scale 2, rotate 90 deg, at (100,100).
         assert!(
@@ -2599,7 +2755,7 @@ mod tests {
         // Layer "0" inside a block takes the layer of the insert, other layers stay.
         let site = doc.classes.iter().find(|c| c.name == "Site").unwrap().id;
         let fixed = doc.classes.iter().find(|c| c.name == "Fixed").unwrap().id;
-        assert_eq!(doc.objects.values().filter(|o| o.class == fixed).count(), 6);
+        assert_eq!(doc.objects.values().filter(|o| o.class == fixed).count(), 7);
         assert!(doc.objects.values().filter(|o| o.class == site).count() >= 6);
         // The flipped insert mirrors X: the line starts at (5,0) and goes to (-5,0)+...
         let last_line = doc

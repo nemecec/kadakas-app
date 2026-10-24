@@ -64,6 +64,8 @@ mod tests {
         let xf = Xf {
             model_center: DVec2::new(3000.0, 2500.0),
             paper_center: DVec2::new(100.0, 100.0),
+            turn: DVec2::X,
+            frame: None,
             k: 0.01,
             window: None,
         };

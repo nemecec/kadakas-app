@@ -204,13 +204,21 @@ pub fn table_prims(
                         cell_top - (l.row_height + ph) / 2.0,
                     );
                     let (a, b) = (xf.p(DVec2::new(x0, y0)), xf.p(DVec2::new(x0 + pw, y0 + ph)));
-                    out.push(Prim::Image(ImagePrim {
-                        min: a.min(b),
-                        max: a.max(b),
-                        width: *w,
-                        height: *hgt,
-                        rgb: rgb.clone(),
-                    }));
+                    if xf.is_turned() {
+                        // An image has straight sides on the sheet, so a turned view cannot show it.
+                        tables.note(
+                            "A picture of a table is not drawn in a viewport with a twist: a raster picture cannot follow the turn"
+                                .into(),
+                        );
+                    } else {
+                        out.push(Prim::Image(ImagePrim {
+                            min: a.min(b),
+                            max: a.max(b),
+                            width: *w,
+                            height: *hgt,
+                            rgb: rgb.clone(),
+                        }));
+                    }
                 }
                 continue;
             }

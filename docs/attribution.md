@@ -125,7 +125,8 @@ These tools build, test or check Kadakas. They are not part of the installers.
 ## DXF test data and the AutoCAD color table (IOP-15)
 
 - The table of the 256 AutoCAD colors in `crates/kadakas-io/src/dxf/aci.rs` has the values 1 to 248 of the table of the ezdxf library (https://github.com/mozman/ezdxf, MIT, Copyright (c) 2020 Manfred Moitzi). It is compiled into Kadakas. The MIT notice is in `THIRD_PARTY_NOTICES.txt`.
-- Some of the DXF import follows the way that ezdxf works: the outline of a WIPEOUT, uniform knots for a spline without knots, and the decoding of caret codes. The code is written for Kadakas. ezdxf is not linked and not shipped.
+- The table of hatch patterns in `crates/kadakas-io/src/dxf/hatch/std_patterns.txt` (106 standard patterns, `tests/data/make_std_patterns.py`) has the lines of the metric pattern table of the ezdxf library (MIT, Copyright (c) 2020 Manfred Moitzi). It is compiled into Kadakas. The MIT notice is in `THIRD_PARTY_NOTICES.txt`.
+- Some of the DXF import follows the way that ezdxf works: the outline of a WIPEOUT, uniform knots for a spline without knots, the decoding of caret codes, the clip of a block reference (XCLIP) and the twist of a viewport. The code is written for Kadakas. ezdxf is not linked and not shipped.
 - The tests fetch public sample files at run time from fixed commits of ezdxf (MIT) and GDAL (https://github.com/OSGeo/gdal, MIT style licence, `LICENSE.TXT` of that repository). They go into `tests/data/dxf-public/`, which git ignores. They are not in the repository and not shipped. Nothing of LibreCAD (GPL) is used.
 - `crates/kadakas-io/tests/fixtures/dxf_public_counts.json` is derived from those files with the ezdxf reader (`tests/data/make_public_counts.py`): counts of entities, layouts and viewports, short MTEXT strings, and points on splines. It holds numbers and short strings, no drawing.
 - The files in `tests/data/dxf-own/` are our own work (`tests/data/make_own_files.py`), under the project license.
@@ -139,6 +140,7 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | Tabler Icons | `assets/icons/tabler/**` | Paweł Kuna | MIT | https://tabler.io/icons | ships |
 | quickjs-ng | `crates/kadakas-script-js/quickjs/**` | Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé | MIT | https://github.com/quickjs-ng/quickjs | ships |
 | ezdxf | `crates/kadakas-io/src/dxf/aci.rs` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf | ships |
+| ezdxf | `crates/kadakas-io/src/dxf/hatch/std_patterns.txt` | Manfred Moitzi | MIT | https://github.com/mozman/ezdxf | ships |
 | Ubuntu-Light | `crate:epaint_default_fonts` | Canonical Ltd. | Ubuntu-font-1.0 | https://design.ubuntu.com/font | ships |
 | Hack | `crate:epaint_default_fonts` | Source Foundry Authors (built on DejaVu and Bitstream Vera Sans Mono) | MIT AND Bitstream-Vera | https://sourcefoundry.org/hack/ | ships |
 | Noto Emoji | `crate:epaint_default_fonts` | Google Inc. | OFL-1.1 | https://github.com/googlefonts/noto-emoji | ships |
@@ -170,6 +172,7 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | Container golden files | `crates/kadakas-api/tests/data/*.kad` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Command schema snapshot | `crates/kadakas-core/tests/command_schema.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Public DXF corpus counts and hashes | `crates/kadakas-io/tests/fixtures/dxf_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| IOP-27 DXF facts from the ezdxf reader | `crates/kadakas-io/tests/fixtures/dxf_iop27.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Own DXF test files | `tests/data/dxf-own/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | DXF test data scripts | `tests/data/*.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Hand written IFC test files | `tests/fixtures/ifc/*.ifc` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |

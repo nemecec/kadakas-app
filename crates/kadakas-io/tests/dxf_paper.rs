@@ -252,8 +252,16 @@ fn a_viewport_keeps_its_frozen_layers_its_view_and_its_crop() {
         rep.skipped
     );
     let n = rep.notes.join("\n");
-    assert!(n.contains("1 viewport has a twist"), "{n}");
-    assert!(n.contains("1 viewport has a perspective view"), "{n}");
+    // A 3D view keeps the twist and the perspective flag. The twist does not turn it.
+    assert!(
+        n.contains("1 3D viewport has a twist: the number is kept and written back"),
+        "{n}"
+    );
+    assert!(
+        n.contains("1 3D viewport has a perspective view: it is drawn with a perspective camera"),
+        "{n}"
+    );
+    assert_eq!((v.twist, v.perspective), (15.0, true));
 }
 
 #[test]
@@ -493,4 +501,104 @@ fn the_custom_plot_scale_of_a_layout_sets_the_size_of_a_paper_unit() {
     assert!((b.x - 200.0).abs() < 1e-9, "{b:?}");
     let s = ed.doc().sheet(sheet.id).unwrap();
     assert_eq!(s.paper, PaperSize::A3);
+}
+
+/// The viewports of the layout A101 of `drawing`, after an import.
+fn viewports_of(src: &str) -> (Vec<kadakas_core::sheets::Viewport>, kadakas_io::Report) {
+    let (ed, rep) = import(src.as_bytes()).unwrap();
+    assert_eq!(
+        rep.entities_read,
+        rep.entities_imported + rep.entities_skipped,
+        "{rep:?}"
+    );
+    let doc = ed.doc();
+    let a101 = doc.layers.iter().find(|l| l.name == "A101").unwrap();
+    let vps = doc.viewports_of(a101.id).map(|(_, v)| v.clone()).collect();
+    (vps, rep)
+}
+
+#[test]
+fn a_twist_turns_a_plan_viewport_and_its_view_center_follows_the_display_axes() {
+    // Plan view, twist 30, target (10, 20), view center (3, 4) in the display coordinate system.
+    // The model point in the middle of the frame is the target plus the view center turned back by 30.
+    let vp = viewport(
+        "TITLE",
+        3,
+        (170.0, 145.0),
+        (140.0, 130.0),
+        "12\n3\n22\n4\n45\n26\n17\n10\n27\n20\n37\n0\n16\n0\n26\n0\n36\n1\n51\n30\n",
+    );
+    let (vps, rep) = viewports_of(&drawing(&vp, ""));
+    let v = &vps[1];
+    assert_eq!(v.twist, 30.0);
+    assert!(v.is_twisted());
+    // The drawing is in meters: 1 m is 1000 mm.
+    let back = DVec2::from_angle(-30f64.to_radians()).rotate(DVec2::new(3.0, 4.0));
+    let want = (DVec2::new(10.0, 20.0) + back) * 1000.0;
+    assert!((v.center - want).length() < 1e-6, "{:?} {want:?}", v.center);
+    // The center of the view is at the middle of the frame, turned or not.
+    assert!(v.to_paper(v.center).distance(v.frame_center()) < 1e-9);
+    let n = rep.notes.join("\n");
+    assert!(
+        n.contains("1 plan viewport has a twist: the plan is turned by it on the sheet"),
+        "{n}"
+    );
+    assert!(!n.contains("camera"), "{n}");
+}
+
+#[test]
+fn the_twist_is_kept_in_the_range_minus_180_to_180() {
+    for (written, kept) in [
+        (370.0, 10.0),
+        (-190.0, 170.0),
+        (330.0, -30.0),
+        (180.0, 180.0),
+        (0.0, 0.0),
+    ] {
+        let vp = viewport(
+            "TITLE",
+            3,
+            (170.0, 145.0),
+            (140.0, 130.0),
+            &format!("45\n26\n17\n0\n27\n0\n37\n0\n16\n0\n26\n0\n36\n1\n51\n{written}\n"),
+        );
+        let (vps, rep) = viewports_of(&drawing(&vp, ""));
+        assert!(
+            (vps[1].twist - kept).abs() < 1e-9,
+            "{written}: {}",
+            vps[1].twist
+        );
+        let n = rep.notes.join("\n");
+        assert_eq!(n.contains("has a twist"), kept != 0.0, "{n}");
+    }
+}
+
+#[test]
+fn a_perspective_flag_works_on_a_3d_view_and_is_kept_on_a_plan() {
+    // Flags: 32768 and the flag value 1 for perspective.
+    let plan = viewport(
+        "TITLE",
+        3,
+        (170.0, 145.0),
+        (140.0, 130.0),
+        "45\n26\n17\n0\n27\n0\n37\n0\n16\n0\n26\n0\n36\n1\n90\n32769\n",
+    );
+    let iso = viewport(
+        "TITLE",
+        4,
+        (170.0, 145.0),
+        (140.0, 130.0),
+        "45\n26\n17\n0\n27\n0\n37\n0\n16\n1\n26\n-1\n36\n1\n90\n32769\n",
+    );
+    let (vps, rep) = viewports_of(&drawing(&format!("{plan}{iso}"), ""));
+    assert!(vps[1].perspective && vps[2].perspective);
+    let n = rep.notes.join("\n");
+    assert!(
+        n.contains("1 plan viewport has the perspective flag: a plan has no perspective"),
+        "{n}"
+    );
+    assert!(
+        n.contains("1 3D viewport has a perspective view: it is drawn with a perspective camera"),
+        "{n}"
+    );
 }

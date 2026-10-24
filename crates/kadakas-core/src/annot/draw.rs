@@ -132,6 +132,8 @@ pub struct ViewMap {
     pub center: DVec2,
     pub frame_half: DVec2,
     pub scale: f64,
+    /// The twist of the viewport as a unit vector (cosine, sine): (1, 0) for none.
+    pub turn: DVec2,
 }
 
 impl Ctx {
@@ -153,6 +155,7 @@ impl Ctx {
                 center: vp.center,
                 frame_half: (vp.max - vp.min) / 2.0,
                 scale: vp.scale,
+                turn: vp.turn(),
             }),
         }
     }
@@ -160,7 +163,7 @@ impl Ctx {
     /// The position of a model point in the coordinates that the annotation uses.
     pub fn local(&self, model: DVec2) -> DVec2 {
         match self.view {
-            Some(v) => (model - v.center) / v.scale + v.frame_half,
+            Some(v) => v.turn.rotate((model - v.center) / v.scale) + v.frame_half,
             None => model,
         }
     }

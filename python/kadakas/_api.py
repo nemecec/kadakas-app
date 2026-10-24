@@ -2711,11 +2711,13 @@ if TYPE_CHECKING:
         'min': list[float] | None,
         'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
         'name': str | None,
+        'perspective': bool | None,
         'render_style': str | None,
         'scale': float | Literal['fit'] | None,
         'sheet': Required[str],
         'show_frame': bool | None,
         'size': list[float] | None,
+        'twist': float | None,
         'view': str | None,
     }, total=False)
 
@@ -2738,9 +2740,11 @@ if TYPE_CHECKING:
         'min': list[float] | None,
         'mode': Literal['shaded', 'wireframe', 'hidden_line', 'dashed_hidden_line'] | None,
         'name': str | None,
+        'perspective': bool | None,
         'render_style': str | None,
         'scale': float | Literal['fit'] | None,
         'show_frame': bool | None,
+        'twist': float | None,
         'view': str | None,
     }, total=False)
 
@@ -5545,7 +5549,7 @@ class Api:
         return self._call("project.new_guid", params or None)
 
     def viewport_create(self, **params: "Unpack[ViewportCreateParams]") -> Any:
-        """Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or "fit" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.
+        """Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or "fit" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?, twist? (plan only: degrees counterclockwise, the model turns about the center of the view; default 0), perspective? (3D views only: a perspective camera; default false)}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.
 
         JSON-RPC method ``viewport.create``."""
         return self._call("viewport.create", params or None)
@@ -5563,7 +5567,7 @@ class Api:
         return self._call("viewport.list", params or None)
 
     def viewport_update(self, **params: "Unpack[ViewportUpdateParams]") -> Any:
-        """Change a viewport. params: {id, and any of name, min, max, center, scale (number or "fit"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.
+        """Change a viewport. params: {id, and any of name, min, max, center, scale (number or "fit"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, twist, perspective, fit (true recomputes center and scale)}. Returns the viewport.
 
         JSON-RPC method ``viewport.update``."""
         return self._call("viewport.update", params or None)

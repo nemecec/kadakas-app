@@ -11,6 +11,7 @@
 assets/icons/tabler/**	Tabler Icons	Paweł Kuna	MIT	https://tabler.io/icons	ships
 crates/kadakas-script-js/quickjs/**	quickjs-ng	Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé	MIT	https://github.com/quickjs-ng/quickjs	ships
 crates/kadakas-io/src/dxf/aci.rs	ezdxf	Manfred Moitzi	MIT	https://github.com/mozman/ezdxf	ships
+crates/kadakas-io/src/dxf/hatch/std_patterns.txt	ezdxf	Manfred Moitzi	MIT	https://github.com/mozman/ezdxf	ships
 crate:epaint_default_fonts	Ubuntu-Light	Canonical Ltd.	Ubuntu-font-1.0	https://design.ubuntu.com/font	ships
 crate:epaint_default_fonts	Hack	Source Foundry Authors (built on DejaVu and Bitstream Vera Sans Mono)	MIT AND Bitstream-Vera	https://sourcefoundry.org/hack/	ships
 crate:epaint_default_fonts	Noto Emoji	Google Inc.	OFL-1.1	https://github.com/googlefonts/noto-emoji	ships
@@ -42,6 +43,7 @@ crates/kadakas-plugin/tests/fixtures/**	Plug-in test modules	Kadakas project	Apa
 crates/kadakas-api/tests/data/*.kad	Container golden files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 crates/kadakas-core/tests/command_schema.json	Command schema snapshot	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 crates/kadakas-io/tests/fixtures/dxf_public_*.json	Public DXF corpus counts and hashes	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-io/tests/fixtures/dxf_iop27.json	IOP-27 DXF facts from the ezdxf reader	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 tests/data/dxf-own/*	Own DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 tests/data/*.py	DXF test data scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 tests/fixtures/ifc/*.ifc	Hand written IFC test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test

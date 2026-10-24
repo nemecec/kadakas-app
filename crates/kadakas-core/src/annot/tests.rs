@@ -1888,8 +1888,23 @@ fn ctx_maps_layers_and_viewports() {
         Some(ViewMap {
             center: v(1000.0, 1000.0),
             frame_half: v(50.0, 25.0),
-            scale: 100.0
+            scale: 100.0,
+            turn: v(1.0, 0.0),
         })
+    );
+    // A twisted viewport: an object 100 mm above the center on the sheet (10 m of model) is
+    // 100 mm to the left of it after a twist of 90 degrees, so a leader to it ends there.
+    let mut vp = vp;
+    vp.twist = 90.0;
+    let c = Ctx::viewport(&vp);
+    let p = c.local(v(1000.0, 11_000.0));
+    assert!((p - v(50.0 - 100.0, 25.0)).length() < 1e-9, "{p:?}");
+    assert!((c.local(v(1000.0, 1000.0)) - v(50.0, 25.0)).length() < 1e-9);
+    // A 3D view is not turned.
+    vp.view = "front".into();
+    assert_eq!(
+        Ctx::viewport(&vp).local(v(1000.0, 11_000.0)),
+        v(50.0, 125.0)
     );
 }
 

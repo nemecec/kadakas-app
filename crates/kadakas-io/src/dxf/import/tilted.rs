@@ -3,8 +3,9 @@
 //! The entities LWPOLYLINE, POLYLINE, CIRCLE, ARC and SOLID lie in their own plane, which the
 //! extrusion direction (group codes 210, 220 and 230) gives. DXF finds the axes of that plane
 //! with the arbitrary axis algorithm. A plan has no shape for a circle in a tilted plane, so these
-//! entities become 3D polylines, cut within the tolerance. Text, hatches and blocks in a tilted
-//! plane are reported (a text or hatch cannot lie in a tilted plane here).
+//! entities become 3D polylines, cut within the tolerance. A hatch in a tilted plane keeps its
+//! boundary only (a fill cannot lie in a tilted plane here). Text and blocks in a tilted plane are in
+//! `tilt.rs`.
 
 use kadakas_core::{DVec2, DVec3};
 

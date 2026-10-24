@@ -19,8 +19,24 @@ pub(super) struct Tally {
     pub scaled_arcs: usize,
     /// LEADER entities (the arrowhead is not drawn).
     pub leaders: usize,
-    /// Pattern hatches by pattern name (imported as outlines).
+    /// Pattern hatches by pattern name that stayed outlines (see the three counts below).
     pub pattern_hatches: BTreeMap<String, usize>,
+    /// Pattern hatches that became a hatch fill of the document, by the name of the fill.
+    pub pattern_fills: BTreeMap<String, usize>,
+    /// Pattern hatches with no pattern lines in the entity: the lines come from the table of standard patterns.
+    pub pattern_from_table: usize,
+    /// Pattern lines left out because a pattern keeps at most 128 of them.
+    pub pattern_lines_cut: usize,
+    /// Pattern lines left out because they cannot be used (their lines would lie on each other).
+    pub pattern_lines_unusable: usize,
+    /// Pattern lines beyond the 10,000 that the import reads from one entity.
+    pub pattern_lines_unread: usize,
+    /// Outline hatches: no pattern lines and the name is not a standard pattern.
+    pub pattern_no_lines: usize,
+    /// Outline hatches: no pattern line could be used.
+    pub pattern_unusable: usize,
+    /// Outline hatches: the lines are denser than the drawing engine draws for the size of the hatch.
+    pub pattern_dense: usize,
     /// Gradient hatches (imported with a flat fill).
     pub gradient_hatches: usize,
     /// Islands of a solid hatch (drawn as white filled outlines on the hatch).
@@ -29,6 +45,17 @@ pub(super) struct Tally {
     pub tilted: usize,
     /// Hatches in a tilted plane: their boundaries became 3D polylines without a fill.
     pub tilted_hatches: usize,
+    /// Block references in a tilted plane (IOP-27) and the objects of them that were placed in 3D.
+    pub tilted_blocks: usize,
+    pub tilted_objects: usize,
+    /// Filled shapes in a tilted plane that lost their fill (a fill cannot lie in a tilted plane).
+    pub tilted_fills: usize,
+    /// White islands of hatches in a tilted plane that were left out.
+    pub tilted_islands: usize,
+    /// Texts in a tilted plane, placed flat by their projection. Of those the ones in a nearly upright plane (full height) and the ones seen from the back.
+    pub tilted_texts: usize,
+    pub tilted_texts_upright: usize,
+    pub tilted_texts_back: usize,
     /// WIPEOUT entities (a polygon with a white fill).
     pub wipeouts: usize,
     /// MESH entities with a subdivision level above 0 (imported as the control mesh).
@@ -41,18 +68,37 @@ pub(super) struct Tally {
     pub default_page: Vec<String>,
     /// Viewports that became viewports of a sheet.
     pub viewports: usize,
-    /// Viewports with a twist (a turned view): the view is not turned.
+    /// Plan viewports with a twist: the plan is turned (IOP-27).
     pub viewport_twist: usize,
-    /// Viewports with a perspective view: shown with a parallel projection.
+    /// 3D viewports with a twist: the number is kept, the view is not turned.
+    pub viewport_twist_ignored: usize,
+    /// 3D viewports with a perspective view: drawn with a perspective camera (IOP-27).
     pub viewport_perspective: usize,
+    /// Plan viewports with the perspective flag: the plan has no perspective, the flag is kept.
+    pub viewport_perspective_plan: usize,
     /// Viewports whose view direction is not a standard view, by the standard view that was used.
     pub viewport_views: BTreeMap<String, usize>,
     /// Viewports whose clipping outline is not a polyline or a circle: the frame is the crop.
     pub viewport_clip_lost: usize,
     /// 3D polylines in paper space that were flattened.
     pub flattened: usize,
-    /// Block references with a clip (XCLIP): the clip is not applied.
-    pub xclip: usize,
+    /// Block references with a clip (XCLIP) that was applied (IOP-27).
+    pub xclip_applied: usize,
+    /// Of those, the clips that are inverted, and the clips with a front or back plane (the plane is not applied).
+    pub xclip_inverted: usize,
+    pub xclip_planes: usize,
+    /// Clips that are switched off in the file (the block shows whole), and clips that cannot be read.
+    pub xclip_off: usize,
+    pub xclip_unreadable: usize,
+    /// Clips with more points than the import cuts by.
+    pub xclip_too_big: usize,
+    /// Circles and arcs that a clip cut, whose chords were cut to the cap (so the tolerance does not hold).
+    pub xclip_chord_cap: usize,
+    /// Items that a clip cut, and of those the ones with curves (cut into chords).
+    pub xclip_cut: usize,
+    pub xclip_curves: usize,
+    /// Items that a clip kept or dropped whole by their point (text, points, meshes).
+    pub xclip_whole: usize,
     /// Entities with a transparency (group code 440): drawn opaque.
     pub transparent: usize,
 }
@@ -63,6 +109,12 @@ impl Tally {
         let mut out = Vec::new();
         let plural =
             |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let list = |m: &BTreeMap<String, usize>| {
+            m.iter()
+                .map(|(n, c)| format!("{n} {c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         if self.splines > 0 {
             out.push(format!(
                 "{} became polylines within {tol} mm: the curve is no longer exact",
@@ -109,18 +161,71 @@ impl Tally {
                 plural(self.leaders, "LEADER was", "LEADERs were")
             ));
         }
+        if !self.pattern_fills.is_empty() {
+            let total: usize = self.pattern_fills.values().sum();
+            out.push(format!(
+                "{} with a pattern became hatch fills of the document: {}",
+                plural(total, "hatch", "hatches"),
+                list(&self.pattern_fills)
+            ));
+        }
+        if self.pattern_from_table > 0 {
+            out.push(format!(
+                "{} had a pattern name but no pattern lines: the lines of the standard pattern of that name were used, with the scale and the angle of the hatch",
+                plural(self.pattern_from_table, "hatch", "hatches")
+            ));
+        }
+        if self.pattern_lines_cut > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} left out: a pattern keeps at most {} lines",
+                plural(self.pattern_lines_cut, "line", "lines"),
+                if self.pattern_lines_cut == 1 {
+                    "was"
+                } else {
+                    "were"
+                },
+                crate::dxf::hatch::MAX_LINES
+            ));
+        }
+        if self.pattern_lines_unusable > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} left out: the lines of the family lie on each other, the dash list draws nothing, or a number is not valid",
+                plural(self.pattern_lines_unusable, "line", "lines"),
+                if self.pattern_lines_unusable == 1 { "was" } else { "were" }
+            ));
+        }
+        if self.pattern_lines_unread > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} not read: the import reads at most {} lines from one hatch",
+                plural(self.pattern_lines_unread, "line", "lines"),
+                if self.pattern_lines_unread == 1 { "was" } else { "were" },
+                crate::dxf::hatch::MAX_READ
+            ));
+        }
         if !self.pattern_hatches.is_empty() {
             let total: usize = self.pattern_hatches.values().sum();
-            let names: Vec<String> = self
-                .pattern_hatches
-                .iter()
-                .map(|(n, c)| format!("{n} {c}"))
-                .collect();
+            let mut why = Vec::new();
+            for (n, text) in [
+                (
+                    self.pattern_no_lines,
+                    "no pattern lines and not a standard pattern",
+                ),
+                (self.pattern_unusable, "no usable pattern line"),
+                (
+                    self.pattern_dense,
+                    "lines closer than the drawing engine draws for all families together",
+                ),
+            ] {
+                if n > 0 {
+                    why.push(format!("{n} with {text}"));
+                }
+            }
             out.push(format!(
-                "{} with a pattern {} imported as outlines without the pattern: {}",
+                "{} with a pattern {} imported as outlines without the pattern ({}): {}",
                 plural(total, "hatch", "hatches"),
                 if total == 1 { "was" } else { "were" },
-                names.join(", ")
+                why.join(", "),
+                list(&self.pattern_hatches)
             ));
         }
         if self.gradient_hatches > 0 {
@@ -135,7 +240,7 @@ impl Tally {
         }
         if self.hatch_islands > 0 {
             out.push(format!(
-                "{} of solid hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes: they cover what lies below them",
+                "{} of hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes: they cover what lies below them",
                 plural(self.hatch_islands, "island", "islands"),
                 if self.hatch_islands == 1 { "is" } else { "are" }
             ));
@@ -151,6 +256,79 @@ impl Tally {
                     "3D polylines"
                 }
             ));
+        }
+        if self.tilted_blocks > 0 {
+            let mut text = format!(
+                "{} in a tilted plane: the content is placed in 3D",
+                plural(
+                    self.tilted_blocks,
+                    "block reference lies",
+                    "block references lie"
+                )
+            );
+            if self.tilted_objects > 0 {
+                text += &format!(
+                    ". {} became 3D polylines (curves within {tol} mm), 3D points or moved meshes",
+                    plural(self.tilted_objects, "object", "objects")
+                );
+            }
+            if self.tilted_fills > 0 {
+                text += &format!(
+                    ". {} lost {} because a fill cannot lie in a tilted plane",
+                    plural(self.tilted_fills, "filled shape", "filled shapes"),
+                    if self.tilted_fills == 1 {
+                        "its fill"
+                    } else {
+                        "their fill"
+                    }
+                );
+            }
+            if self.tilted_islands > 0 {
+                text += &format!(
+                    ". {} of hatches {} left out because there is no fill to cut them from",
+                    plural(self.tilted_islands, "island", "islands"),
+                    if self.tilted_islands == 1 {
+                        "was"
+                    } else {
+                        "were"
+                    }
+                );
+            }
+            out.push(text);
+        }
+        if self.tilted_texts > 0 {
+            let mut text = format!(
+                "{} in a tilted plane {} placed flat: the point, the turn and the height come from the projection onto the drawing plane",
+                plural(self.tilted_texts, "text", "texts"),
+                if self.tilted_texts == 1 {
+                    "was"
+                } else {
+                    "were"
+                }
+            );
+            if self.tilted_texts_upright > 0 {
+                text += &format!(
+                    ". {} stand in a nearly upright plane and keep their full height",
+                    self.tilted_texts_upright
+                );
+            }
+            if self.tilted_texts_back > 0 {
+                text += &format!(
+                    ". {} {} seen from the back and {} not mirrored",
+                    self.tilted_texts_back,
+                    if self.tilted_texts_back == 1 {
+                        "is"
+                    } else {
+                        "are"
+                    },
+                    if self.tilted_texts_back == 1 {
+                        "is"
+                    } else {
+                        "are"
+                    }
+                );
+            }
+            out.push(text);
         }
         if self.tilted_hatches > 0 {
             out.push(format!(
@@ -202,14 +380,26 @@ impl Tally {
         }
         if self.viewport_twist > 0 {
             out.push(format!(
-                "{} a twist, which a viewport of a sheet does not have: the view is not turned",
-                plural(self.viewport_twist, "viewport has", "viewports have")
+                "{} a twist: the plan is turned by it on the sheet (a picture, such as a map underlay, cannot follow the turn and is not drawn)",
+                plural(self.viewport_twist, "plan viewport has", "plan viewports have")
+            ));
+        }
+        if self.viewport_twist_ignored > 0 {
+            out.push(format!(
+                "{} a twist: the number is kept and written back, but a 3D view is not turned (the camera has no roll)",
+                plural(self.viewport_twist_ignored, "3D viewport has", "3D viewports have")
             ));
         }
         if self.viewport_perspective > 0 {
             out.push(format!(
-                "{} a perspective view: it shows a parallel projection",
-                plural(self.viewport_perspective, "viewport has", "viewports have")
+                "{} a perspective view: it is drawn with a perspective camera, with the field of view of Kadakas (the lens length of the file is not read)",
+                plural(self.viewport_perspective, "3D viewport has", "3D viewports have")
+            ));
+        }
+        if self.viewport_perspective_plan > 0 {
+            out.push(format!(
+                "{} the perspective flag: a plan has no perspective, so it shows as a plan. The flag is kept and written back",
+                plural(self.viewport_perspective_plan, "plan viewport has", "plan viewports have")
             ));
         }
         for (view, n) in &self.viewport_views {
@@ -224,10 +414,76 @@ impl Tally {
                 plural(self.viewport_clip_lost, "viewport is", "viewports are")
             ));
         }
-        if self.xclip > 0 {
+        if self.xclip_applied > 0 {
+            let mut text = format!(
+                "{} a clip (XCLIP) that was applied: the geometry of the block is cut by the polygon",
+                plural(
+                    self.xclip_applied,
+                    "block reference has",
+                    "block references have"
+                )
+            );
+            if self.xclip_cut > 0 {
+                text += &format!(
+                    ". {} cut at the edge of the clip (the cut points are exact{})",
+                    plural(self.xclip_cut, "object was", "objects were"),
+                    if self.xclip_curves > 0 {
+                        format!(
+                            ". {} with curves became chords within {tol} mm",
+                            self.xclip_curves
+                        )
+                    } else {
+                        String::new()
+                    }
+                );
+            }
+            if self.xclip_whole > 0 {
+                text += &format!(
+                    ". {} (text, points, meshes) stayed or went whole, by their point or their vertices",
+                    plural(self.xclip_whole, "object", "objects")
+                );
+            }
+            out.push(text);
+        }
+        if self.xclip_inverted > 0 {
             out.push(format!(
-                "{} a clip (XCLIP) that is not applied: the whole block shows",
-                plural(self.xclip, "block reference has", "block references have")
+                "{} inverted (the part inside the polygon is cut away)",
+                plural(self.xclip_inverted, "clip is", "clips are")
+            ));
+        }
+        if self.xclip_planes > 0 {
+            out.push(format!(
+                "{} a front or back clip plane (3D) that is not applied: only the polygon is",
+                plural(self.xclip_planes, "clip has", "clips have")
+            ));
+        }
+        if self.xclip_off > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) that is switched off in the file: the whole block shows",
+                plural(
+                    self.xclip_off,
+                    "block reference has",
+                    "block references have"
+                )
+            ));
+        }
+        if self.xclip_too_big > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) with more than {} points: it is not applied and the whole block shows",
+                plural(self.xclip_too_big, "block reference has", "block references have"),
+                crate::dxf::import::clip::MAX_CLIP_POINTS
+            ));
+        }
+        if self.xclip_chord_cap > 0 {
+            out.push(format!(
+                "{} cut by a clip: the chords were cut to 20000 at most, so the curve is coarser than {tol} mm",
+                plural(self.xclip_chord_cap, "circle or arc was", "circles and arcs were"),
+            ));
+        }
+        if self.xclip_unreadable > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) that cannot be read (too few points, no matrix or no area): the whole block shows",
+                plural(self.xclip_unreadable, "block reference has", "block references have")
             ));
         }
         if self.transparent > 0 {
@@ -270,16 +526,31 @@ mod tests {
             hatch_islands: 5,
             tilted: 6,
             tilted_hatches: 2,
-            xclip: 2,
+            xclip_applied: 2,
+            xclip_inverted: 1,
+            xclip_planes: 1,
+            xclip_off: 3,
+            xclip_unreadable: 1,
+            xclip_cut: 4,
+            xclip_curves: 2,
+            xclip_whole: 5,
             transparent: 3,
             wipeouts: 1,
             subdivided_meshes: 2,
+            pattern_from_table: 2,
+            pattern_lines_cut: 3,
+            pattern_lines_unusable: 1,
+            pattern_no_lines: 1,
+            pattern_unusable: 1,
+            pattern_dense: 1,
             ..Tally::default()
         };
         t.pattern_hatches.insert("ANSI31".into(), 2);
         t.pattern_hatches.insert("NET".into(), 1);
+        t.pattern_fills.insert("EARTH".into(), 4);
+        t.pattern_fills.insert("ANSI32 x2".into(), 1);
         let notes = t.notes(1.5);
-        assert_eq!(notes.len(), 16);
+        assert_eq!(notes.len(), 24);
         let all = notes.join("\n");
         for needle in [
             "2 splines became polylines within 1.5 mm",
@@ -289,10 +560,13 @@ mod tests {
             "1 ellipse or elliptical arc became",
             "4 circles and arcs under a block scale",
             "2 LEADERs were imported as lines",
-            "3 hatches with a pattern were imported",
-            "ANSI31 2, NET 1",
+            "5 hatches with a pattern became hatch fills of the document: ANSI32 x2 1, EARTH 4",
+            "2 hatches had a pattern name but no pattern lines",
+            "3 lines of hatch patterns were left out: a pattern keeps at most 128 lines",
+            "1 line of hatch patterns was left out: the lines of the family lie on each other",
+            "3 hatches with a pattern were imported as outlines without the pattern (1 with no pattern lines and not a standard pattern, 1 with no usable pattern line, 1 with lines closer than the drawing engine draws for all families together): ANSI31 2, NET 1",
             "1 gradient hatch was imported",
-            "5 islands of solid hatches are drawn",
+            "5 islands of hatches are drawn",
             "6 entities in a tilted plane were imported as 3D polylines",
             "2 hatches in a tilted plane were imported as outlines",
             "2 block references have a clip (XCLIP)",

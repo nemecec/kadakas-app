@@ -259,10 +259,15 @@ fn viewport(
     w.num(44, 0.0);
     w.num(45, view_height);
     w.num(50, 0.0);
-    w.num(51, 0.0);
+    // The twist turns the model about the target, which is the center of the view (IOP-27).
+    w.num(51, v.twist.rem_euclid(360.0));
     w.pair(72, 1000);
-    // 32768 is always on in files of AutoCAD. 65536 says that a clipping outline follows.
-    w.pair(90, 32768 + if has_clip { 65536 } else { 0 });
+    // 32768 is always on in files of AutoCAD. 65536 says that a clipping outline follows. The flag value 1
+    // is the perspective view.
+    w.pair(
+        90,
+        32768 + if has_clip { 65536 } else { 0 } + i32::from(v.perspective),
+    );
     for n in &names {
         let h = frozen
             .entry(n.to_uppercase())

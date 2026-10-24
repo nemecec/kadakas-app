@@ -51,7 +51,7 @@ pub const PROJECT_SET: (&str, &str) = (
 );
 pub const VIEWPORT_CREATE: (&str, &str) = (
     "viewport.create",
-    "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.",
+    "Add a viewport to a sheet layer. params: {sheet, layers? (design layer IDs or names; default all), min+max or at+size (frame on the sheet, mm; default the page inside the margins), scale? (denominator such as 100, or \"fit\" for the best standard scale; default fit), center? (model point at the middle of the frame; default the middle of the content), view? (plan | a 3D view from view.list; default plan), mode? (shaded | wireframe | hidden_line | dashed_hidden_line, 3D only; hidden line modes give vector lines), render_style? (a render style of the document, ID or name; it replaces mode), dpi? (3D only, default 150), crop? ({type: rect, min, max} | {type: polygon, points} in paper mm), show_frame?, name?, twist? (plan only: degrees counterclockwise, the model turns about the center of the view; default 0), perspective? (3D views only: a perspective camera; default false)}. 3D views are raster images; the hidden line modes give vector lines. Returns the viewport with its id.",
 );
 pub const VIEWPORT_GET: (&str, &str) = (
     "viewport.get",
@@ -63,7 +63,7 @@ pub const VIEWPORT_LIST: (&str, &str) = (
 );
 pub const VIEWPORT_UPDATE: (&str, &str) = (
     "viewport.update",
-    "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, fit (true recomputes center and scale)}. Returns the viewport.",
+    "Change a viewport. params: {id, and any of name, min, max, center, scale (number or \"fit\"), layers, view, mode, render_style (null removes it), dpi, crop (null removes it), show_frame, twist, perspective, fit (true recomputes center and scale)}. Returns the viewport.",
 );
 pub const VIEWPORT_SET_OVERRIDE: (&str, &str) = (
     "viewport.set_override",
@@ -414,6 +414,10 @@ pub(crate) fn viewport_json(doc: &Document, id: ObjectId) -> Res {
     let mut v = serde_json::to_value(vp).unwrap();
     v["id"] = json!(o.id);
     v["sheet"] = json!(o.layer);
+    let warnings = vp.view_warnings(doc);
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
     Ok(v)
 }
 
@@ -479,6 +483,8 @@ struct CreateViewport {
     name: Option<String>,
     crop: Option<Crop>,
     show_frame: Option<bool>,
+    twist: Option<f64>,
+    perspective: Option<bool>,
 }
 
 fn scale_from(p: &Value) -> Result<Option<f64>, RpcError> {
@@ -534,6 +540,8 @@ fn viewport_create(s: &mut Session, p: &Value) -> Res {
     vp.name = c.name.unwrap_or_default();
     vp.crop = c.crop;
     vp.show_frame = c.show_frame.unwrap_or(false);
+    vp.twist = c.twist.unwrap_or(0.0);
+    vp.perspective = c.perspective.unwrap_or(false);
     vp.snapshot_visibility(doc);
     let mut fitted = vp.clone();
     fitted.fit(doc);
@@ -589,6 +597,8 @@ fn viewport_update(s: &mut Session, p: &Value) -> Res {
             "dpi",
             "crop",
             "show_frame",
+            "twist",
+            "perspective",
         ] {
             if let Some(x) = p.get(key) {
                 obj.insert(key.into(), x.clone());

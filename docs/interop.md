@@ -128,7 +128,7 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file is release 2004 (`AC1018`) with its code page, unless the option `version` says another one (see the DXF files section). The audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas reads the MESH entity too (IOP-15): it becomes a `mesh3d` object with the control mesh.
 
-## DXF files (IOP-01, IOP-15, IOP-16)
+## DXF files (IOP-01, IOP-15, IOP-16, IOP-27)
 
 This section is about real-world DXF files. The research with its sources is `docs/research/dxf-real-world.md`. The code is in `crates/kadakas-io/src/dxf`.
 
@@ -156,15 +156,98 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | ATTRIB | Visible text. An invisible attribute and an ATTDEF are reported. |
 | MTEXT, TEXT | The codes `%%c`, `%%d`, `%%p`, `%%nnn`, `\U+XXXX`, the caret codes (`^J`) and the MTEXT codes for fonts, heights, colors, stacks and paragraphs. The text equals the plain text of the ezdxf reader for the corpus files. |
 | SOLID, TRACE | A filled polygon (fill = pen color). The corners are in the order 1, 2, 4, 3. |
-| HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch is an outline, and a note counts the pattern names. |
+| HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch has a hatch fill of the document, made from its pattern lines (IOP-27, see Pattern hatches). |
 | WIPEOUT | A white polygon with no line and `data.wipeout`, above what was drawn before it. |
 | MESH | A `mesh3d` object (the control mesh). |
 | LEADER | An open polyline. The arrowhead is not drawn. |
 | DIMENSION, ARC_DIMENSION, ACAD_TABLE | The lines and text of the anonymous block. Without the block the entity is reported. The definition points on the layer `Defpoints` are reported. |
 | SPLINE, ELLIPSE | Polylines within the tolerance. A note counts them. A spline without knots gets uniform knots, as in the ezdxf reader. |
-| Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). TEXT, MTEXT and INSERT in a tilted plane are reported. |
+| Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). A TEXT, ATTRIB or MTEXT in a tilted plane is placed flat by its projection, and a block reference in a tilted plane is placed in 3D (IOP-27, see Tilted planes). |
 | IMAGE, 3DSOLID, BODY, REGION, SURFACE, MLEADER, XLINE, RAY, MLINE, OLE2FRAME, XREF | Reported by name with the reason. An IMAGE names its file, an XREF its path. |
-| XCLIP of a block reference, transparency | Not applied. A note counts them. |
+| XCLIP of a block reference | The geometry of the block is cut by the polygon of the clip (IOP-27, see Block clips). |
+| Transparency | Not applied. A note counts them. |
+
+### Pattern hatches (IOP-27)
+
+A pattern hatch has a pattern name, a scale, an angle and pattern lines. The pattern lines are stored in the file after the scale and the turn. The import uses them as they are.
+
+- Each pattern line has an angle, a base point, an offset vector and a dash list. The offset is the vector from a line to the next line of the family.
+- A hatch line of the document has an angle, a spacing across the lines, a stagger along them, an origin and a dash list. The import converts one into the other without loss. A family that runs to the other side gets a negative stagger.
+- A dash is positive, a gap is negative and a dot is 0. A dot becomes a short dash. The gap after it is shorter by that much, so the period stays the same.
+- The dot is 10 percent of the spacing or of the period, whichever is smaller. It is at least 0.1 mm and at most 40 percent of the smallest gap. At 1:100 a dot of a pattern at scale 100 is then 0.1 mm or more on paper.
+- A dash list that starts with a gap keeps its gap. The export writes the same items again. A real short dash stays a dash.
+- Some dash lists are not patterns: gaps only, dots only, or a period under 0.0001 mm. The line is left out and counted.
+- The lines are in mm (`units: world`). The unit of the file, the scale of a block, a turn and a mirror (extrusion -Z) apply. A block with different scales in x and y works too, because a straight line stays straight.
+- A hatch in a tilted block stays an outline, because a fill cannot lie in a tilted plane. It makes no resource.
+- The origin of a family is reduced by whole steps. Rounding noise does not count. Hatches of one pattern then share one resource, wherever they lie.
+- A resource that draws the same lines as one of the document is used again. Else a new hatch is made. It has the pattern name, with ` x2` or ` 30 deg` when the lines are the standard pattern at another scale or turn. A name that is taken gets ` (2)`.
+- An entity with a pattern name and no pattern lines gets the lines of the standard pattern of that name from the table. The scale (code 41) and the angle (code 52) apply. The table has 106 patterns: `ANSI31` to `ANSI38`, `AR-*`, `EARTH`, `GRASS`, `GRAVEL`, `STEEL`, `NET` and more.
+- A double hatch (code 77) adds the lines turned by 90 degrees. This is done for a table pattern and for one family of lines. A file that holds both halves is not doubled again.
+- The boundary loops are polylines with the hatch fill. An island is a white filled polyline on top, as for a solid hatch. The outer loop is always drawn before the islands in it. The outer loop knows its islands (`data.hatch_islands`).
+- A pattern keeps at most 128 lines. A note counts the lines that were left out. A line whose copies would lie on each other is left out and counted. The import reads at most 10,000 lines from one entity, and a note counts the rest.
+- All the families of a pattern together may make 100,000 lines in the box of the hatch. A denser pattern stays an outline, and a note says so. The drawing engine would cut it without a word.
+- The table of the standard patterns is `crates/kadakas-io/src/dxf/hatch/std_patterns.txt`. It is made by `tests/data/make_std_patterns.py` from the metric table of ezdxf (MIT licence).
+
+The export writes a hatch fill as a HATCH entity.
+
+- The object keeps its outline entity. The HATCH has the boundary path, the name and the pattern lines. A landscape area with holes writes the holes as more paths. The islands of an imported pattern hatch are holes of one HATCH too. Real files of AutoCAD flag the outer path as external (3 here) and an island as outermost (18).
+- A fill that is a standard pattern gets its name (`ANSI31`). The scale goes in code 41 and the turn in code 52. The turn must be a multiple of 15 degrees. A pattern of one family of lines is named at the turn 0 only. A resource that starts with the standard name (`ANSI31 x2 90 deg`, made by the import) keeps that name at any turn.
+- Any other fill gets its own name in capital letters, as a custom pattern.
+- The numbers follow the unit, the origin and the scale of the layer (paper units).
+- A fill with a color or a weight on one of its lines stays plain LINE entities. So does a tile. Release 12 has no HATCH. It writes the outline, and a note counts the objects.
+- The report says how many HATCH entities were written, by name.
+
+### Block clips (IOP-27)
+
+A block reference with a clip (XCLIP) has an extension dictionary. It leads to a SPATIAL_FILTER object. Kadakas explodes blocks, so it has no symbol with a stencil. The import cuts the geometry of each entity of the block by the polygon, in the plane.
+
+- The polygon is in the space of the reference. The inverse matrix of the filter (the last 24 numbers of code 40, the first 12) gives it in the coordinates of the block. Two points are a rectangle by its corners.
+- The turn, the scale and the place of the reference apply, also in arrays (every copy is cut) and in nested blocks (all clips of the references around apply).
+- A line or a polyline is cut at the edge of the polygon. The cut points are exact. A concave polygon can cut a line in many pieces.
+- A line that lies on the edge of the polygon stays.
+- A curve (a circle, an arc, a bulge) that lies entirely inside stays exact. A curve that is cut becomes chords within the tolerance. A note counts these.
+- A filled shape (a solid, a hatch loop, a wipeout) becomes the polygon boolean of the shape and the clip. The pattern of a hatch stays. A hole becomes a white island, as in a hatch.
+- A text, a point and a 3D point stay or go whole by their point. A mesh stays or goes whole by its vertices. A note counts these.
+- An entity that is entirely outside is not imported. Its line in `report.skipped` says `outside the clip (XCLIP) of its block reference`, and the accounting stays exact.
+- An inverted clip keeps the part outside. The filter holds a polygon, and an XRECORD in its dictionary holds the part that is cut away. The filter polygon is the outer one or the part that is cut away, as ezdxf says. The smaller box is the part that is cut away. The outer area is the box of the compare polygon in the XRECORD, else of the larger polygon.
+- A clip that is switched off (code 71 is 0), or that cannot be read, shows the whole block. A note counts them.
+- A front or back clip plane (3D) is not applied. Only the polygon is. A note counts them.
+- The clip is in the plane. A 3D polyline is cut by its plan, and its height is interpolated.
+- A circle or an arc is cut into chords within the tolerance, at most 20,000. A note says when the cap holds.
+- A clip may have 10,000 points. A longer one is refused with a note, and the whole block shows. A clip of 10,000 points cuts 20,000 lines in a few seconds. The edges are kept in slabs.
+- The clip of a block cuts the geometry in the plane of the block, before the tilt of a block inside it. A tilted block inside a clipped block is not cut by the plan of the clip.
+
+### Twist and perspective of viewports (IOP-27)
+
+A viewport of the sheet has a `twist` and a `perspective` flag.
+
+- The twist (code 51) is the angle that turns a plan view about the center of the view. A positive angle turns the model counterclockwise on the sheet, as the transformation of the ezdxf reader does. The view center (code 12 and 22) is in the display axes. The model point at the middle of the frame is the target plus the turned back view center.
+- The viewport object keeps the twist in degrees from -180 to 180. `viewport.create` and `viewport.update` take `twist`. The window of the app has a field for it.
+- The sheet draws a twisted plan view: every point, arc, hatch and symbol follows the turn. Text stays upright. A raster picture cannot follow the turn, because it has straight sides on the sheet. A map underlay and the picture in a table cell are not drawn. A note on the page says so. The reply of `viewport.create`, `viewport.update` and `viewport.get` has the same text in `warnings`, and the window shows it.
+- `fit` makes room for the turned content. It turns the box of each object, so the fit is as tight as the boxes allow.
+- The reply has `warnings` for a twist on a 3D view or a section, and for the perspective flag on a plan. The values are kept.
+- The notes of a pattern on the sheet stay inside the frame, also at a twist of 180 degrees.
+- A viewport keeps the fields that a newer version added (`extra`), like a saved view.
+- A 3D view and a section are not turned. The camera of the 3D view has no roll. A 3D viewport keeps the twist and writes it back, and a note counts it.
+- The perspective flag (flag value 1 of code 90) gives a 3D viewport a perspective camera. It shows the same size at the target as the parallel view does. The lens length (code 42) is not read, and the field of view is the one of Kadakas. A note says so.
+- A plan has no perspective. A plan viewport keeps the flag and writes it back, and a note counts it.
+- The export writes the twist from 0 to 360 and the flag. The target is the middle of the view and the view center is 0.
+
+### Tilted planes (IOP-27)
+
+An entity lies in a plane when its extrusion direction (codes 210, 220 and 230) is not straight up or down. The axes of the plane come from the arbitrary axis algorithm of the DXF reference.
+
+- A block reference in a tilted plane is placed in 3D. The turn, the scale and the insertion point apply in the plane. The point of the insertion is the pivot of the tilt.
+- Lines, polylines, circles and arcs of the block become 3D polylines. Curves are cut within the tolerance. 3D polylines, points and meshes move in 3D.
+- A fill cannot lie in a tilted plane. The shape keeps its outline, and a note counts the fills that were lost. The white islands of hatches are left out and counted.
+- A flat shape keeps its elevation as its height above the plane of the block. That is code 30, or 38 for a LWPOLYLINE.
+- Nested references work. A tilted reference inside a block that turns or scales is tilted inside the block first.
+- An object of Kadakas has no work plane. A text has a point, a height and a turn on the drawing plane, and a symbol has the same. So a text in a tilted plane is placed flat by its projection onto the drawing plane.
+- The point of the text is the projected point. The turn is the turn of the projected baseline. The height is the height times the length of the projected height vector. A plane tilted by 60 degrees gives half the height.
+- A plane that stands nearly upright (a wall) would give a height of nothing. Then the text keeps its full height, and the turn follows the wall.
+- A plane that is seen from the back would mirror the text. A text cannot be mirrored, so the text is placed as it is and a note counts it.
+- A note counts the texts, the texts on upright planes and the texts seen from the back. The loss is the 3D position of the text. The export writes the text flat.
+- A block reference whose container cannot be inverted (a scale of 0) is skipped with that reason.
 
 ### The report
 
@@ -182,7 +265,7 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | Entities of the layout, blocks, title block, attributes | Objects on the sheet layer, in the order of the file, so what lies under a viewport stays under it. |
 | 3D polyline in paper space | Flattened to 2D, and a note counts it. Other shapes that a sheet cannot hold are reported. |
 
-A viewport that is off, has no size or is not valid is reported. A twist and a perspective view are not kept, and a note counts them. A view direction that is not a standard view uses the nearest standard view, and a note says which.
+A viewport that is off, has no size or is not valid is reported. A view direction that is not a standard view uses the nearest standard view, and a note says which. The twist and the perspective view are in the next part.
 
 The export writes the reverse. A sheet layer is a layout with the paper, the viewport of the paper, the viewports, the annotations of the viewports, the title block (lines and text) and the objects of the sheet. The first layout is in the section ENTITIES with the flag `67 1`, the others in their blocks `*Paper_Space0` and so on. The option `sheets` is `false` to leave sheets out. Release 12 has no layouts. The update of a drawing (IOP-23) does not import paper space.
 
@@ -207,13 +290,15 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 - Every corpus file goes through the import. It must not panic, it must end in time, and its report must account for every entity. The counts of entities, layouts, viewports and MTEXT texts are compared with the ezdxf reader (`crates/kadakas-io/tests/fixtures/dxf_public_counts.json`, made by `tests/data/make_public_counts.py`).
 - Our own small files are in `tests/data/dxf-own/` (made by `tests/data/make_own_files.py`). They run offline.
 - The tests for damaged and hostile files are in `crates/kadakas-io/tests/dxf_hostile.rs`.
+- The tests of IOP-27 are `crates/kadakas-io/tests/dxf_hatch.rs` (own entities), `dxf_leftovers.rs` (public files, with facts from the ezdxf reader in `fixtures/dxf_iop27.json`, made by `tests/data/make_iop27_facts.py`) and `tests/behavior/test_dxf_hatch.py`. The last one compares the length of the pattern lines with the lines that `ezdxf.render.hatching` draws for the same hatch, for nine patterns.
 
 ### Not done
 
-- Block clips (XCLIP) and transparency are not applied.
-- Pattern hatches are outlines. The pattern is not drawn.
-- A viewport with a twist keeps no twist.
-- TEXT, MTEXT and INSERT in a tilted plane are reported and not placed.
+- Transparency is not applied.
+- The islands of a pattern hatch are white filled outlines on top of the hatch. A polyline has no holes, so the lines of the pattern still run under the island. Outputs that do not paint over it show them. The export writes the island as its own polyline. It also writes it as a hole of the HATCH when the outer loop still knows it.
+- A hatch in a tilted plane has no fill, only its boundary as 3D polylines.
+- A pattern hatch with an associative boundary (code 330 to the entities) loses the association. The boundary becomes polylines.
+- A twist does not turn a 3D view or a section. A raster picture is not drawn in a twisted plan view. The lens length of a perspective view is not read.
 - The releases 2013 and 2018 of the export are not opened in a CAD program. Release 12 is not opened in LibreCAD or a laser program by hand.
 - An import of a very large drawing is slow in the editor, because the batch of a few hundred thousand commands runs in quadratic time. The import itself is linear.
 
