@@ -2934,6 +2934,7 @@ dependencies = [
  "kadakas-crs",
  "kadakas-io",
  "kadakas-site",
+ "kadakas-step",
  "kadakas-sys",
  "proptest",
  "serde",
@@ -3189,6 +3190,17 @@ dependencies = [
  "serde",
  "serde_json",
  "spade",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kadakas-step"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "kadakas-meshio",
+ "proptest",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
