@@ -193,3 +193,62 @@ All paths are in the clone. Provenance is "agent-assisted, policy says clean-roo
 - The clone was shallow. Commit history and authors were not read.
 - Vendored egui-wgpu and matext4cgmath licences are unverified.
 - Counts of tests and lines come from simple greps in the clone. They are rough.
+
+## 12. Business, server and collaboration
+
+Facts are from 2026-10-24. The clone is shallow with one commit, so history and authors are unverified.
+
+### A. Business
+
+- The GitHub organisation is tangency-labs. The footer of solidcraft.io says "© Tangency Labs". The org page names no company, members or legal entity (github.com/tangency-labs).
+- The legal form of Tangency Labs is unverified. The privacy page says the responsible operator is not yet configured (solidcraft.io/privacy).
+- The repo moved from bherbruck/solidcraft. The update check still points to that name (crates/ui-egui/src/update.rs).
+- The main author is probably bherbruck. His profile shows pinned tangency-labs repos and 16 GitHub sponsors. His employer is unverified (github.com/bherbruck).
+- The storytold family is a separate GitHub org with CADCraft, GridCraft, VectorCraft and PhotoCraft. SolidCraft copies code from them under MIT or Apache-2.0 (NOTICE, ATTRIBUTION.md).
+- Tangency Labs also publishes solidcore (Apache-2.0), fieldcraft, pcbcraft (GPL-3.0) and an empty solidcraft-plugins repo (github.com/tangency-labs).
+- Funding: .github/FUNDING.yml lists GitHub Sponsors and Ko-fi for bherbruck, a person and not the company.
+- Blacksmith sponsors the CI minutes (README.md, Sponsors section).
+- The repo has no Open Collective, no dual licence, no paywall, no ads and no token. The licence is MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).
+- The community site solidcraft.pro links to "SolidCraft online", PartBatch, pricing, terms, refund and account pages. It says it is unofficial and unaffiliated. The operator is unnamed.
+- So a paid hosted service exists in the ecosystem, run by an unknown party. Its link to Tangency Labs is unverified.
+- Telemetry: none found. The desktop app asks GitHub for the latest release once a day, sends no identifier, and has an off switch (crates/ui-egui/src/update.rs).
+- Crash reports stay on the computer. The user sends them by hand as a GitHub issue draft (docs/crash-reports.md).
+- The website has no analytics, no accounts and no cookies (solidcraft.io/privacy). It is static on Cloudflare Pages (github.com/tangency-labs/website).
+- Trademark and domain owners are unverified. The README only disclaims CAD vendor trademarks (README.md, NOTICE).
+
+### B. Server component
+
+- The repo has no server, cloud, account, sync, registry or telemetry endpoint. Only static hosting exists.
+- The web app is wasm. A Dockerfile serves the static site with nginx on port 8080 (packaging/docker/Dockerfile).
+- The web build stores designs in the browser origin private file system. An autosave sits there too (apps/solidcraft-web/src/files.rs).
+- The app updates itself through a service worker (crates/ui-egui/src/update.rs).
+- The only network calls from the app go to GitHub releases and to the agent endpoint the user sets (apps/solidcraft/src/main.rs, docs/agent-chat.md).
+- The MCP server and control API listen on loopback with a token (docs/mcp.md, docs/control-protocol.md).
+- Updates for Flatpak come from a feed on docs.solidcraft.io (docs/compatibility.md).
+
+### C. Sharing and collaboration
+
+- Found no share links, comments, presence, CRDT, OT, WebSocket or file locking. The Cargo.lock has no sync crate such as yrs or tungstenite.
+- Export and download of files is the only way to share. The crash lock file is per run and is not a document lock (ROADMAP.md).
+- Undo and redo exist, with one step per agent message (ROADMAP.md). No named versions or history browser were found.
+- The ROADMAP.md comments item is about parameter notes. Real collaboration is not on the roadmap (unverified beyond a grep).
+- The file format is a JSON container. Its merge friendliness is unverified (crates/io/src/design.rs).
+
+### Comparison with Kadakas
+
+- Kadakas plans a separate collab server repo, the crate kadakas-collab and the protocol in docs/collaboration.md. SolidCraft has none of these.
+- Kadakas has a server-ordered operation log, last-writer-wins per property, per-user undo and presence (feature-spec PLAT-07, PLAT-08).
+- Kadakas has named versions, diff and BCF issues (REV-01, REV-02, REV-04). Shared ones live on the server (REV-09).
+- SolidCraft has the same local-first stance and the same MIT or Apache-2.0 licence choice for the client.
+- The Kadakas server sits in its own repo so its licence is chosen apart (feature-spec, platform section). SolidCraft has no such split.
+- Kadakas needs hosting, accounts and operations cost. SolidCraft pays almost nothing and relies on GitHub, Cloudflare Pages and sponsors.
+
+### What to learn
+
+- Keep the client free of any account. Make every server feature optional, as the SolidCraft desktop app does.
+- Copy the update check design. One public request, no identifier, an off switch, a silent failure.
+- Publish a privacy page early. Name the operator and a contact. SolidCraft left both unset and looks unfinished.
+- Keep crash reports local and send them by user action only.
+- Own the name and the domain with a legal entity before launch. SolidCraft changed its repo name and feed addresses three times.
+- Watch the unofficial paid hosting around SolidCraft. A third party sells the hosted service while the project does not. Plan trademark rules for Kadakas.
+- Fund through sponsors and a paid collab server. A paid server fits the separate repo plan and keeps the client free.
