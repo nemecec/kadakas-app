@@ -51,7 +51,8 @@ tests/behavior/fixtures/make_parking_lot*.py	Parking lot DXF scripts	Kadakas pro
 tests/behavior/gltf_validate.js	glTF validation script	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 docs/scripts/*.js	Example generator scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
 docs/icons.html	Icon gallery	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
-crates/kadakas-render/testdata/red_blue.jpg	Test picture red_blue.jpg	UNKNOWN	UNKNOWN	UNKNOWN	test
-crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf	UNKNOWN	UNKNOWN	UNKNOWN	test
-crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson	UNKNOWN	UNKNOWN	UNKNOWN	test
-tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf	UNKNOWN	UNKNOWN	UNKNOWN	test
+crates/kadakas-render/testdata/red_blue.jpg	Test picture red_blue.jpg (16x16, made by an agent with Python and sips)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson (written by an agent)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/fixtures/make_survey.py	Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf)	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test

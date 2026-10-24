@@ -179,10 +179,11 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | glTF validation script | `tests/behavior/gltf_validate.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Example generator scripts | `docs/scripts/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 | Icon gallery | `docs/icons.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
-| Test picture red_blue.jpg | `crates/kadakas-render/testdata/red_blue.jpg` | UNKNOWN | UNKNOWN | UNKNOWN | test |
-| Test file site.dxf | `crates/kadakas-io/tests/fixtures/site.dxf` | UNKNOWN | UNKNOWN | UNKNOWN | test |
-| Test file trees.geojson | `crates/kadakas-io/tests/fixtures/trees.geojson` | UNKNOWN | UNKNOWN | UNKNOWN | test |
-| Test files survey_rev1.dxf and survey_rev2.dxf | `tests/behavior/fixtures/survey_rev?.dxf` | UNKNOWN | UNKNOWN | UNKNOWN | test |
+| Test picture red_blue.jpg (16x16, made by an agent with Python and sips) | `crates/kadakas-render/testdata/red_blue.jpg` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Test file site.dxf (written by an agent) | `crates/kadakas-io/tests/fixtures/site.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Test file trees.geojson (written by an agent) | `crates/kadakas-io/tests/fixtures/trees.geojson` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Test files survey_rev1.dxf and survey_rev2.dxf (made by make_survey.py) | `tests/behavior/fixtures/survey_rev?.dxf` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
+| Script make_survey.py (made survey_rev1.dxf and survey_rev2.dxf) | `tests/behavior/fixtures/make_survey.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/kadakas/kadakas | test |
 
 ## Keep this page current
 

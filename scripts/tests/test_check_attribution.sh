@@ -39,12 +39,32 @@ expect_out() {
 reset() { unset ATTR_TSV ATTR_OPEN ATTR_NOTICES ATTR_ATTRIBUTION ATTR_LICENCES GITHUB_ACTIONS; }
 real_tsv=docs/attribution-assets.tsv
 # The UNKNOWN rows of today. A new one needs a deliberate change of this number.
-expected_unknown_rows=4
+expected_unknown_rows=0
 
 reset
 expect_pass "real tree passes"
-expect_out "UNKNOWN rows are printed as warnings" "^WARN  crates/kadakas-render/testdata/red_blue.jpg"
 expect_out "number of UNKNOWN rows is pinned" "$expected_unknown_rows UNKNOWN row(s)"
+# A synthetic UNKNOWN row (the real tree has none) is printed as a warning and as an annotation.
+awk -F'\t' 'BEGIN{OFS="\t"} /^crates\/kadakas-render\/testdata\/red_blue.jpg/ {$3="UNKNOWN"; $4="UNKNOWN"; $5="UNKNOWN"} {print}' "$real_tsv" > "$tmp/u.tsv"
+{ cat docs/attribution-open.txt; echo "crates/kadakas-render/testdata/red_blue.jpg"; } > "$tmp/u.open"
+# The doc table must match the synthetic table, so make a copy of attribution.md with its new table.
+ATTR_TSV="$tmp/u.tsv" scripts/check-attribution.sh --table | grep '^|' > "$tmp/u.table"
+python3 -I - "$tmp/u.table" "$tmp/u.att" <<'PY'
+import sys
+doc = open("docs/attribution.md").read().split("\n")
+tab = open(sys.argv[1]).read().rstrip("\n").split("\n")
+i = next(k for k, l in enumerate(doc) if l.startswith("## Asset list"))
+a = next(k for k in range(i, len(doc)) if doc[k].startswith("| Item"))
+b = a
+while b < len(doc) and doc[b].startswith("|"):
+    b += 1
+doc[a:b] = tab
+open(sys.argv[2], "w").write("\n".join(doc))
+PY
+export ATTR_TSV="$tmp/u.tsv" ATTR_OPEN="$tmp/u.open" ATTR_ATTRIBUTION="$tmp/u.att"
+run
+expect_out "UNKNOWN rows are printed as warnings" "^WARN  crates/kadakas-render/testdata/red_blue.jpg"
+expect_out "a new UNKNOWN row is counted" "1 UNKNOWN row(s)"
 GITHUB_ACTIONS=true run
 expect_out "GitHub annotations for UNKNOWN rows" "^::warning file=crates/kadakas-render/testdata/red_blue.jpg::"
 reset
@@ -79,10 +99,9 @@ ATTR_TSV="$tmp/g.tsv" run
 awk -F'\t' 'BEGIN{OFS="\t"} /^tests\/behavior\/bcf_cases/ {$6="ships"} {print}' "$real_tsv" > "$tmp/h.tsv"
 ATTR_TSV="$tmp/h.tsv" expect_fail "CC-BY-ND-4.0 on a shipped row" "test-only"
 : > "$tmp/open.txt"
-ATTR_OPEN="$tmp/open.txt" expect_fail "empty open list" "does not name it"
-cat docs/attribution-open.txt > "$tmp/open3.txt"
-echo "tests/behavior/fixtures/survey_rev1.dxf" >> "$tmp/open3.txt"
-ATTR_OPEN="$tmp/open3.txt" expect_fail "duplicate line in the open list" "listed twice"
+ATTR_TSV="$tmp/u.tsv" ATTR_ATTRIBUTION="$tmp/u.att" ATTR_OPEN="$tmp/open.txt" expect_fail "empty open list" "does not name it"
+{ cat "$tmp/u.open"; echo "crates/kadakas-render/testdata/red_blue.jpg"; } > "$tmp/open3.txt"
+ATTR_TSV="$tmp/u.tsv" ATTR_ATTRIBUTION="$tmp/u.att" ATTR_OPEN="$tmp/open3.txt" expect_fail "duplicate line in the open list" "listed twice"
 { cat docs/attribution-open.txt; echo "nothing/here.png"; } > "$tmp/open4.txt"
 ATTR_OPEN="$tmp/open4.txt" expect_fail "open list line without a file" "not a file"
 reset
