@@ -161,7 +161,8 @@ mod tests {
         let d = tmp("flv-bundle");
         assert!(!has_app(&d));
         touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
-        touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
+        // The entry of flavors.json gets the `.exe` ending on Windows, so the file has it there.
+        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
         assert!(has_app(&d));
         std::fs::write(
             d.join("flavors.json"),

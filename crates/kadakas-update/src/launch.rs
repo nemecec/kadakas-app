@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(
             c.get_program(),
             Path::new("/v/1.0.0")
-                .join("Kadakas Engine.app/Contents/MacOS/kadakas-app")
+                .join(crate::flavors::bundle_exe("kadakas-app"))
                 .as_os_str()
         );
         let args: Vec<&OsStr> = c.get_args().collect();
