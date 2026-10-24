@@ -499,3 +499,190 @@ fn merge_and_retain_keep_the_numbers_right() {
     n.retain_faces(|_| false);
     assert!(n.faces.is_empty() && n.shells.is_empty() && n.validate().is_ok());
 }
+
+#[test]
+fn sizes_kinds_poles_and_the_checks_of_splines() {
+    use nurbs::{BSplineCurve, BSplineSurface, Knots};
+    // The size estimate counts splines, polylines, trims and composites.
+    let line = Curve::Line {
+        o: DVec3::ZERO,
+        d: DVec3::X,
+    };
+    let spline = Curve::Spline(BSplineCurve {
+        knots: Knots::clamped(1, 2).unwrap(),
+        points: vec![DVec3::ZERO, DVec3::X],
+        weights: None,
+    });
+    let poly = Curve::Poly {
+        points: vec![DVec3::ZERO; 5],
+    };
+    let trimmed = Curve::Trimmed {
+        basis: Arc::new(spline.clone()),
+        t0: 0.0,
+        t1: 1.0,
+    };
+    let comp = Curve::Composite {
+        segments: vec![
+            (Arc::new(poly.clone()), true),
+            (Arc::new(line.clone()), false),
+        ],
+    };
+    let mut s = sample();
+    let base = s.approx_bytes();
+    for (i, c) in [spline.clone(), poly, trimmed, comp]
+        .into_iter()
+        .enumerate()
+    {
+        s.edges[0].curve = Some(c);
+        assert!(s.approx_bytes() > base - 400, "{i}");
+    }
+    let patch = Surface::Spline(BSplineSurface {
+        u: Knots::clamped(1, 2).unwrap(),
+        v: Knots::clamped(1, 2).unwrap(),
+        points: vec![DVec3::ZERO; 4],
+        weights: Some(vec![1.0; 4]),
+    });
+    s.faces[0].surface = Some(patch.clone());
+    assert!(s.approx_bytes() > 0);
+    s.faces[0].surface = Some(Surface::Revolution {
+        curve: Arc::new(line.clone()),
+        o: DVec3::ZERO,
+        axis: DVec3::Z,
+    });
+    s.faces[1].surface = Some(Surface::Extrusion {
+        curve: Arc::new(spline),
+        dir: DVec3::Z,
+    });
+    assert!(s.approx_bytes() > 0 && s.validate().is_ok());
+    // The kinds and the poles.
+    let f = DAffine3::IDENTITY;
+    let all = [
+        (Surface::Plane { f }, "PLANE"),
+        (Surface::Cylinder { f, r: 1.0 }, "CYLINDRICAL_SURFACE"),
+        (
+            Surface::Cone {
+                f,
+                r: 1.0,
+                angle: 0.4,
+            },
+            "CONICAL_SURFACE",
+        ),
+        (Surface::Sphere { f, r: 1.0 }, "SPHERICAL_SURFACE"),
+        (
+            Surface::Torus {
+                f,
+                big: 3.0,
+                small: 1.0,
+            },
+            "TOROIDAL_SURFACE",
+        ),
+        (
+            Surface::Revolution {
+                curve: Arc::new(line.clone()),
+                o: DVec3::ZERO,
+                axis: DVec3::Z,
+            },
+            "SURFACE_OF_REVOLUTION",
+        ),
+        (
+            Surface::Extrusion {
+                curve: Arc::new(trimmed_line()),
+                dir: DVec3::Z,
+            },
+            "SURFACE_OF_LINEAR_EXTRUSION",
+        ),
+        (patch, "B_SPLINE_SURFACE"),
+    ];
+    for (surface, name) in &all {
+        assert_eq!(surface.kind(), *name);
+    }
+    assert!(
+        all[3].0.at_pole(DVec3::new(0.0, 0.0, 1.0)) && !all[3].0.at_pole(DVec3::new(1.0, 0.0, 0.0))
+    );
+    // The apex of the cone: radius 1, half angle 0.4: the apex is at v = -1 / sin(0.4).
+    let apex = all[2].0.eval(0.0, -1.0 / 0.4f64.sin());
+    assert!(all[2].0.at_pole(apex) && !all[2].0.at_pole(DVec3::new(1.0, 0.0, 0.0)));
+    assert!(!all[1].0.at_pole(DVec3::ZERO));
+    // A cone has its pole on one side only.
+    assert!(all[2].0.pole_v(false).is_some() != all[2].0.pole_v(true).is_some());
+    assert!(
+        Surface::Cone {
+            f,
+            r: 1.0,
+            angle: 0.0
+        }
+        .pole_v(true)
+        .is_none()
+    );
+    // Splines that do not fit their counts or weights are refused.
+    let bad_curve = BSplineCurve {
+        knots: Knots::clamped(1, 2).unwrap(),
+        points: vec![DVec3::ZERO; 3],
+        weights: None,
+    };
+    assert!(bad_curve.check().is_err());
+    let bad_weights = BSplineCurve {
+        knots: Knots::clamped(1, 2).unwrap(),
+        points: vec![DVec3::ZERO; 2],
+        weights: Some(vec![1.0, -1.0]),
+    };
+    assert!(bad_weights.check().is_err());
+    let bad_surface = BSplineSurface {
+        u: Knots::clamped(1, 2).unwrap(),
+        v: Knots::clamped(1, 2).unwrap(),
+        points: vec![DVec3::ZERO; 4],
+        weights: Some(vec![1.0; 3]),
+    };
+    assert!(bad_surface.check().is_err());
+    assert!(
+        BSplineSurface {
+            weights: None,
+            points: vec![DVec3::ZERO; 5],
+            ..bad_surface
+        }
+        .check()
+        .is_err()
+    );
+    // Merge keeps the product of the first, takes one when it has none.
+    let mut a = sample();
+    a.product.clear();
+    a.merge(&sample());
+    assert_eq!(a.product, "Part");
+    // The plane of a face with edges and with nothing.
+    let mut q = sample();
+    q.faces[3].loops = vec![ExactLoop {
+        outer: true,
+        items: vec![
+            LoopItem::Edge {
+                edge: 0,
+                forward: true,
+            },
+            LoopItem::Edge {
+                edge: 1,
+                forward: false,
+            },
+            LoopItem::Edge {
+                edge: 99,
+                forward: true,
+            },
+        ],
+    }];
+    assert_eq!(q.info(10)["list"][3]["kind"], "plane");
+    q.faces[3].loops.clear();
+    assert!(q.info(10)["list"][3].get("normal").is_none());
+    // Retaining a face with a polygon keeps its vertices.
+    let mut r = sample();
+    r.retain_faces(|f| f.surface.is_none());
+    assert_eq!((r.faces.len(), r.vertices.len(), r.edges.len()), (1, 3, 0));
+}
+
+fn trimmed_line() -> Curve {
+    Curve::Trimmed {
+        basis: Arc::new(Curve::Line {
+            o: DVec3::ZERO,
+            d: DVec3::X,
+        }),
+        t0: 0.0,
+        t1: 1.0,
+    }
+}
