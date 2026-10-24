@@ -527,6 +527,23 @@ pub struct Viewport {
     /// (distance along the section line, height) in mm, and shows no plan or 3D image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<crate::section::SectionView>,
+    /// Twist of a plan view: the model is turned by this angle about the view axis, in degrees
+    /// counterclockwise on the sheet. It turns the model about `center`. 3D views and sections
+    /// ignore it (IOP-27).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub twist: f64,
+    /// A 3D view with a perspective camera instead of the parallel projection. A plan view and a
+    /// section ignore it (IOP-27).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub perspective: bool,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 pub const PLAN_VIEW: &str = "plan";
@@ -572,6 +589,8 @@ impl Viewport {
             show_frame: false,
             annotations: Vec::new(),
             section: None,
+            twist: 0.0,
+            perspective: false,
         }
     }
 
@@ -585,7 +604,8 @@ impl Viewport {
             && self.max.is_finite()
             && self.center.is_finite()
             && self.scale.is_finite()
-            && self.dpi.is_finite();
+            && self.dpi.is_finite()
+            && self.twist.is_finite();
         if !finite || !self.annotations.iter().all(Annotation::is_finite) {
             return Some("numbers must be finite".into());
         }
@@ -645,20 +665,49 @@ impl Viewport {
         (self.min + self.max) / 2.0
     }
 
+    /// The turn of a plan view as a rotation, from model to paper. Other views are not turned.
+    fn turn(&self) -> DVec2 {
+        if self.is_plan() && self.section.is_none() {
+            DVec2::from_angle(self.twist.to_radians())
+        } else {
+            DVec2::X
+        }
+    }
+
+    /// True if the view is turned (a plan view with a twist).
+    pub fn is_twisted(&self) -> bool {
+        self.turn() != DVec2::X
+    }
+
     /// Paper position of a model point.
     pub fn to_paper(&self, model: DVec2) -> DVec2 {
-        self.frame_center() + (model - self.center) / self.scale
+        self.frame_center() + self.turn().rotate((model - self.center) / self.scale)
     }
 
     /// Model position of a paper point. The inverse of `to_paper`.
     pub fn to_model(&self, paper: DVec2) -> DVec2 {
-        self.center + (paper - self.frame_center()) * self.scale
+        let d = (paper - self.frame_center()) * self.scale;
+        let t = self.turn();
+        self.center + DVec2::new(t.x, -t.y).rotate(d)
     }
 
-    /// The area of the model that the frame shows, as (min, max).
+    /// The area of the model that the frame shows, as (min, max). A turned view shows a turned
+    /// rectangle, so the area is the box around it.
     pub fn model_window(&self) -> (DVec2, DVec2) {
-        let (a, b) = (self.to_model(self.min), self.to_model(self.max));
-        (a.min(b), a.max(b))
+        let corners = [
+            self.min,
+            DVec2::new(self.max.x, self.min.y),
+            self.max,
+            DVec2::new(self.min.x, self.max.y),
+        ]
+        .map(|c| self.to_model(c));
+        let lo = corners
+            .iter()
+            .fold(DVec2::splat(f64::INFINITY), |a, c| a.min(*c));
+        let hi = corners
+            .iter()
+            .fold(DVec2::splat(f64::NEG_INFINITY), |a, c| a.max(*c));
+        (lo, hi)
     }
 
     /// The polygon (counterclockwise, paper mm) that limits what shows: the frame, cut by the crop.
@@ -784,7 +833,18 @@ impl Viewport {
     pub fn fit(&mut self, doc: &Document) {
         if let Some((lo, hi)) = self.content_bounds(doc) {
             self.center = (lo + hi) / 2.0;
-            self.scale = fit_scale(hi - lo, self.max - self.min);
+            // The content turned like the view: the box around it is what must fit.
+            let turn = self.turn();
+            let half = (hi - lo) / 2.0;
+            let corners = [
+                DVec2::new(-half.x, -half.y),
+                DVec2::new(half.x, -half.y),
+                half,
+                DVec2::new(-half.x, half.y),
+            ]
+            .map(|c| turn.rotate(c));
+            let span = corners.iter().fold(DVec2::ZERO, |m, c| m.max(c.abs())) * 2.0;
+            self.scale = fit_scale(span, self.max - self.min);
         }
     }
 
@@ -1312,6 +1372,97 @@ mod tests {
         assert!((p.to_paper(v(10_000.0, 7000.0)).x - p.frame_center().x - 100.0).abs() < 1e-9);
         let (lo, hi) = p.model_window();
         assert!((hi.x - lo.x - 10_000.0).abs() < 1e-6 && (hi.y - lo.y - 7500.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_twist_turns_the_plan_about_the_center() {
+        let mut p = vp();
+        assert!(!p.is_twisted());
+        p.twist = 90.0;
+        assert!(p.is_twisted());
+        // The center stays. A point 5 m east of it is 100 mm north on the sheet at 1:50.
+        assert!(p.to_paper(p.center).distance(p.frame_center()) < 1e-9);
+        let east = p.to_paper(p.center + v(5000.0, 0.0));
+        assert!(
+            east.distance(p.frame_center() + v(0.0, 100.0)) < 1e-9,
+            "{east:?}"
+        );
+        // The inverse maps back, for any twist.
+        for twist in [0.0, 30.0, 90.0, -45.0, 200.0, 720.5] {
+            p.twist = twist;
+            for m in [v(0.0, 0.0), v(12_345.0, -6_789.0), p.center] {
+                assert!(
+                    p.to_model(p.to_paper(m)).distance(m) < 1e-6,
+                    "{twist} {m:?}"
+                );
+            }
+        }
+        // The window is the box around the turned frame: for 90 degrees the sides swap.
+        p.twist = 90.0;
+        let (lo, hi) = p.model_window();
+        assert!(
+            (hi.x - lo.x - 7500.0).abs() < 1e-6 && (hi.y - lo.y - 10_000.0).abs() < 1e-6,
+            "{lo:?} {hi:?}"
+        );
+        // At 45 degrees the box is larger than the frame.
+        p.twist = 45.0;
+        let (lo, hi) = p.model_window();
+        assert!(hi.x - lo.x > 10_000.0 && hi.y - lo.y > 7500.0);
+        // 3D views and sections are not turned.
+        p.view = "front".into();
+        assert!(!p.is_twisted());
+        assert_eq!(p.to_paper(v(5000.0, 7000.0)), p.frame_center());
+        p.view = PLAN_VIEW.into();
+        p.section = Some(crate::section::SectionView::new(
+            crate::model::ObjectId::from_num(1),
+        ));
+        assert!(!p.is_twisted());
+    }
+
+    #[test]
+    fn a_twist_and_a_perspective_view_are_stored_and_checked() {
+        let mut p = vp();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("twist").is_none() && json.get("perspective").is_none());
+        p.twist = 30.0;
+        p.perspective = true;
+        let back: Viewport = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+        assert_eq!((back.twist, back.perspective), (30.0, true));
+        // An older file has neither.
+        let old: Viewport = serde_json::from_value(json).unwrap();
+        assert_eq!((old.twist, old.perspective), (0.0, false));
+        p.twist = f64::NAN;
+        assert!(p.problem().is_some());
+    }
+
+    #[test]
+    fn fit_makes_room_for_the_turned_content() {
+        let mut doc = crate::model::Document::with_sequential_ids();
+        let mut ed = crate::command::Editor::new(std::mem::take(&mut doc));
+        ed.execute(&crate::command::Command::AddObject {
+            shape: Shape::Rect {
+                min: v(0.0, 0.0),
+                max: v(20_000.0, 2_000.0),
+            },
+            layer: None,
+            class: None,
+            attrs: crate::model::Attributes::default(),
+        })
+        .unwrap();
+        let mut p = Viewport::new(
+            v(0.0, 0.0),
+            v(200.0, 150.0),
+            v(0.0, 0.0),
+            100.0,
+            vec![FIRST_LAYER],
+        );
+        p.fit(ed.doc());
+        let flat = p.scale;
+        p.twist = 90.0;
+        p.fit(ed.doc());
+        // Turned by a quarter, the long side runs up the sheet, which is shorter: a larger denominator.
+        assert!(p.scale > flat, "{} {flat}", p.scale);
+        assert!(p.center.distance(v(10_000.0, 1_000.0)) < 1e-6);
     }
 
     #[test]

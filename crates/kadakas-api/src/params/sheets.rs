@@ -404,6 +404,14 @@ pub struct ViewportCreateParams {
     pub show_frame: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// plan only: turns the model about the center of the view by this angle, in degrees counterclockwise on the sheet
+    #[schemars(extend("default" = 0))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist: Option<Num>,
+    /// 3D views only: a perspective camera instead of the parallel projection
+    #[schemars(extend("default" = false))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<bool>,
 }
 
 // Parameters of `viewport.get`.
@@ -462,6 +470,12 @@ pub struct ViewportUpdateParams {
     pub crop: Option<Option<Obj>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_frame: Option<bool>,
+    /// plan only: the angle in degrees counterclockwise on the sheet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist: Option<Num>,
+    /// 3D views only
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<bool>,
     /// true recomputes center and scale
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<bool>,

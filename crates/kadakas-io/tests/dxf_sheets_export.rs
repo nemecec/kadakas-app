@@ -693,3 +693,50 @@ fn a_section_viewport_and_odd_sheets_are_reported() {
         3
     );
 }
+
+#[test]
+fn a_twist_and_a_perspective_view_are_written_and_read_back() {
+    let mut doc = document();
+    // Give both viewports of the first sheet a twist, the second one a perspective camera.
+    let ids: Vec<_> = doc
+        .objects
+        .values()
+        .filter(|o| matches!(o.shape, Shape::Viewport(_)))
+        .map(|o| o.id)
+        .collect();
+    assert!(ids.len() >= 2);
+    for (n, id) in ids.iter().enumerate() {
+        if let Shape::Viewport(v) = &mut doc.object_mut(*id).unwrap().shape {
+            v.twist = if n == 0 { 30.0 } else { -45.0 };
+            v.perspective = n == 1 && !v.is_plan();
+        }
+    }
+    let (text, _) = export(&doc, &ExportOptions::default());
+    let p = pairs(&text);
+    // The twist is written in degrees from 0 to 360.
+    let twists: Vec<f64> = p
+        .iter()
+        .filter(|(c, _)| *c == 51)
+        .map(|(_, v)| v.parse().unwrap())
+        .collect();
+    assert!(
+        twists.contains(&30.0) && twists.contains(&315.0),
+        "{twists:?}"
+    );
+    let (back, rep) = import(text.as_bytes()).unwrap();
+    assert_eq!(
+        rep.entities_read,
+        rep.entities_imported + rep.entities_skipped,
+        "{rep:?}"
+    );
+    let got: Vec<f64> = back
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::Viewport(v) if !v.annotations.is_empty() || v.twist != 0.0 => Some(v.twist),
+            _ => None,
+        })
+        .collect();
+    assert!(got.contains(&30.0) && got.contains(&-45.0), "{got:?}");
+}

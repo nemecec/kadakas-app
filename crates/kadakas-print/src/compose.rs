@@ -365,7 +365,13 @@ fn viewport_scene(d: &Document) -> kadakas_core::mesh::Scene {
 fn viewport_camera(vp: &Viewport, scene: &kadakas_core::mesh::Scene) -> Option<Camera> {
     let view = StandardView::from_name(&vp.view)?;
     let size = vp.max - vp.min;
-    let mut cam = Camera::standard(view, Projection::Orthographic);
+    // A perspective view shows the same size at the target as the parallel view (IOP-27).
+    let projection = if vp.perspective {
+        Projection::Perspective
+    } else {
+        Projection::Orthographic
+    };
+    let mut cam = Camera::standard(view, projection);
     let c = vp.center - scene.origin.truncate();
     let z = scene.bounds.map_or(0.0, |(lo, hi)| (lo.z + hi.z) / 2.0);
     cam.target = glam::Vec3::new(c.x as f32, c.y as f32, z);

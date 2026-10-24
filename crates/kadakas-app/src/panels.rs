@@ -1282,6 +1282,18 @@ fn edit_shape(
                 f.xy(ui, &tr!("panels-frame-min"), &mut vp.min);
                 f.xy(ui, &tr!("panels-frame-max"), &mut vp.max);
                 f.xy(ui, &tr!("panels-model-center"), &mut vp.center);
+                // A plan view can be twisted, a 3D view can have a perspective camera (IOP-27).
+                if vp.section.is_none() {
+                    if vp.is_plan() {
+                        f.scalar(ui, &tr!("panels-twist-deg"), &mut vp.twist, 1.0);
+                    } else {
+                        ui.label(tr!("panels-projection"));
+                        f.commit |= ui
+                            .checkbox(&mut vp.perspective, tr!("panels-perspective"))
+                            .changed();
+                        ui.end_row();
+                    }
+                }
                 ui.label(tr!("panels-frame"));
                 f.commit |= ui
                     .checkbox(&mut vp.show_frame, tr!("panels-show-2"))

@@ -217,6 +217,29 @@ Rank = chance that a real Vectorworks or AutoCAD file hits it, times the harm. E
 ## 11. Next steps
 
 1. Check the exports of the releases 12, 2013 and 2018 by hand in a CAD program or a laser program.
-2. Apply the block clip (XCLIP) and read the hatch patterns.
-3. Place text and blocks that lie in a tilted plane.
-4. When a Vectorworks forum page becomes readable, re-check this note. The unverified items in sections 2, 5 and 7 are the first to confirm.
+2. Check the sign of the viewport twist and the pattern hatches by hand in a CAD program. The tests follow the ezdxf reader.
+3. When a Vectorworks forum page becomes readable, re-check this note. The unverified items in sections 2, 5 and 7 are the first to confirm.
+
+## 12. The leftovers of IOP-15 (IOP-27)
+
+Public sources only. The ezdxf source is MIT licensed. Nothing of a CAD program was used.
+
+| Topic | Source | What we took |
+|---|---|---|
+| HATCH pattern data | Autodesk DXF reference (HATCH group codes 52, 41, 77, 78, 53, 43 to 46, 79, 49) | The pattern lines are stored after the scale and the turn. The offset is a vector in the world frame. |
+| Pattern names and lines | `ezdxf/tools/pattern.py` (metric table) | The table of 106 standard patterns in `std_patterns.txt`, and the names `ANSI31` to `ANSI38`, `AR-*`, `EARTH`, `GRASS`, `GRAVEL`, `STEEL`. |
+| Drawing a pattern | `ezdxf/render/hatching.py` | An independent drawing of the pattern lines. Our line length is compared with it for nine patterns. |
+| Block clip | `ezdxf/xclip.py` and `ezdxf/entities/spatial_filter.py` | The clip polygon in the space of the reference, the inverse matrix (the last 24 numbers of code 40), the switch (code 71), the inverted part in an XRECORD. |
+| Viewport twist | `ezdxf/entities/viewport.py` (`get_transformation_matrix`) | A positive twist turns the model counterclockwise on the sheet. The view center is in the display axes. |
+| Tilted plane | Autodesk DXF reference (arbitrary axis algorithm), `Insert.virtual_entities` of ezdxf | The place of a block reference in 3D. |
+
+Decisions:
+
+1. Pattern hatches become hatch fills of the document. The pattern lines in the entity are exact, so the name is only a name. A table is for entities without lines and for the names on export.
+2. A polyline has no holes. An island of a pattern hatch is a white outline on top, as for a solid hatch. The export does not turn it back into a hole.
+3. A block is exploded, so a clip cuts geometry. Lines are exact at the edge. Curves become chords. A clip that lies on the edge keeps the geometry.
+4. The sheet has a twist for plan views. The 3D camera has no roll, so a 3D view only keeps the number. A picture cannot follow a turn. It is not drawn, and a note says so.
+5. A perspective view works for a 3D viewport through the camera of Kadakas. The lens length is not read.
+6. A text has no work plane. It is placed flat by its projection. A block reference in a tilted plane is placed in 3D.
+
+Open: the sign of the twist is taken from the ezdxf reader. A check in a CAD program by hand is not done.

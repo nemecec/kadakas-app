@@ -326,11 +326,19 @@ impl Walker<'_> {
         let center = cx.xf.apply(DVec2::new(e.fd(10, 0.0), e.fd(20, 0.0)));
         let half = DVec2::new(w, h) * unit_mm / 2.0;
         let scale = view_height * model_mm / (h * unit_mm);
-        let target = DVec2::new(e.fd(17, 0.0), e.fd(27, 0.0));
-        let view_center = DVec2::new(e.fd(12, 0.0), e.fd(22, 0.0));
-        let model_center = (target + view_center) * model_mm - model_offset;
         let dir = DVec3::new(e.fd(16, 0.0), e.fd(26, 0.0), e.fd(36, 1.0));
         let (view, exact) = view_for(dir);
+        // The view center is in the display coordinate system, which the twist turns. A plan view
+        // is turned by the twist. A 3D view is not, so its center stays as it is.
+        let twist = e.fd(51, 0.0);
+        let target = DVec2::new(e.fd(17, 0.0), e.fd(27, 0.0));
+        let view_center = DVec2::new(e.fd(12, 0.0), e.fd(22, 0.0));
+        let back = if view == "plan" {
+            DVec2::from_angle(-twist.to_radians())
+        } else {
+            DVec2::X
+        };
+        let model_center = (target + back.rotate(view_center)) * model_mm - model_offset;
         let layers = self.viewport_layers();
         let mut v = Viewport::new(center - half, center + half, model_center, scale, layers);
         v.view = view.to_string();
@@ -347,6 +355,11 @@ impl Walker<'_> {
             _ => "shaded",
         }
         .into();
+        // The twist turns a plan view. A 3D view keeps the number and does not turn (the camera has
+        // no roll). The perspective flag works for a 3D view only.
+        let twist = (twist.rem_euclid(360.0) * 1e9).round() / 1e9;
+        v.twist = if twist > 180.0 { twist - 360.0 } else { twist };
+        v.perspective = e.int(90).unwrap_or(0) & 1 != 0;
         let (layer_overrides, class_overrides) = self.viewport_visibility(e);
         v.layer_overrides = layer_overrides;
         v.class_overrides = class_overrides;
@@ -375,11 +388,19 @@ impl Walker<'_> {
             );
             return false;
         }
-        if e.fd(51, 0.0).abs() > 1e-9 {
-            self.tally.viewport_twist += 1;
+        if v.twist != 0.0 {
+            if v.is_plan() {
+                self.tally.viewport_twist += 1;
+            } else {
+                self.tally.viewport_twist_ignored += 1;
+            }
         }
-        if e.int(90).unwrap_or(0) & 1 != 0 {
-            self.tally.viewport_perspective += 1;
+        if v.perspective {
+            if v.is_plan() {
+                self.tally.viewport_perspective_plan += 1;
+            } else {
+                self.tally.viewport_perspective += 1;
+            }
         }
         if !exact {
             *self

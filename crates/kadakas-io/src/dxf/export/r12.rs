@@ -341,6 +341,7 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         cut_texts: 0,
     };
     out.layers.insert("0".into(), (7, false));
+    let mut patterns_left_out = 0usize;
     for o in doc.objects.values() {
         if opts.visible_only && !doc.is_visible(o) {
             continue;
@@ -360,10 +361,21 @@ pub fn export(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoEr
         let mark = out.buf.len();
         if out.object(o) {
             out.report.count(o.shape.kind());
+            // A hatch fill, a tile or a line type is lines in newer releases. Release 12 writes the outline only.
+            let a = kadakas_core::hardscape::styled_attrs(doc, o, doc.resolved_attrs(o));
+            if a.fill_pattern.is_some() || a.line_type.is_some() {
+                patterns_left_out += 1;
+            }
         } else {
             out.buf.truncate(mark);
             out.report.skip(o.shape.kind(), REASON);
         }
+    }
+    if patterns_left_out > 0 {
+        out.report.note(&format!(
+            "{patterns_left_out} {} a hatch fill, a tile or a line type: release 12 has no HATCH entity, so only the outline is written",
+            if patterns_left_out == 1 { "object has" } else { "objects have" }
+        ));
     }
     if out.cut_texts > 0 {
         let n = out.cut_texts;

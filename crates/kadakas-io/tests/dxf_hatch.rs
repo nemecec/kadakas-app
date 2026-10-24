@@ -918,3 +918,27 @@ fn the_pattern_of_a_hatch_is_written_in_every_release_with_hatches() {
     );
     assert!(pairs_of(&text, "HATCH").is_empty());
 }
+
+#[test]
+fn release_12_says_that_it_writes_the_outline_only() {
+    let ed = doc_with_fill(
+        "x",
+        PatternUnits::World,
+        vec![HatchLine::solid(45.0, 3.175)],
+        square_shape(100.0),
+    );
+    let (_, report) = export_text(
+        &ed,
+        ExportOptions {
+            version: kadakas_io::DxfVersion::R12,
+            ..ExportOptions::default()
+        },
+    );
+    assert!(
+        report.notes.iter().any(|n| n.contains(
+            "1 object has a hatch fill, a tile or a line type: release 12 has no HATCH entity"
+        )),
+        "{:?}",
+        report.notes
+    );
+}

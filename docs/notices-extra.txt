@@ -491,14 +491,16 @@ Drawn for this project from written ideas. They are covered by the project licen
 The application icons in packaging/icons/ are our own work, under the same license.
 
 --------------------------------------------------------------------------------
-ezdxf: the table of the 256 AutoCAD colors (MIT)
+ezdxf: the table of the 256 AutoCAD colors and the table of hatch patterns (MIT)
 --------------------------------------------------------------------------------
-Used by: crates/kadakas-io/src/dxf/aci.rs
+Used by: crates/kadakas-io/src/dxf/aci.rs and crates/kadakas-io/src/dxf/hatch/std_patterns.txt
 
-The colors 1 to 248 of the AutoCAD Color Index in that file are the values of the table in the
-ezdxf library (https://github.com/mozman/ezdxf). Some of the code of the DXF import follows the
-way that ezdxf reads a WIPEOUT outline, makes uniform knots for a spline without knots and
-decodes caret codes. The code is written for Kadakas. The tests also read public sample files of
+The colors 1 to 248 of the AutoCAD Color Index in the first file are the values of the table in the
+ezdxf library (https://github.com/mozman/ezdxf). The second file holds the lines of 106 standard
+hatch patterns from the metric pattern table of that library (tests/data/make_std_patterns.py
+makes it). Some of the code of the DXF import follows the
+way that ezdxf reads a WIPEOUT outline, makes uniform knots for a spline without knots, decodes
+caret codes, reads the clip of a block reference and turns a viewport. The code is written for Kadakas. The tests also read public sample files of
 ezdxf and GDAL at run time (they are not part of Kadakas and not shipped).
 
 MIT License

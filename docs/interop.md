@@ -190,7 +190,7 @@ The export writes a hatch fill as a HATCH entity.
 - A fill that is a standard pattern at some scale and turn gets the name (`ANSI31`), the scale in code 41 and the turn in code 52. The turn must be a multiple of 15 degrees. A pattern of one family of lines is named at the turn 0 only.
 - Any other fill gets its own name in capital letters, as a custom pattern.
 - The numbers follow the unit, the origin and the scale of the layer (paper units).
-- A fill with a color or a weight on one of its lines stays plain LINE entities. So does a tile. Release 12 has no HATCH.
+- A fill with a color or a weight on one of its lines stays plain LINE entities. So does a tile. Release 12 has no HATCH. It writes the outline, and a note counts the objects.
 - The report says how many HATCH entities were written, by name.
 
 ### Block clips (IOP-27)
@@ -209,6 +209,19 @@ A block reference with a clip (XCLIP) has an extension dictionary. It leads to a
 - A clip that is switched off (code 71 is 0), or that cannot be read, shows the whole block. A note counts them.
 - A front or back clip plane (3D) is not applied. Only the polygon is. A note counts them.
 - The clip is in the plane. A 3D polyline is cut by its plan, and its height is interpolated.
+
+### Twist and perspective of viewports (IOP-27)
+
+A viewport of the sheet has a `twist` and a `perspective` flag.
+
+- The twist (code 51) is the angle that turns a plan view about the center of the view. A positive angle turns the model counterclockwise on the sheet, as the transformation of the ezdxf reader does. The view center (code 12 and 22) is in the display axes. The model point at the middle of the frame is the target plus the turned back view center.
+- The viewport object keeps the twist in degrees from -180 to 180. `viewport.create` and `viewport.update` take `twist`. The window of the app has a field for it.
+- The sheet draws a twisted plan view: every point, arc, hatch and symbol follows the turn. Text stays upright. A raster picture cannot follow the turn, because it has straight sides on the sheet. A map underlay and the picture in a table cell are not drawn. A note on the page says so.
+- `fit` makes room for the turned content.
+- A 3D view and a section are not turned. The camera of the 3D view has no roll. A 3D viewport keeps the twist and writes it back, and a note counts it.
+- The perspective flag (bit 1 of code 90) gives a 3D viewport a perspective camera. It shows the same size at the target as the parallel view does. The lens length (code 42) is not read, and the field of view is the one of Kadakas. A note says so.
+- A plan has no perspective. A plan viewport keeps the flag and writes it back, and a note counts it.
+- The export writes the twist from 0 to 360 and the flag. The target is the middle of the view and the view center is 0.
 
 ### Tilted planes (IOP-27)
 
@@ -241,7 +254,7 @@ An entity lies in a plane when its extrusion direction (codes 210, 220 and 230) 
 | Entities of the layout, blocks, title block, attributes | Objects on the sheet layer, in the order of the file, so what lies under a viewport stays under it. |
 | 3D polyline in paper space | Flattened to 2D, and a note counts it. Other shapes that a sheet cannot hold are reported. |
 
-A viewport that is off, has no size or is not valid is reported. A twist and a perspective view are not kept, and a note counts them. A view direction that is not a standard view uses the nearest standard view, and a note says which.
+A viewport that is off, has no size or is not valid is reported. A view direction that is not a standard view uses the nearest standard view, and a note says which. The twist and the perspective view are in the next part.
 
 The export writes the reverse. A sheet layer is a layout with the paper, the viewport of the paper, the viewports, the annotations of the viewports, the title block (lines and text) and the objects of the sheet. The first layout is in the section ENTITIES with the flag `67 1`, the others in their blocks `*Paper_Space0` and so on. The option `sheets` is `false` to leave sheets out. Release 12 has no layouts. The update of a drawing (IOP-23) does not import paper space.
 
@@ -274,7 +287,7 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 - The islands of a pattern hatch are white filled outlines on top of the hatch. A polyline has no holes, so the lines of the pattern still run under the island. The export writes the island as its own polyline and not as a hole of the HATCH.
 - A hatch in a tilted plane has no fill, only its boundary as 3D polylines.
 - A pattern hatch with an associative boundary (code 330 to the entities) loses the association. The boundary becomes polylines.
-- A viewport with a twist keeps no twist.
+- A twist does not turn a 3D view or a section. A raster picture is not drawn in a twisted plan view. The lens length of a perspective view is not read.
 - The releases 2013 and 2018 of the export are not opened in a CAD program. Release 12 is not opened in LibreCAD or a laser program by hand.
 - An import of a very large drawing is slow in the editor, because the batch of a few hundred thousand commands runs in quadratic time. The import itself is linear.
 

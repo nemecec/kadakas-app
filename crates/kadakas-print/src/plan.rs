@@ -15,12 +15,15 @@ use kadakas_site::grading::hook;
 
 use crate::display::*;
 
-/// Maps model coordinates to paper: `paper = paper_center + (model - model_center) * k`.
+/// Maps model coordinates to paper: `paper = paper_center + turn * (model - model_center) * k`.
+/// `turn` is the twist of the view as a unit vector (cosine, sine), counterclockwise.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Xf {
     pub model_center: DVec2,
     pub paper_center: DVec2,
     pub k: f64,
+    /// The turn of the view (IOP-27): (1, 0) for no turn.
+    pub turn: DVec2,
     /// The part of the model that the frame shows (lowest and highest corner), when known. Paved
     /// areas draw only the units that are in it.
     pub window: Option<(DVec2, DVec2)>,
@@ -32,6 +35,7 @@ impl Xf {
         model_center: DVec2::ZERO,
         paper_center: DVec2::ZERO,
         k: 1.0,
+        turn: DVec2::X,
         window: None,
     };
 
@@ -40,12 +44,27 @@ impl Xf {
             model_center: vp.center,
             paper_center: vp.frame_center(),
             k: 1.0 / vp.scale,
+            turn: if vp.is_twisted() {
+                DVec2::from_angle(vp.twist.to_radians())
+            } else {
+                DVec2::X
+            },
             window: Some(vp.model_window()),
         }
     }
 
     pub fn p(&self, m: DVec2) -> DVec2 {
-        self.paper_center + (m - self.model_center) * self.k
+        self.paper_center + self.turn.rotate((m - self.model_center) * self.k)
+    }
+
+    /// The angle of the turn of the view, in radians. A curve that is mapped through `p` turns by it.
+    pub fn angle(&self) -> f64 {
+        self.turn.y.atan2(self.turn.x)
+    }
+
+    /// True if the view is turned: an image cannot follow it.
+    pub fn is_turned(&self) -> bool {
+        self.turn != DVec2::X
     }
 
     pub fn len(&self, l: f64) -> f64 {
@@ -99,7 +118,13 @@ pub fn curve_segs(p: &curve::Path, xf: &Xf) -> Vec<PSeg> {
                 start,
                 sweep,
                 ..
-            } => out.extend(arc_segs(xf.p(center), xf.len(radius), start, sweep, false)),
+            } => out.extend(arc_segs(
+                xf.p(center),
+                xf.len(radius),
+                start + xf.angle(),
+                sweep,
+                false,
+            )),
             Seg::Quad { from, c, to } => {
                 let (c1, c2) = (from + (c - from) * (2.0 / 3.0), to + (c - to) * (2.0 / 3.0));
                 out.push(PSeg::Cubic(xf.p(c1), xf.p(c2), xf.p(to)));
@@ -331,7 +356,13 @@ fn shape_core(
         } => {
             let sweep = kadakas_core::model::arc_sweep(*start, *end);
             out.push(path(
-                arc_segs(xf.p(*center), xf.len(*radius), *start, sweep, true),
+                arc_segs(
+                    xf.p(*center),
+                    xf.len(*radius),
+                    *start + xf.angle(),
+                    sweep,
+                    true,
+                ),
                 false,
                 &st,
             ));
@@ -536,7 +567,13 @@ fn shape_core(
         // A guide is construction geometry. The sheet leaves it out (the export says how many).
         Shape::Group { .. } | Shape::Unknown { .. } | Shape::Guide(_) => {}
         Shape::Underlay(u) => {
-            if let Some(img) = crate::underlay::image_prim(u, xf) {
+            // An image has straight sides on the sheet, so a turned view cannot show it.
+            if xf.is_turned() {
+                tables.note(format!(
+                    "Underlay {} is not drawn in a viewport with a twist: a raster picture cannot follow the turn",
+                    obj.id
+                ));
+            } else if let Some(img) = crate::underlay::image_prim(u, xf) {
                 out.push(Prim::Image(img));
             }
         }
@@ -823,6 +860,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                     model_center: DVec2::ZERO,
                     paper_center: vp.min,
                     k: 1.0,
+                    turn: DVec2::X,
                     window: None,
                 };
                 crate::annot::push(
@@ -846,6 +884,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                 model_center: DVec2::ZERO,
                 paper_center: vp.min,
                 k: 1.0,
+                turn: DVec2::X,
                 window: None,
             };
             shape_prims(

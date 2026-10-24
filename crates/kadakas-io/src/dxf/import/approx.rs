@@ -66,10 +66,14 @@ pub(super) struct Tally {
     pub default_page: Vec<String>,
     /// Viewports that became viewports of a sheet.
     pub viewports: usize,
-    /// Viewports with a twist (a turned view): the view is not turned.
+    /// Plan viewports with a twist: the plan is turned (IOP-27).
     pub viewport_twist: usize,
-    /// Viewports with a perspective view: shown with a parallel projection.
+    /// 3D viewports with a twist: the number is kept, the view is not turned.
+    pub viewport_twist_ignored: usize,
+    /// 3D viewports with a perspective view: drawn with a perspective camera (IOP-27).
     pub viewport_perspective: usize,
+    /// Plan viewports with the perspective flag: the plan has no perspective, the flag is kept.
+    pub viewport_perspective_plan: usize,
     /// Viewports whose view direction is not a standard view, by the standard view that was used.
     pub viewport_views: BTreeMap<String, usize>,
     /// Viewports whose clipping outline is not a polyline or a circle: the frame is the crop.
@@ -362,14 +366,26 @@ impl Tally {
         }
         if self.viewport_twist > 0 {
             out.push(format!(
-                "{} a twist, which a viewport of a sheet does not have: the view is not turned",
-                plural(self.viewport_twist, "viewport has", "viewports have")
+                "{} a twist: the plan is turned by it on the sheet (a picture, such as a map underlay, cannot follow the turn and is not drawn)",
+                plural(self.viewport_twist, "plan viewport has", "plan viewports have")
+            ));
+        }
+        if self.viewport_twist_ignored > 0 {
+            out.push(format!(
+                "{} a twist: the number is kept and written back, but a 3D view is not turned (the camera has no roll)",
+                plural(self.viewport_twist_ignored, "3D viewport has", "3D viewports have")
             ));
         }
         if self.viewport_perspective > 0 {
             out.push(format!(
-                "{} a perspective view: it shows a parallel projection",
-                plural(self.viewport_perspective, "viewport has", "viewports have")
+                "{} a perspective view: it is drawn with a perspective camera, with the field of view of Kadakas (the lens length of the file is not read)",
+                plural(self.viewport_perspective, "3D viewport has", "3D viewports have")
+            ));
+        }
+        if self.viewport_perspective_plan > 0 {
+            out.push(format!(
+                "{} the perspective flag: a plan has no perspective, so it shows as a plan. The flag is kept and written back",
+                plural(self.viewport_perspective_plan, "plan viewport has", "plan viewports have")
             ));
         }
         for (view, n) in &self.viewport_views {
