@@ -3198,6 +3198,7 @@ name = "kadakas-step"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "kadakas-core",
  "kadakas-meshio",
  "proptest",
  "serde_json",

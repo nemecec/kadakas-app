@@ -116,6 +116,7 @@ fn mesh_entity_falls_back_before_release_2010() {
         vertices: vec![DVec3::ZERO, DVec3::X * 100.0, DVec3::Y * 100.0],
         triangles: vec![[0, 1, 2]],
         color: None,
+        exact: None,
     }));
     for (v, has_mesh) in [
         (DxfVersion::R2000, false),
@@ -148,6 +149,7 @@ fn release_12_writes_plain_entities_and_counts_what_it_drops() {
         vertices: vec![DVec3::ZERO, DVec3::X, DVec3::Y],
         triangles: vec![[0, 1, 2]],
         color: None,
+        exact: None,
     })));
     let (bytes, report) = export(shapes, DxfVersion::R12);
     let t = String::from_utf8_lossy(&bytes).into_owned();

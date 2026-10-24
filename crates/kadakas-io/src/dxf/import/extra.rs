@@ -248,6 +248,7 @@ pub(super) fn mesh(e: &Entity, xf: &Xf) -> Result<(Mesh3d, bool), Skip> {
             vertices,
             triangles,
             color: None,
+            exact: None,
         },
         subdivided,
     ))

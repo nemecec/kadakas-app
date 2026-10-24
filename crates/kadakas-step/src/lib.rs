@@ -14,19 +14,18 @@
 
 mod assembly;
 mod body;
-mod brep;
 mod ctx;
-mod curve;
 mod geom;
 mod mesh2d;
-mod nurbs;
 pub mod part21;
-mod surface;
+mod read_brep;
+mod tess;
 mod units;
 
 use std::collections::BTreeMap;
 
 use glam::DAffine3;
+use kadakas_core::exact::{self, ExactSolid};
 use kadakas_meshio::{Format, Frame, Limits, MeshError, MeshSet, Part, Unit, Up};
 use serde_json::{Value as Json, json};
 
@@ -68,6 +67,8 @@ pub struct StepOptions {
     pub angle_deg: f64,
     /// One part for each product and color (true) or for each body and color (false).
     pub per_product: bool,
+    /// Keep the exact surfaces of each part next to its triangles (the default).
+    pub keep_exact: bool,
     pub limits: Limits,
     pub step: StepLimits,
 }
@@ -79,6 +80,7 @@ impl Default for StepOptions {
             tolerance_mm: None,
             angle_deg: 15.0,
             per_product: true,
+            keep_exact: true,
             limits: Limits::default(),
             step: StepLimits::default(),
         }
@@ -114,6 +116,11 @@ pub struct StepReport {
     pub tolerance_mm: Option<f64>,
     pub angle_deg: f64,
     pub welded_vertices: u64,
+    /// Parts that keep their exact surfaces, and the size of that data.
+    pub exact_kept: usize,
+    pub exact_bytes: usize,
+    /// Parts without exact data, with the reason: (part, reason).
+    pub exact_dropped: Vec<(String, String)>,
 }
 
 impl StepReport {
@@ -133,6 +140,11 @@ impl StepReport {
             "tolerance_mm": self.tolerance_mm,
             "angle_deg": self.angle_deg,
             "welded_vertices": self.welded_vertices,
+            "exact": {
+                "kept_parts": self.exact_kept,
+                "approx_bytes": self.exact_bytes,
+                "without": self.exact_dropped.iter().map(|(p, r)| json!({"part": p, "reason": r})).collect::<Vec<_>>(),
+            },
         })
     }
 }
@@ -141,6 +153,10 @@ impl StepReport {
 #[derive(Debug)]
 pub struct StepImport {
     pub set: MeshSet,
+    /// The exact surfaces of each part of `set` (same order), in millimeters and in the frame
+    /// of the part. `None` for a part that has none: tessellated items, an option that turned
+    /// them off, or a payload over the cap (the report says which).
+    pub exact: Vec<Option<ExactSolid>>,
     pub curves: Vec<CurvePart>,
     pub report: StepReport,
 }
@@ -157,12 +173,36 @@ const KNOWN_SCHEMAS: &[&str] = &[
     "GEOMETRY_SCHEMA",
 ];
 
+/// The parts of one product while they are collected.
+struct Acc {
+    name: String,
+    by_color: BTreeMap<Option<[u8; 4]>, (Vec<glam::DVec3>, Vec<[u32; 3]>)>,
+    exact: Option<ExactSolid>,
+    exact_ok: bool,
+}
+
 /// Why an entity type was not used.
 fn unused_reason(name: &str) -> &'static str {
     const GEOMETRY: &[&str] = &[
-        "SURFACE", "CURVE", "POINT", "DIRECTION", "AXIS", "EDGE", "LOOP", "FACE", "VERTEX",
-        "SHELL", "BREP", "SOLID", "LINE", "CIRCLE", "VECTOR", "TRIANGULATED", "TESSELLATED",
-        "COORDINATES", "POLYLINE",
+        "SURFACE",
+        "CURVE",
+        "POINT",
+        "DIRECTION",
+        "AXIS",
+        "EDGE",
+        "LOOP",
+        "FACE",
+        "VERTEX",
+        "SHELL",
+        "BREP",
+        "SOLID",
+        "LINE",
+        "CIRCLE",
+        "VECTOR",
+        "TRIANGULATED",
+        "TESSELLATED",
+        "COORDINATES",
+        "POLYLINE",
     ];
     if GEOMETRY.iter().any(|g| name.contains(g)) {
         "geometry that no product or item refers to"
@@ -182,7 +222,11 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         });
     }
     let text = String::from_utf8_lossy(bytes);
-    if !text.trim_start_matches('\u{feff}').trim_start().starts_with("ISO-10303-21") {
+    if !text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("ISO-10303-21")
+    {
         return Err(MeshError::Malformed(
             "this is not a STEP file: it does not start with ISO-10303-21".into(),
         ));
@@ -208,9 +252,11 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     let mut c = Ctx::new(&file, opts, &opts.step);
     let schemas = file.schemas();
     if !schemas.is_empty()
-        && !schemas
-            .iter()
-            .any(|s| KNOWN_SCHEMAS.iter().any(|k| s.to_ascii_uppercase().contains(k)))
+        && !schemas.iter().any(|s| {
+            KNOWN_SCHEMAS
+                .iter()
+                .any(|k| s.to_ascii_uppercase().contains(k))
+        })
     {
         c.note(format!(
             "the schema {} is not one of AP203, AP214 or AP242: the file is read as if it were",
@@ -227,8 +273,11 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     let mut curves: Vec<CurvePart> = Vec::new();
     let mut welded = 0u64;
     let mut degenerate = 0u64;
-    let tol_for_weld = c.tol.max(1e-9);
-    let weld_eps = (opts.tolerance_mm.unwrap_or(0.05) * 1e-3).max(1e-6).min(tol_for_weld * 1e6);
+    let mut exacts: Vec<Option<ExactSolid>> = Vec::new();
+    let mut exact_bytes = 0usize;
+    let mut exact_dropped: Vec<(String, String)> = Vec::new();
+    let tol_mm = c.tol * c.unit_scales.first().copied().unwrap_or(1.0);
+    let weld_eps = (tol_mm * 1e-3).max(1e-6);
     for inst in &structure.instances {
         let moved = if inst.placement == DAffine3::IDENTITY {
             None
@@ -237,44 +286,98 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         };
         let geom = moved.as_ref().unwrap_or(&inst.geom);
         // Bodies: one group for a product, or each body on its own.
-        let mut groups: Vec<(String, BTreeMap<Option<[u8; 4]>, (Vec<glam::DVec3>, Vec<[u32; 3]>)>)> =
-            Vec::new();
+        let mut groups: Vec<Acc> = Vec::new();
         for b in &geom.bodies {
             let name = if opts.per_product || b.name.is_empty() {
                 inst.name.clone()
             } else {
                 b.name.clone()
             };
-            let name = if name.is_empty() { b.name.clone() } else { name };
+            let name = if name.is_empty() {
+                b.name.clone()
+            } else {
+                name
+            };
             let idx = if opts.per_product {
-                groups.iter().position(|g| g.0 == name).filter(|_| groups.len() == 1)
+                groups.iter().position(|g| g.name == name)
             } else {
                 None
             };
             let g = match idx {
-                Some(i) => &mut groups[i].1,
+                Some(i) => &mut groups[i],
                 None => {
-                    groups.push((name, BTreeMap::new()));
-                    &mut groups.last_mut().expect("just pushed").1
+                    groups.push(Acc {
+                        name,
+                        by_color: BTreeMap::new(),
+                        exact: None,
+                        exact_ok: true,
+                    });
+                    groups.last_mut().expect("just pushed")
                 }
             };
             for (color, tris) in &b.groups {
-                let e = g.entry(*color).or_default();
+                let e = g.by_color.entry(*color).or_default();
                 let base = e.0.len() as u32;
                 e.0.extend_from_slice(&b.positions);
                 e.1.extend(tris.iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
             }
+            match &b.exact {
+                Some(x) => match &mut g.exact {
+                    Some(have) => have.merge(x),
+                    None => g.exact = Some(x.clone()),
+                },
+                None => g.exact_ok = false,
+            }
         }
-        for (name, by_color) in groups {
-            for (color, (pos, tris)) in by_color {
+        for g in groups {
+            for (color, (pos, tris)) in g.by_color {
                 let (positions, triangles, w, d) = weld(&pos, &tris, weld_eps);
                 welded += w;
                 degenerate += d;
                 if triangles.is_empty() {
                     continue;
                 }
+                let name = if g.name.is_empty() {
+                    "STEP".to_string()
+                } else {
+                    g.name.clone()
+                };
+                // The exact data of this color.
+                let payload = match (&g.exact, g.exact_ok, opts.keep_exact) {
+                    (_, _, false) => Err("the option keep_exact is off".to_string()),
+                    (None, _, _) | (_, false, _) => Err(
+                        "the part has triangles that were given, not cut from surfaces".to_string(),
+                    ),
+                    (Some(x), true, true) => {
+                        let mut x = x.clone();
+                        x.retain_faces(|f| f.color == color);
+                        if x.faces.is_empty() {
+                            Err("no faces are left for this color".to_string())
+                        } else if x.approx_bytes() > exact::MAX_OBJECT_BYTES {
+                            Err(format!(
+                                "the exact data is about {} bytes, over the limit of {} bytes for one object: only the triangles are kept",
+                                x.approx_bytes(),
+                                exact::MAX_OBJECT_BYTES
+                            ))
+                        } else {
+                            Ok(x)
+                        }
+                    }
+                };
+                match payload {
+                    Ok(x) => {
+                        exact_bytes += x.approx_bytes();
+                        exacts.push(Some(x));
+                    }
+                    Err(why) => {
+                        if opts.keep_exact {
+                            exact_dropped.push((name.clone(), why));
+                        }
+                        exacts.push(None);
+                    }
+                }
                 parts.push(Part {
-                    name: if name.is_empty() { "STEP".into() } else { name.clone() },
+                    name,
                     material: String::new(),
                     color,
                     positions,
@@ -284,7 +387,11 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         }
         for cv in &geom.curves {
             curves.push(CurvePart {
-                name: if inst.name.is_empty() { cv.name.clone() } else { inst.name.clone() },
+                name: if inst.name.is_empty() {
+                    cv.name.clone()
+                } else {
+                    inst.name.clone()
+                },
                 points: cv.points.iter().map(|p| p.to_array()).collect(),
                 closed: cv.closed,
                 color: cv.color,
@@ -321,6 +428,9 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         tolerance_mm: Some(c.tol * c.unit_scales.first().copied().unwrap_or(1.0)),
         angle_deg: opts.angle_deg,
         welded_vertices: welded,
+        exact_kept: exacts.iter().flatten().count(),
+        exact_bytes,
+        exact_dropped,
     };
     let notes = c.notes.clone();
     let frame = Frame {
@@ -352,7 +462,24 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     } else {
         MeshSet::finish(Format::Step, frame, parts, degenerate, notes, &opts.limits)?
     };
-    Ok(StepImport { set, curves, report })
+    // A set that was joined by color has parts of other faces than the payloads.
+    let mut report = report;
+    let exact = if set.parts.len() == exacts.len() {
+        exacts
+    } else {
+        report.exact_kept = 0;
+        report.exact_dropped.push((
+            "all".into(),
+            "the parts were joined by color, so the exact data does not fit them".into(),
+        ));
+        vec![None; set.parts.len()]
+    };
+    Ok(StepImport {
+        set,
+        exact,
+        curves,
+        report,
+    })
 }
 
 /// Joins vertices that lie within `eps` of each other, drops triangles with a repeated corner
@@ -409,7 +536,11 @@ fn weld(
     let mut used = vec![u32::MAX; kept.len()];
     let mut out_pos: Vec<[f64; 3]> = Vec::new();
     for t in tris {
-        let m = [remap[t[0] as usize], remap[t[1] as usize], remap[t[2] as usize]];
+        let m = [
+            remap[t[0] as usize],
+            remap[t[1] as usize],
+            remap[t[2] as usize],
+        ];
         if m[0] == m[1] || m[1] == m[2] || m[0] == m[2] {
             dropped += 1;
             continue;
@@ -432,7 +563,9 @@ fn weld(
         let mut key = *t;
         key.sort_unstable();
         // The winding: whether the corners are an even permutation of the sorted ones.
-        let even = (t[0] == key[0] && t[1] == key[1]) || (t[1] == key[0] && t[2] == key[1]) || (t[2] == key[0] && t[0] == key[1]);
+        let even = (t[0] == key[0] && t[1] == key[1])
+            || (t[1] == key[0] && t[2] == key[1])
+            || (t[2] == key[0] && t[0] == key[1]);
         seen.entry(key).or_default().push((i, even));
     }
     let mut remove = vec![false; out_tris.len()];
@@ -458,4 +591,88 @@ fn weld(
         !remove[k - 1]
     });
     (out_pos, out_tris, joined, dropped)
+}
+
+/// The triangles of a payload, cut again at another tolerance.
+#[derive(Debug)]
+pub struct Retessellation {
+    pub positions: Vec<[f64; 3]>,
+    pub triangles: Vec<[u32; 3]>,
+    pub notes: Vec<String>,
+    /// Faces that could not be cut (their number in the payload and the reason).
+    pub skipped: Vec<(usize, String)>,
+    /// Faces and triangles by kind of surface.
+    pub kinds: Vec<(String, u64, u64)>,
+}
+
+/// Cuts the faces of an exact solid into triangles again, with a chord `tolerance_mm` and a
+/// largest turn of the normal `angle_deg`. The payload is checked first, because it may come
+/// from a file. Nothing is read from a STEP file.
+pub fn retessellate(
+    solid: &ExactSolid,
+    tolerance_mm: f64,
+    angle_deg: f64,
+    limits: &Limits,
+) -> Result<Retessellation, MeshError> {
+    solid
+        .validate()
+        .map_err(|why| MeshError::Malformed(format!("the exact data is not valid: {why}")))?;
+    if !(tolerance_mm.is_finite() && tolerance_mm > 0.0 && angle_deg.is_finite() && angle_deg > 0.0)
+    {
+        return Err(MeshError::Malformed(
+            "the tolerance and the angle must be positive numbers".into(),
+        ));
+    }
+    let params = tess::TessParams {
+        tol: tolerance_mm,
+        angle: angle_deg.to_radians().clamp(0.02, 1.5),
+        max_face_triangles: StepLimits::default().max_face_triangles,
+        triangles_left: limits.max_triangles as usize,
+    };
+    let (mut vertices, mut triangles) = (0u64, 0u64);
+    let mut spend = |v: u64, t: u64| -> Result<(), MeshError> {
+        vertices += v;
+        triangles += t;
+        if triangles > limits.max_triangles {
+            return Err(MeshError::TooManyTriangles {
+                count: triangles,
+                limit: limits.max_triangles,
+            });
+        }
+        if vertices > limits.max_vertices {
+            return Err(MeshError::TooManyVertices {
+                count: vertices,
+                limit: limits.max_vertices,
+            });
+        }
+        let need = Limits::memory_of(vertices, triangles);
+        if need > limits.max_memory {
+            return Err(MeshError::TooMuchMemory {
+                bytes: need,
+                limit: limits.max_memory,
+            });
+        }
+        Ok(())
+    };
+    let t = tess::tessellate(solid, &params, &mut spend)?;
+    let mut pos = t.positions;
+    let mut tris: Vec<[u32; 3]> = Vec::new();
+    for (_, g) in t.groups {
+        tris.extend(g);
+    }
+    if tris.is_empty() {
+        return Err(MeshError::Empty);
+    }
+    let (positions, triangles, _, _) = {
+        let eps = (tolerance_mm * 1e-3).max(1e-6);
+        let r = weld(&std::mem::take(&mut pos), &tris, eps);
+        (r.0, r.1, r.2, r.3)
+    };
+    Ok(Retessellation {
+        positions,
+        triangles,
+        notes: t.notes,
+        skipped: t.skipped,
+        kinds: t.kinds.into_iter().map(|(k, (f, t))| (k, f, t)).collect(),
+    })
 }

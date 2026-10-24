@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use glam::DVec3;
 
-use crate::surface::Surface;
+use kadakas_core::exact::Surface;
 
 /// The points of a face: the parameters and the position of each.
 #[derive(Clone, Debug, Default)]
@@ -24,8 +24,16 @@ impl Points {
     /// The position in a plane where lengths are about those in space.
     pub fn flat(&self, i: u32) -> [f64; 2] {
         let s = [
-            if self.scale[0] > 0.0 { self.scale[0] } else { 1.0 },
-            if self.scale[1] > 0.0 { self.scale[1] } else { 1.0 },
+            if self.scale[0] > 0.0 {
+                self.scale[0]
+            } else {
+                1.0
+            },
+            if self.scale[1] > 0.0 {
+                self.scale[1]
+            } else {
+                1.0
+            },
         ];
         let p = self.uv[i as usize];
         [p[0] * s[0], p[1] * s[1]]
@@ -53,7 +61,12 @@ pub fn area(uv: &[[f64; 2]], l: &[usize]) -> f64 {
 
 /// Triangles for the outline `loops[0]` (counterclockwise) and the holes `loops[1..]`
 /// (clockwise), as indices of `uv`. `None` when the polygon cannot be cut.
-pub fn ear_clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], loops: &[Vec<usize>]) -> Option<Vec<[u32; 3]>> {
+pub fn ear_clip(
+    uv: &[[f64; 2]],
+    xyz: &[DVec3],
+    scale: [f64; 2],
+    loops: &[Vec<usize>],
+) -> Option<Vec<[u32; 3]>> {
     let mut poly: Vec<usize> = loops.first()?.clone();
     let total: usize = loops.iter().map(Vec::len).sum();
     if poly.len() < 3 || total > MAX_POLYGON_POINTS {
@@ -61,7 +74,11 @@ pub fn ear_clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], loops: &[Vec<us
     }
     // Holes, the one with the largest x first.
     let mut holes: Vec<&Vec<usize>> = loops[1..].iter().filter(|h| h.len() >= 3).collect();
-    let max_x = |h: &Vec<usize>| h.iter().map(|i| uv[*i][0]).fold(f64::NEG_INFINITY, f64::max);
+    let max_x = |h: &Vec<usize>| {
+        h.iter()
+            .map(|i| uv[*i][0])
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
     holes.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
     for h in holes {
         poly = bridge(uv, poly, h)?;
@@ -92,7 +109,11 @@ fn bridge(uv: &[[f64; 2]], poly: Vec<usize>, hole: &[usize]) -> Option<Vec<usize
     }
     let (ix, ei) = best?;
     let (a, b) = (poly[ei], poly[(ei + 1) % n]);
-    let p_idx = if uv[a][0] > uv[b][0] { ei } else { (ei + 1) % n };
+    let p_idx = if uv[a][0] > uv[b][0] {
+        ei
+    } else {
+        (ei + 1) % n
+    };
     let ipt = [ix, m[1]];
     let ppt = uv[poly[p_idx]];
     let mut vi = p_idx;
@@ -107,8 +128,7 @@ fn bridge(uv: &[[f64; 2]], poly: Vec<usize>, hole: &[usize]) -> Option<Vec<usize
             }
             let ang = (t[1] - m[1]).abs().atan2(t[0] - m[0]);
             let closer = ang < best_ang - 1e-12
-                || ((ang - best_ang).abs() <= 1e-12
-                    && dist2(m, t) < dist2(m, uv[poly[vi]]));
+                || ((ang - best_ang).abs() <= 1e-12 && dist2(m, t) < dist2(m, uv[poly[vi]]));
             if closer {
                 best_ang = ang;
                 vi = k;
@@ -175,41 +195,42 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
         let (cx, cy) = cell_of(pt(i));
         grid[cy * cells + cx].push(i);
     }
-    let inside_any = |a: usize, b: usize, c: usize, prev: &[usize], next: &[usize], alive: &[bool]| -> bool {
-        let (pa, pb, pc) = (pt(a), pt(b), pt(c));
-        let (x0, x1) = (pa[0].min(pb[0]).min(pc[0]), pa[0].max(pb[0]).max(pc[0]));
-        let (y0, y1) = (pa[1].min(pb[1]).min(pc[1]), pa[1].max(pb[1]).max(pc[1]));
-        if reflex0.is_empty() || x1 < lo[0] || x0 > hi[0] || y1 < lo[1] || y0 > hi[1] {
-            return false;
-        }
-        let (cx0, cy0) = cell_of([x0, y0]);
-        let (cx1, cy1) = cell_of([x1, y1]);
-        for cy in cy0..=cy1 {
-            for cx in cx0..=cx1 {
-                for &r in &grid[cy * cells + cx] {
-                    if r == a || r == b || r == c || !alive[r] {
-                        continue;
-                    }
-                    let q = pt(r);
-                    // The same position as a corner: a bridge copy, not a blocker.
-                    if poly[r] == poly[a] || poly[r] == poly[b] || poly[r] == poly[c] {
-                        continue;
-                    }
-                    if q == pa || q == pb || q == pc {
-                        continue;
-                    }
-                    // Still reflex now?
-                    if convex(prev[r], r, next[r]) {
-                        continue;
-                    }
-                    if in_triangle(pa, pb, pc, q) {
-                        return true;
+    let inside_any =
+        |a: usize, b: usize, c: usize, prev: &[usize], next: &[usize], alive: &[bool]| -> bool {
+            let (pa, pb, pc) = (pt(a), pt(b), pt(c));
+            let (x0, x1) = (pa[0].min(pb[0]).min(pc[0]), pa[0].max(pb[0]).max(pc[0]));
+            let (y0, y1) = (pa[1].min(pb[1]).min(pc[1]), pa[1].max(pb[1]).max(pc[1]));
+            if reflex0.is_empty() || x1 < lo[0] || x0 > hi[0] || y1 < lo[1] || y0 > hi[1] {
+                return false;
+            }
+            let (cx0, cy0) = cell_of([x0, y0]);
+            let (cx1, cy1) = cell_of([x1, y1]);
+            for cy in cy0..=cy1 {
+                for cx in cx0..=cx1 {
+                    for &r in &grid[cy * cells + cx] {
+                        if r == a || r == b || r == c || !alive[r] {
+                            continue;
+                        }
+                        let q = pt(r);
+                        // The same position as a corner: a bridge copy, not a blocker.
+                        if poly[r] == poly[a] || poly[r] == poly[b] || poly[r] == poly[c] {
+                            continue;
+                        }
+                        if q == pa || q == pb || q == pc {
+                            continue;
+                        }
+                        // Still reflex now?
+                        if convex(prev[r], r, next[r]) {
+                            continue;
+                        }
+                        if in_triangle(pa, pb, pc, q) {
+                            return true;
+                        }
                     }
                 }
             }
-        }
-        false
-    };
+            false
+        };
     let score = |p: usize, i: usize, q: usize| -> f64 {
         let sc = [
             if scale[0] > 0.0 { scale[0] } else { 1.0 },
@@ -367,12 +388,17 @@ impl Topo {
 
 fn angle_at(pts: &Points, a: u32, b: u32, c: u32) -> f64 {
     let (pa, pb, pc) = (pts.flat(a), pts.flat(b), pts.flat(c));
-    let (u, v) = ([pa[0] - pb[0], pa[1] - pb[1]], [pc[0] - pb[0], pc[1] - pb[1]]);
+    let (u, v) = (
+        [pa[0] - pb[0], pa[1] - pb[1]],
+        [pc[0] - pb[0], pc[1] - pb[1]],
+    );
     let (lu, lv) = (u[0].hypot(u[1]), v[0].hypot(v[1]));
     if lu == 0.0 || lv == 0.0 {
         return 0.0;
     }
-    ((u[0] * v[0] + u[1] * v[1]) / (lu * lv)).clamp(-1.0, 1.0).acos()
+    ((u[0] * v[0] + u[1] * v[1]) / (lu * lv))
+        .clamp(-1.0, 1.0)
+        .acos()
 }
 
 /// What the refinement needs to know.
@@ -406,7 +432,9 @@ pub fn mesh_face(
     let curved = !refine.surface.is_flat();
     if curved {
         seed_grid(&mut topo, pts, loops, refine);
-        let mut stack: Vec<u32> = (0..topo.tris.len() as u32).filter(|t| topo.alive[*t as usize]).collect();
+        let mut stack: Vec<u32> = (0..topo.tris.len() as u32)
+            .filter(|t| topo.alive[*t as usize])
+            .collect();
         let mut guard = 0usize;
         let mut seen: HashMap<[u32; 3], u8> = HashMap::new();
         while let Some(t) = stack.pop() {
@@ -467,7 +495,8 @@ fn remove_flat(topo: &mut Topo, pts: &Points) {
                 let (p, m, q) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
                 let (up, um, uq) = (pts.uv[p as usize], pts.uv[m as usize], pts.uv[q as usize]);
                 let long2 = dist2(up, uq);
-                let between = (up[0] - um[0]) * (uq[0] - um[0]) + (up[1] - um[1]) * (uq[1] - um[1]) < 0.0;
+                let between =
+                    (up[0] - um[0]) * (uq[0] - um[0]) + (up[1] - um[1]) * (uq[1] - um[1]) < 0.0;
                 if !(between && cross(up, um, uq).abs() <= 1e-9 * long2) {
                     continue;
                 }
@@ -584,9 +613,18 @@ fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine
             pts.xyz.push(xyz);
             let m = (pts.uv.len() - 1) as u32;
             topo.remove(t);
-            let nt = [topo.add([tri[0], tri[1], m]), topo.add([tri[1], tri[2], m]), topo.add([tri[2], tri[0], m])];
+            let nt = [
+                topo.add([tri[0], tri[1], m]),
+                topo.add([tri[1], tri[2], m]),
+                topo.add([tri[2], tri[0], m]),
+            ];
             last = nt[0];
-            let _ = legalize(topo, pts, vec![(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])], r.surface);
+            let _ = legalize(
+                topo,
+                pts,
+                vec![(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])],
+                r.surface,
+            );
             if !topo.alive[last as usize] {
                 last = topo.alive.iter().rposition(|a| *a).unwrap_or(0) as u32;
             }
@@ -648,7 +686,9 @@ fn needs_split(topo: &Topo, pts: &Points, t: u32, r: &Refine) -> bool {
         return false;
     }
     // A triangle of three points on a line is not refined: its neighbour is.
-    let longest_uv = (0..3).map(|k| dist2(uv[k], uv[(k + 1) % 3])).fold(0.0, f64::max);
+    let longest_uv = (0..3)
+        .map(|k| dist2(uv[k], uv[(k + 1) % 3]))
+        .fold(0.0, f64::max);
     if cross(uv[0], uv[1], uv[2]).abs() <= 1e-13 * longest_uv {
         return false;
     }
@@ -727,15 +767,21 @@ fn split(topo: &mut Topo, pts: &mut Points, t: u32, surface: &Surface) -> Vec<u3
             let Some((t2, d)) = topo.across(a, b) else {
                 return Vec::new();
             };
-            let c = tri.iter().copied().find(|v| *v != a && *v != b).unwrap_or(a);
+            let c = tri
+                .iter()
+                .copied()
+                .find(|v| *v != a && *v != b)
+                .unwrap_or(a);
             let (ua, ub) = (pts.uv[a as usize], pts.uv[b as usize]);
             // A corner that lies on the edge (a flat neighbour) is the split point.
             let on_edge = |p: u32| {
                 let up = pts.uv[p as usize];
                 let l2 = dist2(ua, ub);
                 cross(ua, ub, up).abs() <= 1e-9 * l2
-                    && (up[0] - ua[0]) * (ub[0] - ua[0]) + (up[1] - ua[1]) * (ub[1] - ua[1]) > 1e-6 * l2
-                    && (up[0] - ub[0]) * (ua[0] - ub[0]) + (up[1] - ub[1]) * (ua[1] - ub[1]) > 1e-6 * l2
+                    && (up[0] - ua[0]) * (ub[0] - ua[0]) + (up[1] - ua[1]) * (ub[1] - ua[1])
+                        > 1e-6 * l2
+                    && (up[0] - ub[0]) * (ua[0] - ub[0]) + (up[1] - ub[1]) * (ua[1] - ub[1])
+                        > 1e-6 * l2
             };
             let m = if on_edge(d) {
                 d
@@ -759,7 +805,11 @@ fn split(topo: &mut Topo, pts: &mut Points, t: u32, surface: &Surface) -> Vec<u3
                     [topo.add([b, m, o]), topo.add([m, a, o])]
                 };
                 let made = legalize(topo, pts, vec![(a, o), (o, b), (b, o), (o, a)], surface);
-                return r.into_iter().chain(made).filter(|t| topo.alive[*t as usize]).collect();
+                return r
+                    .into_iter()
+                    .chain(made)
+                    .filter(|t| topo.alive[*t as usize])
+                    .collect();
             }
             topo.remove(t);
             topo.remove(t2);
@@ -771,7 +821,10 @@ fn split(topo: &mut Topo, pts: &mut Points, t: u32, surface: &Surface) -> Vec<u3
             ];
             let edges = vec![(a, c), (c, b), (b, d), (d, a)];
             let made = legalize(topo, pts, edges, surface);
-            new.into_iter().chain(made).filter(|t| topo.alive[*t as usize]).collect()
+            new.into_iter()
+                .chain(made)
+                .filter(|t| topo.alive[*t as usize])
+                .collect()
         }
         _ => {
             let uv = tri.map(|i| pts.uv[i as usize]);
@@ -792,7 +845,10 @@ fn split(topo: &mut Topo, pts: &mut Points, t: u32, surface: &Surface) -> Vec<u3
             ];
             let edges = vec![(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])];
             let made = legalize(topo, pts, edges, surface);
-            new.into_iter().chain(made).filter(|t| topo.alive[*t as usize]).collect()
+            new.into_iter()
+                .chain(made)
+                .filter(|t| topo.alive[*t as usize])
+                .collect()
         }
     }
 }
@@ -801,7 +857,12 @@ fn split(topo: &mut Topo, pts: &mut Points, t: u32, surface: &Surface) -> Vec<u3
 /// convex quadrilateral in UV. On a plane the better pair has the larger smallest angle
 /// (Delaunay: opposite angles add up to less than a half turn). On a curved surface the
 /// better pair leans less from the surface.
-fn legalize(topo: &mut Topo, pts: &Points, mut stack: Vec<(u32, u32)>, _surface: &Surface) -> Vec<u32> {
+fn legalize(
+    topo: &mut Topo,
+    pts: &Points,
+    mut stack: Vec<(u32, u32)>,
+    _surface: &Surface,
+) -> Vec<u32> {
     let mut made: Vec<u32> = Vec::new();
     let mut budget = 40 * stack.len() + 1000;
     while let Some((a, b)) = stack.pop() {
@@ -817,7 +878,11 @@ fn legalize(topo: &mut Topo, pts: &Points, mut stack: Vec<(u32, u32)>, _surface:
             continue;
         };
         let tri = topo.tris[t1 as usize];
-        let c = tri.iter().copied().find(|v| *v != a && *v != b).unwrap_or(a);
+        let c = tri
+            .iter()
+            .copied()
+            .find(|v| *v != a && *v != b)
+            .unwrap_or(a);
         if c == d {
             continue;
         }
@@ -901,7 +966,11 @@ mod tests {
         }
         let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
         let want = 100.0 - 4.0 - 9.0 - 2.56;
-        assert!((area_of(&uv, &t) - want).abs() < 1e-9, "{}", area_of(&uv, &t));
+        assert!(
+            (area_of(&uv, &t) - want).abs() < 1e-9,
+            "{}",
+            area_of(&uv, &t)
+        );
         // A hole in the middle of the way of the ray of another one.
         let uv2 = vec![
             [0.0, 0.0],
@@ -931,7 +1000,15 @@ mod tests {
             [6.0, 1.0],
             [6.0, 0.5],
         ];
-        assert!(ear_clip(&uv3, &flat3(&uv3), [1.0, 1.0], &[vec![0, 1, 2, 3], vec![4, 5, 6, 7]]).is_none());
+        assert!(
+            ear_clip(
+                &uv3,
+                &flat3(&uv3),
+                [1.0, 1.0],
+                &[vec![0, 1, 2, 3], vec![4, 5, 6, 7]]
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -975,7 +1052,13 @@ mod tests {
         }
         // Every triangle is counterclockwise in UV.
         for tri in &t {
-            assert!(cross(pts.uv[tri[0] as usize], pts.uv[tri[1] as usize], pts.uv[tri[2] as usize]) > 0.0);
+            assert!(
+                cross(
+                    pts.uv[tri[0] as usize],
+                    pts.uv[tri[1] as usize],
+                    pts.uv[tri[2] as usize]
+                ) > 0.0
+            );
         }
         // The count limit stops the refinement.
         let mut pts2 = Points::default();
@@ -1008,7 +1091,8 @@ mod tests {
         // Close the loop through the pole in UV.
         pts.uv.push([std::f64::consts::TAU, 1.0]);
         pts.xyz.push(s.eval(0.0, 1.0));
-        pts.uv.push([std::f64::consts::TAU, std::f64::consts::FRAC_PI_2]);
+        pts.uv
+            .push([std::f64::consts::TAU, std::f64::consts::FRAC_PI_2]);
         pts.xyz.push(s.eval(0.0, std::f64::consts::FRAC_PI_2));
         pts.uv.push([0.0, std::f64::consts::FRAC_PI_2]);
         pts.xyz.push(s.eval(0.0, std::f64::consts::FRAC_PI_2));

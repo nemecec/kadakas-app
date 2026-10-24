@@ -698,10 +698,7 @@ impl Shape {
                 mv(&mut u.max);
             }
             Shape::Group { .. } | Shape::Unknown { .. } => {}
-            Shape::Mesh3d(m) => m.vertices.iter_mut().for_each(|p| {
-                p.x += d.x;
-                p.y += d.y;
-            }),
+            Shape::Mesh3d(m) => m.translate_xy(d),
             Shape::Irrigation(i) => i.translate(d),
             Shape::SurfaceModel(s) => s.translate(DVec3::new(d.x, d.y, 0.0)),
             Shape::Component { transform, .. } => {

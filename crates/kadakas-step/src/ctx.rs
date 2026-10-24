@@ -2,14 +2,13 @@
 //! limits and the counters of the report.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use kadakas_meshio::MeshError;
 
-use crate::curve::Curve;
 use crate::part21::{Entity, StepFile, Value};
-use crate::surface::Surface;
 use crate::{StepLimits, StepOptions};
+use kadakas_core::exact::{Curve, Surface};
 
 /// Why a piece of the file is not read. `Skip` loses that piece only. `Abort` stops the import
 /// (a limit that the file passes).
@@ -61,11 +60,10 @@ pub struct Ctx<'a> {
     pub angle: f64,
     /// Radians in one plane angle unit of the representation that is being read.
     pub angle_unit: f64,
-    pub curves: HashMap<u64, Rc<Curve>>,
-    pub edges: HashMap<u64, Rc<Vec<(glam::DVec3, crate::brep::VKey)>>>,
+    pub curves: HashMap<u64, Arc<Curve>>,
     /// Colors of styled items by the number of the item (a solid, a shell or a face).
     pub colors: HashMap<u64, [u8; 4]>,
-    pub surfaces: HashMap<u64, Rc<Surface>>,
+    pub surfaces: HashMap<u64, Arc<Surface>>,
     pub depth: usize,
     /// Millimeters per file unit of the representations read, and whether the file named them.
     pub unit_scales: Vec<f64>,
@@ -92,7 +90,6 @@ impl<'a> Ctx<'a> {
             angle: 0.3,
             angle_unit: 1.0,
             curves: HashMap::new(),
-            edges: HashMap::new(),
             colors: HashMap::new(),
             surfaces: HashMap::new(),
             depth: 0,
@@ -104,10 +101,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn position(&self, id: u64) -> Option<usize> {
-        self.file
-            .entities
-            .binary_search_by_key(&id, |e| e.id)
-            .ok()
+        self.file.entities.binary_search_by_key(&id, |e| e.id).ok()
     }
 
     /// The entity with this number, marked as used.
@@ -168,8 +162,12 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn tessellated_face(&mut self, kind: &str, triangles: u64) {
+        self.tessellated_faces(kind, 1, triangles);
+    }
+
+    pub fn tessellated_faces(&mut self, kind: &str, faces: u64, triangles: u64) {
         let s = self.tessellated.entry(kind.to_string()).or_default();
-        s.faces += 1;
+        s.faces += faces;
         s.triangles += triangles;
     }
 

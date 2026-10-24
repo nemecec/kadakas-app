@@ -244,6 +244,7 @@ fn mesh(n: usize) -> Mesh3d {
         vertices,
         triangles,
         color: None,
+        exact: None,
     }
 }
 

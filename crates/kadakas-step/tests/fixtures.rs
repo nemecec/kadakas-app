@@ -29,7 +29,10 @@ fn metrics(imp: &StepImport) -> (f64, f64, usize) {
     for p in &imp.set.parts {
         let mut edges = std::collections::HashMap::<(u32, u32), i32>::new();
         for t in &p.triangles {
-            let v: Vec<glam::DVec3> = t.iter().map(|i| glam::DVec3::from(p.positions[*i as usize])).collect();
+            let v: Vec<glam::DVec3> = t
+                .iter()
+                .map(|i| glam::DVec3::from(p.positions[*i as usize]))
+                .collect();
             vol += v[0].dot(v[1].cross(v[2])) / 6.0;
             area += (v[1] - v[0]).cross(v[2] - v[0]).length() / 2.0;
             for k in 0..3 {
@@ -45,18 +48,28 @@ fn metrics(imp: &StepImport) -> (f64, f64, usize) {
                 *count.entry((a.min(b), a.max(b))).or_default() += 1;
             }
         }
-        open += count.iter().filter(|(k, n)| **n != 2 || edges[*k] != 0).count();
+        open += count
+            .iter()
+            .filter(|(k, n)| **n != 2 || edges[*k] != 0)
+            .count();
     }
     (vol, area, open)
 }
 
 fn close(a: f64, b: f64, rel: f64) {
-    assert!((a - b).abs() <= rel * b.abs(), "{a} is not within {rel} of {b}");
+    assert!(
+        (a - b).abs() <= rel * b.abs(),
+        "{a} is not within {rel} of {b}"
+    );
 }
 
 fn accounted(imp: &StepImport) {
     let r = &imp.report;
-    assert_eq!(r.entities_read, r.entities_used + r.entities_skipped, "{r:?}");
+    assert_eq!(
+        r.entities_read,
+        r.entities_used + r.entities_skipped,
+        "{r:?}"
+    );
 }
 
 #[test]
@@ -85,7 +98,11 @@ fn units_are_applied() {
         unit: Some(kadakas_meshio::Unit::Centimetre),
         ..Default::default()
     };
-    close(metrics(&load("box.step", &o)).0, 200.0 * 300.0 * 400.0, 1e-9);
+    close(
+        metrics(&load("box.step", &o)).0,
+        200.0 * 300.0 * 400.0,
+        1e-9,
+    );
 }
 
 #[test]
@@ -130,7 +147,10 @@ fn cone_revolution_and_extrusion() {
         let imp = load_default(f);
         accounted(&imp);
         let (vol, _, open) = metrics(&imp);
-        assert!(vol < want_frustum && vol > want_frustum * 0.98, "{f} {vol} {want_frustum}");
+        assert!(
+            vol < want_frustum && vol > want_frustum * 0.98,
+            "{f} {vol} {want_frustum}"
+        );
         assert_eq!(open, 0, "{f} {:?}", imp.report);
     }
     let e = load_default("extrusion.step");

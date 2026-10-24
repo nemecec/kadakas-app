@@ -1,13 +1,16 @@
 //! The geometry items of a representation: solids, surface models, tessellated items and curve
 //! sets, read into bodies in millimeters.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use glam::{DAffine3, DVec3};
+use kadakas_core::exact::ExactSolid;
+use kadakas_meshio::MeshError;
 
-use crate::brep::{Builder, Rgba};
 use crate::ctx::{Ctx, Fail, R, attr, flag, int, list, num, reference, refs, skip};
 use crate::part21::{Entity, Value};
+use crate::read_brep::ExactBuilder;
+use crate::tess::{Rgba, TessParams, tessellate};
 
 /// Triangles with a color, in millimeters.
 #[derive(Clone, Debug, Default)]
@@ -15,6 +18,9 @@ pub struct Body {
     pub name: String,
     pub positions: Vec<DVec3>,
     pub groups: BTreeMap<Option<Rgba>, Vec<[u32; 3]>>,
+    /// The exact surfaces of the triangles, in millimeters, when the body comes from a
+    /// boundary representation.
+    pub exact: Option<ExactSolid>,
 }
 
 impl Body {
@@ -27,7 +33,12 @@ impl Body {
         let mirror = m.matrix3.determinant() < 0.0;
         Body {
             name: self.name.clone(),
-            positions: self.positions.iter().map(|p| m.transform_point3(*p)).collect(),
+            exact: self.exact.as_ref().and_then(|e| e.transformed(m).ok()),
+            positions: self
+                .positions
+                .iter()
+                .map(|p| m.transform_point3(*p))
+                .collect(),
             groups: self
                 .groups
                 .iter()
@@ -66,8 +77,15 @@ impl RepGeom {
     }
 
     pub fn vertices(&self) -> u64 {
-        self.bodies.iter().map(|b| b.positions.len() as u64).sum::<u64>()
-            + self.curves.iter().map(|c| c.points.len() as u64).sum::<u64>()
+        self.bodies
+            .iter()
+            .map(|b| b.positions.len() as u64)
+            .sum::<u64>()
+            + self
+                .curves
+                .iter()
+                .map(|c| c.points.len() as u64)
+                .sum::<u64>()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -107,14 +125,6 @@ pub const ITEM_TYPES: &[&str] = &[
     "GEOMETRIC_SET",
 ];
 
-fn scaled(b: Builder, name: String, scale: f64) -> Body {
-    Body {
-        name,
-        positions: b.positions.iter().map(|p| *p * scale).collect(),
-        groups: b.groups,
-    }
-}
-
 impl<'a> Ctx<'a> {
     /// The faces of a shell with the flip of each.
     fn shell_faces(&mut self, id: u64, flip: bool, depth: usize) -> R<Vec<(u64, bool)>> {
@@ -134,12 +144,13 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// Adds the faces of a shell to the pending triangles of the builder.
-    fn shell_into(
+    /// Reads the faces of a shell into the payload.
+    fn read_shell(
         &mut self,
-        b: &mut Builder,
+        b: &mut ExactBuilder,
         shell: u64,
         flip: bool,
+        closed: bool,
         outward: Option<bool>,
         inherited: Option<Rgba>,
     ) -> R<()> {
@@ -152,35 +163,106 @@ impl<'a> Ctx<'a> {
             Err(f) => return Err(f),
         };
         let color = self.colors.get(&shell).copied().or(inherited);
+        let index = b.begin_shell(closed, outward);
         for (f, fl) in faces {
-            self.face(b, f, fl, color)?;
-        }
-        if b.commit(outward) {
-            self.note("a closed shell had its normals inward: it was turned inside out");
+            self.read_face(b, index, f, fl, color)?;
         }
         Ok(())
     }
 
-    fn solid(&mut self, e: &'a Entity, scale: f64) -> R<Body> {
-        let mut b = Builder::default();
-        let outer = reference(attr(e, 1)?).unwrap_or(0);
-        let color = self.colors.get(&e.id).copied();
-        self.shell_into(&mut b, outer, false, Some(true), color)?;
-        if e.name == "BREP_WITH_VOIDS" {
-            for v in refs(attr(e, 2)?) {
-                self.shell_into(&mut b, v, false, Some(false), color)?;
+    /// Cuts the payload into triangles (in millimeters) and makes the body. The payload is
+    /// kept in the body, in millimeters.
+    fn finish_body(&mut self, b: ExactBuilder, name: String, scale: f64) -> R<Body> {
+        let mut solid = b.solid;
+        if (scale - 1.0).abs() > 1e-15 {
+            solid = solid
+                .transformed(&DAffine3::from_scale(DVec3::splat(scale)))
+                .map_err(Fail::Skip)?;
+        }
+        solid.unit_mm = scale;
+        solid.product = name.clone();
+        solid.tolerance_mm = self.tol * scale;
+        solid.angle_deg = self.angle.to_degrees();
+        let params = TessParams {
+            tol: self.tol * scale,
+            angle: self.angle,
+            max_face_triangles: self.limits.max_face_triangles,
+            triangles_left: self
+                .opts
+                .limits
+                .max_triangles
+                .saturating_sub(self.triangles) as usize,
+        };
+        let mut count_error: Option<Fail> = None;
+        let t = {
+            let mut spend = |v: u64, t: u64| -> Result<(), MeshError> {
+                match self.count(v, t) {
+                    Ok(()) => Ok(()),
+                    Err(Fail::Abort(e)) => Err(e),
+                    Err(f) => {
+                        count_error = Some(f);
+                        Err(MeshError::Empty)
+                    }
+                }
+            };
+            tessellate(&solid, &params, &mut spend)
+        };
+        let t = t.map_err(|e| count_error.take().unwrap_or(Fail::Abort(e)))?;
+        for (fi, why) in &t.skipped {
+            self.skip_id(solid.faces[*fi].source, &format!("face not read: {why}"));
+        }
+        for n in &t.notes {
+            self.note(n.clone());
+        }
+        for (kind, (faces, triangles)) in &t.kinds {
+            self.tessellated_faces(kind, *faces, *triangles);
+        }
+        if !t.turned.is_empty() {
+            self.note("a closed shell had its normals inward: it was turned inside out");
+            for f in &mut solid.faces {
+                if t.turned.contains(&f.shell) {
+                    f.flip = !f.flip;
+                }
             }
         }
-        Ok(scaled(b, text_of(e), scale))
+        // The faces that were not cut cannot be cut again. The orientation is settled.
+        let skipped: HashSet<usize> = t.skipped.iter().map(|s| s.0).collect();
+        let mut k = 0;
+        solid.faces.retain(|_| {
+            k += 1;
+            !skipped.contains(&(k - 1))
+        });
+        for s in &mut solid.shells {
+            s.outward = None;
+        }
+        Ok(Body {
+            name,
+            positions: t.positions,
+            groups: t.groups,
+            exact: Some(solid),
+        })
+    }
+
+    fn solid(&mut self, e: &'a Entity, scale: f64) -> R<Body> {
+        let mut b = ExactBuilder::default();
+        let outer = reference(attr(e, 1)?).unwrap_or(0);
+        let color = self.colors.get(&e.id).copied();
+        self.read_shell(&mut b, outer, false, true, Some(true), color)?;
+        if e.name == "BREP_WITH_VOIDS" {
+            for v in refs(attr(e, 2)?) {
+                self.read_shell(&mut b, v, false, true, Some(false), color)?;
+            }
+        }
+        self.finish_body(b, text_of(e), scale)
     }
 
     fn surface_model(&mut self, e: &'a Entity, scale: f64) -> R<Body> {
-        let mut b = Builder::default();
+        let mut b = ExactBuilder::default();
         let color = self.colors.get(&e.id).copied();
         for s in refs(attr(e, 1)?) {
-            self.shell_into(&mut b, s, false, None, color)?;
+            self.read_shell(&mut b, s, false, false, None, color)?;
         }
-        Ok(scaled(b, text_of(e), scale))
+        self.finish_body(b, text_of(e), scale)
     }
 
     /// The coordinates of a COORDINATES_LIST in millimeters.
@@ -189,10 +271,14 @@ impl<'a> Ctx<'a> {
         if e.name != "COORDINATES_LIST" {
             return skip(format!("tessellated points are in a {}", e.name));
         }
-        let rows = list(attr(e, 2)?).ok_or(()).or_else(|()| skip("a coordinate list has no points"))?;
+        let rows = list(attr(e, 2)?)
+            .ok_or(())
+            .or_else(|()| skip("a coordinate list has no points"))?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let c = list(r).map(|l| l.iter().filter_map(num).collect::<Vec<_>>()).unwrap_or_default();
+            let c = list(r)
+                .map(|l| l.iter().filter_map(num).collect::<Vec<_>>())
+                .unwrap_or_default();
             if c.len() != 3 || c.iter().any(|x| x.abs() > 1e12) {
                 return skip("a tessellated point is not three usable numbers");
             }
@@ -221,7 +307,9 @@ impl<'a> Ctx<'a> {
             if let Value::List(items) = a {
                 if items.iter().all(|i| matches!(i, Value::Int(_))) {
                     pnindex = ints(a).unwrap_or_default();
-                } else if items.iter().all(|i| matches!(i, Value::List(l) if l.iter().all(|x| matches!(x, Value::Int(_))))) {
+                } else if items.iter().all(
+                    |i| matches!(i, Value::List(l) if l.iter().all(|x| matches!(x, Value::Int(_)))),
+                ) {
                     if let Some(l) = lol(a) {
                         sets.push(l);
                     }
@@ -276,19 +364,29 @@ impl<'a> Ctx<'a> {
             }
         }
         if bad > 0 {
-            self.note(format!("{bad} tessellated triangles name a point that does not exist and were left out"));
+            self.note(format!(
+                "{bad} tessellated triangles name a point that does not exist and were left out"
+            ));
         }
         self.count(pts.len() as u64, tris.len() as u64)?;
         self.tessellated_face("TESSELLATED (given triangles)", tris.len() as u64);
         let color = self.colors.get(&e.id).copied();
         let mut groups = BTreeMap::new();
         groups.insert(color, tris);
-        Ok(Body { name: text_of(e), positions: pts, groups })
+        Ok(Body {
+            name: text_of(e),
+            positions: pts,
+            groups,
+            exact: None,
+        })
     }
 
     fn tessellated_group(&mut self, e: &'a Entity, scale: f64, out: &mut RepGeom) -> R<()> {
         let color = self.colors.get(&e.id).copied();
-        let mut merged = Body { name: text_of(e), ..Default::default() };
+        let mut merged = Body {
+            name: text_of(e),
+            ..Default::default()
+        };
         for item in refs(attr(e, 1)?) {
             let ie = self.ent(item)?;
             if !ie.name.contains("TRIANGULATED") {
@@ -300,11 +398,10 @@ impl<'a> Ctx<'a> {
                     let base = merged.positions.len() as u32;
                     merged.positions.extend(b.positions);
                     for (c, t) in b.groups {
-                        merged
-                            .groups
-                            .entry(c.or(color))
-                            .or_default()
-                            .extend(t.into_iter().map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+                        merged.groups.entry(c.or(color)).or_default().extend(
+                            t.into_iter()
+                                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+                        );
                     }
                 }
                 Err(Fail::Skip(why)) => self.skip_entity(ie, &why),
@@ -332,7 +429,8 @@ impl<'a> Ctx<'a> {
                 continue;
             };
             self.count(pts.len() as u64, 0)?;
-            let closed = pts.len() > 2 && pts[0].distance(pts[pts.len() - 1]) <= 1e-9 * (1.0 + pts[0].length());
+            let closed = pts.len() > 2
+                && pts[0].distance(pts[pts.len() - 1]) <= 1e-9 * (1.0 + pts[0].length());
             let mut points: Vec<DVec3> = pts.iter().map(|p| *p * scale).collect();
             if closed {
                 points.pop();
@@ -363,8 +461,11 @@ impl<'a> Ctx<'a> {
                 "SHELL_BASED_SURFACE_MODEL" | "FACE_BASED_SURFACE_MODEL" => {
                     self.surface_model(e, scale).map(|b| out.bodies.push(b))
                 }
-                "TRIANGULATED_FACE" | "TRIANGULATED_FACE_SET" | "TRIANGULATED_SURFACE_SET"
-                | "COMPLEX_TRIANGULATED_FACE" | "COMPLEX_TRIANGULATED_SURFACE_SET" => {
+                "TRIANGULATED_FACE"
+                | "TRIANGULATED_FACE_SET"
+                | "TRIANGULATED_SURFACE_SET"
+                | "COMPLEX_TRIANGULATED_FACE"
+                | "COMPLEX_TRIANGULATED_SURFACE_SET" => {
                     self.triangulated(e, scale).map(|b| out.bodies.push(b))
                 }
                 "TESSELLATED_SOLID" | "TESSELLATED_SHELL" => self.tessellated_group(e, scale, out),

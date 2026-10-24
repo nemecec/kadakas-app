@@ -2,12 +2,13 @@
 //! Public algorithm, written here from the definition.
 
 use glam::DVec3;
+use serde::{Deserialize, Serialize};
 
 /// The highest degree that the reader accepts.
 pub const MAX_DEGREE: usize = 25;
 
 /// The knot vector, expanded: one entry for each multiplicity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Knots {
     pub degree: usize,
     pub values: Vec<f64>,
@@ -19,7 +20,9 @@ impl Knots {
     /// Checks the vector: `count + degree + 1` entries that never decrease and are finite.
     pub fn new(degree: usize, count: usize, values: Vec<f64>) -> Result<Knots, String> {
         if degree == 0 || degree > MAX_DEGREE {
-            return Err(format!("degree {degree} is not supported (1 to {MAX_DEGREE})"));
+            return Err(format!(
+                "degree {degree} is not supported (1 to {MAX_DEGREE})"
+            ));
         }
         if count < degree + 1 {
             return Err(format!(
@@ -46,6 +49,11 @@ impl Knots {
             return Err("the parameter range of the knots is empty".into());
         }
         Ok(k)
+    }
+
+    /// The checks of [`Knots::new`] for a vector that comes from a file.
+    pub fn check(&self) -> Result<(), String> {
+        Knots::new(self.degree, self.count, self.values.clone()).map(|_| ())
     }
 
     /// A clamped uniform vector (also the vector of a Bezier curve when `count = degree + 1`).
@@ -149,14 +157,32 @@ impl Knots {
 }
 
 /// A B-spline curve in space, rational when it has weights.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BSplineCurve {
     pub knots: Knots,
     pub points: Vec<DVec3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weights: Option<Vec<f64>>,
 }
 
 impl BSplineCurve {
+    /// The invariants that [`BSplineCurve::eval`] relies on, for data from a file.
+    pub fn check(&self) -> Result<(), String> {
+        self.knots.check()?;
+        if self.points.len() != self.knots.count || self.points.iter().any(|p| !p.is_finite()) {
+            return Err(
+                "a spline curve has the wrong number of points or a point that is not finite"
+                    .into(),
+            );
+        }
+        if let Some(w) = &self.weights
+            && (w.len() != self.points.len() || w.iter().any(|x| !x.is_finite() || *x <= 0.0))
+        {
+            return Err("the weights of a spline curve are not usable".into());
+        }
+        Ok(())
+    }
+
     pub fn domain(&self) -> (f64, f64) {
         self.knots.domain()
     }
@@ -182,15 +208,36 @@ impl BSplineCurve {
 
 /// A B-spline surface in space, rational when it has weights. Points are in rows of `u`
 /// (`points[iu * nv + iv]`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BSplineSurface {
     pub u: Knots,
     pub v: Knots,
     pub points: Vec<DVec3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weights: Option<Vec<f64>>,
 }
 
 impl BSplineSurface {
+    /// The invariants that [`BSplineSurface::eval`] relies on, for data from a file.
+    pub fn check(&self) -> Result<(), String> {
+        self.u.check()?;
+        self.v.check()?;
+        if self.points.len() != self.u.count.saturating_mul(self.v.count)
+            || self.points.iter().any(|p| !p.is_finite())
+        {
+            return Err(
+                "a spline surface has the wrong number of points or a point that is not finite"
+                    .into(),
+            );
+        }
+        if let Some(w) = &self.weights
+            && (w.len() != self.points.len() || w.iter().any(|x| !x.is_finite() || *x <= 0.0))
+        {
+            return Err("the weights of a spline surface are not usable".into());
+        }
+        Ok(())
+    }
+
     pub fn domain(&self) -> ((f64, f64), (f64, f64)) {
         (self.u.domain(), self.v.domain())
     }

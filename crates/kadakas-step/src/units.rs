@@ -1,8 +1,8 @@
 //! Length and angle units of a representation context, and colors of styled items.
 
-use crate::brep::Rgba;
 use crate::ctx::{Ctx, attr, enum_name, int, list, num, reference, text};
 use crate::part21::Value;
+use crate::tess::Rgba;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UnitKind {
@@ -101,14 +101,22 @@ impl<'a> Ctx<'a> {
             let Ok(e) = self.ent(id) else { continue };
             match e.name.as_str() {
                 "COLOUR_RGB" => {
-                    let c: Vec<f64> = (1..4).filter_map(|i| e.attrs.get(i).and_then(num)).collect();
+                    let c: Vec<f64> = (1..4)
+                        .filter_map(|i| e.attrs.get(i).and_then(num))
+                        .collect();
                     if c.len() == 3 && found.is_none() {
                         let b = |x: f64| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
                         found = Some([b(c[0]), b(c[1]), b(c[2]), 255]);
                     }
                 }
                 "DRAUGHTING_PRE_DEFINED_COLOUR" => {
-                    let rgb = match e.attrs.first().and_then(text).map(str::to_ascii_lowercase).as_deref() {
+                    let rgb = match e
+                        .attrs
+                        .first()
+                        .and_then(text)
+                        .map(str::to_ascii_lowercase)
+                        .as_deref()
+                    {
                         Some("red") => Some([255, 0, 0]),
                         Some("green") => Some([0, 255, 0]),
                         Some("blue") => Some([0, 0, 255]),
@@ -128,10 +136,16 @@ impl<'a> Ctx<'a> {
                         alpha = (1.0 - t).clamp(0.0, 1.0);
                     }
                 }
-                "PRESENTATION_STYLE_ASSIGNMENT" | "SURFACE_STYLE_USAGE" | "SURFACE_SIDE_STYLE"
-                | "SURFACE_STYLE_FILL_AREA" | "FILL_AREA_STYLE" | "FILL_AREA_STYLE_COLOUR"
-                | "SURFACE_STYLE_RENDERING" | "SURFACE_STYLE_RENDERING_WITH_PROPERTIES"
-                | "CURVE_STYLE" | "PRESENTATION_STYLE_BY_CONTEXT" => {
+                "PRESENTATION_STYLE_ASSIGNMENT"
+                | "SURFACE_STYLE_USAGE"
+                | "SURFACE_SIDE_STYLE"
+                | "SURFACE_STYLE_FILL_AREA"
+                | "FILL_AREA_STYLE"
+                | "FILL_AREA_STYLE_COLOUR"
+                | "SURFACE_STYLE_RENDERING"
+                | "SURFACE_STYLE_RENDERING_WITH_PROPERTIES"
+                | "CURVE_STYLE"
+                | "PRESENTATION_STYLE_BY_CONTEXT" => {
                     for a in &e.attrs {
                         push(a, &mut stack, d + 1);
                     }
@@ -151,7 +165,9 @@ impl<'a> Ctx<'a> {
         for e in &file.entities {
             if !matches!(
                 e.name.as_str(),
-                "STYLED_ITEM" | "OVER_RIDING_STYLED_ITEM" | "CONTEXT_DEPENDENT_OVER_RIDING_STYLED_ITEM"
+                "STYLED_ITEM"
+                    | "OVER_RIDING_STYLED_ITEM"
+                    | "CONTEXT_DEPENDENT_OVER_RIDING_STYLED_ITEM"
             ) {
                 continue;
             }

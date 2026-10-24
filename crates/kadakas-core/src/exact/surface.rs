@@ -2,14 +2,19 @@
 //! point.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use glam::{DAffine3, DVec3};
+use serde::{Deserialize, Serialize};
 
-use crate::curve::Curve;
-use crate::nurbs::BSplineSurface;
+use serde_json::{Value, json};
 
-#[derive(Clone, Debug)]
+use super::Similarity;
+use super::curve::Curve;
+use super::nurbs::BSplineSurface;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Surface {
     Plane {
         f: DAffine3,
@@ -35,13 +40,13 @@ pub enum Surface {
     },
     /// The curve turned around the axis: `u` is the angle, `v` the parameter of the curve.
     Revolution {
-        curve: Rc<Curve>,
+        curve: Arc<Curve>,
         o: DVec3,
         axis: DVec3,
     },
     /// The curve moved along the direction: `v` is the distance.
     Extrusion {
-        curve: Rc<Curve>,
+        curve: Arc<Curve>,
         dir: DVec3,
     },
     Spline(BSplineSurface),
@@ -53,6 +58,149 @@ fn rotate_about(axis: DVec3, angle: f64, v: DVec3) -> DVec3 {
 }
 
 impl Surface {
+    /// Checks a surface from a file: finite numbers and valid splines.
+    pub fn validate(&self) -> Result<(), String> {
+        let frame_ok = |f: &DAffine3| f.matrix3.is_finite() && f.translation.is_finite();
+        let size_ok = |x: f64| x.is_finite() && x > 0.0 && x < 1e12;
+        let ok = match self {
+            Surface::Plane { f } => frame_ok(f),
+            Surface::Cylinder { f, r } | Surface::Sphere { f, r } => frame_ok(f) && size_ok(*r),
+            Surface::Cone { f, r, angle } => {
+                frame_ok(f)
+                    && r.is_finite()
+                    && *r >= 0.0
+                    && *r < 1e12
+                    && angle.is_finite()
+                    && angle.abs() > 1e-9
+                    && angle.abs() < TAU / 4.0 - 1e-6
+            }
+            Surface::Torus { f, big, small } => {
+                frame_ok(f) && size_ok(*big) && size_ok(*small) && small < big
+            }
+            Surface::Revolution { curve, o, axis } => {
+                curve.validate()?;
+                o.is_finite() && axis.is_finite() && axis.length() > 0.5
+            }
+            Surface::Extrusion { curve, dir } => {
+                curve.validate()?;
+                curve.natural_range().is_some() && dir.is_finite() && dir.length() > 0.5
+            }
+            Surface::Spline(s) => return s.check(),
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err("a surface has a number that is not usable".into())
+        }
+    }
+
+    /// The surface moved by a similarity. For a map that mirrors, the faces must turn their
+    /// `same_sense` (the payload does that), because the cross product of the derivatives
+    /// changes sign.
+    pub fn transformed(&self, m: &Similarity) -> Surface {
+        match self {
+            Surface::Plane { f } => Surface::Plane { f: m.frame(f) },
+            Surface::Cylinder { f, r } => Surface::Cylinder {
+                f: m.frame(f),
+                r: r * m.scale,
+            },
+            Surface::Cone { f, r, angle } => Surface::Cone {
+                f: m.frame(f),
+                r: r * m.scale,
+                angle: *angle,
+            },
+            Surface::Sphere { f, r } => Surface::Sphere {
+                f: m.frame(f),
+                r: r * m.scale,
+            },
+            Surface::Torus { f, big, small } => Surface::Torus {
+                f: m.frame(f),
+                big: big * m.scale,
+                small: small * m.scale,
+            },
+            Surface::Revolution { curve, o, axis } => {
+                // A mirror turns the sense of the turn, so the axis turns around.
+                let a = m.vector(*axis) / m.scale;
+                Surface::Revolution {
+                    curve: Arc::new(curve.transformed(m)),
+                    o: m.point(*o),
+                    axis: if m.mirror { -a } else { a },
+                }
+            }
+            Surface::Extrusion { curve, dir } => Surface::Extrusion {
+                curve: Arc::new(curve.transformed(m)),
+                dir: m.vector(*dir) / m.scale,
+            },
+            Surface::Spline(s) => {
+                let mut s = s.clone();
+                s.points = s.points.iter().map(|p| m.point(*p)).collect();
+                Surface::Spline(s)
+            }
+        }
+    }
+
+    /// A short name: `plane`, `cylinder`, `cone`, `sphere`, `torus`, `revolution`,
+    /// `extrusion`, `spline`.
+    pub fn short_kind(&self) -> &'static str {
+        match self {
+            Surface::Plane { .. } => "plane",
+            Surface::Cylinder { .. } => "cylinder",
+            Surface::Cone { .. } => "cone",
+            Surface::Sphere { .. } => "sphere",
+            Surface::Torus { .. } => "torus",
+            Surface::Revolution { .. } => "revolution",
+            Surface::Extrusion { .. } => "extrusion",
+            Surface::Spline(_) => "spline",
+        }
+    }
+
+    /// The true sizes of the surface in the units of the payload, as JSON.
+    pub fn describe(&self) -> Value {
+        let frame = |f: &DAffine3| {
+            json!({
+                "origin": f.translation.to_array(),
+                "axis": f.matrix3.z_axis.to_array(),
+                "x_axis": f.matrix3.x_axis.to_array(),
+            })
+        };
+        let mut v = match self {
+            Surface::Plane { f } => json!({
+                "point": f.translation.to_array(),
+                "normal": f.matrix3.z_axis.to_array(),
+            }),
+            Surface::Cylinder { f, r } => {
+                let mut o = frame(f);
+                o["radius"] = json!(r);
+                o
+            }
+            Surface::Cone { f, r, angle } => {
+                let mut o = frame(f);
+                o["radius"] = json!(r);
+                o["half_angle_deg"] = json!(angle.to_degrees());
+                o
+            }
+            Surface::Sphere { f, r } => json!({"center": f.translation.to_array(), "radius": r}),
+            Surface::Torus { f, big, small } => {
+                let mut o = frame(f);
+                o["major_radius"] = json!(big);
+                o["minor_radius"] = json!(small);
+                o
+            }
+            Surface::Revolution { o, axis, .. } => {
+                json!({"origin": o.to_array(), "axis": axis.to_array()})
+            }
+            Surface::Extrusion { dir, .. } => json!({"direction": dir.to_array()}),
+            Surface::Spline(s) => json!({
+                "degree_u": s.u.degree,
+                "degree_v": s.v.degree,
+                "control_points": [s.u.count, s.v.count],
+                "rational": s.weights.is_some(),
+            }),
+        };
+        v["kind"] = json!(self.short_kind());
+        v
+    }
+
     /// The name of the kind, for the report.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -140,7 +288,11 @@ impl Surface {
                 )
             }
             Surface::Sphere { f, r } => (
-                f.transform_vector3(DVec3::new(-r * v.cos() * u.sin(), r * v.cos() * u.cos(), 0.0)),
+                f.transform_vector3(DVec3::new(
+                    -r * v.cos() * u.sin(),
+                    r * v.cos() * u.cos(),
+                    0.0,
+                )),
                 f.transform_vector3(DVec3::new(
                     -r * v.sin() * u.cos(),
                     -r * v.sin() * u.sin(),
@@ -350,7 +502,7 @@ fn spline_uv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nurbs::Knots;
+    use crate::exact::nurbs::Knots;
 
     fn near(a: DVec3, b: DVec3) -> bool {
         (a - b).length() < 1e-6
@@ -386,7 +538,11 @@ mod tests {
             }
         }
         assert!(Surface::Plane { f }.is_flat());
-        assert!(Surface::Sphere { f, r: 1.0 }.normal(0.0, FRAC_PI_2).is_none());
+        assert!(
+            Surface::Sphere { f, r: 1.0 }
+                .normal(0.0, FRAC_PI_2)
+                .is_none()
+        );
         // Poles.
         assert_eq!(surfaces[3].pole_v(true), Some(FRAC_PI_2));
         assert_eq!(surfaces[3].pole_v(false), Some(-FRAC_PI_2));
@@ -401,7 +557,7 @@ mod tests {
     fn revolution_extrusion_and_spline() {
         // A line at x = 3 turned around Z is a cylinder of radius 3.
         let rev = Surface::Revolution {
-            curve: Rc::new(Curve::Line {
+            curve: Arc::new(Curve::Line {
                 o: DVec3::new(3.0, 0.0, 0.0),
                 d: DVec3::Z,
             }),
@@ -416,7 +572,7 @@ mod tests {
         assert_eq!(rev.period_u(), Some(TAU));
         // A circle profile turned around Z gives a torus.
         let tor = Surface::Revolution {
-            curve: Rc::new(Curve::Circle {
+            curve: Arc::new(Curve::Circle {
                 f: DAffine3::from_translation(DVec3::new(10.0, 0.0, 0.0))
                     * DAffine3::from_rotation_x(FRAC_PI_2),
                 r: 2.0,
@@ -429,7 +585,7 @@ mod tests {
         let (u, v) = tor.uv_of(p, Some((0.7, 1.1))).unwrap();
         assert!(near(tor.eval(u, v), p));
         let ext = Surface::Extrusion {
-            curve: Rc::new(Curve::Circle {
+            curve: Arc::new(Curve::Circle {
                 f: DAffine3::IDENTITY,
                 r: 2.0,
             }),
@@ -441,7 +597,7 @@ mod tests {
         assert!(ext.normal(0.5, 7.0).is_some());
         assert_eq!(ext.period_v(), None);
         let line_ext = Surface::Extrusion {
-            curve: Rc::new(Curve::Line {
+            curve: Arc::new(Curve::Line {
                 o: DVec3::ZERO,
                 d: DVec3::X,
             }),

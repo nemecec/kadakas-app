@@ -8,6 +8,7 @@ repository.workspace = true
 description = "STEP files for Kadakas (IOP-11): the Part 21 reader and writer, and the import of B-rep geometry (AP203, AP214, AP242) as tessellated parts. Pure Rust, no file access."
 
 [dependencies]
+kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
 glam = "0.34.1"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

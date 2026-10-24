@@ -37,6 +37,7 @@ fn cube_mesh(z0: f64) -> Mesh3d {
             .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
             .collect(),
         color: None,
+        exact: None,
     }
 }
 

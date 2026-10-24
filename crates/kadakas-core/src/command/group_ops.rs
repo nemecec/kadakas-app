@@ -91,11 +91,7 @@ pub fn rotate_shape(shape: &Shape, center: DVec2, angle: f64) -> Result<Shape, S
         }
         Shape::Mesh3d(m) => {
             let mut m = (**m).clone();
-            for q in &mut m.vertices {
-                let t = p(q.truncate());
-                q.x = t.x;
-                q.y = t.y;
-            }
+            m.rotate_z(center, angle);
             Shape::Mesh3d(Box::new(m))
         }
         Shape::Polyline3d { points, closed } => Shape::Polyline3d {

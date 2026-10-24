@@ -74,7 +74,10 @@ impl<'a> Ctx<'a> {
         if !self.unit_scales.contains(&scale) {
             self.unit_scales.push(scale);
         }
-        let tol_mm = self.opts.tolerance_mm.unwrap_or_else(|| (self.diag_mm(scale) / 2000.0).clamp(0.01, 0.5));
+        let tol_mm = self
+            .opts
+            .tolerance_mm
+            .unwrap_or_else(|| (self.diag_mm(scale) / 2000.0).clamp(0.01, 0.5));
         self.tol = tol_mm / scale;
         self.angle = self.opts.angle_deg.to_radians().clamp(0.02, 1.5);
         scale
@@ -96,11 +99,20 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-        if lo.x > hi.x { 1000.0 } else { ((hi - lo).length() * scale).max(1.0) }
+        if lo.x > hi.x {
+            1000.0
+        } else {
+            ((hi - lo).length() * scale).max(1.0)
+        }
     }
 
     /// The geometry of the items of one representation, in millimeters.
-    fn rep_geometry(&mut self, rep: u64, cache: &mut HashMap<u64, Rc<RepGeom>>, depth: usize) -> R<Rc<RepGeom>> {
+    fn rep_geometry(
+        &mut self,
+        rep: u64,
+        cache: &mut HashMap<u64, Rc<RepGeom>>,
+        depth: usize,
+    ) -> R<Rc<RepGeom>> {
         if let Some(g) = cache.get(&rep) {
             return Ok(g.clone());
         }
@@ -138,7 +150,13 @@ impl<'a> Ctx<'a> {
         Ok(g)
     }
 
-    fn mapped_item(&mut self, e: &'a Entity, scale: f64, cache: &mut HashMap<u64, Rc<RepGeom>>, depth: usize) -> R<RepGeom> {
+    fn mapped_item(
+        &mut self,
+        e: &'a Entity,
+        scale: f64,
+        cache: &mut HashMap<u64, Rc<RepGeom>>,
+        depth: usize,
+    ) -> R<RepGeom> {
         let map = self.ent(reference(attr(e, 1)?).unwrap_or(0))?;
         if map.name != "REPRESENTATION_MAP" {
             return skip("a mapped item without a representation map");
@@ -184,12 +202,19 @@ impl<'a> Ctx<'a> {
                         e.attrs.get(3).and_then(reference),
                         e.attrs.get(4).and_then(reference),
                     ) {
-                        usages.push(Usage { nauo: e.id, parent: p, child: c });
+                        usages.push(Usage {
+                            nauo: e.id,
+                            parent: p,
+                            child: c,
+                        });
                         self.use_id(e.id);
                     }
                 }
                 "SHAPE_REPRESENTATION_RELATIONSHIP" => {
-                    if let (Some(a), Some(b)) = (e.attrs.get(2).and_then(reference), e.attrs.get(3).and_then(reference)) {
+                    if let (Some(a), Some(b)) = (
+                        e.attrs.get(2).and_then(reference),
+                        e.attrs.get(3).and_then(reference),
+                    ) {
                         srr.push((a, b));
                         self.use_id(e.id);
                     }
@@ -233,23 +258,31 @@ impl<'a> Ctx<'a> {
                 _ => {}
             }
         }
-        let mut out = Structure { instances: Vec::new(), products: pd_name.len() };
-        let any_geometry = pd_reps.values().flatten().any(|r| {
-            self.peek(*r).is_some_and(is_rep)
-        });
+        let mut out = Structure {
+            instances: Vec::new(),
+            products: pd_name.len(),
+        };
+        let any_geometry = pd_reps
+            .values()
+            .flatten()
+            .any(|r| self.peek(*r).is_some_and(is_rep));
         if !any_geometry {
             return self.loose_items(&mut cache, out);
         }
         // Transform of each usage.
         let mut tf: HashMap<u64, DAffine3> = HashMap::new();
         for u in &usages {
-            let Some(pds) = pds_of_nauo.get(&u.nauo) else { continue };
+            let Some(pds) = pds_of_nauo.get(&u.nauo) else {
+                continue;
+            };
             let Some(pl) = places.get(pds) else { continue };
             let child_reps = pd_reps.get(&u.child).cloned().unwrap_or_default();
             if let Some(m) = self.place_matrix(pl, &child_reps) {
                 tf.insert(u.nauo, m);
             } else {
-                self.note("an assembly usage has a placement that cannot be read: identity is used");
+                self.note(
+                    "an assembly usage has a placement that cannot be read: identity is used",
+                );
             }
         }
         let children: HashSet<u64> = usages.iter().map(|u| u.child).collect();
@@ -257,15 +290,25 @@ impl<'a> Ctx<'a> {
         for u in &usages {
             kids.entry(u.parent).or_default().push(u);
         }
-        let mut roots: Vec<u64> = pd_name.keys().copied().filter(|p| !children.contains(p)).collect();
+        let mut roots: Vec<u64> = pd_name
+            .keys()
+            .copied()
+            .filter(|p| !children.contains(p))
+            .collect();
         roots.sort_unstable();
         let mut used_reps: HashSet<u64> = HashSet::new();
         // Depth-first walk with an explicit stack.
-        let mut stack: Vec<(u64, DAffine3, usize, Vec<u64>)> =
-            roots.into_iter().rev().map(|r| (r, DAffine3::IDENTITY, 0, vec![r])).collect();
+        let mut stack: Vec<(u64, DAffine3, usize, Vec<u64>)> = roots
+            .into_iter()
+            .rev()
+            .map(|r| (r, DAffine3::IDENTITY, 0, vec![r]))
+            .collect();
         while let Some((pd, m, depth, path)) = stack.pop() {
             if depth > self.limits.max_assembly_depth {
-                self.note(format!("an assembly is nested deeper than {} levels: the rest is left out", self.limits.max_assembly_depth));
+                self.note(format!(
+                    "an assembly is nested deeper than {} levels: the rest is left out",
+                    self.limits.max_assembly_depth
+                ));
                 continue;
             }
             let name = pd_name.get(&pd).cloned().unwrap_or_default();
@@ -291,7 +334,11 @@ impl<'a> Ctx<'a> {
                 if repeated {
                     self.count(geom.vertices(), geom.triangles())?;
                 }
-                out.instances.push(Instance { name: name.clone(), geom, placement: m });
+                out.instances.push(Instance {
+                    name: name.clone(),
+                    geom,
+                    placement: m,
+                });
             }
             if let Some(ks) = kids.get(&pd) {
                 for u in ks.iter().rev() {
@@ -311,7 +358,11 @@ impl<'a> Ctx<'a> {
 
     /// A file with no product structure: every solid, surface model and tessellated item that
     /// is not part of another becomes a body. The units come from the first context.
-    fn loose_items(&mut self, cache: &mut HashMap<u64, Rc<RepGeom>>, mut out: Structure) -> R<Structure> {
+    fn loose_items(
+        &mut self,
+        cache: &mut HashMap<u64, Rc<RepGeom>>,
+        mut out: Structure,
+    ) -> R<Structure> {
         let file = self.file;
         let _ = cache;
         let inner: HashSet<u64> = file
@@ -359,7 +410,13 @@ impl<'a> Ctx<'a> {
             .and_then(|f| f.attrs.get(2).and_then(reference));
         product
             .and_then(|p| name(self, p, 1).or_else(|| name(self, p, 0)))
-            .or_else(|| pd.attrs.first().and_then(text).map(str::to_string).filter(|s| !s.trim().is_empty()))
+            .or_else(|| {
+                pd.attrs
+                    .first()
+                    .and_then(text)
+                    .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty())
+            })
             .unwrap_or_default()
     }
 
@@ -373,21 +430,37 @@ impl<'a> Ctx<'a> {
         let rel = self.ent(e.attrs.first().and_then(reference)?).ok()?;
         let pds = e.attrs.get(1).and_then(reference)?;
         let base = rel.part("REPRESENTATION_RELATIONSHIP")?;
-        let (r1, r2) = (base.get(2).and_then(reference)?, base.get(3).and_then(reference)?);
+        let (r1, r2) = (
+            base.get(2).and_then(reference)?,
+            base.get(3).and_then(reference)?,
+        );
         let tr = rel.part("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")?;
         let idt = self.ent(tr.first().and_then(reference)?).ok()?;
         if idt.name != "ITEM_DEFINED_TRANSFORMATION" {
             return None;
         }
-        let (i1, i2) = (idt.attrs.get(2).and_then(reference)?, idt.attrs.get(3).and_then(reference)?);
+        let (i1, i2) = (
+            idt.attrs.get(2).and_then(reference)?,
+            idt.attrs.get(3).and_then(reference)?,
+        );
         self.use_id(e.id);
-        Some((pds, Place { rep_1: r1, rep_2: r2, item_1: i1, item_2: i2 }))
+        Some((
+            pds,
+            Place {
+                rep_1: r1,
+                rep_2: r2,
+                item_1: i1,
+                item_2: i2,
+            },
+        ))
     }
 
     /// The matrix (in millimeters) that moves the child into the parent.
     fn place_matrix(&mut self, p: &Place, child_reps: &[u64]) -> Option<DAffine3> {
         let scale_of = |ctx: &mut Ctx<'a>, rep: u64| -> f64 {
-            let Ok((_, c)) = ctx.rep_parts(rep) else { return 1.0 };
+            let Ok((_, c)) = ctx.rep_parts(rep) else {
+                return 1.0;
+            };
             let (l, _) = ctx.context_units(c);
             ctx.opts.unit.map_or(l.unwrap_or(1.0), |u| u.mm())
         };
@@ -405,7 +478,10 @@ impl<'a> Ctx<'a> {
 
 /// A frame with its origin in millimeters.
 fn mm_frame(f: DAffine3, scale: f64) -> DAffine3 {
-    DAffine3 { matrix3: f.matrix3, translation: f.translation * scale }
+    DAffine3 {
+        matrix3: f.matrix3,
+        translation: f.translation * scale,
+    }
 }
 
 fn attr_at(a: &[crate::part21::Value], i: usize) -> R<&crate::part21::Value> {
@@ -414,5 +490,9 @@ fn attr_at(a: &[crate::part21::Value], i: usize) -> R<&crate::part21::Value> {
 
 #[allow(dead_code)]
 fn unused(_: &[u8]) {
-    let _ = (attr as fn(&Entity, usize) -> R<&crate::part21::Value>, flag, list);
+    let _ = (
+        attr as fn(&Entity, usize) -> R<&crate::part21::Value>,
+        flag,
+        list,
+    );
 }

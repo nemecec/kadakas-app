@@ -4,9 +4,10 @@
 //! IFC file. The vertices are absolute: Z is the height in the model, not above the layer.
 //! The source class (for example `IfcSlab`) is kept in the `data` of the object.
 
-use glam::DVec3;
+use glam::{DAffine3, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
+use crate::exact::{self, ExactSolid};
 use crate::model::{Color, MAX_COORD};
 
 /// Most vertices and triangles that one mesh object may hold.
@@ -22,9 +23,89 @@ pub struct Mesh3d {
     pub triangles: Vec<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
+    /// The exact surfaces that the triangles were cut from (a STEP import). The triangles stay
+    /// the source for drawing and for every tool; see [`crate::exact`]. A tool that edits the
+    /// triangles does not need to know: the payload is stale then (`exact_state`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<Box<ExactSolid>>,
 }
 
 impl Mesh3d {
+    /// Is the exact payload in step with the triangles? `None` when there is no payload.
+    pub fn exact_state(&self) -> Option<exact::State> {
+        let e = self.exact.as_ref()?;
+        Some(
+            if e.mesh_hash == exact::fingerprint(&self.vertices, &self.triangles) {
+                exact::State::Fresh
+            } else {
+                exact::State::Stale
+            },
+        )
+    }
+
+    /// Puts a payload on the mesh and ties it to the triangles as they are now.
+    pub fn set_exact(&mut self, mut e: ExactSolid) {
+        e.mesh_hash = exact::fingerprint(&self.vertices, &self.triangles);
+        self.exact = Some(Box::new(e));
+    }
+
+    /// Moves the mesh in the plan; the payload moves with it and stays in step.
+    pub fn translate_xy(&mut self, d: DVec2) {
+        let map = DAffine3::from_translation(DVec3::new(d.x, d.y, 0.0));
+        self.apply_map(&map, |p| DVec3::new(p.x + d.x, p.y + d.y, p.z));
+    }
+
+    /// Turns the mesh about a vertical axis; the payload turns with it.
+    pub fn rotate_z(&mut self, center: DVec2, angle: f64) {
+        let (s, c) = angle.sin_cos();
+        let turn = move |p: DVec3| {
+            let r = DVec2::new(p.x - center.x, p.y - center.y);
+            DVec3::new(
+                center.x + r.x * c - r.y * s,
+                center.y + r.x * s + r.y * c,
+                p.z,
+            )
+        };
+        let map = DAffine3::from_translation(DVec3::new(center.x, center.y, 0.0))
+            * DAffine3::from_rotation_z(angle)
+            * DAffine3::from_translation(DVec3::new(-center.x, -center.y, 0.0));
+        self.apply_map(&map, turn);
+    }
+
+    /// Moves every vertex with `f` and the payload with `map` (the same move). A payload that
+    /// was stale stays stale. A map the payload cannot follow drops it; the result says so.
+    fn apply_map(&mut self, map: &DAffine3, f: impl Fn(DVec3) -> DVec3) -> Option<&'static str> {
+        let fresh = self.exact_state() == Some(exact::State::Fresh);
+        self.vertices.iter_mut().for_each(|p| *p = f(*p));
+        let mut note = None;
+        if let Some(e) = self.exact.take() {
+            match e.transformed(map) {
+                Ok(mut moved) => {
+                    moved.mesh_hash = if fresh {
+                        exact::fingerprint(&self.vertices, &self.triangles)
+                    } else {
+                        e.mesh_hash
+                    };
+                    self.exact = Some(Box::new(moved));
+                }
+                Err(_) => {
+                    note = Some(
+                        "the exact data was dropped: the map is not a move, turn, mirror or uniform scale",
+                    )
+                }
+            }
+        }
+        note
+    }
+
+    /// Maps the mesh by an affine map (any map moves the triangles). The payload follows a
+    /// move, a turn, a mirror and a uniform scale. For a stretch or a shear it is dropped, and
+    /// the answer is a note for the report.
+    pub fn transform(&mut self, map: &DAffine3) -> Option<&'static str> {
+        let m = *map;
+        self.apply_map(map, move |p| m.transform_point3(p))
+    }
+
     pub fn is_finite(&self) -> bool {
         self.vertices.iter().all(|v| v.is_finite())
     }
@@ -48,6 +129,11 @@ impl Mesh3d {
         let n = self.vertices.len() as u32;
         if self.triangles.iter().any(|t| t.iter().any(|&i| i >= n)) {
             return Some("a triangle refers to a vertex that does not exist".into());
+        }
+        if let Some(e) = &self.exact
+            && let Err(why) = e.validate()
+        {
+            return Some(format!("the exact data is not valid: {why}"));
         }
         None
     }
@@ -89,6 +175,7 @@ mod tests {
             ],
             triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]],
             color: None,
+            exact: None,
         }
     }
 

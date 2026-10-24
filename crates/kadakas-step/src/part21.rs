@@ -905,12 +905,7 @@ mod tests {
         let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
         let file = format!("HEADER;\nENDSEC;\nDATA;\n#1=A({deep});\nENDSEC;");
         assert!(parse(&file).unwrap_err().contains("nested"));
-        for bad in [
-            "#1=();",
-            "#1=(A(;",
-            "#1=(A() 5);",
-            "#1=A(1 2);",
-        ] {
+        for bad in ["#1=();", "#1=(A(;", "#1=(A() 5);", "#1=A(1 2);"] {
             let file = format!("HEADER;\nENDSEC;\nDATA;\n{bad}\nENDSEC;");
             assert!(parse(&file).is_err(), "{bad}");
         }
