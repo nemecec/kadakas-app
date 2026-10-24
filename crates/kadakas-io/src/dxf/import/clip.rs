@@ -27,7 +27,7 @@ use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 
 use kadakas_core::curve::{self, corners};
-use kadakas_core::geom::{dist_to_segment, point_in_polygon, point_in_polygon_closed};
+use kadakas_core::geom::{dist_to_segment, point_in_polygon};
 use kadakas_core::model::Shape;
 use kadakas_core::{DVec2, DVec3};
 
@@ -36,12 +36,17 @@ use super::{Item, Tally, Walker, Xf};
 use crate::dxf::hash;
 use crate::dxf::parse::Entity;
 
+/// Most points of a clip polygon that the import cuts by. A longer one is refused with a note.
+pub(super) const MAX_CLIP_POINTS: usize = 10_000;
+
 /// What the file says about the clip of one block reference.
 pub(super) enum ClipRead {
     /// The clip is switched off.
     Off,
     /// The clip cannot be read (too few points, or the matrix is missing).
     Unreadable,
+    /// The clip has more points than the import cuts by.
+    TooBig,
     /// A clip polygon in the coordinates of the block, and a polygon cut away from it (inverted).
     Polygon {
         outer: Vec<DVec2>,
@@ -108,6 +113,7 @@ impl Walker<'_> {
         }
         // The matrix is the inverse of the placement of the block: the last 24 numbers of the
         // code 40 are it (12 numbers) and the matrix of the clip space (12 numbers).
+        let planes = filter.int(72) == Some(1) || filter.int(73) == Some(1);
         let nums = filter.all_f(40);
         let points: Vec<DVec2> = filter
             .items
@@ -125,6 +131,9 @@ impl Walker<'_> {
         if nums.len() < 24 || points.len() < 2 || declared != points.len() as i64 {
             return Some(ClipRead::Unreadable);
         }
+        if points.len() > MAX_CLIP_POINTS {
+            return Some(ClipRead::TooBig);
+        }
         let m = &nums[nums.len() - 24..nums.len() - 12];
         let map = |p: DVec2| {
             DVec2::new(
@@ -135,41 +144,62 @@ impl Walker<'_> {
         let to_block = |pts: &[DVec2]| -> Option<Vec<DVec2>> {
             block_ring(&pts.iter().map(|p| map(*p)).collect::<Vec<_>>())
         };
-        let Some(outer) = to_block(&points) else {
+        let Some(primary) = to_block(&points) else {
             return Some(ClipRead::Unreadable);
         };
-        let (inner, inverted) = self
-            .inverted_part(filter)
-            .map_or((Vec::new(), false), |pts| {
-                (to_block(&pts).unwrap_or_default(), true)
+        let Some((cut_away, compare)) = self.inverted_parts(filter) else {
+            return Some(ClipRead::Polygon {
+                outer: primary,
+                inner: Vec::new(),
+                planes,
+                inverted: false,
             });
+        };
+        // An inverted clip: the polygon of the filter is the outer one or the part that is cut
+        // away, "but not always" (ezdxf). The smaller box is the part that is cut away. The outer
+        // polygon is the box of the compare polygon, else of the larger polygon.
+        let cut_away = to_block(&cut_away).unwrap_or_default();
+        let (inner, bigger) = if box_area(&cut_away) < box_area(&primary) {
+            (cut_away, primary)
+        } else {
+            (primary, cut_away)
+        };
+        let outer = match compare.and_then(|c| to_block(&c)) {
+            Some(c) if c.len() >= 3 => box_ring(&c),
+            _ => box_ring(&bigger),
+        };
         Some(ClipRead::Polygon {
             outer,
             inner,
-            planes: filter.int(72) == Some(1) || filter.int(73) == Some(1),
-            inverted,
+            planes,
+            inverted: true,
         })
     }
 
-    /// The points of the part that an inverted clip cuts away, in the space of the reference.
-    fn inverted_part(&self, filter: &Entity) -> Option<Vec<DVec2>> {
+    /// The points of the part that an inverted clip cuts away and, if it is there, the compare
+    /// polygon, both in the space of the reference. `None` for a clip that is not inverted.
+    fn inverted_parts(&self, filter: &Entity) -> Option<(Vec<DVec2>, Option<Vec<DVec2>>)> {
         let dict = self.object(&xdict(filter)?)?;
         let record = self.object(&entry(dict, "ACAD_XREC_ROUNDTRIP")?)?;
-        let at = record
-            .items
-            .iter()
-            .position(|(c, v)| *c == 102 && v.trim() == "ACAD_INVERTEDCLIP_ROUNDTRIP")?;
-        let mut xs = Vec::new();
-        for (c, v) in &record.items[at + 1..] {
-            match *c {
-                102 => break,
-                10 => xs.push((super::parse::parse_f64(v)?, f64::NAN)),
-                20 => xs.last_mut()?.1 = super::parse::parse_f64(v)?,
-                _ => {}
+        let section = |marker: &str| -> Option<Vec<DVec2>> {
+            let at = record
+                .items
+                .iter()
+                .position(|(c, v)| *c == 102 && v.trim() == marker)?;
+            let mut xs: Vec<(f64, f64)> = Vec::new();
+            for (c, v) in &record.items[at + 1..] {
+                match *c {
+                    102 => break,
+                    10 => xs.push((super::parse::parse_f64(v)?, f64::NAN)),
+                    20 => xs.last_mut()?.1 = super::parse::parse_f64(v)?,
+                    _ => {}
+                }
             }
-        }
-        let pts: Vec<DVec2> = xs.into_iter().map(|(x, y)| DVec2::new(x, y)).collect();
-        pts.iter().all(|p| p.is_finite()).then_some(pts)
+            let pts: Vec<DVec2> = xs.into_iter().map(|(x, y)| DVec2::new(x, y)).collect();
+            (pts.iter().all(|p| p.is_finite()) && pts.len() <= MAX_CLIP_POINTS).then_some(pts)
+        };
+        let cut_away = section("ACAD_INVERTEDCLIP_ROUNDTRIP")?;
+        Some((cut_away, section("ACAD_INVERTEDCLIP_ROUNDTRIP_COMPARE")))
     }
 
     /// The clip of a block reference in the drawing, for the content of the copy with the
@@ -184,6 +214,12 @@ impl Walker<'_> {
             ClipRead::Off => {
                 if counted {
                     self.tally.xclip_off += 1;
+                }
+                None
+            }
+            ClipRead::TooBig => {
+                if counted {
+                    self.tally.xclip_too_big += 1;
                 }
                 None
             }
@@ -216,6 +252,28 @@ impl Walker<'_> {
     }
 }
 
+/// The area of the box around a polygon.
+fn box_area(pts: &[DVec2]) -> f64 {
+    let (lo, hi) = pts.iter().fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    if lo.x <= hi.x {
+        (hi.x - lo.x) * (hi.y - lo.y)
+    } else {
+        0.0
+    }
+}
+
+/// The corners of the box around a polygon.
+fn box_ring(pts: &[DVec2]) -> Vec<DVec2> {
+    let (lo, hi) = pts.iter().fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y)]
+}
+
 /// A clip polygon in block coordinates: two points are a rectangle by its corners. `None` when
 /// the polygon has no area.
 fn block_ring(pts: &[DVec2]) -> Option<Vec<DVec2>> {
@@ -245,7 +303,6 @@ fn block_ring(pts: &[DVec2]) -> Option<Vec<DVec2>> {
 
 /// What a clip lets through: the inside of the outer polygon, without the inner polygon.
 pub(super) struct Region {
-    outer: Vec<DVec2>,
     inner: Vec<DVec2>,
     lo: DVec2,
     hi: DVec2,
@@ -253,6 +310,71 @@ pub(super) struct Region {
     eps: f64,
     /// The area as polygons with holes, for the clip of filled shapes.
     shapes: Vec<Vec<Vec<[f64; 2]>>>,
+    edges: Edges,
+}
+
+/// The edges of both polygons in slabs of height, so a query looks at the edges near it only.
+/// A clip of 10,000 points and 100,000 lines then costs about what the lines cost.
+struct Edges {
+    a: Vec<DVec2>,
+    b: Vec<DVec2>,
+    /// 0 for an edge of the outer polygon, 1 for the inner.
+    ring: Vec<u8>,
+    first: Vec<u32>,
+    bins: Vec<Vec<u32>>,
+    y0: f64,
+    per_unit: f64,
+}
+
+impl Edges {
+    fn new(outer: &[DVec2], inner: &[DVec2], lo: f64, hi: f64, eps: f64) -> Edges {
+        let mut e = Edges {
+            a: Vec::new(),
+            b: Vec::new(),
+            ring: Vec::new(),
+            first: Vec::new(),
+            bins: Vec::new(),
+            y0: lo,
+            per_unit: 0.0,
+        };
+        for (k, ring) in [outer, inner].into_iter().enumerate() {
+            let n = ring.len();
+            for i in 0..n {
+                e.a.push(ring[i]);
+                e.b.push(ring[(i + 1) % n]);
+                e.ring.push(k as u8);
+            }
+        }
+        let count = ((e.a.len() as f64).sqrt() * 2.0).ceil().clamp(1.0, 4096.0) as usize;
+        e.per_unit = count as f64 / (hi - lo).max(1e-12);
+        e.bins = vec![Vec::new(); count];
+        for i in 0..e.a.len() {
+            let (b0, b1) = (
+                e.bin(e.a[i].y.min(e.b[i].y) - eps),
+                e.bin(e.a[i].y.max(e.b[i].y) + eps),
+            );
+            e.first.push(b0 as u32);
+            for b in b0..=b1 {
+                e.bins[b].push(i as u32);
+            }
+        }
+        e
+    }
+
+    fn bin(&self, y: f64) -> usize {
+        (((y - self.y0) * self.per_unit).floor().max(0.0) as usize).min(self.bins.len() - 1)
+    }
+
+    /// The edges whose slabs touch the heights `y0` to `y1`, each once.
+    fn near(&self, y0: f64, y1: f64) -> impl Iterator<Item = usize> + '_ {
+        let (b0, b1) = (self.bin(y0), self.bin(y1));
+        (b0..=b1).flat_map(move |b| {
+            self.bins[b]
+                .iter()
+                .map(|i| *i as usize)
+                .filter(move |i| b == b0.max(self.first[*i] as usize))
+        })
+    }
 }
 
 fn path(r: &[DVec2]) -> Vec<[f64; 2]> {
@@ -278,49 +400,61 @@ impl Region {
             )
         };
         let eps = 1e-9 * (hi - lo).max_element().max(1.0);
+        let edges = Edges::new(&outer, &inner, lo.y.min(hi.y), hi.y.max(lo.y + 1e-9), eps);
         Some(Region {
-            outer,
             inner,
             lo,
             hi,
             eps,
             shapes,
+            edges,
         })
     }
 
     /// Whether a point shows. A point on the edge of the clip shows (a frame that lies on the edge stays).
     pub fn contains(&self, p: DVec2) -> bool {
-        let inside = p.cmpge(self.lo - self.eps).all()
-            && p.cmple(self.hi + self.eps).all()
-            && (point_in_polygon_closed_eps(p, &self.outer, self.eps));
-        inside
-            && (self.inner.is_empty()
-                || on_edge(p, &self.inner, self.eps)
-                || !point_in_polygon(p, &self.inner))
+        if !(p.cmpge(self.lo - self.eps).all() && p.cmple(self.hi + self.eps).all()) {
+            return false;
+        }
+        // Crossings of a ray to the right with the edges of each polygon, and the touch of an edge.
+        let mut parity = [false; 2];
+        let mut on = [false; 2];
+        for i in self.edges.near(p.y - self.eps, p.y + self.eps) {
+            let (a, b) = (self.edges.a[i], self.edges.b[i]);
+            let k = self.edges.ring[i] as usize;
+            if dist_to_segment(p, a, b) <= self.eps {
+                on[k] = true;
+            }
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                parity[k] = !parity[k];
+            }
+        }
+        (on[0] || parity[0]) && (self.inner.is_empty() || on[1] || !parity[1])
     }
 
     /// The parts of the segment `a`-`b` inside the region, as parameter ranges. The cut points
     /// are the crossings with the edges.
     pub fn clip_segment(&self, a: DVec2, b: DVec2) -> Vec<(f64, f64)> {
-        if a.max(b).cmplt(self.lo).any() || a.min(b).cmpgt(self.hi).any() {
+        let (lo, hi) = (self.lo - self.eps, self.hi + self.eps);
+        if a.max(b).cmplt(lo).any() || a.min(b).cmpgt(hi).any() {
             return Vec::new();
         }
         let d = b - a;
         let mut ts = vec![0.0, 1.0];
-        for ring in [&self.outer, &self.inner] {
-            let n = ring.len();
-            for i in 0..n {
-                let (c, e) = (ring[i], ring[(i + 1) % n]);
-                let r = e - c;
-                let den = d.perp_dot(r);
-                if den == 0.0 {
-                    continue;
-                }
-                let t = (c - a).perp_dot(r) / den;
-                let u = (c - a).perp_dot(d) / den;
-                if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u) {
-                    ts.push(t);
-                }
+        for i in self
+            .edges
+            .near(a.y.min(b.y) - self.eps, a.y.max(b.y) + self.eps)
+        {
+            let (c, e) = (self.edges.a[i], self.edges.b[i]);
+            let r = e - c;
+            let den = d.perp_dot(r);
+            if den == 0.0 {
+                continue;
+            }
+            let t = (c - a).perp_dot(r) / den;
+            let u = (c - a).perp_dot(d) / den;
+            if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u) {
+                ts.push(t);
             }
         }
         ts.sort_by(f64::total_cmp);
@@ -354,15 +488,6 @@ impl Region {
         }
         out
     }
-}
-
-fn on_edge(p: DVec2, ring: &[DVec2], eps: f64) -> bool {
-    let n = ring.len();
-    (0..n).any(|i| dist_to_segment(p, ring[i], ring[(i + 1) % n]) <= eps)
-}
-
-fn point_in_polygon_closed_eps(p: DVec2, ring: &[DVec2], eps: f64) -> bool {
-    on_edge(p, ring, eps) || point_in_polygon_closed(p, ring)
 }
 
 const WHOLE: f64 = 1e-9;
@@ -469,10 +594,11 @@ fn clip_item(item: Item, region: &Region, tol: f64, t: &mut Tally) -> Vec<Item> 
             pieces_as_items(&item, cut, false)
         }
         Shape::Circle { center, radius } => {
-            let ring: Vec<DVec2> = (0..96)
+            let n = chords(*radius, std::f64::consts::TAU, tol, t).max(8);
+            let ring: Vec<DVec2> = (0..n)
                 .map(|k| {
                     *center
-                        + DVec2::from_angle(std::f64::consts::TAU * f64::from(k) / 96.0) * *radius
+                        + DVec2::from_angle(std::f64::consts::TAU * k as f64 / n as f64) * *radius
                 })
                 .collect();
             clip_round(item, region, ring, true, t)
@@ -484,7 +610,7 @@ fn clip_item(item: Item, region: &Region, tol: f64, t: &mut Tally) -> Vec<Item> 
             end,
         } => {
             let sweep = kadakas_core::model::arc_sweep(*start, *end);
-            let n = ((sweep / std::f64::consts::TAU * 96.0).ceil() as usize).max(2);
+            let n = chords(*radius, sweep, tol, t).max(2);
             let ring: Vec<DVec2> = (0..=n)
                 .map(|k| {
                     *center + DVec2::from_angle(*start + sweep * k as f64 / n as f64) * *radius
@@ -524,6 +650,27 @@ fn keep_by_point(item: Item, region: &Region, at: DVec2, t: &mut Tally) -> Vec<I
     } else {
         t.xclip_whole += 1;
         Vec::new()
+    }
+}
+
+/// Most chords for a circle or an arc that a clip cuts.
+const MAX_CHORDS: usize = 20_000;
+
+/// The number of chords for an arc within the tolerance. A larger number than the cap is cut to
+/// the cap, and the tally says so.
+fn chords(radius: f64, sweep: f64, tol: f64, t: &mut Tally) -> usize {
+    let r = radius.abs().max(1e-12);
+    let step = if tol >= r {
+        std::f64::consts::FRAC_PI_2
+    } else {
+        2.0 * (1.0 - tol / r).acos()
+    };
+    let n = (sweep.abs() / step.max(1e-9)).ceil();
+    if n > MAX_CHORDS as f64 {
+        t.xclip_chord_cap += 1;
+        MAX_CHORDS
+    } else {
+        n as usize
     }
 }
 
@@ -730,6 +877,20 @@ mod tests {
         .unwrap();
         assert!(ring.contains(v(40.0, 50.0)));
         assert!(!ring.contains(v(50.0, 50.0)));
+    }
+
+    #[test]
+    fn a_line_that_touches_the_box_of_the_clip_with_rounding_noise_stays() {
+        let r = region();
+        // On the right edge, 1e-12 outside the box: it is on the edge.
+        let (out, _) = run(
+            Shape::Line {
+                a: v(100.0 + 1e-12, 20.0),
+                b: v(100.0 + 1e-12, 80.0),
+            },
+            &r,
+        );
+        assert_eq!(out.len(), 1);
     }
 
     #[test]

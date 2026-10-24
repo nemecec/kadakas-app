@@ -127,7 +127,36 @@ fn a_hatch_line_and_a_pattern_line_are_the_same_lines() {
                 std.name
             );
             assert!((back.base - l.base).length() < 1e-9, "{}", std.name);
-            assert_eq!(back.dashes.len(), dash_items(&dash_list(&l.dashes)).len());
+            // The signed items come back as they were (a dot is 0, a gap-first list stays gap-first).
+            // (A list of dashes and dots without a gap is a solid line.)
+            // A real dash as long as the dot of its list cannot be told from a dot: it comes back as a dot
+            // with the same period.
+            let period_of = l.dashes.iter().map(|d| d.abs()).sum::<f64>();
+            let ambiguous = l
+                .dashes
+                .iter()
+                .any(|d| *d > 0.0 && *d <= DOT_SHARE * h.spacing.min(period_of) * (1.0 + 1e-9));
+            if l.dashes.iter().any(|d| *d < 0.0) && !ambiguous {
+                assert_eq!(
+                    back.dashes.len(),
+                    l.dashes.len(),
+                    "{} {:?} {:?}",
+                    std.name,
+                    l.dashes,
+                    back.dashes
+                );
+                for (x, y) in back.dashes.iter().zip(&l.dashes) {
+                    assert!(
+                        (x - y).abs() < 1e-6,
+                        "{} {:?} {:?}",
+                        std.name,
+                        l.dashes,
+                        back.dashes
+                    );
+                }
+            } else if !ambiguous {
+                assert!(back.dashes.is_empty(), "{} {:?}", std.name, l.dashes);
+            }
             // The period is the same, also with dots.
             let period = |d: &[f64]| d.iter().map(|x| x.abs()).sum::<f64>();
             if !l.dashes.is_empty() && h.dash.len() >= 2 {
@@ -162,7 +191,6 @@ fn the_lines_of_a_hatch_are_where_the_dxf_reference_puts_them() {
     // Each standard pattern in a 60 mm window: every dash of the DXF rule is on a line that the
     // hatch of the document draws, and the other way round. A dot is 0.1 mm long in the hatch.
     let side = 60.0;
-    let tol = DOT_MM + 1e-6;
     let inside = |m: DVec2| m.x > 0.01 && m.y > 0.01 && m.x < side - 0.01 && m.y < side - 0.01;
     let mut checked = 0;
     for std in table() {
@@ -171,6 +199,13 @@ fn the_lines_of_a_hatch_are_where_the_dxf_reference_puts_them() {
         if hatch.lines.iter().any(|h| h.spacing < 0.5) {
             continue;
         }
+        // A dot is a short stroke, as long as the longest dot of the pattern.
+        let tol = hatch
+            .lines
+            .iter()
+            .map(|h| dot_len(h.spacing, h.dash.iter().sum::<f64>(), 1e9))
+            .fold(DOT_MM, f64::max)
+            + 1e-6;
         let ours = hatch_segments(&hatch, &[square(side)], 1.0);
         let mut theirs: Vec<(DVec2, DVec2)> = Vec::new();
         for l in &std.lines {
@@ -189,7 +224,8 @@ fn the_lines_of_a_hatch_are_where_the_dxf_reference_puts_them() {
         }
         for s in ours.iter().step_by(1 + ours.len() / 150) {
             let mid = (s.a + s.b) / 2.0;
-            if !inside(mid) {
+            // A dash that the window cuts is shorter than the dash of the file, so leave it out.
+            if !(inside(mid) && inside(s.a) && inside(s.b)) {
                 continue;
             }
             assert!(
@@ -265,31 +301,67 @@ fn a_family_whose_lines_lie_on_each_other_is_not_a_hatch_line() {
 
 #[test]
 fn dash_items_become_a_dash_list() {
-    assert_eq!(dash_list(&[]), Vec::<f64>::new());
-    assert_eq!(dash_list(&[5.0, -2.0]), vec![5.0, 2.0]);
-    // A dot is a short dash.
-    // The gap after it is shorter, so the period stays 3.
-    assert_eq!(dash_list(&[0.0, -3.0]), vec![DOT_MM, 3.0 - DOT_MM]);
+    let sp = 100.0;
+    let list = |i: &[f64]| dash_list(i, sp).unwrap();
+    assert_eq!(list(&[]), Vec::<f64>::new());
+    assert_eq!(list(&[5.0, -2.0]), vec![5.0, 2.0]);
+    // A dot is a short dash: 10 percent of the period here. The gap after it is shorter, so the period stays 3.
+    let dot = dot_len(sp, 3.0, 3.0);
+    assert!((dot - 3.0 * DOT_SHARE).abs() < 1e-12);
+    assert_eq!(list(&[0.0, -3.0]), vec![dot, 3.0 - dot]);
     // A list that starts with a gap starts with a dash of length 0. A list that ends with a dash gets a gap of 0.
-    assert_eq!(dash_list(&[-2.0, 3.0]), vec![0.0, 2.0, 3.0, 0.0]);
-    assert_eq!(dash_list(&[1.0, -2.0, 3.0]), vec![1.0, 2.0, 3.0, 0.0]);
-    assert_eq!(dash_list(&[-2.0]), vec![0.0, 2.0]);
+    assert_eq!(list(&[-2.0, 3.0]), vec![0.0, 2.0, 3.0, 0.0]);
+    assert_eq!(list(&[1.0, -2.0, 3.0]), vec![1.0, 2.0, 3.0, 0.0]);
+    assert_eq!(list(&[-2.0, 0.0]).len(), 4);
     // Items of one kind in a row add up.
-    assert_eq!(dash_list(&[2.0, 3.0, -1.0, -1.0]), vec![5.0, 2.0]);
+    assert_eq!(list(&[2.0, 3.0, -1.0, -1.0]), vec![5.0, 2.0]);
     // Dashes only: a solid line.
-    assert!(dash_list(&[5.0]).is_empty());
-    assert!(dash_list(&[5.0, 2.0]).is_empty());
+    assert!(list(&[5.0]).is_empty());
+    assert!(list(&[5.0, 2.0]).is_empty());
     // Not numbers are skipped.
-    assert_eq!(dash_list(&[f64::NAN, 1.0, -1.0]), vec![1.0, 1.0]);
+    assert_eq!(list(&[f64::NAN, 1.0, -1.0]), vec![1.0, 1.0]);
+    // Lists that draw nothing, or that have no period, are refused.
+    assert!(dash_list(&[-5.0], sp).is_none());
+    assert!(dash_list(&[-5.0, -2.0], sp).is_none());
+    assert!(dash_list(&[0.0], sp).is_none());
+    assert!(dash_list(&[0.0, 0.0], sp).is_none());
+    assert!(dash_list(&[1e-300, -1e-300], sp).is_none());
     // Too long a list is cut to the limit.
     let long: Vec<f64> = (0..200).flat_map(|_| [1.0, -1.0]).collect();
-    assert_eq!(dash_list(&long).len(), MAX_DASHES);
+    assert_eq!(list(&long).len(), MAX_DASHES);
     // The other way.
-    assert_eq!(dash_items(&[5.0, 2.0]), vec![5.0, -2.0]);
-    assert_eq!(dash_items(&[DOT_MM, 3.0 - DOT_MM]), vec![0.0, -3.0]);
-    assert_eq!(dash_items(&[4.0]), vec![4.0]);
-    assert!(dash_items(&[]).is_empty());
-    assert!(dash_items(&[0.0, 0.0]).is_empty());
+    assert_eq!(dash_items(&[5.0, 2.0], sp), vec![5.0, -2.0]);
+    assert_eq!(dash_items(&[dot, 3.0 - dot], sp), vec![0.0, -3.0]);
+    assert_eq!(dash_items(&[4.0], sp), vec![4.0]);
+    assert!(dash_items(&[], sp).is_empty());
+    assert!(dash_items(&[0.0, 0.0], sp).is_empty());
+    // A list that starts with a gap does not gain a dot, and a real short dash stays a dash.
+    assert_eq!(dash_items(&[0.0, 3.0, 5.0, 0.0], sp), vec![-3.0, 5.0]);
+    assert_eq!(dash_items(&[0.12, 3.0], sp), vec![0.12, -3.0]);
+    // Every kind of list comes back.
+    for items in [
+        vec![-3.0, 5.0],
+        vec![0.0, -3.0],
+        vec![0.12, -3.0],
+        vec![4.0, -1.0, 0.0, -1.0],
+        vec![2.0, -1.0, 3.0],
+    ] {
+        let back = dash_items(&list(&items), sp);
+        assert_eq!(back.len(), items.len(), "{items:?} {back:?}");
+        for (x, y) in back.iter().zip(&items) {
+            assert!((x - y).abs() < 1e-9, "{items:?} {back:?}");
+        }
+    }
+}
+
+#[test]
+fn a_dot_is_long_enough_to_show_at_the_scales_of_drawings() {
+    // 10 percent of the smaller of the spacing and the period, but not under 0.1 mm.
+    assert!((dot_len(1000.0, 2000.0, 1e9) - 1000.0 * DOT_SHARE).abs() < 1e-9);
+    assert!((dot_len(3.0, 10.0, 1e9) - 3.0 * DOT_SHARE).abs() < 1e-12);
+    // A dot is not longer than 40 percent of the smallest gap.
+    assert!((dot_len(100.0, 100.0, 1.0) - 0.4).abs() < 1e-12);
+    assert_eq!(dot_len(0.5, 0.5, 1e9), DOT_MM);
 }
 
 #[test]

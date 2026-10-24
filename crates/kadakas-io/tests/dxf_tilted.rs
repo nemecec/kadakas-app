@@ -296,3 +296,25 @@ fn a_block_whose_container_cannot_be_inverted_is_reported() {
         rep.skipped
     );
 }
+
+#[test]
+fn a_flat_shape_keeps_its_own_elevation_inside_a_tilted_block() {
+    // The plane x = 0. A circle at the elevation 300 and a text at the elevation 400 stand 300 and
+    // 400 mm in front of the plane: their world x is the elevation (OCS z is the world X axis).
+    let b = block(
+        "B",
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n30\n300\n40\n50\n\
+0\nTEXT\n8\n0\n10\n0\n20\n0\n30\n400\n40\n10\n1\nUp\n\
+0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n38\n500\n10\n0\n20\n0\n10\n10\n20\n0\n",
+    );
+    let ins = format!("0\nINSERT\n8\n0\n2\nB\n{PLANE_X}10\n0\n20\n0\n30\n0\n");
+    let (ed, rep) = import(file(&b, &ins).as_bytes()).unwrap();
+    accounted(&rep);
+    let objs = objects(&ed);
+    assert!(points3(objs[0]).iter().all(|p| (p.x - 300.0).abs() < 1e-6));
+    let Shape::Text { at, .. } = &objs[1].shape else {
+        panic!()
+    };
+    assert!((at.x - 400.0).abs() < 1e-6, "{at:?}");
+    assert!(points3(objs[2]).iter().all(|p| (p.x - 500.0).abs() < 1e-6));
+}

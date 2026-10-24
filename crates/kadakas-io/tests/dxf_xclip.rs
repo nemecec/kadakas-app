@@ -335,7 +335,8 @@ fn a_circle_inside_stays_exact_and_a_circle_that_is_cut_becomes_chords() {
     assert!(
         points
             .iter()
-            .all(|p| ((p.p - DVec2::new(60.0, 0.0)).length() - 20.0).abs() < 1e-6)
+            // The chords are within the tolerance of 0.001 mm of the circle.
+            .all(|p| ((p.p - DVec2::new(60.0, 0.0)).length() - 20.0).abs() < 1.1e-3)
     );
     assert_eq!(skipped(&rep, "outside the clip"), 1);
     let notes = rep.notes.join("\n");
@@ -576,4 +577,111 @@ fn a_reference_without_a_clip_shows_whole() {
     accounted(&rep);
     assert_eq!(objects(&ed).len(), 1);
     assert!(!rep.notes.iter().any(|n| n.contains("XCLIP")));
+}
+
+#[test]
+fn a_large_circle_is_cut_within_the_tolerance_and_a_tiny_tolerance_says_that_it_is_capped() {
+    // A circle of 20 m radius, cut by a rectangle. The tolerance is 2 mm.
+    let circle = "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n20000\n";
+    let b = block("B", circle);
+    let c = Clipped::new("A1", "B", HERE, &[(-30_000.0, -30_000.0), (0.0, 30_000.0)]);
+    let o = ImportOptions {
+        tolerance: 2.0,
+        ..opts()
+    };
+    let (ed, rep) = import_with(file(&b, "", &[c]).as_bytes(), &o).unwrap();
+    accounted(&rep);
+    let objs = objects(&ed);
+    let Shape::Polyline { points, .. } = &objs[0].shape else {
+        panic!()
+    };
+    for w in points.windows(2) {
+        let mid = (w[0].p + w[1].p) / 2.0;
+        assert!(
+            20_000.0 - mid.length() <= 2.0 + 1e-6,
+            "{}",
+            20_000.0 - mid.length()
+        );
+    }
+    // A very small tolerance meets the cap, and the note says so.
+    let c = Clipped::new("A1", "B", HERE, &[(-30_000.0, -30_000.0), (0.0, 30_000.0)]);
+    let o = ImportOptions {
+        tolerance: 1e-7,
+        ..opts()
+    };
+    let (_, rep) = import_with(file(&b, "", &[c]).as_bytes(), &o).unwrap();
+    accounted(&rep);
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n.contains("chords were cut to 20000 at most")),
+        "{:?}",
+        rep.notes
+    );
+}
+
+#[test]
+fn an_inverted_clip_whose_filter_polygon_is_the_inner_one_is_read_like_ezdxf() {
+    // The polygon of the filter is the part that is cut away (20..60). The XRECORD holds the
+    // outer polygon (0..100). The smaller box is the part that is cut away.
+    let inner = [(20.0, -10.0), (60.0, -10.0), (60.0, 10.0), (20.0, 10.0)];
+    let outer = [(0.0, -50.0), (100.0, -50.0), (100.0, 50.0), (0.0, 50.0)];
+    let b = block("B", &line((0.0, 0.0), (100.0, 0.0)));
+    let mut c = Clipped::new("A1", "B", HERE, &inner);
+    c.cut_away = Some(outer.to_vec());
+    let (ed, rep) = import_with(file(&b, "", &[c]).as_bytes(), &opts()).unwrap();
+    accounted(&rep);
+    let mut spans: Vec<(f64, f64)> = objects(&ed)
+        .iter()
+        .map(|o| (ends(o).0.x, ends(o).1.x))
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(spans.len(), 2, "{spans:?}");
+    assert!((spans[0].1 - 20.0).abs() < 1e-6 && (spans[1].0 - 60.0).abs() < 1e-6);
+}
+
+fn circle_points(n: usize, r: f64) -> Vec<(f64, f64)> {
+    (0..n)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            (r * a.cos(), r * a.sin())
+        })
+        .collect()
+}
+
+#[test]
+fn a_clip_with_too_many_points_is_refused_with_a_note_and_stays_fast() {
+    let b = block("B", &line((-10.0, 0.0), (10.0, 0.0)));
+    let start = std::time::Instant::now();
+    let c = Clipped::new("A1", "B", HERE, &circle_points(200_000, 500.0));
+    let (ed, rep) = import_with(file(&b, "", &[c]).as_bytes(), &opts()).unwrap();
+    accounted(&rep);
+    assert_eq!(objects(&ed).len(), 1);
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n.contains("with more than 10000 points: it is not applied")),
+        "{:?}",
+        rep.notes
+    );
+    assert!(start.elapsed().as_secs() < 20, "{:?}", start.elapsed());
+}
+
+#[test]
+fn a_clip_of_10000_points_cuts_20000_lines_fast() {
+    let mut lines = String::new();
+    for i in 0..20_000 {
+        let y = -900.0 + f64::from(i) * 0.09;
+        lines += &line((-2000.0, y), (2000.0, y));
+    }
+    let b = block("B", &lines);
+    let start = std::time::Instant::now();
+    let c = Clipped::new("A1", "B", HERE, &circle_points(10_000, 1000.0));
+    let (ed, rep) = import_with(file(&b, "", &[c]).as_bytes(), &opts()).unwrap();
+    accounted(&rep);
+    assert_eq!(objects(&ed).len(), 20_000);
+    // Each chord of the circle at the height y is 2 sqrt(r^2 - y^2) long.
+    let l = ends(objects(&ed)[10_000]);
+    assert!((l.1.x - l.0.x - 2.0 * (1000.0_f64.powi(2) - (l.0.y).powi(2)).sqrt()).abs() < 0.1);
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
 }

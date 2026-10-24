@@ -575,7 +575,7 @@ fn the_twist_is_kept_in_the_range_minus_180_to_180() {
 
 #[test]
 fn a_perspective_flag_works_on_a_3d_view_and_is_kept_on_a_plan() {
-    // Flags: 32768 and the bit 1 for perspective.
+    // Flags: 32768 and the flag value 1 for perspective.
     let plan = viewport(
         "TITLE",
         3,

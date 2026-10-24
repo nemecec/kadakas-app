@@ -29,6 +29,8 @@ pub(super) struct Tally {
     pub pattern_lines_cut: usize,
     /// Pattern lines left out because they cannot be used (their lines would lie on each other).
     pub pattern_lines_unusable: usize,
+    /// Pattern lines beyond the 10,000 that the import reads from one entity.
+    pub pattern_lines_unread: usize,
     /// Outline hatches: no pattern lines and the name is not a standard pattern.
     pub pattern_no_lines: usize,
     /// Outline hatches: no pattern line could be used.
@@ -88,6 +90,10 @@ pub(super) struct Tally {
     /// Clips that are switched off in the file (the block shows whole), and clips that cannot be read.
     pub xclip_off: usize,
     pub xclip_unreadable: usize,
+    /// Clips with more points than the import cuts by.
+    pub xclip_too_big: usize,
+    /// Circles and arcs that a clip cut, whose chords were cut to the cap (so the tolerance does not hold).
+    pub xclip_chord_cap: usize,
     /// Items that a clip cut, and of those the ones with curves (cut into chords).
     pub xclip_cut: usize,
     pub xclip_curves: usize,
@@ -183,9 +189,17 @@ impl Tally {
         }
         if self.pattern_lines_unusable > 0 {
             out.push(format!(
-                "{} of hatch patterns {} left out: the lines of the family lie on each other or a number is not valid",
+                "{} of hatch patterns {} left out: the lines of the family lie on each other, the dash list draws nothing, or a number is not valid",
                 plural(self.pattern_lines_unusable, "line", "lines"),
                 if self.pattern_lines_unusable == 1 { "was" } else { "were" }
+            ));
+        }
+        if self.pattern_lines_unread > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} not read: the import reads at most {} lines from one hatch",
+                plural(self.pattern_lines_unread, "line", "lines"),
+                if self.pattern_lines_unread == 1 { "was" } else { "were" },
+                crate::dxf::hatch::MAX_READ
             ));
         }
         if !self.pattern_hatches.is_empty() {
@@ -199,7 +213,7 @@ impl Tally {
                 (self.pattern_unusable, "no usable pattern line"),
                 (
                     self.pattern_dense,
-                    "lines closer than the drawing engine draws",
+                    "lines closer than the drawing engine draws for all families together",
                 ),
             ] {
                 if n > 0 {
@@ -453,6 +467,19 @@ impl Tally {
                 )
             ));
         }
+        if self.xclip_too_big > 0 {
+            out.push(format!(
+                "{} a clip (XCLIP) with more than {} points: it is not applied and the whole block shows",
+                plural(self.xclip_too_big, "block reference has", "block references have"),
+                crate::dxf::import::clip::MAX_CLIP_POINTS
+            ));
+        }
+        if self.xclip_chord_cap > 0 {
+            out.push(format!(
+                "{} cut by a clip: the chords were cut to 20000 at most, so the curve is coarser than {tol} mm",
+                plural(self.xclip_chord_cap, "circle or arc was", "circles and arcs were"),
+            ));
+        }
         if self.xclip_unreadable > 0 {
             out.push(format!(
                 "{} a clip (XCLIP) that cannot be read (too few points, no matrix or no area): the whole block shows",
@@ -537,7 +564,7 @@ mod tests {
             "2 hatches had a pattern name but no pattern lines",
             "3 lines of hatch patterns were left out: a pattern keeps at most 128 lines",
             "1 line of hatch patterns was left out: the lines of the family lie on each other",
-            "3 hatches with a pattern were imported as outlines without the pattern (1 with no pattern lines and not a standard pattern, 1 with no usable pattern line, 1 with lines closer than the drawing engine draws): ANSI31 2, NET 1",
+            "3 hatches with a pattern were imported as outlines without the pattern (1 with no pattern lines and not a standard pattern, 1 with no usable pattern line, 1 with lines closer than the drawing engine draws for all families together): ANSI31 2, NET 1",
             "1 gradient hatch was imported",
             "5 islands of hatches are drawn",
             "6 entities in a tilted plane were imported as 3D polylines",

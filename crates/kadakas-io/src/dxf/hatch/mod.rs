@@ -16,14 +16,19 @@ use std::sync::OnceLock;
 use kadakas_core::DVec2;
 use kadakas_core::graphics::{HatchDef, HatchLine, PatternUnits};
 
-/// Most lines of one pattern that the import keeps. The standard patterns have at most 30.
+/// Most lines of one pattern that the import keeps. The standard patterns of the table have at most 128.
 pub const MAX_LINES: usize = 128;
 /// Most items of a dash list that the import keeps (the limit of a hatch resource).
 pub const MAX_DASHES: usize = 64;
 /// Most pattern lines that the import reads from one HATCH entity. More are counted and ignored.
 pub const MAX_READ: usize = 10_000;
-/// The length of a dot (a dash of length 0 in DXF) in mm.
+/// The least length of a dot (a dash of length 0 in DXF) in mm. A dot is 10 percent of the spacing or of the period (the smaller), but not less.
 pub const DOT_MM: f64 = 0.1;
+/// The share of the spacing or period that a dot has, a little under 10 percent. The odd number
+/// keeps a real dash from having the length of a dot by chance.
+pub const DOT_SHARE: f64 = 0.0997;
+/// The least period of a dash list, in mm. A shorter period is not a pattern.
+pub const MIN_PERIOD_MM: f64 = 1.0e-4;
 /// The least distance between two lines of a family, in mm. A closer family is not a pattern.
 pub const MIN_SPACING_MM: f64 = 1.0e-4;
 
@@ -50,10 +55,13 @@ impl PatLine {
         let lin = |v: DVec2| cols[0] * v.x + cols[1] * v.y;
         let u = lin(self.dir());
         let stretch = u.length();
-        let angle = if stretch > 0.0 {
+        // A number that is not a number stays one, so the line is dropped and counted.
+        let angle = if stretch > 0.0 && stretch.is_finite() {
             u.y.atan2(u.x).to_degrees().rem_euclid(360.0)
-        } else {
+        } else if stretch == 0.0 {
             0.0
+        } else {
+            f64::NAN
         };
         PatLine {
             angle,
@@ -91,6 +99,7 @@ impl PatLine {
         {
             return None;
         }
+        let dash = dash_list(&self.dashes, perp.abs())?;
         Some(HatchLine {
             angle: self.angle.rem_euclid(360.0),
             spacing: perp.abs(),
@@ -98,26 +107,59 @@ impl PatLine {
             // other way round, so the stagger changes its sign.
             offset: along * perp.signum(),
             origin: self.base,
-            dash: dash_list(&self.dashes),
+            dash,
             color: None,
             weight: None,
         })
     }
 }
 
+/// The length of a dot in mm: about 10 percent ([`DOT_SHARE`]) of the spacing or of the period, whichever is smaller,
+/// and at least [`DOT_MM`], but not more than 40 percent of the smallest gap of the list
+/// (`gap_min`). A dot then shows on the sheet at the scales that people use, and it fits its gaps.
+pub fn dot_len(spacing: f64, period: f64, gap_min: f64) -> f64 {
+    (DOT_SHARE * spacing.min(period))
+        .max(DOT_MM)
+        .min(0.4 * gap_min)
+}
+
 /// The dash list of a hatch line (dash, gap, dash, gap, ...) from the signed items of DXF.
 /// A dot becomes a short dash, and the gap after it is shorter by that much, so the period stays
-/// the same. A list of dashes only is a solid line. At most `MAX_DASHES` items.
-pub fn dash_list(items: &[f64]) -> Vec<f64> {
+/// the same. A list of dashes only is a solid line (an empty list). At most `MAX_DASHES` items.
+/// `None` for a list that draws nothing or has no real period: gaps only, dots only, or a period
+/// below [`MIN_PERIOD_MM`].
+pub fn dash_list(items: &[f64], spacing: f64) -> Option<Vec<f64>> {
+    let items: Vec<f64> = items.iter().copied().filter(|d| d.is_finite()).collect();
+    if items.is_empty() {
+        return Some(Vec::new());
+    }
+    let period: f64 = items.iter().map(|d| d.abs()).sum();
+    if period < MIN_PERIOD_MM {
+        return None;
+    }
+    let (has_gap, has_dash) = (
+        items.iter().any(|d| *d < 0.0),
+        items.iter().any(|d| *d > 0.0),
+    );
+    if !has_gap {
+        // Dashes only draw a solid line. Dots only have no length to draw.
+        return has_dash.then(Vec::new);
+    }
+    if !items.iter().any(|d| *d >= 0.0) {
+        return None;
+    }
+    let gap_min = items
+        .iter()
+        .filter(|d| **d < 0.0)
+        .map(|d| -d)
+        .fold(f64::INFINITY, f64::min);
+    let dot = dot_len(spacing, period, gap_min);
     let mut out: Vec<f64> = Vec::new();
     // What the dots in each dash added to it. The gap after the dash gives that back.
     let mut owed: Vec<f64> = Vec::new();
     // `true` when the next item of the output is a dash.
     let mut want_dash = true;
-    for &d in items {
-        if !d.is_finite() {
-            continue;
-        }
+    for d in items {
         if d < 0.0 {
             if out.is_empty() {
                 out.push(0.0);
@@ -132,27 +174,23 @@ pub fn dash_list(items: &[f64]) -> Vec<f64> {
                 want_dash = true;
             }
         } else {
-            let (len, dot) = if d == 0.0 { (DOT_MM, DOT_MM) } else { (d, 0.0) };
+            let (len, owe) = if d == 0.0 { (dot, dot) } else { (d, 0.0) };
             if want_dash {
                 out.push(len);
-                owed.push(dot);
+                owed.push(owe);
                 want_dash = false;
             } else {
                 // A dash after a dash.
                 *out.last_mut().expect("not empty") += len;
-                *owed.last_mut().expect("not empty") += dot;
+                *owed.last_mut().expect("not empty") += owe;
             }
         }
-    }
-    // A list of dashes only draws a solid line. It must still have an even count.
-    if out.len() == 1 {
-        return Vec::new();
     }
     if out.len() % 2 == 1 {
         // The last dash runs on into the first one when the list repeats: a gap of 0 closes it.
         out.push(0.0);
     }
-    // A dot took DOT_MM of the period. The gap after it gives it back, else the gap before it.
+    // A dot took its length from the period. The gap after it gives it back, else the gap before it.
     let len = out.len();
     for (i, o) in owed.iter().enumerate() {
         let mut rest = *o;
@@ -163,26 +201,64 @@ pub fn dash_list(items: &[f64]) -> Vec<f64> {
         }
     }
     out.truncate(MAX_DASHES);
-    if out.iter().sum::<f64>() <= 0.0 {
-        Vec::new()
-    } else {
-        out
-    }
+    (out.iter().sum::<f64>() > 0.0).then_some(out)
 }
 
-/// The signed DXF items of the dash list of a hatch line.
-pub fn dash_items(dash: &[f64]) -> Vec<f64> {
-    if dash.iter().sum::<f64>() <= 0.0 {
+/// The signed DXF items of the dash list of a hatch line with this spacing. A dash of length 0
+/// (the start of a list that begins with a gap) is left out. A short dash is a dot when its length
+/// is the length that `dash_list` gives a dot of this list, so a real short dash stays a dash.
+pub fn dash_items(dash: &[f64], spacing: f64) -> Vec<f64> {
+    let period: f64 = dash.iter().sum();
+    if period <= 0.0 {
         return Vec::new();
     }
+    let upper = (DOT_SHARE * spacing.min(period)).max(DOT_MM);
+    let mut candidates: Vec<f64> = dash
+        .iter()
+        .step_by(2)
+        .copied()
+        .filter(|d| *d > 0.0 && *d <= upper * (1.0 + 1.0e-9))
+        .collect();
+    candidates.sort_by(f64::total_cmp);
+    candidates.dedup_by(|a, b| (*a - *b).abs() <= 1.0e-9 * (1.0 + *b));
+    // The dot is the length for which the list, with that length put back into the gaps, would
+    // have been given exactly that length.
+    let dot = candidates.into_iter().find(|x| {
+        let near = |d: f64| (d - x).abs() <= 1.0e-9 * (1.0 + x);
+        let mut gaps: Vec<f64> = Vec::new();
+        for pair in dash.chunks(2) {
+            let g = pair.get(1).copied().unwrap_or(0.0);
+            let was_dot = near(pair[0]);
+            if g > 0.0 {
+                gaps.push(if was_dot { g + x } else { g });
+            } else if was_dot && let Some(last) = gaps.last_mut() {
+                // A dot at the end took its length from the gap before it.
+                *last += x;
+            }
+        }
+        let gap_min = gaps.into_iter().fold(f64::INFINITY, f64::min);
+        (dot_len(spacing, period, gap_min) - x).abs() <= 1.0e-9 * (1.0 + x)
+    });
     let mut out = Vec::new();
     for pair in dash.chunks(2) {
         let (d, gap) = (pair[0], pair.get(1).copied().unwrap_or(0.0));
-        if d <= DOT_MM * 1.5 {
+        if d == 0.0 {
+            if gap > 0.0 {
+                out.push(-gap);
+            }
+        } else if dot.is_some_and(|x| (d - x).abs() <= 1.0e-9 * (1.0 + x)) {
             // A dot: the gap after it takes back the length of the short dash.
             out.push(0.0);
-            if gap + d > 0.0 {
+            if gap > 0.0 {
                 out.push(-(gap + d));
+            } else if let Some(prev) = out
+                .len()
+                .checked_sub(2)
+                .and_then(|i| out.get_mut(i))
+                .filter(|g| **g < 0.0)
+            {
+                // A dot at the end of the list took its length from the gap before it.
+                *prev -= d;
             }
         } else {
             out.push(d);
@@ -202,7 +278,7 @@ impl From<&HatchLine> for PatLine {
             angle: h.angle.rem_euclid(360.0),
             base: h.origin,
             offset: u * h.offset + n * h.spacing,
-            dashes: dash_items(&h.dash),
+            dashes: dash_items(&h.dash, h.spacing),
         }
     }
 }
@@ -214,16 +290,23 @@ pub fn reduced(line: &HatchLine) -> HatchLine {
     let u = DVec2::from_angle(line.angle.to_radians());
     let n = DVec2::new(-u.y, u.x);
     let v = u * line.offset + n * line.spacing;
-    let across = line.origin.dot(n);
-    let steps = (across / line.spacing).floor();
+    // Numbers that are whole steps up to rounding count as whole, so equal hatches merge.
+    let snap = |q: f64| {
+        if (q - q.round()).abs() < 1.0e-7 {
+            q.round()
+        } else {
+            q
+        }
+    };
+    let steps = snap(line.origin.dot(n) / line.spacing).floor();
     let mut o = line.origin - v * steps;
     let period: f64 = line.dash.iter().sum();
-    let mut along = o.dot(u);
-    if period > 0.0 {
-        along = along.rem_euclid(period);
+    let along = if period > 0.0 {
+        let q = snap(o.dot(u) / period);
+        (q - q.floor()) * period
     } else {
-        along = 0.0;
-    }
+        0.0
+    };
     // The part across stays as it is. The part along is reduced.
     o = n * o.dot(n) + u * along;
     let mut out = line.clone();
@@ -309,6 +392,7 @@ fn same_angle(a: f64, b: f64) -> bool {
 /// The standard pattern that a hatch is (at a scale and a turn), if there is one. The origin of
 /// the hatch does not matter. A pattern of one family of lines is ANSI31 at any turn, so it is
 /// named only at the turn 0. Other patterns are named at a turn of a multiple of 15 degrees.
+#[cfg(test)]
 pub fn identify(def: &HatchDef) -> Option<Named> {
     identify_as(def, None)
 }
@@ -332,8 +416,8 @@ fn fits(std: &StdPattern, def: &HatchDef, any_turn: bool) -> Option<Named> {
     if std_lines.len() != def.lines.len() {
         return None;
     }
-    // Rounded to 5 places: the table has 6.
-    let scale = (first.spacing / std_lines[0].spacing * 1.0e5).round() / 1.0e5;
+    // Rounded to 6 significant digits: the table has 6 decimals.
+    let scale = round_sig(first.spacing / std_lines[0].spacing);
     let turn = (first.angle - std_lines[0].angle).rem_euclid(360.0);
     if !(scale.is_finite() && scale > 0.0) {
         return None;
@@ -367,6 +451,14 @@ fn fits(std: &StdPattern, def: &HatchDef, any_turn: bool) -> Option<Named> {
     })
 }
 
+fn round_sig(v: f64) -> f64 {
+    if !(v.is_finite() && v > 0.0) {
+        return v;
+    }
+    let k = 10f64.powi(5 - v.log10().floor() as i32);
+    (v * k).round() / k
+}
+
 /// The name that a resource gets: the standard name, with the scale and the turn when they are not 1 and 0.
 pub fn display_name(n: &Named) -> String {
     let mut s = n.name.to_string();
@@ -386,11 +478,17 @@ fn trim(v: f64) -> String {
 
 /// True when two hatch definitions draw the same lines (to within 1e-6 mm).
 pub fn same_def(a: &HatchDef, b: &HatchDef) -> bool {
+    // The origins are compared in their reduced form: a hatch of the document whose origin was
+    // never reduced still matches.
+    let (ra, rb): (Vec<HatchLine>, Vec<HatchLine>) = (
+        a.lines.iter().map(reduced).collect(),
+        b.lines.iter().map(reduced).collect(),
+    );
     let eq = |x: f64, y: f64| (x - y).abs() <= 1.0e-6 * (1.0 + x.abs().max(y.abs()));
     a.units == PatternUnits::World
         && b.units == PatternUnits::World
         && a.lines.len() == b.lines.len()
-        && a.lines.iter().zip(&b.lines).all(|(p, q)| {
+        && ra.iter().zip(&rb).all(|(p, q)| {
             eq(p.angle, q.angle)
                 && eq(p.spacing, q.spacing)
                 && eq(p.offset, q.offset)

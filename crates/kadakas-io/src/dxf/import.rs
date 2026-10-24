@@ -555,6 +555,8 @@ struct Item {
     pattern: Option<kadakas_core::resource::ResourceId>,
     /// The height of a flat shape in a tilted plane, before the tilt (IOP-27). Without one the shape is at the height of its block.
     z: Option<f64>,
+    /// The hatch that this loop belongs to: the number of its outer loop. An island carries the number of the outer loop that holds it (IOP-27).
+    group: Option<u32>,
     /// The tilt of the plane of the entity itself (a text in a tilted plane), applied before the tilt of the blocks around.
     tilt: Option<kadakas_core::DAffine3>,
     /// A pen that replaces the one of the entity (a wipeout has none).
@@ -571,6 +573,7 @@ impl Item {
             fill_pen: false,
             pattern: None,
             z: None,
+            group: None,
             tilt: None,
             pen: None,
             data: BTreeMap::new(),
@@ -876,6 +879,17 @@ impl Walker<'_> {
         if cx.tilt.is_some() || items.iter().any(|i| i.tilt.is_some()) {
             let z0 = cx.xf.z(0.0);
             let tol = self.opts.tolerance;
+            // A flat shape keeps its own elevation: it is its height above the plane of the block.
+            let elevation = if e.kind == "LWPOLYLINE" {
+                e.fd(38, 0.0)
+            } else {
+                e.fd(30, 0.0)
+            };
+            for item in &mut items {
+                if item.z.is_none() {
+                    item.z = Some(cx.xf.z(elevation));
+                }
+            }
             let mut moved = Vec::with_capacity(items.len());
             for item in items {
                 let map = tilt::combined(item.tilt, &cx.tilt);
@@ -920,7 +934,15 @@ impl Walker<'_> {
         };
         let attrs = self.attrs(e, cx, &defaults);
         let parts = items.len();
+        // The ids of the outer loops of pattern hatches, and the islands that belong to them.
+        let mut outers: HashMap<u32, kadakas_core::uid::Uid> = HashMap::new();
+        let mut holes: Vec<(kadakas_core::uid::Uid, Vec<kadakas_core::uid::Uid>)> = Vec::new();
         for (n, mut item) in items.into_iter().enumerate() {
+            let (group, is_island, is_pattern) = (
+                item.group,
+                item.data.contains_key("hatch_island"),
+                item.pattern.is_some(),
+            );
             let mut a = attrs.clone();
             if item.fill_pen {
                 a.fill = Some(a.pen.unwrap_or(Color::BLACK));
@@ -940,7 +962,33 @@ impl Walker<'_> {
                     item.data.insert(provenance::KEY.into(), tag);
                 }
             }
-            self.b.add(&e.kind, item.shape, layer, class, a, item.data);
+            let added = self.b.add(&e.kind, item.shape, layer, class, a, item.data);
+            if let (true, Some(g)) = (added && !self.b.is_probe(), group) {
+                let id = self.b.last_id();
+                if is_pattern && !is_island {
+                    outers.insert(g, id);
+                    holes.push((id, Vec::new()));
+                } else if let (true, Some(outer)) = (is_island, outers.get(&g))
+                    && let Some(h) = holes.iter_mut().find(|h| h.0 == *outer)
+                {
+                    h.1.push(id);
+                }
+            }
+        }
+        // An outer loop knows its islands, so the export can write them as holes of one HATCH.
+        for (outer, islands) in holes {
+            if islands.is_empty() {
+                continue;
+            }
+            self.b.push(kadakas_core::command::Command::SetData {
+                id: kadakas_core::model::ObjectId(outer),
+                set: [(
+                    "hatch_islands".to_string(),
+                    serde_json::to_value(&islands).unwrap_or_default(),
+                )]
+                .into(),
+                remove: vec![],
+            });
         }
     }
 
@@ -1681,6 +1729,11 @@ impl Walker<'_> {
                 // A pattern hatch becomes a hatch fill of the document (IOP-27).
                 let pattern = if solid {
                     None
+                } else if cx.tilt.is_some() {
+                    // A fill cannot lie in a tilted plane, so the hatch stays an outline. No hatch
+                    // resource is made for it.
+                    self.tally.tilted_fills += 1;
+                    None
                 } else {
                     let extent = extra::extent(&corner_points)
                         * xf.cols[0].length().max(xf.cols[1].length());
@@ -1698,6 +1751,23 @@ impl Walker<'_> {
                     let areas: Vec<f64> = corner_points.iter().map(|p| extra::area(p)).collect();
                     order.sort_by(|a, b| areas[*b].total_cmp(&areas[*a]));
                 }
+                // The outer loop that holds each island: the smallest loop (not an island) around it.
+                let areas: Vec<f64> = corner_points.iter().map(|p| extra::area(p)).collect();
+                let holder: Vec<Option<usize>> = (0..loops.len())
+                    .map(|k| {
+                        if !island[k] {
+                            return None;
+                        }
+                        let at = *corner_points[k].first()?;
+                        (0..loops.len())
+                            .filter(|j| {
+                                !island[*j]
+                                    && areas[*j] > areas[k]
+                                    && kadakas_core::geom::point_in_polygon(at, &corner_points[*j])
+                            })
+                            .min_by(|a, b| areas[*a].total_cmp(&areas[*b]))
+                    })
+                    .collect();
                 let mut loops: Vec<Option<Vec<Vertex>>> = loops.into_iter().map(Some).collect();
                 for k in order {
                     let (Some(l), is_island) = (loops[k].take(), island[k]) else {
@@ -1711,6 +1781,13 @@ impl Walker<'_> {
                         points: pts,
                         closed: true,
                     });
+                    if fills {
+                        item.group = Some(if is_island {
+                            holder[k].unwrap_or(k) as u32
+                        } else {
+                            k as u32
+                        });
+                    }
                     if is_island {
                         // A filled shape has no hole: the island is the color of the paper.
                         item.fill = Some(extra::PAPER);

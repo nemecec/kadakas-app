@@ -414,6 +414,10 @@ pub(crate) fn viewport_json(doc: &Document, id: ObjectId) -> Res {
     let mut v = serde_json::to_value(vp).unwrap();
     v["id"] = json!(o.id);
     v["sheet"] = json!(o.layer);
+    let warnings = vp.view_warnings(doc);
+    if !warnings.is_empty() {
+        v["warnings"] = json!(warnings);
+    }
     Ok(v)
 }
 

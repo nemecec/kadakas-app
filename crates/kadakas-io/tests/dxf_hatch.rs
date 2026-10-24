@@ -506,9 +506,16 @@ fn hostile_pattern_data_does_not_panic() {
     let e = "0\nHATCH\n8\nH\n210\n0\n220\n0\n230\n1\n2\nX\n70\n0\n71\n0\n91\n1\n92\n7\n72\n0\n73\n1\n93\n3\n10\n0\n20\n0\n10\n9\n20\n0\n10\n9\n20\n9\n97\n0\n75\n0\n76\n1\n52\nabc\n41\n-3\n77\n1\n78\n999999999\n53\nxyz\n43\n1\n45\n3\n46\n3\n79\n2\n49\n1\n53\n10\n43\n0\n44\n0\n45\n0\n46\n4\n79\n1\n49\n5\n98\n1\n10\n1\n20\n1\n";
     let (ed, rep) = import(mm(e).as_bytes()).unwrap();
     accounted(&rep);
-    // The first line has no angle, the second is good.
+    // The first line has no angle: it is dropped and counted. The second is good.
     assert_eq!(objects(&ed).len(), 1);
     assert_eq!(hatches(&ed).len(), 1);
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n.contains("1 line of hatch patterns was left out")),
+        "{:?}",
+        rep.notes
+    );
 }
 
 #[test]
@@ -667,9 +674,9 @@ fn a_hatch_that_is_not_standard_gets_its_own_name_and_a_scaled_one_the_scale() {
     let h = pairs_of(&text, "HATCH");
     let get = |code: i32| h.iter().find(|(c, _)| *c == code).map(|(_, v)| v.clone());
     assert_ne!(get(2).as_deref(), Some("ANSI31"));
-    // One line at an angle that is no turn of ANSI31 by a multiple of 5 degrees: custom name.
-    let name = get(2).unwrap();
-    assert!(name.starts_with("ANSI31") || name == "WET_SAND_7", "{name}");
+    // One line of 10 degrees is ANSI31 at a turn other than 0, and a single family is named at the
+    // turn 0 only: it gets its own name.
+    assert_eq!(get(2).as_deref(), Some("WET_SAND_7"));
     // ANSI37 (a cross of lines) drawn twice as large and turned 30 degrees is found with scale and angle.
     let ed = doc_with_fill(
         "x",
@@ -940,5 +947,266 @@ fn release_12_says_that_it_writes_the_outline_only() {
         )),
         "{:?}",
         report.notes
+    );
+}
+
+// The review of IOP-27 -------------------------------------------------------------------------
+
+/// The numbers of a code in the order of the file.
+fn codes(text: &str, kind: &str, code: i32) -> Vec<String> {
+    pairs_of(text, kind)
+        .into_iter()
+        .filter(|(c, _)| *c == code)
+        .map(|(_, v)| v)
+        .collect()
+}
+
+#[test]
+fn a_user_defined_double_hatch_that_has_both_halves_is_not_doubled_again() {
+    // The file holds the lines at 0 and at 90 degrees, and says "double" (77).
+    let both: [Line; 2] = [
+        (0.0, 0.0, 0.0, 0.0, 5.0, &[]),
+        (90.0, 0.0, 0.0, -5.0, 0.0, &[]),
+    ];
+    let e = hatch_ext(&[&SQ100], "_USER", 1.0, 0.0, &both, 1, "");
+    let (ed, rep) = import(mm(&e).as_bytes()).unwrap();
+    accounted(&rep);
+    assert_eq!(hatches(&ed)[0].2.lines.len(), 2);
+    let ed2 = doc_with_fill(
+        "x",
+        PatternUnits::World,
+        hatches(&ed)[0].2.lines.clone(),
+        square_shape(100.0),
+    );
+    let (text, _) = export_text(&ed2, ExportOptions::default());
+    assert_eq!(codes(&text, "HATCH", 78), ["2"]);
+    // A table pattern with the double flag gets its second half.
+    let t = format!(
+        "0\nHATCH\n8\nH\n210\n0\n220\n0\n230\n1\n2\nANSI31\n70\n0\n71\n0\n{}75\n0\n76\n1\n52\n0\n41\n1\n77\n1\n78\n0\n98\n0\n",
+        paths(&[&SQ100])
+    );
+    let (ed, _) = import(mm(&t).as_bytes()).unwrap();
+    assert_eq!(hatches(&ed)[0].2.lines.len(), 2);
+}
+
+#[test]
+fn a_dash_list_that_starts_with_a_gap_does_not_gain_a_dot_and_a_short_dash_stays() {
+    for dashes in [
+        &[-3.0, 5.0][..],
+        &[0.12, -3.0][..],
+        &[4.0, -1.0, 0.0, -1.0][..],
+    ] {
+        let line: Line = (0.0, 0.0, 0.0, 0.0, 10.0, dashes);
+        let (ed, rep) =
+            import(mm(&hatch(&[&SQ100], "GAPFIRST", 1.0, 0.0, &[line])).as_bytes()).unwrap();
+        accounted(&rep);
+        let ed2 = doc_with_fill(
+            "x",
+            PatternUnits::World,
+            hatches(&ed)[0].2.lines.clone(),
+            square_shape(100.0),
+        );
+        let (text, _) = export_text(&ed2, ExportOptions::default());
+        let back: Vec<f64> = codes(&text, "HATCH", 49)
+            .iter()
+            .map(|v| v.parse().unwrap())
+            .collect();
+        assert_eq!(back.len(), dashes.len(), "{dashes:?} {back:?}");
+        for (x, y) in back.iter().zip(dashes) {
+            assert!((x - y).abs() < 1e-6, "{dashes:?} {back:?}");
+        }
+    }
+}
+
+#[test]
+fn thirty_hatches_of_one_pattern_on_the_lattice_make_one_resource() {
+    let mut ents = String::new();
+    for k in 0..30 {
+        // The base points are steps of the offset vector (-2.2450640303, 2.2450640303), with rounding noise.
+        let m = f64::from(k) * 7.0 + 3.0;
+        let line: Line = (
+            45.0,
+            -2.2450640303 * m + 1e-11,
+            2.2450640303 * m - 1e-11,
+            -2.2450640303,
+            2.2450640303,
+            &[],
+        );
+        ents += &hatch(&[&SQ100], "ANSI31", 1.0, 0.0, &[line]);
+    }
+    let (ed, rep) = import(mm(&ents).as_bytes()).unwrap();
+    accounted(&rep);
+    assert_eq!(hatches(&ed).len(), 1, "{:?}", hatches(&ed));
+    assert_eq!(objects(&ed).len(), 30);
+}
+
+#[test]
+fn a_hatch_of_the_document_whose_origin_was_never_reduced_is_used() {
+    let mut ed = Editor::new(Document::with_sequential_ids());
+    // The same lines as ANSI31, but the origin is far out on the lattice.
+    let far = HatchLine {
+        origin: DVec2::new(-2.2450640303 * 40.0, 2.2450640303 * 40.0),
+        ..HatchLine::solid(45.0, 3.175)
+    };
+    ed.execute(&kadakas_core::command::Command::AddResource {
+        name: "Mine".into(),
+        body: ResourceBody::Graphic(Box::new(GraphicResource::Hatch(HatchDef {
+            units: PatternUnits::World,
+            lines: vec![far],
+        }))),
+    })
+    .unwrap();
+    let before = hatches(&ed);
+    let src = Source {
+        name: "t".into(),
+        data: mm(&hatch(&[&SQ100], "ANSI31", 1.0, 0.0, &[ANSI31])).into_bytes(),
+        extra: Default::default(),
+    };
+    let r = importer(Format::Dxf)
+        .import(&src, &Context::of(ed.doc()), &ImportOptions::default())
+        .unwrap();
+    ed.execute(&r.command).unwrap();
+    assert_eq!(hatches(&ed).len(), before.len());
+    assert_eq!(objects(&ed)[0].attrs.fill_pattern, Some(before[0].0));
+}
+
+#[test]
+fn a_scaled_and_turned_single_family_keeps_its_ansi_name() {
+    // ANSI31 at twice the size and turned by 90 degrees is one line at 135 degrees.
+    let mut ed = doc_with_fill(
+        "ANSI31 x2 90 deg",
+        PatternUnits::World,
+        vec![HatchLine::solid(135.0, 6.35)],
+        square_shape(500.0),
+    );
+    let (text, _) = export_text(&ed, ExportOptions::default());
+    assert_eq!(codes(&text, "HATCH", 2), ["ANSI31"]);
+    assert_eq!(codes(&text, "HATCH", 41), ["2"]);
+    assert_eq!(codes(&text, "HATCH", 52), ["90"]);
+    // A small scale keeps its name too.
+    ed = doc_with_fill(
+        "ANSI31 x0.0003",
+        PatternUnits::World,
+        vec![HatchLine::solid(45.0, 3.175 * 0.0003)],
+        square_shape(5.0),
+    );
+    let (text, _) = export_text(&ed, ExportOptions::default());
+    assert_eq!(codes(&text, "HATCH", 2), ["ANSI31"]);
+}
+
+#[test]
+fn dots_show_on_a_sheet_at_1_to_100() {
+    // DOTS at the scale 100: the dot is at least 0.1 mm on paper, 10 mm of model.
+    let e = format!(
+        "0\nHATCH\n8\nH\n210\n0\n220\n0\n230\n1\n2\nDOTS\n70\n0\n71\n0\n{}75\n0\n76\n1\n52\n0\n41\n100\n77\n0\n78\n0\n98\n0\n",
+        paths(&[&[(0.0, 0.0), (5000.0, 0.0), (5000.0, 5000.0), (0.0, 5000.0)]])
+    );
+    let (ed, rep) = import(mm(&e).as_bytes()).unwrap();
+    accounted(&rep);
+    let o = objects(&ed)[0];
+    let attrs = ed.doc().resolved_attrs(o);
+    let d = kadakas_core::pattern::decorate(ed.doc(), o, &attrs, 100.0).unwrap();
+    assert!(d.fill.len() > 50);
+    assert!(
+        d.fill.iter().all(|s| s.a.distance(s.b) >= 10.0),
+        "{:?}",
+        d.fill.first()
+    );
+}
+
+#[test]
+fn a_pattern_in_a_tilted_block_makes_no_resource_and_one_note() {
+    let b = format!(
+        "0\nBLOCK\n8\n0\n2\nB\n70\n0\n10\n0\n20\n0\n30\n0\n{}0\nENDBLK\n8\n0\n",
+        hatch(&[&SQ100], "ANSI31", 1.0, 0.0, &[ANSI31])
+    );
+    let ins = "0\nINSERT\n8\n0\n2\nB\n210\n1\n220\n0\n230\n0\n10\n0\n20\n0\n30\n0\n";
+    let src = format!(
+        "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nBLOCKS\n{b}0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{ins}0\nENDSEC\n0\nEOF\n"
+    );
+    let (ed, rep) = import(src.as_bytes()).unwrap();
+    accounted(&rep);
+    assert!(hatches(&ed).is_empty(), "no orphan resource");
+    let n = rep.notes.join("\n");
+    assert!(n.contains("1 filled shape lost its fill"), "{n}");
+    assert!(!n.contains("became hatch fills"), "{n}");
+}
+
+#[test]
+fn lists_that_draw_nothing_or_have_no_period_are_reported_not_imported() {
+    for dashes in [&[-5.0][..], &[0.0][..], &[1e-300, -1e-300][..]] {
+        let line: Line = (0.0, 0.0, 0.0, 0.0, 10.0, dashes);
+        let (ed, rep) = import(mm(&hatch(&[&SQ100], "BAD", 1.0, 0.0, &[line])).as_bytes()).unwrap();
+        accounted(&rep);
+        assert!(hatches(&ed).is_empty(), "{dashes:?}");
+        let n = rep.notes.join("\n");
+        assert!(n.contains("no usable pattern line"), "{dashes:?} {n}");
+        assert!(!n.contains("became hatch fills"), "{n}");
+    }
+}
+
+#[test]
+fn many_families_together_that_are_too_dense_stay_an_outline() {
+    // 100 families, each of 90,000 lines in the box: 9 million lines, more than the engine draws.
+    let lines: Vec<Line> = (0..100)
+        .map(|i| (f64::from(i), 0.0, 0.0, 0.0, 1.0, &[][..]))
+        .collect();
+    let sq: [(f64, f64); 4] = [
+        (0.0, 0.0),
+        (90_000.0, 0.0),
+        (90_000.0, 90_000.0),
+        (0.0, 90_000.0),
+    ];
+    let (ed, rep) = import(mm(&hatch(&[&sq], "MANY", 1.0, 0.0, &lines)).as_bytes()).unwrap();
+    accounted(&rep);
+    assert!(hatches(&ed).is_empty());
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n.contains("lines closer than the drawing engine draws"))
+    );
+}
+
+#[test]
+fn the_islands_of_a_pattern_hatch_are_holes_of_the_hatch_on_export() {
+    let ents = hatch(&[&SQ100, &SQ40], "ANSI31", 1.0, 0.0, &[ANSI31]);
+    let (ed, _) = import(mm(&ents).as_bytes()).unwrap();
+    let outer = objects(&ed)[0];
+    assert!(outer.data.contains_key("hatch_islands"));
+    let (text, _) = export_text(&ed, ExportOptions::default());
+    let h = pairs_of(&text, "HATCH");
+    assert_eq!(h.iter().find(|(c, _)| *c == 91).unwrap().1, "2");
+    let flags: Vec<&str> = h
+        .iter()
+        .filter(|(c, _)| *c == 92)
+        .map(|(_, v)| v.as_str())
+        .collect();
+    assert_eq!(flags, ["3", "18"]);
+    // The file reads back as the same hatch: an outer loop and one island.
+    let (back, rep) = import(text.as_bytes()).unwrap();
+    accounted(&rep);
+    let islands = objects(&back)
+        .iter()
+        .filter(|o| o.data.contains_key("hatch_island"))
+        .count();
+    assert!(islands >= 1);
+}
+
+#[test]
+fn lines_beyond_the_read_limit_are_counted_as_not_read() {
+    let lines: Vec<Line> = (0..10_050)
+        .map(|i| (0.0, 0.0, 0.0, 0.0, 1.0 + f64::from(i % 5), &[][..]))
+        .collect();
+    let (ed, rep) = import(mm(&hatch(&[&SQ100], "HUGE", 1.0, 0.0, &lines)).as_bytes()).unwrap();
+    accounted(&rep);
+    assert_eq!(hatches(&ed)[0].2.lines.len(), 128);
+    let n = rep.notes.join("\n");
+    assert!(
+        n.contains("50 lines of hatch patterns were not read"),
+        "{n}"
+    );
+    assert!(
+        !n.contains("cannot be used") && !n.contains("lie on each other"),
+        "{n}"
     );
 }

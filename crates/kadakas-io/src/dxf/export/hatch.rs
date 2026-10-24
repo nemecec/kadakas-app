@@ -34,7 +34,39 @@ fn boundary(cx: &Ctx, o: &Object) -> Option<Vec<Path>> {
         Shape::Polyline {
             points,
             closed: true,
-        } => Some(vec![ring(points)?]),
+        } => {
+            let mut paths = vec![ring(points)?];
+            // The islands that the import found in the hatch are holes of this one HATCH.
+            let outer: Vec<DVec2> = paths[0].iter().map(|(p, _)| *p).collect();
+            let ids: Vec<kadakas_core::uid::Uid> = o
+                .data
+                .get("hatch_islands")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            for id in ids.into_iter().take(1000) {
+                let Some(Shape::Polyline {
+                    points: hole,
+                    closed: true,
+                }) = cx
+                    .doc
+                    .object(kadakas_core::model::ObjectId(id))
+                    .map(|x| &x.shape)
+                else {
+                    continue;
+                };
+                // The objects of the export are moved to the real-world place, the islands are not yet.
+                let Some(mut r) = ring(hole) else { continue };
+                for (p, _) in &mut r {
+                    *p += cx.shift;
+                }
+                if r.first()
+                    .is_some_and(|(p, _)| kadakas_core::geom::point_in_polygon(*p, &outer))
+                {
+                    paths.push(r);
+                }
+            }
+            Some(paths)
+        }
         Shape::Rect { min, max } => {
             let (lo, hi) = (min.min(*max), min.max(*max));
             Some(vec![
@@ -167,7 +199,12 @@ pub(super) fn write(
     };
     let model = in_model_mm(def, scale);
     let unit = cx.unit;
-    let named = hatch::identify(&model);
+    // The name of the resource keeps the name of a standard pattern ("ANSI31 x2 90 deg"): its first word.
+    let first_word = doc
+        .resources
+        .get(id)
+        .and_then(|r| r.name.split_whitespace().next().map(str::to_owned));
+    let named = hatch::identify_as(&model, first_word.as_deref());
     let (name, scale_code, angle_code, kind) = match &named {
         Some(n) => (n.name.to_string(), n.scale / unit, n.angle, 1),
         None => (

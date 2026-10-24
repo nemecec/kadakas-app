@@ -83,6 +83,29 @@ fn ring_segs(ring: &[DVec2], hole: bool, xf: &Xf) -> Vec<PSeg> {
     segs
 }
 
+/// Where the note number `notes` of a part stands on the sheet: at the lower left corner of the
+/// part (after the twist of the view), and always inside the frame of the viewport.
+fn note_position(xf: &Xf, lo: DVec2, hi: DVec2, notes: usize) -> DVec2 {
+    let corners = [
+        DVec2::new(lo.x, lo.y.min(hi.y)),
+        DVec2::new(hi.x, lo.y.min(hi.y)),
+        DVec2::new(hi.x, hi.y.max(lo.y)),
+        DVec2::new(lo.x, hi.y.max(lo.y)),
+    ]
+    .map(|c| xf.p(c));
+    let up = 1.5 + 2.4 * notes as f64;
+    let mut at = corners
+        .iter()
+        .fold(DVec2::splat(f64::INFINITY), |m, c| m.min(*c))
+        + DVec2::new(1.0, up);
+    if let Some((fmin, fmax)) = xf.frame {
+        at = at
+            .max(fmin + DVec2::new(1.0, up))
+            .min(fmax - DVec2::new(1.0, 2.5));
+    }
+    at
+}
+
 /// The pattern plan of a hardscape on paper: the real units of the part in view (whole units as
 /// outlines, cut units with a light fill) when the view holds at most `PRINT_BOUND` units, else
 /// the gap lines of the plan and a note on the sheet. Zones and courses are in it, laid by the same
@@ -99,9 +122,9 @@ fn pattern_prims(doc: &Document, obj: &Object, color: Option<Rgba>, xf: &Xf, out
             Some((wlo, whi)) => (bounds.0.max(wlo), bounds.1.min(whi)),
             None => bounds,
         };
-        let at = xf.p(DVec2::new(lo.x, lo.y.min(hi.y)));
+        let at = note_position(xf, lo, hi, notes);
         out.push(Prim::Text(TextPrim {
-            at: at + DVec2::new(1.0, 1.5 + 2.4 * notes as f64),
+            at,
             text,
             height: 2.0,
             color: color.unwrap_or([0, 0, 0, 255]),
@@ -336,5 +359,58 @@ pub fn extras(doc: &Document, obj: &Object, st: &Style, xf: &Xf, out: &mut Vec<P
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xf(twist: f64) -> Xf {
+        Xf {
+            model_center: DVec2::new(5000.0, 5000.0),
+            paper_center: DVec2::new(210.0, 150.0),
+            k: 0.01,
+            turn: DVec2::from_angle(f64::to_radians(twist)),
+            frame: Some((DVec2::new(10.0, 10.0), DVec2::new(410.0, 290.0))),
+            window: None,
+        }
+    }
+
+    #[test]
+    fn notes_stand_inside_the_frame_at_every_twist() {
+        // A part that reaches far out of the view: its corners are outside the frame.
+        let (lo, hi) = (
+            DVec2::new(-50_000.0, -50_000.0),
+            DVec2::new(60_000.0, 60_000.0),
+        );
+        for twist in [0.0, 30.0, 90.0, 180.0, 270.0] {
+            for notes in 0..3 {
+                let p = note_position(&xf(twist), lo, hi, notes);
+                assert!(
+                    p.x >= 10.0 && p.x <= 410.0 && p.y >= 10.0 && p.y <= 290.0,
+                    "{twist} {notes} {p:?}"
+                );
+            }
+        }
+        // A small part in view at twist 180: its lower left corner on the sheet is the upper right one in the model.
+        let p = note_position(
+            &xf(180.0),
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(5000.0, 5000.0),
+            0,
+        );
+        assert!((p - DVec2::new(211.0, 151.5)).length() < 1e-9, "{p:?}");
+        assert!(p.x >= 210.0 && p.y >= 150.0, "{p:?}");
+        // Without a frame nothing is clamped.
+        let mut f = xf(0.0);
+        f.frame = None;
+        let q = note_position(
+            &f,
+            DVec2::new(4000.0, 4000.0),
+            DVec2::new(5000.0, 5000.0),
+            1,
+        );
+        assert!((q - DVec2::new(200.0 + 1.0, 140.0 + 1.5 + 2.4)).length() < 1e-9);
     }
 }

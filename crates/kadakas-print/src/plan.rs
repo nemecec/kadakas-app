@@ -24,6 +24,8 @@ pub struct Xf {
     pub k: f64,
     /// The turn of the view (IOP-27): (1, 0) for no turn.
     pub turn: DVec2,
+    /// The frame of the viewport on the sheet (lowest and highest corner), when known. Notes stay inside it.
+    pub frame: Option<(DVec2, DVec2)>,
     /// The part of the model that the frame shows (lowest and highest corner), when known. Paved
     /// areas draw only the units that are in it.
     pub window: Option<(DVec2, DVec2)>,
@@ -36,6 +38,7 @@ impl Xf {
         paper_center: DVec2::ZERO,
         k: 1.0,
         turn: DVec2::X,
+        frame: None,
         window: None,
     };
 
@@ -49,6 +52,7 @@ impl Xf {
             } else {
                 DVec2::X
             },
+            frame: Some((vp.min, vp.max)),
             window: Some(vp.model_window()),
         }
     }
@@ -861,6 +865,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                     paper_center: vp.min,
                     k: 1.0,
                     turn: DVec2::X,
+                    frame: None,
                     window: None,
                 };
                 crate::annot::push(
@@ -885,6 +890,7 @@ pub fn annotation_prims(doc: &Document, vp: &Viewport, a: &Annotation, out: &mut
                 paper_center: vp.min,
                 k: 1.0,
                 turn: DVec2::X,
+                frame: None,
                 window: None,
             };
             shape_prims(

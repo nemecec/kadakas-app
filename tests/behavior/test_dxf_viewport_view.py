@@ -107,7 +107,21 @@ def test_the_viewport_can_be_changed_and_a_twist_moves_the_fit(sheet):
     turned = sheet.result("viewport.update", {"id": vp["id"], "twist": 90, "fit": True})
     assert turned["twist"] == 90
     # The model is 12 m by 8 m. Turned by a quarter, it is 8 m wide and 12 m high: a larger scale number.
-    assert turned["scale"] >= flat
+    assert turned["scale"] > flat
+    assert turned["center"] == approx([6000, 4000], abs=1e-6)
     back = sheet.result("viewport.update", {"id": vp["id"], "twist": 0, "perspective": True})
     assert "twist" not in back or back["twist"] == 0
     assert back["perspective"] is True
+
+
+def test_the_reply_warns_when_the_twist_or_the_perspective_is_not_applied(sheet):
+    plan = sheet.result("viewport.create", {"sheet": "Plan", "scale": 100, "perspective": True})
+    assert any("plan or a section has no perspective" in w for w in plan["warnings"]), plan
+    iso = sheet.result("viewport.create", {"sheet": "Plan", "scale": 100, "view": "right_isometric", "twist": 20})
+    assert any("not turned" in w for w in iso["warnings"]), iso
+    # A raster picture is not drawn in a twisted plan view: the reply says so.
+    sheet.execute({"op": "add_object", "shape": {"kind": "underlay", "name": "map", "min": [0, 0], "max": [1000, 1000], "width": 1, "height": 1, "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==", "opacity": 1.0, "source": ""}})
+    turned = sheet.result("viewport.update", {"id": plan["id"], "twist": 30})
+    assert any("raster picture" in w for w in turned.get("warnings", [])), turned
+    flat = sheet.result("viewport.update", {"id": plan["id"], "twist": 0, "perspective": False})
+    assert "warnings" not in flat

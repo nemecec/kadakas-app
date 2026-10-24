@@ -536,6 +536,10 @@ pub struct Viewport {
     /// section ignore it (IOP-27).
     #[serde(default, skip_serializing_if = "is_false")]
     pub perspective: bool,
+    /// Fields that this version does not know (from a newer file). They are saved again unchanged,
+    /// so an older program keeps the fields of a newer one (IOP-27).
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -591,6 +595,7 @@ impl Viewport {
             section: None,
             twist: 0.0,
             perspective: false,
+            extra: serde_json::Map::new(),
         }
     }
 
@@ -665,13 +670,38 @@ impl Viewport {
         (self.min + self.max) / 2.0
     }
 
-    /// The turn of a plan view as a rotation, from model to paper. Other views are not turned.
-    fn turn(&self) -> DVec2 {
+    /// The turn of a plan view as a unit vector (cosine, sine), from model to paper. Other views are not turned.
+    pub fn turn(&self) -> DVec2 {
         if self.is_plan() && self.section.is_none() {
             DVec2::from_angle(self.twist.to_radians())
         } else {
             DVec2::X
         }
+    }
+
+    /// What the person should know about the twist and the perspective flag of this viewport (IOP-27).
+    pub fn view_warnings(&self, doc: &Document) -> Vec<String> {
+        let mut out = Vec::new();
+        let plan = self.is_plan() && self.section.is_none();
+        if self.twist != 0.0 && !plan {
+            out.push("The twist is kept, but a 3D view or a section is not turned: only a plan view has a twist".into());
+        }
+        if self.perspective && (self.is_plan() || self.section.is_some()) {
+            out.push("The perspective flag is kept, but a plan or a section has no perspective: only a 3D view has it".into());
+        }
+        if self.is_twisted() {
+            let pictures = doc
+                .objects
+                .values()
+                .filter(|o| matches!(o.shape, Shape::Underlay(_)) && self.shows(doc, o))
+                .count();
+            if pictures > 0 {
+                out.push(format!(
+                    "{pictures} raster picture(s) are not drawn in a twisted view: a picture cannot follow the turn"
+                ));
+            }
+        }
+        out
     }
 
     /// True if the view is turned (a plan view with a twist).
@@ -831,21 +861,34 @@ impl Viewport {
     /// Sets the center and the scale so that the content fills the frame (a standard scale).
     /// An empty viewport keeps its settings.
     pub fn fit(&mut self, doc: &Document) {
-        if let Some((lo, hi)) = self.content_bounds(doc) {
+        let Some((lo, hi)) = self.content_bounds(doc) else {
+            return;
+        };
+        if !self.is_twisted() {
             self.center = (lo + hi) / 2.0;
-            // The content turned like the view: the box around it is what must fit.
-            let turn = self.turn();
-            let half = (hi - lo) / 2.0;
-            let corners = [
-                DVec2::new(-half.x, -half.y),
-                DVec2::new(half.x, -half.y),
-                half,
-                DVec2::new(-half.x, half.y),
-            ]
-            .map(|c| turn.rotate(c));
-            let span = corners.iter().fold(DVec2::ZERO, |m, c| m.max(c.abs())) * 2.0;
-            self.scale = fit_scale(span, self.max - self.min);
+            self.scale = fit_scale(hi - lo, self.max - self.min);
+            return;
         }
+        // A turned view: the corners of the box of each object, turned like the view. The box
+        // around those corners is what must fit, and its middle is the center.
+        let turn = self.turn();
+        let (mut tlo, mut thi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for (a, b) in doc
+            .objects
+            .values()
+            .filter(|o| self.shows(doc, o))
+            .map(|o| o.shape.bounds())
+            .filter(|(a, b)| a.is_finite() && b.is_finite())
+        {
+            for c in [a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y)] {
+                let t = turn.rotate(c);
+                tlo = tlo.min(t);
+                thi = thi.max(t);
+            }
+        }
+        let mid = (tlo + thi) / 2.0;
+        self.center = DVec2::new(turn.x, -turn.y).rotate(mid);
+        self.scale = fit_scale(thi - tlo, self.max - self.min);
     }
 
     /// The next free annotation id.
@@ -1433,6 +1476,12 @@ mod tests {
         assert_eq!((old.twist, old.perspective), (0.0, false));
         p.twist = f64::NAN;
         assert!(p.problem().is_some());
+        // A field that this version does not know comes back as it was.
+        let mut j = serde_json::to_value(vp()).unwrap();
+        j["twist_unit"] = serde_json::json!("turns");
+        let v: Viewport = serde_json::from_value(j).unwrap();
+        assert_eq!(v.extra["twist_unit"], "turns");
+        assert_eq!(serde_json::to_value(&v).unwrap()["twist_unit"], "turns");
     }
 
     #[test]

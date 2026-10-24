@@ -181,6 +181,8 @@ struct Made {
     cut: usize,
     /// Pattern lines left out because they cannot be used.
     bad: usize,
+    /// Pattern lines beyond the read limit.
+    unread: usize,
 }
 
 /// Why a pattern hatch stayed an outline.
@@ -212,6 +214,7 @@ impl Walker<'_> {
                 from_table,
                 cut,
                 bad,
+                unread,
             }) => {
                 // The name of the file stays. A standard name gets the scale and the turn of the
                 // lines, so a pattern at another size is told apart.
@@ -226,6 +229,7 @@ impl Walker<'_> {
                 }
                 self.tally.pattern_lines_cut += cut;
                 self.tally.pattern_lines_unusable += bad;
+                self.tally.pattern_lines_unread += unread;
                 *self.tally.pattern_fills.entry(name.clone()).or_default() += 1;
                 if self.b.is_probe() {
                     return None;
@@ -254,7 +258,8 @@ impl Walker<'_> {
     ) -> Result<Made, Outline> {
         let p = read(e);
         let mut lines = p.lines;
-        let mut bad = p.unread;
+        let unread = p.unread;
+        let mut bad = 0;
         let mut from_table = false;
         if lines.is_empty() {
             // A pattern name without lines: the standard pattern, scaled and turned as the codes say.
@@ -268,7 +273,11 @@ impl Walker<'_> {
                 .collect();
             from_table = true;
         }
-        if p.double && lines.len() * 2 <= hatch::MAX_LINES {
+        // A double hatch is the pattern and the same pattern turned by 90 degrees. A table pattern
+        // or a single family of lines needs the second half. Lines in the file that have a partner
+        // at 90 degrees already hold both halves.
+        let has_partner = lines.len() > 1;
+        if p.double && (from_table || !has_partner) && lines.len() * 2 <= hatch::MAX_LINES {
             let turned: Vec<PatLine> = lines.iter().map(PatLine::turned_90).collect();
             lines.extend(turned);
         }
@@ -287,10 +296,10 @@ impl Walker<'_> {
         if out.is_empty() {
             return Err(Outline::Unusable);
         }
-        let dense = out
-            .iter()
-            .any(|h| extent_mm / h.spacing > kadakas_core::pattern::MAX_LINES as f64);
-        if dense {
+        // The drawing engine draws a limited number of lines for one shape. All families together
+        // must fit, else the engine would cut them without a word.
+        let total: f64 = out.iter().map(|h| extent_mm / h.spacing).sum();
+        if total > kadakas_core::pattern::MAX_LINES as f64 {
             return Err(Outline::Dense);
         }
         let def = HatchDef {
@@ -302,6 +311,7 @@ impl Walker<'_> {
             from_table,
             cut,
             bad,
+            unread,
         })
     }
 }

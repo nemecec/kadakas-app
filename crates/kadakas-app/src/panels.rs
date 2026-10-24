@@ -1286,12 +1286,27 @@ fn edit_shape(
                 if vp.section.is_none() {
                     if vp.is_plan() {
                         f.scalar(ui, &tr!("panels-twist-deg"), &mut vp.twist, 1.0);
+                        if vp.perspective {
+                            ui.label("");
+                            ui.label(tr!("panels-perspective-ignored"));
+                            ui.end_row();
+                        }
+                        if vp.is_twisted() {
+                            ui.label("");
+                            ui.label(tr!("panels-twist-pictures"));
+                            ui.end_row();
+                        }
                     } else {
                         ui.label(tr!("panels-projection"));
                         f.commit |= ui
                             .checkbox(&mut vp.perspective, tr!("panels-perspective"))
                             .changed();
                         ui.end_row();
+                        if vp.twist != 0.0 {
+                            ui.label("");
+                            ui.label(tr!("panels-twist-ignored"));
+                            ui.end_row();
+                        }
                     }
                 }
                 ui.label(tr!("panels-frame"));

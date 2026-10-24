@@ -262,7 +262,7 @@ fn viewport(
     // The twist turns the model about the target, which is the center of the view (IOP-27).
     w.num(51, v.twist.rem_euclid(360.0));
     w.pair(72, 1000);
-    // 32768 is always on in files of AutoCAD. 65536 says that a clipping outline follows. The bit 1
+    // 32768 is always on in files of AutoCAD. 65536 says that a clipping outline follows. The flag value 1
     // is the perspective view.
     w.pair(
         90,
