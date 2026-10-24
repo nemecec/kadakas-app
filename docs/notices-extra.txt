@@ -491,6 +491,17 @@ Drawn for this project from written ideas. They are covered by the project licen
 The application icons in packaging/icons/ are our own work, under the same license.
 
 --------------------------------------------------------------------------------
+compiler-rt builtins (libclang_rt.builtins, LLVM project)
+--------------------------------------------------------------------------------
+Used by: the script engine. When the build finds wasi-runtimes (crates/kadakas-script-js/build.rs), the
+library libclang_rt.builtins.a of the LLVM project is linked into the WebAssembly module of the
+script engine (128 bit arithmetic). https://github.com/llvm/llvm-project (folder compiler-rt)
+
+compiler-rt is part of the LLVM project and is licensed under the Apache License v2.0 with LLVM
+Exceptions. The text of the Apache License 2.0 is part of THIRD_PARTY_NOTICES.txt above. The LLVM
+exceptions are in the entry of wasi-libc.
+
+--------------------------------------------------------------------------------
 ezdxf: the table of the 256 AutoCAD colors (MIT)
 --------------------------------------------------------------------------------
 Used by: crates/kadakas-io/src/dxf/aci.rs

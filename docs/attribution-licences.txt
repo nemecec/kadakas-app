@@ -1,0 +1,16 @@
+# Licence ids (SPDX) for docs/attribution-assets.tsv. One id per line, then an optional kind.
+# Kind `exception`: the id is allowed only after WITH, as in "Apache-2.0 WITH LLVM-exception".
+# Kind `test-only`: only rows with the use `test` have this licence.
+# An expression such as "Apache-2.0 OR MIT" is split at OR and AND. Each id is in this list.
+# Add an id only after you read the licence text and ship the notice that it asks for.
+Apache-2.0
+MIT
+BSD-2-Clause
+BSD-3-Clause
+CC0-1.0
+CC-BY-ND-4.0 test-only
+OFL-1.1
+Ubuntu-font-1.0
+Bitstream-Vera
+LicenseRef-EPSG-Terms
+LLVM-exception exception

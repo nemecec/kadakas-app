@@ -97,6 +97,16 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny check
+  # Every shipped asset, dataset, vendored file and Cargo dependency needs a row (PLAT-21).
+  attribution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      # The script reads Cargo data offline. Fetch the sources first.
+      - run: cargo fetch --locked
+      - run: scripts/check-attribution.sh
+      - run: scripts/tests/test_check_attribution.sh
   # THIRD_PARTY_NOTICES.txt must match the dependencies. The installers ship it (packager.toml).
   notices:
     runs-on: ubuntu-latest

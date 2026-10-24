@@ -1,0 +1,57 @@
+# Machine-readable list of every third-party or own asset, dataset and vendored file (PLAT-21).
+# Columns (tab separated): path, name, author, licence, source URL, use.
+# path: a glob in the repository (** crosses folders), crate:NAME for data inside a Cargo crate,
+#   or ext:ID for data that is not in the repository (fetched at run time or made at build time).
+# licence: an SPDX expression. The ids are in docs/attribution-licences.txt.
+# use: `ships` for what goes into the installers or the web build, `test` for the rest (tests, docs, tools).
+#   A third-party row that ships needs its name in THIRD_PARTY_NOTICES.txt.
+# author "Kadakas project" marks our own work. The own-work source is the repository URL in Cargo.toml.
+# UNKNOWN (licence, source or author) is only for a path under tests/, testdata/ or fixtures/.
+#   Such a row needs every file that it matches named in docs/attribution-open.txt.
+assets/icons/tabler/**	Tabler Icons	Paweł Kuna	MIT	https://tabler.io/icons	ships
+crates/kadakas-script-js/quickjs/**	quickjs-ng	Fabrice Bellard, Charlie Gordon, Ben Noordhuis, Saúl Ibarra Corretgé	MIT	https://github.com/quickjs-ng/quickjs	ships
+crates/kadakas-io/src/dxf/aci.rs	ezdxf	Manfred Moitzi	MIT	https://github.com/mozman/ezdxf	ships
+crate:epaint_default_fonts	Ubuntu-Light	Canonical Ltd.	Ubuntu-font-1.0	https://design.ubuntu.com/font	ships
+crate:epaint_default_fonts	Hack	Source Foundry Authors (built on DejaVu and Bitstream Vera Sans Mono)	MIT AND Bitstream-Vera	https://sourcefoundry.org/hack/	ships
+crate:epaint_default_fonts	Noto Emoji	Google Inc.	OFL-1.1	https://github.com/googlefonts/noto-emoji	ships
+crate:epaint_default_fonts	emoji-icon-font	John Slegers	MIT	https://github.com/jslegers/emoji-icon-font	ships
+crate:crs-definitions	EPSG Geodetic Parameter Dataset	crs-definitions crate (definitions derived from the EPSG dataset of IOGP)	CC0-1.0 AND LicenseRef-EPSG-Terms	https://tangled.org/rwell.org/crs-definitions	ships
+crate:proj4rs-geodesic	GeographicLib geodesic routines	Charles Karney	MIT	https://geographiclib.sourceforge.io/	ships
+ext:wasi-libc	wasi-libc	WebAssembly community and contributors	(Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT)	https://github.com/WebAssembly/wasi-libc	ships
+ext:wasi-libc-musl	musl	musl authors (inside wasi-libc)	MIT	https://musl.libc.org/	ships
+ext:wasi-libc-cloudlibc	cloudlibc	Nuxi (inside wasi-libc)	BSD-2-Clause	https://github.com/NuxiNL/cloudlibc	ships
+ext:wasi-libc-dlmalloc	dlmalloc	Doug Lea (inside wasi-libc)	CC0-1.0	https://gee.cs.oswego.edu/dl/html/malloc.html	ships
+ext:wasi-libc-emmalloc	emmalloc	Emscripten authors (inside wasi-libc)	MIT	https://github.com/emscripten-core/emscripten	ships
+ext:wasi-libc-musl-fts	musl-fts	Void Linux contributors (inside wasi-libc)	BSD-3-Clause	https://github.com/void-linux/musl-fts	ships
+ext:compiler-rt	compiler-rt	LLVM project	Apache-2.0 WITH LLVM-exception	https://github.com/llvm/llvm-project	ships
+ext:ezdxf-public-dxf	ezdxf public sample files	Manfred Moitzi	MIT	https://github.com/mozman/ezdxf	test
+ext:gdal-public-dxf	GDAL public sample files (MIT-style general terms, verified in LICENSE.TXT at the pinned commit 739fcf03, terms of single files not verified)	OSGeo and contributors	MIT	https://github.com/OSGeo/gdal	test
+tests/behavior/bcf_schemas/**	buildingSMART BCF schemas	buildingSMART International Ltd.	CC-BY-ND-4.0	https://github.com/buildingSMART/BCF-XML	test
+tests/behavior/bcf_cases/**	buildingSMART BCF 2.1 test files	buildingSMART International Ltd.	CC-BY-ND-4.0	https://github.com/buildingSMART/BCF-XML	test
+assets/icons/kadakas/**	Kadakas icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+assets/icons/modeler/**	Kadakas modeler icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+packaging/icons/**	Kadakas application icons	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+packaging/macos/*	Kadakas macOS bundle files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+web/index.html	Kadakas web page	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-script-js/c/prelude.js	Script engine prelude	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-l10n/locales/**	Kadakas translations	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-ui-core/profiles/*	Kadakas workspace profiles	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-plants/src/sample_catalog.csv	Plant sample catalog	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-launcher/trusted-keys.txt	Update manifest public keys	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-plugin/tests/fixtures/**	Plug-in test modules	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	ships
+crates/kadakas-api/tests/data/*.kad	Container golden files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-core/tests/command_schema.json	Command schema snapshot	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-io/tests/fixtures/dxf_public_*.json	Public DXF corpus counts and hashes	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/data/dxf-own/*	Own DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/data/*.py	DXF test data scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/fixtures/ifc/*.ifc	Hand written IFC test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/fixtures/messy/*	Messy DXF test corpus	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/fixtures/parking_lot*.dxf	Parking lot DXF test files	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/fixtures/make_parking_lot*.py	Parking lot DXF scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+tests/behavior/gltf_validate.js	glTF validation script	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+docs/scripts/*.js	Example generator scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+docs/icons.html	Icon gallery	Kadakas project	Apache-2.0 OR MIT	https://github.com/kadakas/kadakas	test
+crates/kadakas-render/testdata/red_blue.jpg	Test picture red_blue.jpg	UNKNOWN	UNKNOWN	UNKNOWN	test
+crates/kadakas-io/tests/fixtures/site.dxf	Test file site.dxf	UNKNOWN	UNKNOWN	UNKNOWN	test
+crates/kadakas-io/tests/fixtures/trees.geojson	Test file trees.geojson	UNKNOWN	UNKNOWN	UNKNOWN	test
+tests/behavior/fixtures/survey_rev?.dxf	Test files survey_rev1.dxf and survey_rev2.dxf	UNKNOWN	UNKNOWN	UNKNOWN	test
