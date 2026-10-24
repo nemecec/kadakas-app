@@ -1534,7 +1534,13 @@ fn edit_shape(
                 f.commit |= crate::gis_ui::massing_fields(ui, m);
                 f.count(ui, m.footprint.len());
             }
-            Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
+            Shape::Mesh3d(m) => {
+                f.count(ui, m.vertices.len());
+                // What a STEP import kept of the surfaces, or that it no longer fits.
+                if let Some(line) = kadakas_ui_core::mesh_import::exact_line(m) {
+                    ui.label(line);
+                }
+            }
             // The counts and the rest are in the block of `surface_ui`.
             Shape::SurfaceModel(_) => {}
             Shape::Extrude(e) => crate::solid_ui::extrude_fields(ui, &mut f, e),
