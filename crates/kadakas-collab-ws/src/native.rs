@@ -556,6 +556,8 @@ fn io_loop(
     shared: &Shared,
     waker: &Waker,
 ) {
+    // Off unix the socket id is `()`, which a lint flags on the Windows runner.
+    #[cfg_attr(not(unix), allow(clippy::let_unit_value))]
     let socket = socket_id(&ws);
     let mut last_heard = Instant::now();
     let mut last_ping = Instant::now();

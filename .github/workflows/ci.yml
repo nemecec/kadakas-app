@@ -1,7 +1,16 @@
 name: CI
 # Actions are pinned to commit SHAs, as in release.yml. To update one, look up the new SHA of its tag
 # and change the comment.
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # Run it by hand: Actions tab, or `gh workflow run ci.yml`.
+  workflow_dispatch:
+
+# A newer push to the same branch stops the older run, which saves minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
