@@ -412,6 +412,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn link<'a>(name: &'a str, to: &'a str) -> Item<'a> {
         Item {
             name,
