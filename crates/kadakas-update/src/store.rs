@@ -865,6 +865,11 @@ pub(crate) mod tests {
         d
     }
 
+    /// The file name of a program: with `.exe` on Windows.
+    pub fn exe_name(n: &str) -> String {
+        format!("{n}{}", std::env::consts::EXE_SUFFIX)
+    }
+
     pub fn v(s: &str) -> Version {
         Version::parse(s).unwrap()
     }
@@ -872,8 +877,8 @@ pub(crate) mod tests {
     /// Writes an archive file whose app prints its version.
     pub fn archive_file(dir: &Path, ver: &str) -> ArchiveFile {
         let bytes = build(&[
-            file("kadakas-app", format!("app {ver}").as_bytes()),
-            file("kadakas", b"cli"),
+            file(&exe_name("kadakas-app"), format!("app {ver}").as_bytes()),
+            file(&exe_name("kadakas"), b"cli"),
         ]);
         let p = dir.join(format!("a-{ver}.tar.gz"));
         let sha256 = sha256_hex(&bytes[..]).unwrap();
@@ -882,13 +887,13 @@ pub(crate) mod tests {
     }
 
     fn app_text(a: &Active) -> String {
-        std::fs::read_to_string(a.dir.join("kadakas-app")).unwrap()
+        std::fs::read_to_string(a.dir.join(exe_name("kadakas-app"))).unwrap()
     }
 
     pub fn bundled(root: &Path, ver: &str) -> Bundled {
         let dir = root.join("bundled-dir");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("kadakas-app"), format!("app {ver}")).unwrap();
+        std::fs::write(dir.join(exe_name("kadakas-app")), format!("app {ver}")).unwrap();
         Bundled {
             version: v(ver),
             dir,
@@ -938,7 +943,11 @@ pub(crate) mod tests {
             assert_eq!(folders(&s), want, "keep {n}");
             // The bundled app is never counted and never deleted.
             assert!(s.list().iter().any(|i| i.slot == Slot::Bundled));
-            assert!(sub.join("bundled-dir").join("kadakas-app").is_file());
+            assert!(
+                sub.join("bundled-dir")
+                    .join(exe_name("kadakas-app"))
+                    .is_file()
+            );
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1078,10 +1087,10 @@ pub(crate) mod tests {
         assert_eq!(item.meta.label, "local");
         assert_eq!(item.meta.commit.as_deref(), Some("abc123"));
         assert_eq!(
-            std::fs::read_to_string(item.dir.join("kadakas-app")).unwrap(),
+            std::fs::read_to_string(item.dir.join(exe_name("kadakas-app"))).unwrap(),
             "app build1"
         );
-        assert!(item.dir.join("kadakas").is_file());
+        assert!(item.dir.join(exe_name("kadakas")).is_file());
         // The pointer did not move: Auto-update decides by channel.
         assert_eq!(s.active().unwrap().slot, Slot::Bundled);
         // A new build with the same number replaces the folder.
@@ -1089,10 +1098,10 @@ pub(crate) mod tests {
         s.add_local(&ver, &again, None).unwrap();
         let item = s.list().into_iter().find(|i| i.version == ver).unwrap();
         assert_eq!(
-            std::fs::read_to_string(item.dir.join("kadakas-app")).unwrap(),
+            std::fs::read_to_string(item.dir.join(exe_name("kadakas-app"))).unwrap(),
             "app build2"
         );
-        assert!(!item.dir.join("kadakas").exists());
+        assert!(!item.dir.join(exe_name("kadakas")).exists());
         assert_eq!(item.meta.commit, None);
         // A running local version is not replaced.
         let g = crate::runs::RunGuard::begin(&s, &slot).unwrap();
@@ -1243,8 +1252,12 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(matches!(e, UpdateError::NotRemovable(_)), "{e}");
         assert_eq!(
-            std::fs::read_to_string(s.versions_dir().join(ver.to_string()).join("kadakas-app"))
-                .unwrap(),
+            std::fs::read_to_string(
+                s.versions_dir()
+                    .join(ver.to_string())
+                    .join(exe_name("kadakas-app"))
+            )
+            .unwrap(),
             "app b1"
         );
         // A swap that stopped after the first rename: recover puts the old folder back.
@@ -1563,7 +1576,7 @@ pub(crate) mod tests {
         // Somebody changed a file in the folder of the previous version. The marker is the
         // same, so the folder is reused as it is (we trust our own folder), but a wrong or
         // missing marker makes the install unpack again.
-        std::fs::write(dir.join("kadakas-app"), b"damaged").unwrap();
+        std::fs::write(dir.join(exe_name("kadakas-app")), b"damaged").unwrap();
         std::fs::remove_file(dir.join(MARKER)).unwrap();
         // Go to 1.2.0 and back to 1.0.0 as an explicit downgrade: the folder is made again.
         s.install(&v("1.0.0"), &archive_file(&root, "1.0.0"), true)

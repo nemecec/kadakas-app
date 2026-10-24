@@ -308,7 +308,10 @@ mod tests {
         let again = Settings::load(&root);
         assert_eq!((again.mode, again.keep_older), (UpdateMode::NotifyOnly, 4));
         assert_eq!(again.flavor, "sketch");
-        assert!(Settings::update(Path::new("/proc/none/x"), |_| {}).is_err());
+        // A folder below a plain file cannot be made, on every system.
+        let blocker = root.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        assert!(Settings::update(&blocker.join("x"), |_| {}).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

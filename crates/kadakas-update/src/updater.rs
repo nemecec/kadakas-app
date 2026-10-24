@@ -347,7 +347,7 @@ pub(crate) mod tests {
     use crate::archive::tests::{build, file};
     use crate::http::MockHttp;
     use crate::sign;
-    use crate::store::tests::{bundled, tmp, v};
+    use crate::store::tests::{bundled, exe_name, tmp, v};
     use crate::store::{Slot, Step};
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeMap;
@@ -367,8 +367,8 @@ pub(crate) mod tests {
 
     pub fn archive_bytes(ver: &str) -> Vec<u8> {
         build(&[
-            file("kadakas-app", format!("app {ver}").as_bytes()),
-            file("kadakas", b"cli"),
+            file(&exe_name("kadakas-app"), format!("app {ver}").as_bytes()),
+            file(&exe_name("kadakas"), b"cli"),
         ])
     }
 
@@ -417,7 +417,7 @@ pub(crate) mod tests {
 
     fn active_text(u: &Updater) -> String {
         let a = u.store().active().unwrap();
-        std::fs::read_to_string(a.dir.join("kadakas-app")).unwrap()
+        std::fs::read_to_string(a.dir.join(exe_name("kadakas-app"))).unwrap()
     }
 
     #[test]

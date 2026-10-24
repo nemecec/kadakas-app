@@ -136,6 +136,13 @@ mod tests {
         std::fs::write(p, b"x").unwrap();
     }
 
+    /// A file at exactly this relative path (inside an app bundle the program has no `.exe`).
+    fn touch_exact(dir: &Path, rel: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
+    }
+
     #[test]
     fn main_app_only() {
         let d = tmp("flv-main");
@@ -153,8 +160,8 @@ mod tests {
     fn the_program_inside_an_app_bundle_is_found() {
         let d = tmp("flv-bundle");
         assert!(!has_app(&d));
-        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
-        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
+        touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
+        touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-sketch");
         assert!(has_app(&d));
         std::fs::write(
             d.join("flavors.json"),
@@ -177,7 +184,7 @@ mod tests {
         );
         // A folder with a different bundle name is no version folder.
         let e = tmp("flv-other");
-        touch(&e, "Other.app/Contents/MacOS/kadakas-app");
+        touch_exact(&e, "Other.app/Contents/MacOS/kadakas-app");
         assert!(!has_app(&e));
         std::fs::remove_dir_all(&d).unwrap();
         std::fs::remove_dir_all(&e).unwrap();
@@ -212,9 +219,9 @@ mod tests {
     #[test]
     fn the_modeler_inside_the_app_bundle_is_a_flavor_too() {
         let d = tmp("flv-modeler-bundle");
-        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
+        touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-app");
         assert_eq!(discover(&d).len(), 1);
-        touch(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-modeler");
+        touch_exact(&d, "Kadakas Engine.app/Contents/MacOS/kadakas-modeler");
         let f = discover(&d);
         assert_eq!(f.len(), 2);
         assert_eq!(f[1].id, "kadakas-modeler");

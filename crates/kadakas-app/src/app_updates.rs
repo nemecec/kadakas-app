@@ -733,7 +733,10 @@ mod tests {
             stamp
         );
         // A folder that cannot be written is an error for the status line.
-        let mut bad = Updates::new(None, Some(PathBuf::from("/proc/none/launcher")));
+        // (A folder below a plain file cannot be made, on every system.)
+        let blocker = d.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let mut bad = Updates::new(None, Some(blocker.join("launcher")));
         bad.settings.keep_older = 5;
         bad.save_if_changed();
         assert!(bad.take_error().is_some());

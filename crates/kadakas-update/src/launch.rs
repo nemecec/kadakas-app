@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(args, ["--profile", "acad"]);
         assert_eq!(
             c.get_program(),
-            Path::new("/v/1.0.0/kadakas-app").as_os_str()
+            Path::new("/v/1.0.0").join("kadakas-app").as_os_str()
         );
         let env: Vec<_> = c.get_envs().collect();
         assert_eq!(
@@ -203,7 +203,9 @@ mod tests {
         let c = command_with(Path::new("/v/1.0.0"), &bundle, "", &files, &env).unwrap();
         assert_eq!(
             c.get_program(),
-            Path::new("/v/1.0.0/Kadakas Engine.app/Contents/MacOS/kadakas-app").as_os_str()
+            Path::new("/v/1.0.0")
+                .join("Kadakas Engine.app/Contents/MacOS/kadakas-app")
+                .as_os_str()
         );
         let args: Vec<&OsStr> = c.get_args().collect();
         assert_eq!(args, ["--", "/a/b.kad"]);
