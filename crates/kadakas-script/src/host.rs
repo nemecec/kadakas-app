@@ -384,24 +384,24 @@ impl ScriptHost {
     }
 }
 
-// The tests run shell scripts (`sh`), so they are for Unix.
-#[cfg(all(test, unix))]
+// The tests run scripts of the test tool (see `testtool_main.rs`), the same on every system.
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
     fn sh() -> Interpreter {
         Interpreter {
-            program: PathBuf::from("sh"),
+            program: crate::testtool::tool().to_path_buf(),
             prefix: vec![],
         }
     }
 
-    /// A shell script in a temp folder. `sh -u file` works: -u is a shell option.
+    /// A script of the test tool in a temp folder. The host calls `tool -u file`.
     fn script(name: &str, body: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kadakas-host-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
-        let p = d.join("run.sh");
+        let p = d.join("run.script");
         std::fs::write(&p, body).unwrap();
         p
     }
@@ -435,7 +435,7 @@ mod tests {
         let h = ScriptHost::new();
         let p = script(
             "env",
-            "echo \"addr=$KADAKAS_ADDR token=$KADAKAS_TOKEN\"\necho oops >&2\nexit 2\n",
+            "out addr=${KADAKAS_ADDR} token=${KADAKAS_TOKEN}\nerr oops\nexit 2\n",
         );
         let id = h.start(spec(p)).unwrap();
         let (lines, st) = wait(&h, id);
@@ -453,7 +453,7 @@ mod tests {
         );
         assert!(lines.last().unwrap().text.contains("exit code 2"));
         assert_eq!(Stream::Info.name(), "info");
-        assert_eq!(h.list()[0].name, "run.sh");
+        assert_eq!(h.list()[0].name, "run.script");
         // `since` skips old lines.
         let (rest, _) = h.poll(id, lines.len() - 1).unwrap();
         assert_eq!(rest.len(), 1);
@@ -463,7 +463,7 @@ mod tests {
     fn a_running_script_can_be_stopped() {
         let h = ScriptHost::new();
         let id = h
-            .start(spec(script("stop", "echo start\nsleep 30\n")))
+            .start(spec(script("stop", "out start\nsleep 30000\n")))
             .unwrap();
         assert!(h.list()[0].status.is_running());
         assert!(h.stop(id));
@@ -483,7 +483,7 @@ mod tests {
                 .unwrap_err()
                 .contains("not a file")
         );
-        let mut s = spec(script("noprog", "echo x\n"));
+        let mut s = spec(script("noprog", "out x\n"));
         s.interpreter = Some(Interpreter {
             program: PathBuf::from("/no/such/python"),
             prefix: vec![],
@@ -499,11 +499,11 @@ mod tests {
         let h = ScriptHost::new();
         let long = "x".repeat(MAX_LINE_CHARS * 2);
         let id = h
-            .start(spec(script("long", &format!("echo {long}\n"))))
+            .start(spec(script("long", &format!("out {long}\n"))))
             .unwrap();
         let (lines, _) = wait(&h, id);
         assert!(lines.iter().any(|l| l.text.len() == MAX_LINE_CHARS));
-        let sleeper = script("sleepy", "sleep 30\n");
+        let sleeper = script("sleepy", "sleep 30000\n");
         let ids: Vec<u64> = (0..MAX_RUNNING)
             .map(|_| h.start(spec(sleeper.clone())).unwrap())
             .collect();
@@ -518,10 +518,7 @@ mod tests {
     #[test]
     fn the_console_keeps_the_newest_lines() {
         let h = ScriptHost::new();
-        let body = format!(
-            "i=0\nwhile [ $i -lt {} ]; do echo $i; i=$((i+1)); done\n",
-            MAX_LINES + 100
-        );
+        let body = format!("count {}\n", MAX_LINES + 100);
         let id = h.start(spec(script("many", &body))).unwrap();
         let (lines, _) = wait(&h, id);
         assert_eq!(lines.len(), MAX_LINES);

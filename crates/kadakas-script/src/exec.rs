@@ -204,16 +204,10 @@ pub fn run(mut cmd: Command, stdin: &[u8], limits: Limits) -> Result<Output, Exe
 /// How long we wait for the output readers after the process has ended.
 const READER_GRACE: Duration = Duration::from_millis(500);
 
-// The tests run shell scripts (`sh`), so they are for Unix.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    fn sh(script: &str) -> Command {
-        let mut c = Command::new("sh");
-        c.args(["-c", script]);
-        c
-    }
+    use crate::testtool::command as tool;
 
     fn limits(ms: u64, out: usize) -> Limits {
         Limits {
@@ -225,7 +219,7 @@ mod tests {
 
     #[test]
     fn collects_output_and_code() {
-        let o = run(sh("cat; echo err >&2; exit 3"), b"hello", limits(5000, 100)).unwrap();
+        let o = run(tool("cat\nerr err\nexit 3"), b"hello", limits(5000, 100)).unwrap();
         assert_eq!(o.stdout, b"hello");
         assert_eq!(o.stderr.trim(), "err");
         assert_eq!(o.code, Some(3));
@@ -233,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_slow_process_is_killed() {
-        let e = run(sh("sleep 30"), b"", limits(150, 100)).unwrap_err();
+        let e = run(tool("sleep 30000"), b"", limits(150, 100)).unwrap_err();
         assert!(matches!(e, ExecError::Timeout(_)));
         assert!(e.to_string().contains("150 ms"));
     }
@@ -241,25 +235,20 @@ mod tests {
     #[test]
     fn a_process_that_ignores_its_input_is_fine() {
         let big = vec![b'x'; 1 << 20];
-        let o = run(sh("echo ok"), &big, limits(5000, 100)).unwrap();
-        assert_eq!(o.stdout, b"ok\n");
+        let o = run(tool("out ok"), &big, limits(5000, 100)).unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "ok");
     }
 
     #[test]
     fn too_much_output_is_refused() {
-        let e = run(sh("yes"), b"", limits(5000, 1000)).unwrap_err();
+        let e = run(tool("yes"), b"", limits(5000, 1000)).unwrap_err();
         assert_eq!(e, ExecError::OutputTooLarge(1000));
         assert!(e.to_string().contains("1000"));
     }
 
     #[test]
     fn stderr_is_cut_at_its_limit() {
-        let o = run(
-            sh("head -c 5000 /dev/zero | tr '\\0' e >&2"),
-            b"",
-            limits(5000, 100),
-        )
-        .unwrap();
+        let o = run(tool("errbytes 5000"), b"", limits(5000, 100)).unwrap();
         assert_eq!(o.stderr.len(), 64);
     }
 
@@ -272,26 +261,27 @@ mod tests {
 
     #[test]
     fn child_processes_die_with_the_timeout() {
-        // The shell starts a child that keeps the output pipe open. The kill must reach it.
-        let e = run(sh("sleep 30 & sleep 30"), b"", limits(150, 100)).unwrap_err();
+        // The program starts a child that keeps the output pipe open. The kill must reach it
+        // (on Unix; Windows kills the program only, and the run ends at the reader grace).
+        let e = run(tool("bg sleep 5000\nsleep 5000"), b"", limits(150, 100)).unwrap_err();
         assert!(matches!(e, ExecError::Timeout(_)));
     }
 
     #[test]
     fn a_background_process_does_not_stall_the_run() {
-        // The shell starts a long background job that keeps the output pipe open, then ends.
-        let o = run(sh("sleep 30 & echo done"), b"", limits(1000, 100)).unwrap();
-        assert_eq!(o.stdout, b"done\n");
+        // The program starts a long background job that keeps the output pipe open, then ends.
+        let o = run(tool("bg sleep 5000\nout done"), b"", limits(1000, 100)).unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "done");
     }
 
+    // `setsid` and the shell are Unix only: Windows has no process group to leave.
+    #[cfg(unix)]
     #[test]
     fn a_process_that_leaves_its_group_cannot_hold_us() {
         // `setsid` puts the job in a new group; the kill cannot reach it, but the reader grace ends.
-        let o = run(
-            sh("(setsid sleep 3 >&2 &) ; echo ok"),
-            b"",
-            limits(1000, 100),
-        );
+        let mut c = Command::new("sh");
+        c.args(["-c", "(setsid sleep 3 >&2 &) ; echo ok"]);
+        let o = run(c, b"", limits(1000, 100));
         if let Ok(o) = o {
             assert_eq!(o.stdout, b"ok\n");
         }

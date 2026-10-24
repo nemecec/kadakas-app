@@ -453,25 +453,34 @@ fn a_background_process_does_not_stall_the_reset() {
     assert_eq!(shapes.len(), 1);
 }
 
+/// A fake interpreter that is a real program on every system (a shell script would not run on
+/// Windows): it writes `started`, `cwd` (its current folder) and `env` (its variables) into a
+/// folder and ends with an error. The test compiles it with the `rustc` of the toolchain that
+/// built the tests.
 fn marker_interpreter(name: &str) -> (std::path::PathBuf, python::Interpreter) {
     let dir = std::env::temp_dir().join(format!("kadakas-exec-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let prog = dir.join("spy.sh");
+    let src = dir.join("spy.rs");
     std::fs::write(
-        &prog,
+        &src,
         format!(
-            "#!/bin/sh\ntouch {m}\npwd > {c}\nenv > {e}\nexit 1\n",
-            m = dir.join("started").display(),
-            c = dir.join("cwd").display(),
-            e = dir.join("env").display()
+            "use std::io::Write;\n\
+             fn main() {{\n\
+                 let dir = std::path::PathBuf::from({dir:?});\n\
+                 std::fs::write(dir.join(\"started\"), b\"x\").unwrap();\n\
+                 let cwd = std::env::current_dir().unwrap();\n\
+                 std::fs::write(dir.join(\"cwd\"), cwd.display().to_string()).unwrap();\n\
+                 let mut env = std::fs::File::create(dir.join(\"env\")).unwrap();\n\
+                 for (k, v) in std::env::vars_os() {{\n\
+                     writeln!(env, \"{{}}={{}}\", k.to_string_lossy(), v.to_string_lossy()).unwrap();\n\
+                 }}\n\
+                 std::process::exit(1);\n\
+             }}\n"
         ),
     )
     .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let prog = dir.join(format!("spy{}", std::env::consts::EXE_SUFFIX));
+    crate::testtool::compile(&src, &prog);
     (
         dir,
         python::Interpreter {
