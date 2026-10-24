@@ -309,10 +309,9 @@ impl<'a> Ctx<'a> {
                     pnindex = ints(a).unwrap_or_default();
                 } else if items.iter().all(
                     |i| matches!(i, Value::List(l) if l.iter().all(|x| matches!(x, Value::Int(_)))),
-                ) {
-                    if let Some(l) = lol(a) {
-                        sets.push(l);
-                    }
+                ) && let Some(l) = lol(a)
+                {
+                    sets.push(l);
                 }
             }
         }

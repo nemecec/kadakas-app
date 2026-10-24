@@ -43,7 +43,7 @@ fn a_file_cut_anywhere_never_panics() {
     let mut cut = 0;
     while cut < t.len() {
         if t.is_char_boundary(cut) {
-            let r = read(t[..cut].as_bytes(), &StepOptions::default());
+            let r = read(&t.as_bytes()[..cut], &StepOptions::default());
             if cut < t.len() - 40 {
                 assert!(r.is_err(), "cut at {cut}");
             }
@@ -129,11 +129,6 @@ fn cycles_in_references_end() {
     assert!(r.is_err());
     // An assembly that contains itself, and a part that is its own child.
     let t = text("assembly.step");
-    let looped = t.replace(
-        "NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#",
-        "NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#",
-    );
-    assert!(read(looped.as_bytes(), &StepOptions::default()).is_ok());
     let mut selfref = String::new();
     for line in t.lines() {
         if line.contains("NEXT_ASSEMBLY_USAGE_OCCURRENCE") {

@@ -311,6 +311,7 @@ fn to_uv(surface: &Surface, pts: &[Pt], hint: &mut Option<(f64, f64)>, ang: f64)
 
 /// Points on the line `u` from `v0` to `v1` (not the ends) so that the line follows the surface.
 fn seam_points(s: &Surface, u: f64, v0: f64, v1: f64, tol: f64, ang: f64) -> Vec<(f64, DVec3)> {
+    #[allow(clippy::too_many_arguments)]
     fn rec(
         s: &Surface,
         u: f64,
@@ -598,7 +599,7 @@ impl Tessellator<'_> {
             if pts.len() < 3 {
                 continue;
             }
-            match to_uv(&surface, pts, &mut hint, self.p.angle) {
+            match to_uv(surface, pts, &mut hint, self.p.angle) {
                 Some(l) => uvloops.push((l, *outer)),
                 None => return skip("a boundary loop cannot be placed on the surface"),
             }
@@ -661,7 +662,7 @@ impl Tessellator<'_> {
                     Some(l.src[0].1),
                 ));
                 // Up the meridian to the pole, along the pole, down the meridian.
-                let up = seam_points(&surface, closing[0], closing[1], vp, tol, ang);
+                let up = seam_points(surface, closing[0], closing[1], vp, tol, ang);
                 for (k, (v, p)) in up.iter().enumerate() {
                     ix.push(add(
                         &mut points,
@@ -722,8 +723,7 @@ impl Tessellator<'_> {
                     Some(a.src[0].1),
                 ));
                 // The right-hand meridian from the end of a to the start of b.
-                let right =
-                    seam_points(&surface, closing_a[0], closing_a[1], bb.uv[0][1], tol, ang);
+                let right = seam_points(surface, closing_a[0], closing_a[1], bb.uv[0][1], tol, ang);
                 for (j, (v, p)) in right.iter().enumerate() {
                     ix.push(add(
                         &mut points,
@@ -833,10 +833,10 @@ impl Tessellator<'_> {
             }
         }
         let n_bound = points.uv.len();
-        points.scale = metric(&surface, &points);
+        points.scale = metric(surface, &points);
         let max_tris = self.p.max_face_triangles.min(self.left_triangles() + 1);
         let refine = Refine {
-            surface: &surface,
+            surface,
             tol: self.p.tol,
             // A little more than the step of the edges, so that a face with edges at exactly
             // the angle step is not cut again for the rounding of the last digit.
@@ -855,9 +855,9 @@ impl Tessellator<'_> {
         // To the vertices of the body: boundary points by key, new points one each.
         let mut global: Vec<u32> = Vec::with_capacity(points.uv.len());
         let before = self.mesh.positions.len();
-        for i in 0..points.uv.len() {
+        for (i, p) in points.xyz.iter().enumerate() {
             let key = if i < n_bound { srcs[i] } else { None };
-            global.push(self.mesh.vertex(key, points.xyz[i]));
+            global.push(self.mesh.vertex(key, *p));
         }
         let reverse = flip ^ !same_sense;
         let mut count = 0u64;

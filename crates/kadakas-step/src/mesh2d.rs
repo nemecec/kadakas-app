@@ -606,7 +606,7 @@ fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine
                 cross(u[0], p, u[2]) / area2,
                 cross(u[0], u[1], p) / area2,
             ];
-            if !(area2 > 0.0) || w.iter().any(|x| !x.is_finite() || *x < 1e-6) {
+            if !area2.is_finite() || area2 <= 0.0 || w.iter().any(|x| !x.is_finite() || *x < 1e-6) {
                 continue;
             }
             pts.uv.push(p);
@@ -1021,13 +1021,13 @@ mod tests {
         let n = 16;
         let mut ring = Vec::new();
         for k in 0..n {
-            ring.push([3.14159 * k as f64 / n as f64, 0.0]);
+            ring.push([std::f64::consts::PI * k as f64 / n as f64, 0.0]);
         }
         for k in 0..n {
-            ring.push([3.14159, 10.0 * k as f64 / n as f64]);
+            ring.push([std::f64::consts::PI, 10.0 * k as f64 / n as f64]);
         }
         for k in 0..n {
-            ring.push([3.14159 * (n - k) as f64 / n as f64, 10.0]);
+            ring.push([std::f64::consts::PI * (n - k) as f64 / n as f64, 10.0]);
         }
         for k in 0..n {
             ring.push([0.0, 10.0 * (n - k) as f64 / n as f64]);
@@ -1043,7 +1043,7 @@ mod tests {
             angle: 0.3,
             max_triangles: 10_000,
         };
-        let (t, cut) = mesh_face(&mut pts, &[ids.clone()], &r).unwrap();
+        let (t, cut) = mesh_face(&mut pts, std::slice::from_ref(&ids), &r).unwrap();
         assert!(!cut);
         assert!(t.len() >= 20, "{}", t.len());
         // All points lie on the cylinder.

@@ -449,14 +449,12 @@ impl ExactSolid {
                     // The face normal is the normal of the surface, or the opposite one.
                     let outward = f.same_sense != f.flip;
                     if m.get("kind") == Some(&json!("plane")) {
-                        if !outward {
-                            if let Some(n) = m.get("normal").and_then(|n| n.as_array()) {
-                                let neg: Vec<Value> = n
-                                    .iter()
-                                    .map(|x| json!(-x.as_f64().unwrap_or(0.0)))
-                                    .collect();
-                                m.insert("normal".into(), Value::Array(neg));
-                            }
+                        if !outward && let Some(n) = m.get("normal").and_then(|n| n.as_array()) {
+                            let neg: Vec<Value> = n
+                                .iter()
+                                .map(|x| json!(-x.as_f64().unwrap_or(0.0)))
+                                .collect();
+                            m.insert("normal".into(), Value::Array(neg));
                         }
                     } else if !outward {
                         // A hole: the face looks into the surface (a cylinder bore).

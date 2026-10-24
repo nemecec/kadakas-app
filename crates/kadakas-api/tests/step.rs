@@ -540,7 +540,7 @@ fn a_payload_over_the_cap_of_one_object_is_dropped_and_reported() {
 #[test]
 fn hostile_files_are_refused_cleanly() {
     let dir = tempfile::tempdir().unwrap();
-    let mut run = |name: &str, text: String| -> RpcError {
+    let run = |name: &str, text: String| -> RpcError {
         let p = dir.path().join(name);
         std::fs::write(&p, text).unwrap();
         err(

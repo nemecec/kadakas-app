@@ -282,9 +282,7 @@ impl<'a> Ctx<'a> {
                     t1 = t0 - period;
                 }
             }
-        } else if !sense && t1 > t0 {
-            std::mem::swap(&mut t0, &mut t1);
-        } else if sense && t1 < t0 {
+        } else if (!sense && t1 > t0) || (sense && t1 < t0) {
             std::mem::swap(&mut t0, &mut t1);
         }
         if !(t0.is_finite() && t1.is_finite()) || (t1 - t0).abs() > BIG {

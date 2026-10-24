@@ -173,10 +173,13 @@ const KNOWN_SCHEMAS: &[&str] = &[
     "GEOMETRY_SCHEMA",
 ];
 
+/// Vertices and triangles of one color of a product.
+type Soup = (Vec<glam::DVec3>, Vec<[u32; 3]>);
+
 /// The parts of one product while they are collected.
 struct Acc {
     name: String,
-    by_color: BTreeMap<Option<[u8; 4]>, (Vec<glam::DVec3>, Vec<[u32; 3]>)>,
+    by_color: BTreeMap<Option<[u8; 4]>, Soup>,
     exact: Option<ExactSolid>,
     exact_ok: bool,
 }
