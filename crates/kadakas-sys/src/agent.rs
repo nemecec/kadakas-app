@@ -24,6 +24,23 @@ impl AgentInfo {
     }
 }
 
+/// The file that [`remove_file_on_signal`] removes, as a C string made before the handler is set.
+#[cfg(unix)]
+static SIGNAL_FILE: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
+
+/// The part of the signal handler that removes the file. Apart from the handler so that a test
+/// can run it (a process that a signal ends writes no coverage data).
+#[cfg(unix)]
+fn unlink_signal_file() {
+    if let Some(p) = SIGNAL_FILE.get() {
+        // SAFETY: unlink may be called in a signal handler; the path was built before the
+        // handler was set.
+        unsafe {
+            libc::unlink(p.as_ptr());
+        }
+    }
+}
+
 /// Deletes `path` when the process gets SIGTERM, SIGINT or SIGHUP, then lets the signal do what
 /// it would have done (the process ends). A killed app then leaves no runtime file that points
 /// to a port nobody listens on. Only the unlink runs in the handler, which is safe there.
@@ -32,17 +49,10 @@ impl AgentInfo {
 pub fn remove_file_on_signal(path: &Path) {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
-    use std::sync::OnceLock;
-    static PATH: OnceLock<CString> = OnceLock::new();
     extern "C" fn handler(sig: libc::c_int) {
-        if let Some(p) = PATH.get() {
-            // SAFETY: unlink, signal and raise may be called in a signal handler; the path was
-            // built before the handler was set.
-            unsafe {
-                libc::unlink(p.as_ptr());
-            }
-        }
-        // SAFETY: as above. The default action of the signal ends the process as before.
+        unlink_signal_file();
+        // SAFETY: signal and raise may be called in a signal handler. The default action of the
+        // signal ends the process as before.
         unsafe {
             libc::signal(sig, libc::SIG_DFL);
             libc::raise(sig);
@@ -51,7 +61,7 @@ pub fn remove_file_on_signal(path: &Path) {
     let Ok(c) = CString::new(path.as_os_str().as_bytes()) else {
         return;
     };
-    if PATH.set(c).is_err() {
+    if SIGNAL_FILE.set(c).is_err() {
         return;
     }
     for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
@@ -157,6 +167,26 @@ mod tests {
         child.wait().unwrap();
         info.pid = Some(pid);
         assert_eq!(info.stale_pid(), Some(pid));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_handler_removes_the_file_that_was_given_first_and_only_that() {
+        let dir = std::env::temp_dir().join(format!("kadakas-agentunlink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, second) = (dir.join("first.json"), dir.join("second.json"));
+        std::fs::write(&first, "x").unwrap();
+        std::fs::write(&second, "x").unwrap();
+        // This process arms the handlers (a signal here would end the test program, as it
+        // should); the second call is ignored.
+        remove_file_on_signal(&first);
+        remove_file_on_signal(&second);
+        unlink_signal_file();
+        assert!(!first.exists(), "the first file is gone");
+        assert!(second.exists(), "a later call changes nothing");
+        // A file that is gone already is no error.
+        unlink_signal_file();
         let _ = std::fs::remove_dir_all(dir);
     }
 
