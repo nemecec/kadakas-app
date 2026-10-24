@@ -812,7 +812,18 @@ impl Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
+        // The end of the input ends `kadakas serve`. Let it leave on its own: a program that is
+        // built for coverage writes its profile data when it leaves, and a kill in the middle
+        // of that leaves a corrupt `.profraw` file ("file header is corrupt", then
+        // "no profile can be merged" in scripts/coverage.sh). The kill is for a stuck program.
         drop(self.child.stdin.take());
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < end {
+            if matches!(self.child.try_wait(), Ok(Some(_)) | Err(_)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
