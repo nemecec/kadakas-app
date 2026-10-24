@@ -23,8 +23,10 @@ fn the_command_schema_matches_the_saved_copy() {
         std::fs::write(golden_path(), &now).unwrap();
         return;
     }
+    // A checkout may have changed the line ends (git on Windows): they are not the schema.
     let saved = std::fs::read_to_string(golden_path())
-        .expect("tests/command_schema.json is missing: run with UPDATE_SCHEMA=1");
+        .expect("tests/command_schema.json is missing: run with UPDATE_SCHEMA=1")
+        .replace("\r\n", "\n");
     assert!(
         saved == now,
         "the command schema changed. If this is on purpose, run: UPDATE_SCHEMA=1 cargo test -p kadakas-core --test command_schema"

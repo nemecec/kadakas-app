@@ -136,8 +136,14 @@ fn link_keeps_the_path_the_size_and_the_hash_instead_of_the_summaries() {
         link.sha256,
         kadakas_core::picture::sha256_hex(text.as_bytes())
     );
+    // The link keeps the usual form of a path: on Windows the canonical path has the prefix
+    // `\\?\`, which the link does not keep.
     let canonical = std::fs::canonicalize(&path).unwrap();
-    assert_eq!(link.path, canonical.to_str().unwrap());
+    let canonical = canonical.to_str().unwrap();
+    assert_eq!(
+        link.path,
+        canonical.strip_prefix(r"\\?\").unwrap_or(canonical)
+    );
     assert_eq!(link.problem(), None);
     assert!(r.report.notes.iter().any(|t| t.contains("original file")));
 

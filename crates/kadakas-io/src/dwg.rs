@@ -835,7 +835,11 @@ mod tests {
             })
             .expect("the link is on the layer source");
         // It names the DWG file with its size and hash, not the temporary DXF file.
-        assert_eq!(link.path, fs::canonicalize(&dwg).unwrap().to_str().unwrap());
+        let canonical = fs::canonicalize(&dwg).unwrap();
+        assert_eq!(
+            link.path,
+            crate::strip_verbatim(canonical.to_str().unwrap())
+        );
         assert_eq!(link, FileLink::of_bytes(&link.path, b"FAKEDWG\n"));
         let no_resources = ed
             .doc()

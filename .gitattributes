@@ -1,0 +1,22 @@
+# Text files are LF in the working tree on every system. On Windows git would make them CRLF,
+# and the tests that compare a file with generated text, and the golden files, would differ.
+* text=auto eol=lf
+
+# Binary files are never changed.
+*.kad binary
+*.bcf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.wasm binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
+
+# DXF files in the binary form (text DXF stays text).
+*_binary.dxf binary
