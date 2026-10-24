@@ -1271,6 +1271,7 @@ fn edit_shape(
     effective_tile: Option<f64>,
     site_mapping: kadakas_core::texture_bed::BedMapping,
     component: Option<&kadakas_core::component::InstanceInfo>,
+    exact_state: Option<kadakas_core::exact::State>,
 ) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
@@ -1537,7 +1538,7 @@ fn edit_shape(
             Shape::Mesh3d(m) => {
                 f.count(ui, m.vertices.len());
                 // What a STEP import kept of the surfaces, or that it no longer fits.
-                if let Some(line) = kadakas_ui_core::mesh_import::exact_line(m) {
+                if let Some(line) = kadakas_ui_core::mesh_import::exact_line_with(m, exact_state) {
                     ui.label(line);
                 }
             }
@@ -1667,6 +1668,22 @@ pub fn object_info(
     };
     let site_mapping = kadakas_core::texture_bed::site_mapping(session.editor.doc(), obj.layer);
     let component = kadakas_core::component::instance_info(session.editor.doc(), edited);
+    // Whether the exact data fits the triangles is a hash of the mesh: it is made once for each
+    // revision of the document, not for each frame.
+    let exact_state = match edited {
+        Shape::Mesh3d(m) if m.exact.is_some() => {
+            let key = egui::Id::new(("exact_state", id, session.editor.revision()));
+            match ui.data(|d| d.get_temp::<Option<kadakas_core::exact::State>>(key)) {
+                Some(s) => s,
+                None => {
+                    let s = m.exact_state();
+                    ui.data_mut(|d| d.insert_temp(key, s));
+                    s
+                }
+            }
+        }
+        _ => None,
+    };
     let commit = edit_shape(
         ui,
         edited,
@@ -1674,6 +1691,7 @@ pub fn object_info(
         effective_tile,
         site_mapping,
         component.as_ref(),
+        exact_state,
     );
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {

@@ -244,9 +244,23 @@ fn kind_name(kind: &str) -> String {
 /// The sentence of Object Info about the exact data of a mesh, or `None` for a mesh without.
 /// A payload that is out of step with the triangles says so instead of listing its faces.
 pub fn exact_line(m: &kadakas_core::mesh3d::Mesh3d) -> Option<String> {
+    exact_line_with(m, m.exact_state())
+}
+
+/// Like [`exact_line`], with the state of the payload known already. Finding it takes a pass
+/// over the mesh, so a caller that draws every frame keeps it for each revision.
+pub fn exact_line_with(
+    m: &kadakas_core::mesh3d::Mesh3d,
+    state: Option<kadakas_core::exact::State>,
+) -> Option<String> {
     use kadakas_core::exact::State;
-    let e = m.exact.as_ref()?;
-    if m.exact_state() == Some(State::Stale) {
+    let Some(e) = m.exact.as_ref() else {
+        return m
+            .exact_unusable
+            .as_ref()
+            .map(|u| tr!("meshio-ui-exact-unusable", reason = u.reason.clone()));
+    };
+    if state == Some(State::Stale) {
         return Some(tr!("meshio-ui-exact-stale"));
     }
     let kinds: Vec<String> = e
@@ -719,6 +733,27 @@ mod tests {
         m.vertices[0].z = 1.0;
         let stale = exact_line(&m).unwrap();
         assert!(stale.contains("edited"), "{stale}");
+        // One face is "1 face" and "1 tahk".
+        let mut one = m.clone();
+        one.exact.as_mut().unwrap().faces.truncate(1);
+        let line = exact_line_with(&one, Some(kadakas_core::exact::State::Fresh)).unwrap();
+        assert!(
+            line.contains("1 face (") && !line.contains("faces"),
+            "{line}"
+        );
+        let et = kadakas_l10n::with_language("et", || {
+            exact_line_with(&one, Some(kadakas_core::exact::State::Fresh)).unwrap()
+        });
+        assert!(et.contains("1 tahk ("), "{et}");
+        // A payload that this program cannot use is named as such.
+        let mut raw = serde_json::to_value(&one).unwrap();
+        raw["exact"]["version"] = serde_json::json!(9);
+        let later: kadakas_core::mesh3d::Mesh3d = serde_json::from_value(raw).unwrap();
+        let line = exact_line(&later).unwrap();
+        assert!(
+            line.contains("cannot use") && line.contains("version 9"),
+            "{line}"
+        );
         // The other kinds have names too.
         for k in ["revolution", "extrusion", "spline"] {
             assert!(!kind_name(k).is_empty());

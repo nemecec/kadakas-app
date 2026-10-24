@@ -52,6 +52,7 @@ fn cube(z0: f64) -> Mesh3d {
             .collect(),
         color: None,
         exact: None,
+        exact_unusable: None,
     }
 }
 
@@ -81,6 +82,7 @@ fn plate_with_hole() -> Mesh3d {
         triangles,
         color: Some(Color([10, 120, 200, 255])),
         exact: None,
+        exact_unusable: None,
     }
 }
 

@@ -1,6 +1,6 @@
 # Exact solids (stage 1 of the hybrid exact and faceted model)
 
-A STEP file holds the true surfaces of a product: a cylinder has a radius, a plane has a normal. Kadakas draws triangles, so the import cuts the faces into triangles. The import cuts the faces into triangles. Dropping the surfaces loses the dimensions. So each imported `mesh3d` object keeps its exact surfaces next to its triangles. This page describes that payload. The code is in `crates/kadakas-core/src/exact`.
+A STEP file holds the true surfaces of a product: a cylinder has a radius, a plane has a normal. Kadakas draws triangles, so the import cuts the faces into triangles. Dropping the surfaces would lose the dimensions. So each imported `mesh3d` object keeps its exact surfaces next to its triangles. This page describes that payload. The code is in `crates/kadakas-core/src/exact`.
 
 ## The rule
 
@@ -11,6 +11,15 @@ A STEP file holds the true surfaces of a product: a cylinder has a radius, a pla
 ## Where it lives
 
 `Mesh3d` has the optional field `exact`. It is left out of the JSON when there is no payload. A file from an older program has no such field and loads as before. `ExactSolid.extra` holds the fields of a later version. A program writes them back unchanged.
+
+## A payload that the program cannot use
+
+The payload is opaque to the document. A file is always loaded, whatever the payload holds. The loader reads the payload as plain JSON and then tries to understand it. The attempt fails for a newer `version`, for a kind of surface or curve that the program does not know, and for damaged numbers or indexes. Then the mesh has no usable payload (`exact` is empty) and keeps the JSON as it was (`exact_unusable`). The file writes it back unchanged. The triangles work as always.
+
+- A move, a turn or any other edit leaves such a payload as it is. It does not follow the edit, because the program cannot read it.
+- Object Info says "Exact data is kept but this program cannot use it" and gives the reason.
+- `mesh3d.exact_info` answers with `state: "unusable"` and the reason. `mesh3d.retessellate` refuses with `error_id: exact_unusable`.
+- A program of a later version that reads the file again can use the payload again.
 
 The payload is in millimeters, in the frame of the vertices of the mesh. A move or a turn of the object moves the payload too.
 
@@ -25,7 +34,7 @@ The payload is in millimeters, in the frame of the vertices of the mesh. A move 
   "angle_deg": 15,
   "vertices": [[0, 0, 0], [10, 0, 0]],
   "edges": [{"start": 0, "end": 1, "same_sense": true, "curve": {"kind": "line", "o": [0, 0, 0], "d": [10, 0, 0]}}],
-  "shells": [{"closed": true, "outward": null}],
+  "shells": [{"closed": true, "outward": true}],
   "faces": [{"shell": 0, "surface": {"kind": "plane", "f": {"matrix3": {}, "translation": []}}, "same_sense": true, "loops": [{"outer": true, "items": [{"kind": "edge", "edge": 0, "forward": true}]}], "color": [255, 0, 0, 255], "source": 35}],
   "mesh_hash": 123456789
 }
@@ -52,6 +61,7 @@ Kept:
 - the loops with holes and the orientation flags
 - the colours of faces
 - the product name and the unit of the file (for the report)
+- the unit scale and the tolerance of the first representation of the file
 
 Not kept:
 
@@ -78,9 +88,21 @@ The STEP text of a part is about as long as its payload. One object keeps at mos
 
 Over a cap, the mesh keeps its triangles and loses the payload. The report says so: `report.exact.without` lists each part with the reason and the size. The option `keep_exact` (default true) turns the payload off for a whole import.
 
+With the option `join`, the payloads of the parts are joined too. If the joined payload is over the cap of one object, the import does not fail. The joined mesh keeps its triangles, and `report.exact.without` names the reason.
+
+A copy of an object (duplicate, array, copy with a move) counts against the cap of the document too. A copy that would pass 64 MiB keeps its triangles only. The command answers with a note that counts these copies.
+
+## Collaboration
+
+A shared document sends the changes of a shape as properties (`kadakas-props`, `docsync`). The exact data of a mesh is a property of its own, `shape.exact`. A move of the object sends the triangles and the data, but a change of the colour sends neither. The value limit of a property is 32 MiB. One payload is at most 8 MiB by `approx_bytes`, which is some 4.5 MB of JSON.
+
+The sync budget is 16 MiB of JSON for one payload (`MAX_SYNC_EXACT_BYTES`). A payload over it is not sent. The other users get the triangles. The payload stays on the computer that made it and in its saved file. This case is rare: only a payload that is not usable can be so big, because the cap of one object is lower.
+
+Plan for later: if the data of a payload must be shared in parts, cut it by face into chunks of `shape.exact.<n>`, like the points of a site model. Then a change of one face sends one chunk.
+
 ## Moves, turns, scale, mirror
 
-`Mesh3d::translate_xy`, `rotate_z` and `transform` move the payload and the vertices together and write the new `mesh_hash`. A uniform scale scales the radii and the tolerance. A mirror turns the faces around (`same_sense`). A stretch or a shear cannot be followed, so the payload is dropped and the call returns a note. A payload that was stale before stays stale.
+`Mesh3d::translate_xy`, `rotate_z` and `transform` move the payload and the vertices together and write the new `mesh_hash`. A uniform scale scales the radii and the tolerance. A mirror turns the faces around (`same_sense`). `mesh3d.exact_info` uses the handedness of the frame of each surface, so the normals and the `concave` flag of a bore stay right after a mirror. A stretch or a shear cannot be followed, so the payload is dropped and the call returns a note. A payload that was stale before stays stale.
 
 ## Stale data
 
@@ -88,6 +110,7 @@ The payload is stale when `mesh_hash` differs from the fingerprint of the curren
 
 - `mesh3d.exact_info` still lists a stale payload, with `state: "stale"` and a note.
 - `mesh3d.retessellate` refuses a stale payload with `error_id: exact_stale`.
+- `mesh3d.retessellate` also refuses when a face of a closed solid cannot be cut at the new tolerance. The solid would open, so the old mesh stays and the answer names the face.
 - Object Info says that the triangles were edited and that the exact data no longer fits.
 - A conversion to a surface model drops the payload (a surface model has its own faces). The import report counts this in `report.exact.lost_to_surface`.
 
@@ -102,4 +125,4 @@ The payload is stale when `mesh_hash` differs from the fingerprint of the curren
 - Stage 2 builds edit tools that keep exactness (offset a face, change a radius) and a STEP export. The payload has the topology for it: shared edges, loops and orientation.
 - Stage 3 makes the payload the source for some objects. The triangles become a cache that `retessellate` rebuilds. The `mesh_hash` says when the cache is current.
 - Booleans on exact solids need to move faces between objects. `ExactSolid::merge` and `retain_faces` already join and split the payload by face.
-- Version 1 of the form stays readable. New fields go in `extra` first.
+- New fields go in `extra` first. A payload that a program cannot read stays in the file untouched (see above), so an older program never loses it.

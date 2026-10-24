@@ -240,7 +240,10 @@ fn styles_units_in_degrees_and_colors_by_name() {
 fn mapped_items_and_related_representations_and_loose_solids() {
     let m = load("mapped.step");
     accounted(&m);
-    assert_eq!(m.set.parts.len(), 2);
+    // The plate is the target of the mapped items: it shows only where the frame places it,
+    // not a third time at the origin.
+    assert_eq!(m.set.parts.len(), 1);
+    assert!(m.set.parts.iter().all(|p| p.name != "Plate"));
     let frame = m.set.parts.iter().find(|p| p.name == "Frame").unwrap();
     assert_eq!(frame.triangles.len(), 24);
     let (lo, hi) = bounds(frame);
@@ -273,7 +276,7 @@ fn per_body_parts_and_a_tolerance_option_change_the_split() {
     )
     .unwrap();
     // The two mapped plates are two bodies now.
-    assert_eq!(per_body.set.parts.len(), 3);
+    assert_eq!(per_body.set.parts.len(), 2);
     let coarse = read(
         &std::fs::read(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/step/cylinder.step"),

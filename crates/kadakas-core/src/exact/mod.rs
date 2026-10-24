@@ -231,6 +231,22 @@ impl ExactSolid {
         n
     }
 
+    /// Reads a payload from JSON. A payload of a newer version, with a kind that this program
+    /// does not know, or with damaged data is an error with a reason, never a panic.
+    pub fn from_json(v: &Value) -> Result<ExactSolid, String> {
+        let version = v.get("version").and_then(Value::as_u64).unwrap_or(0);
+        if version > u64::from(VERSION) {
+            return Err(format!(
+                "the data has version {version}, this program reads up to version {VERSION}"
+            ));
+        }
+        let e =
+            ExactSolid::deserialize(v).map_err(|e| format!("the data is not understood: {e}"))?;
+        e.validate()
+            .map_err(|e| format!("the data is not valid: {e}"))?;
+        Ok(e)
+    }
+
     /// Checks a payload from an untrusted file: counts, indices, finite numbers and the
     /// invariants that the evaluation of the curves and surfaces relies on.
     pub fn validate(&self) -> Result<(), String> {
@@ -448,6 +464,9 @@ impl ExactSolid {
                     m.insert("face".into(), json!(i));
                     // The face normal is the normal of the surface, or the opposite one.
                     let outward = f.same_sense != f.flip;
+                    // The face looks along the normal of the surface (outward) or against it,
+                    // and the normal of the surface turns with the handedness of the frame.
+                    let handed = f.surface.as_ref().is_none_or(Surface::right_handed);
                     if m.get("kind") == Some(&json!("plane")) {
                         if !outward && let Some(n) = m.get("normal").and_then(|n| n.as_array()) {
                             let neg: Vec<Value> = n
@@ -456,7 +475,7 @@ impl ExactSolid {
                                 .collect();
                             m.insert("normal".into(), Value::Array(neg));
                         }
-                    } else if !outward {
+                    } else if outward != handed {
                         // A hole: the face looks into the surface (a cylinder bore).
                         m.insert("concave".into(), json!(true));
                     }

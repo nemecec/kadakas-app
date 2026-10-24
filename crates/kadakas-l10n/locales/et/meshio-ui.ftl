@@ -49,7 +49,10 @@ meshio-ui-step-tolerance-auto = Tolerants detaili suuruse järgi
 meshio-ui-step-tolerance = Tolerants (mm)
 meshio-ui-step-per-product = Üks võrk iga toote kohta (väljas: üks iga keha kohta)
 meshio-ui-step-keep-exact = Hoia täpsed pinnad kolmnurkade kõrval
-meshio-ui-exact-kept = Täpsed andmed alles: { $faces } tahku ({ $kinds })
+meshio-ui-exact-kept = Täpsed andmed alles: { $faces } { $faces ->
+    [one] tahk
+   *[other] tahku
+} ({ $kinds })
 meshio-ui-exact-stale = Kolmnurki muudeti pärast importi. Täpsed andmed ei sobi neile enam.
 meshio-ui-kind-plane = tasapind
 meshio-ui-kind-cylinder = silinder
@@ -59,3 +62,4 @@ meshio-ui-kind-torus = toor
 meshio-ui-kind-revolution = pöördpind
 meshio-ui-kind-extrusion = tõmbepind
 meshio-ui-kind-spline = splainpind
+meshio-ui-exact-unusable = Täpsed andmed on alles, kuid programm ei saa neid kasutada: { $reason }

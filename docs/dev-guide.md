@@ -177,7 +177,7 @@ cargo build -p kadakas-cli && uv run --with pytest --with ezdxf --with ifcopensh
 uv run --no-project --with pytest pytest python/tests -q   # the Python package (set KADAKAS_BIN as for the behavior tests). Both folders also run in one command: pytest tests/behavior python/tests
 ```
 
-All five must pass. The wasm check covers the app crate too: keep native-only code (files, threads, sockets, Python) behind `#[cfg(not(target_arch = "wasm32"))]`. The Python package tests belong to check 5. Write plain commit messages. Do not add a co-author line.
+All five must pass. The wasm check covers the app crate too: keep native-only code (files, threads, sockets, Python) behind `#[cfg(not(target_arch = "wasm32"))]`. The Python package tests belong to check 5. Write plain commit messages. A person can add a co-author line, because people take responsibility for the work. AI agents must not add one, because an agent is a tool that a person uses.
 
 ## Parallel work in worktrees
 

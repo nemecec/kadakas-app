@@ -38,6 +38,7 @@ fn every_error_has_a_kind_details_and_text() {
         },
         MeshError::Unsupported("u".into()),
         MeshError::Empty,
+        MeshError::TooMuchWork { units: 5, limit: 4 },
     ];
     let mut kinds = std::collections::BTreeSet::new();
     for e in &all {
@@ -47,7 +48,8 @@ fn every_error_has_a_kind_details_and_text() {
         assert!(e.details().is_object());
     }
     assert_eq!(kinds.len(), all.len(), "each kind has its own name");
-    assert_eq!(all.iter().filter(|e| e.is_limit()).count(), 5);
+    assert_eq!(all.iter().filter(|e| e.is_limit()).count(), 6);
+    assert_eq!(all[12].details()["units"], 5);
     assert_eq!(all[0].details()["limit"], 4);
     assert_eq!(all[5].details()["need"], 2);
     assert_eq!(all[9].details()["index"], 9);

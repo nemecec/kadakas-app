@@ -37,7 +37,7 @@ fn mesh_with_exact(doc: &Document, id: ObjectId) -> Result<&Mesh3d, RpcError> {
             json!({"object": id, "kind": o.shape.kind()}),
         ));
     };
-    if m.exact.is_none() {
+    if m.exact.is_none() && m.exact_unusable.is_none() {
         return Err(typed(
             RpcError::validation(format!(
                 "object {id} has no exact data: only a mesh from a STEP import with keep_exact has it"
@@ -54,6 +54,14 @@ pub(super) fn exact_info(s: &mut Session, p: Value) -> Result<Value, RpcError> {
     let id = object_id(&q.id.0)?;
     let limit = q.limit.map_or(200, |n| n.0.clamp(1, 5000) as usize);
     let m = mesh_with_exact(s.editor.doc(), id)?;
+    if let Some(u) = &m.exact_unusable {
+        return Ok(json!({
+            "id": id,
+            "state": "unusable",
+            "reason": u.reason,
+            "note": "this program cannot use the exact data. The file keeps it as it is.",
+        }));
+    }
     let e = m.exact.as_ref().expect("checked");
     let stale = m.exact_state() == Some(State::Stale);
     let mut out = e.info(limit);
@@ -81,6 +89,16 @@ pub(super) fn retessellate(s: &mut Session, p: Value) -> Result<Value, RpcError>
         return Err(bad("angle: degrees, 1 to 90"));
     }
     let m = mesh_with_exact(s.editor.doc(), id)?;
+    if let Some(u) = &m.exact_unusable {
+        return Err(typed(
+            RpcError::conflict(format!(
+                "object {id}: this program cannot use the exact data ({})",
+                u.reason
+            )),
+            "exact_unusable",
+            json!({"object": id, "reason": u.reason}),
+        ));
+    }
     if m.exact_state() == Some(State::Stale) {
         return Err(typed(
             RpcError::conflict(format!(
@@ -105,6 +123,7 @@ pub(super) fn retessellate(s: &mut Session, p: Value) -> Result<Value, RpcError>
         triangles: r.triangles,
         color: m.color,
         exact: None,
+        exact_unusable: None,
     };
     exact.tolerance_mm = q.tolerance;
     exact.angle_deg = angle;

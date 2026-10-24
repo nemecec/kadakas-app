@@ -10,7 +10,7 @@ use kadakas_meshio::MeshError;
 use crate::ctx::{Ctx, Fail, R, attr, flag, int, list, num, reference, refs, skip};
 use crate::part21::{Entity, Value};
 use crate::read_brep::ExactBuilder;
-use crate::tess::{Rgba, TessParams, tessellate};
+use crate::tess::{Cost, Rgba, TessParams, tessellate};
 
 /// Triangles with a color, in millimeters.
 #[derive(Clone, Debug, Default)]
@@ -90,6 +90,25 @@ impl RepGeom {
 
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty() && self.curves.is_empty()
+    }
+
+    /// The bytes of exact data in all bodies.
+    pub fn payload_bytes(&self) -> u64 {
+        self.bodies
+            .iter()
+            .filter_map(|b| b.exact.as_ref())
+            .map(|e| e.approx_bytes() as u64)
+            .sum()
+    }
+
+    /// Charges the copy of this geometry to the import before it is made.
+    pub fn charge_copy(&self, ctx: &mut Ctx) -> R<()> {
+        ctx.charge_copy(
+            self.vertices(),
+            self.triangles(),
+            (self.bodies.len() + self.curves.len()) as u64,
+            self.payload_bytes(),
+        )
     }
 
     pub fn transformed(&self, m: &DAffine3) -> RepGeom {
@@ -195,8 +214,12 @@ impl<'a> Ctx<'a> {
         };
         let mut count_error: Option<Fail> = None;
         let t = {
-            let mut spend = |v: u64, t: u64| -> Result<(), MeshError> {
-                match self.count(v, t) {
+            let mut spend = |c: Cost| -> Result<(), MeshError> {
+                let r = match c {
+                    Cost::Output(v, t) => self.count(v, t),
+                    Cost::Work(n) => self.charge(n),
+                };
+                match r {
                     Ok(()) => Ok(()),
                     Err(Fail::Abort(e)) => Err(e),
                     Err(f) => {
@@ -299,21 +322,16 @@ impl<'a> Ctx<'a> {
         let pts = self.coordinates(coords_id, scale)?;
         let ints = |v: &Value| -> Option<Vec<i64>> { list(v)?.iter().map(int).collect() };
         let lol = |v: &Value| -> Option<Vec<Vec<i64>>> { list(v)?.iter().map(ints).collect() };
-        // The flat list of integers is the point index (maybe empty). The lists of lists are
-        // the triangles, or the strips and the fans.
-        let mut pnindex: Vec<i64> = Vec::new();
+        // The attributes by position. A face has a link to the face of the B-rep before the
+        // point index. Normals (a list of lists of reals) are not used. Strips and fans (or
+        // triangles) may be empty lists, so they cannot be told apart by their content.
+        let complex = e.name.starts_with("COMPLEX_");
+        let face = e.name.ends_with("_FACE");
+        let first = if face { 5 } else { 4 };
+        let pnindex: Vec<i64> = e.attrs.get(first).and_then(ints).unwrap_or_default();
         let mut sets: Vec<Vec<Vec<i64>>> = Vec::new();
-        for a in &e.attrs {
-            if let Value::List(items) = a {
-                if items.iter().all(|i| matches!(i, Value::Int(_))) {
-                    pnindex = ints(a).unwrap_or_default();
-                } else if items.iter().all(
-                    |i| matches!(i, Value::List(l) if l.iter().all(|x| matches!(x, Value::Int(_)))),
-                ) && let Some(l) = lol(a)
-                {
-                    sets.push(l);
-                }
-            }
+        for k in 1..=if complex { 2 } else { 1 } {
+            sets.push(e.attrs.get(first + k).and_then(lol).unwrap_or_default());
         }
         let n = pts.len() as i64;
         let point = |i: i64| -> Option<u32> {
@@ -324,7 +342,6 @@ impl<'a> Ctx<'a> {
             };
             (1..=n).contains(&j).then(|| (j - 1) as u32)
         };
-        let complex = e.name.starts_with("COMPLEX_");
         let mut tris: Vec<[u32; 3]> = Vec::new();
         let mut bad = 0u64;
         if complex {

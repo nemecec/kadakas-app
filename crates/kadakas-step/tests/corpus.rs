@@ -72,7 +72,11 @@ fn fetch() -> Option<Vec<u8>> {
     let bytes = std::fs::read(&part).ok()?;
     let _ = std::fs::remove_file(&part);
     assert_eq!(sha256_hex(&bytes), SHA256, "the file has a wrong hash");
-    let _ = std::fs::write(&file, &bytes);
+    // Written to a file of its own and renamed, so that a second test run never reads half a file.
+    let part = file.with_extension(format!("part{}", std::process::id()));
+    if std::fs::write(&part, &bytes).is_ok() && std::fs::rename(&part, &file).is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
     Some(bytes)
 }
 

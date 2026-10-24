@@ -521,11 +521,15 @@ fn remove_flat(topo: &mut Topo, pts: &Points) {
     }
 }
 
-/// Points in the region on a grid in the parameters, so that no triangle is a long needle
-/// before the refinement starts. The grid steps are those of the boundary: the median
-/// distance between neighbouring boundary points in each direction.
-fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine) {
-    let outline = &loops[0];
+/// The most steps of work that the seeding of one face may take (grid points times boundary
+/// points, for the test of each grid point against the loops). A face over it is not seeded.
+pub const SEED_MAX_COST: u64 = 30_000_000;
+
+/// The steps of work that seeding a face takes, about.
+pub fn seed_cost(pts: &Points, loops: &[Vec<usize>]) -> u64 {
+    let Some(outline) = loops.first() else {
+        return 0;
+    };
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for &i in outline {
         for k in 0..2 {
@@ -533,6 +537,20 @@ fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine
             hi[k] = hi[k].max(pts.uv[i][k]);
         }
     }
+    let Some((_, n)) = grid_plan(pts, loops, lo, hi) else {
+        return 0;
+    };
+    let boundary: u64 = loops.iter().map(|l| l.len() as u64).sum();
+    (n[0] as u64 * n[1] as u64).saturating_mul(boundary + 1)
+}
+
+/// The steps and the counts of the seed grid, or `None` when the grid is too big.
+fn grid_plan(
+    pts: &Points,
+    loops: &[Vec<usize>],
+    lo: [f64; 2],
+    hi: [f64; 2],
+) -> Option<([f64; 2], [usize; 2])> {
     let mut steps = [Vec::new(), Vec::new()];
     for l in loops {
         for k in 0..l.len() {
@@ -556,9 +574,27 @@ fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine
         (((hi[0] - lo[0]) / step[0]).ceil() as usize).max(1),
         (((hi[1] - lo[1]) / step[1]).ceil() as usize).max(1),
     ];
-    if n[0] * n[1] > 60_000 || n[0] < 1 || n[1] < 1 {
+    (n[0] * n[1] <= 60_000).then_some((step, n))
+}
+
+/// Points in the region on a grid in the parameters, so that no triangle is a long needle
+/// before the refinement starts. The grid steps are those of the boundary: the median
+/// distance between neighbouring boundary points in each direction.
+fn seed_grid(topo: &mut Topo, pts: &mut Points, loops: &[Vec<usize>], r: &Refine) {
+    if seed_cost(pts, loops) > SEED_MAX_COST {
         return;
     }
+    let outline = &loops[0];
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for &i in outline {
+        for k in 0..2 {
+            lo[k] = lo[k].min(pts.uv[i][k]);
+            hi[k] = hi[k].max(pts.uv[i][k]);
+        }
+    }
+    let Some((step, n)) = grid_plan(pts, loops, lo, hi) else {
+        return;
+    };
     // An even-odd test against all loops.
     let inside = |p: [f64; 2], pts: &Points| -> bool {
         let mut c = false;

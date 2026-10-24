@@ -67,7 +67,7 @@ Every limit is checked before the work it protects. A refusal changes nothing an
 
 | Limit | Default | Reason |
 |---|---|---|
-| File size, checked before the file is read | 512 MiB, and never above `import_text_bytes` of the session | `mesh_file_too_large` |
+| File size, checked before the file is read | 512 MiB (STEP: 128 MiB), and never above `import_text_bytes` of the session | `mesh_file_too_large` |
 | Triangles in all parts | 8,000,000 (`max_triangles`) | `mesh_too_many_triangles` |
 | Vertices in all parts | 4,000,000 (`max_vertices`) | `mesh_too_many_vertices` |
 | Memory estimated from the counts | 2 GiB | `mesh_too_much_memory` |
@@ -137,7 +137,7 @@ The reader is the crate `kadakas-step`. It uses the public knowledge of the form
 | LINE, CIRCLE, ELLIPSE, B_SPLINE_CURVE_WITH_KNOTS (also rational), BEZIER, QUASI_UNIFORM and UNIFORM curves, POLYLINE, TRIMMED_CURVE, COMPOSITE_CURVE, SURFACE_CURVE, SEAM_CURVE | edge curves |
 | FACE_BOUND, FACE_OUTER_BOUND, ORIENTED_EDGE, ORIENTED_FACE, ORIENTED_CLOSED_SHELL, POLY_LOOP | holes and orientation flags are used |
 | PRODUCT, PRODUCT_DEFINITION, SHAPE_DEFINITION_REPRESENTATION | the product name is the name of the mesh |
-| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances |
+| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances. A usage with no placement sits at the origin and a note counts it. A product that only mapped items use shows where they place it, not at the origin |
 | MAPPED_ITEM with REPRESENTATION_MAP | an instance of a representation |
 | LENGTH_UNIT as SI_UNIT or CONVERSION_BASED_UNIT, PLANE_ANGLE_UNIT | millimeters, meters, inches and so on, for each representation |
 | STYLED_ITEM with COLOUR_RGB or a predefined colour, SURFACE_STYLE_TRANSPARENT | colour of a solid, a shell or a face. A part gets one mesh for each colour |
@@ -153,7 +153,7 @@ The reader is the crate `kadakas-step`. It uses the public knowledge of the form
 
 ### How faces are cut
 
-- The boundary of each face is cut first. An edge is cut once and both faces use the same points, so a closed solid has no cracks. Equal points are joined at the end (0.1 percent of the tolerance, at least 1 micrometer).
+- The boundary of each face is cut first. An edge is cut once and both faces use the same points, so a closed solid has no cracks. Equal points are joined at the end (0.1 percent of the tolerance in millimeters, at least 1 micrometer).
 - A plane is cut by ear clipping with the holes joined by bridges. Other surfaces are cut in the parameters (u, v) of the surface. The angle of a periodic surface is made continuous along each loop. A pole of a sphere or cone is a line in (u, v). It is cut into many points at one place.
 - A triangle is split where the surface leaves it by more than the tolerance. It is also split where the normal turns by more than the angle.
 - The points of the boundary never move.
@@ -181,6 +181,7 @@ The reader is the crate `kadakas-step`. It uses the public knowledge of the form
 - `tessellated` lists the faces and triangles by kind of surface.
 - `products`, `instances`, `length_unit_mm`, `unit_from_file`, `tolerance_mm`, `angle_deg` and `welded_vertices` say what was done.
 - `length_unit_mm` has one value for each unit in the file.
+- A color of a surface wins over the color of a curve. An overriding style wins over the style it overrides, in any order of the file. A style for one instance of an item is not applied to all instances, and the report counts it as skipped.
 - `report.exact` says how many meshes keep their exact data and why some do not. `report.curves` counts the 3D polylines.
 - A file with nothing to read is refused with `mesh_unsupported` or `mesh_empty` and the reasons. Damaged files give `mesh_truncated` or `mesh_malformed`.
 
@@ -189,11 +190,16 @@ The reader is the crate `kadakas-step`. It uses the public knowledge of the form
 A STEP file is not trusted. These limits hold:
 
 - values nest to 48 levels, and the file has at most 5 million entities
-- file size, vertices, triangles and memory have the limits of the other mesh formats
+- the parser stops at the entity limit and at an estimate of its memory (3 GiB), before the file is parsed in full
+- a STEP file has at most 128 MiB. A parsed file takes about 18 times its size in memory: a file of 20 MB took 365 MB. The other formats allow 512 MiB
+- vertices, triangles and memory have the limits of the other mesh formats
 - the degree and the control points are limited as above
-- a curve has at most 20,000 points, and an assembly has at most 32 levels
+- a curve has at most 200,000 points, and an assembly has at most 32 levels
+- an assembly has at most 20,000 instances. Every use of a product counts, also in a product that has no shape
+- the copies of mapped items are counted before they are made
+- a counter of work (400 million steps) stops files that ask for much time and make little output. Faces that give no triangles count too. The error is `mesh_too_much_work`
 
-References that point to themselves end. Numbers that are not finite or larger than 1e12 are not used. The tests cut files at every place, damage bytes, make cycles and use huge counts.
+References that point to themselves end. Numbers that are not finite or larger than 1e12 are not used. A number that the file defines twice uses the first definition, and a note counts these. The tests cut files in many places, damage bytes, make cycles and use huge counts.
 
 ### Tests
 

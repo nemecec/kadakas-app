@@ -360,6 +360,8 @@ pub struct StepFile {
     /// The text of the header section, without `HEADER;` and `ENDSEC;`.
     pub header: String,
     pub entities: Vec<Entity>,
+    /// Entity numbers that the file defines more than once. The first definition is kept.
+    pub duplicates: Vec<u64>,
 }
 
 impl StepFile {
@@ -416,7 +418,14 @@ struct Parser<'a> {
     s: &'a str,
     i: usize,
     depth: usize,
+    /// Estimated bytes that the parsed values take in memory.
+    cost: u64,
 }
+
+/// Bytes that one value takes, about (the value itself and the share of its list).
+const VALUE_BYTES: u64 = 40;
+/// Bytes of an entity without its values.
+const ENTITY_BYTES: u64 = 96;
 
 impl Parser<'_> {
     fn peek(&self) -> Option<u8> {
@@ -493,6 +502,7 @@ impl Parser<'_> {
             return Err(format!("values are nested deeper than {MAX_DEPTH} levels"));
         }
         self.depth += 1;
+        self.cost += VALUE_BYTES;
         let r = self.value_inner();
         self.depth -= 1;
         r
@@ -601,19 +611,53 @@ impl Parser<'_> {
     }
 }
 
+/// The offset just after the `DATA;` of the first data section. Edition 3 files name the
+/// section: `DATA('name',('schema'));`.
+fn find_data(s: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(at) = s[from..].find("DATA") {
+        let start = from + at;
+        let before_ok = s[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+        let rest = &s[start + 4..];
+        let trimmed = rest.trim_start();
+        if before_ok {
+            if trimmed.starts_with(';') {
+                return Some(start + 4 + (rest.len() - trimmed.len()) + 1);
+            }
+            if trimmed.starts_with('(')
+                && let Some(end) = trimmed.find(");")
+            {
+                return Some(start + 4 + (rest.len() - trimmed.len()) + end + 2);
+            }
+        }
+        from = start + 4;
+    }
+    None
+}
+
 /// Reads a STEP physical file. It handles the header and the simple entity instances of the data section.
 pub fn parse(text: &str) -> Result<StepFile, String> {
+    parse_limited(text, MAX_ENTITIES, u64::MAX)
+}
+
+/// Like [`parse`], with the most entities and the most memory (an estimate, in bytes) that
+/// the parsed file may take. The reader stops at once when a limit is passed, so a hostile
+/// file cannot fill the memory before the limit is looked at.
+pub fn parse_limited(text: &str, max_entities: usize, max_memory: u64) -> Result<StepFile, String> {
     let header_start = text.find("HEADER;").ok_or("no HEADER section")? + "HEADER;".len();
     let header_end = text[header_start..]
         .find("ENDSEC;")
         .ok_or("HEADER is not closed")?
         + header_start;
-    let data_start =
-        text[header_end..].find("DATA;").ok_or("no DATA section")? + header_end + "DATA;".len();
+    let data_start = find_data(&text[header_end..]).ok_or("no DATA section")? + header_end;
     let mut p = Parser {
         s: text,
         i: data_start,
         depth: 0,
+        cost: 0,
     };
     let mut entities = Vec::new();
     loop {
@@ -624,8 +668,16 @@ pub fn parse(text: &str) -> Result<StepFile, String> {
         if p.i >= p.s.len() {
             return Err("unexpected end of file: ENDSEC is missing".into());
         }
-        if entities.len() >= MAX_ENTITIES {
-            return Err(format!("the file has more than {MAX_ENTITIES} entities"));
+        if entities.len() >= max_entities.min(MAX_ENTITIES) {
+            return Err(format!(
+                "the file has more than {} entities",
+                max_entities.min(MAX_ENTITIES)
+            ));
+        }
+        if p.cost > max_memory {
+            return Err(format!(
+                "the file needs more than {max_memory} bytes of memory to read"
+            ));
         }
         p.eat(b'#')?;
         let id: u64 = p
@@ -665,12 +717,28 @@ pub fn parse(text: &str) -> Result<StepFile, String> {
             (name, p.attr_list(id)?)
         };
         p.eat(b';')?;
+        p.cost += ENTITY_BYTES + name.len() as u64;
         entities.push(Entity { id, name, attrs });
     }
+    if p.cost > max_memory {
+        return Err(format!(
+            "the file needs more than {max_memory} bytes of memory to read"
+        ));
+    }
+    // A stable sort keeps the first definition of a number first.
     entities.sort_by_key(|e| e.id);
+    let mut duplicates = Vec::new();
+    entities.dedup_by(|later, first| {
+        let same = later.id == first.id;
+        if same && duplicates.last() != Some(&later.id) {
+            duplicates.push(later.id);
+        }
+        same
+    });
     Ok(StepFile {
         header: text[header_start..header_end].to_string(),
         entities,
+        duplicates,
     })
 }
 
@@ -858,7 +926,8 @@ mod tests {
         assert_eq!(
             StepFile {
                 header: String::new(),
-                entities: vec![]
+                entities: vec![],
+                duplicates: vec![],
             }
             .schemas(),
             Vec::<String>::new()
@@ -866,7 +935,8 @@ mod tests {
         assert_eq!(
             StepFile {
                 header: "FILE_SCHEMA".into(),
-                entities: vec![]
+                entities: vec![],
+                duplicates: vec![],
             }
             .schemas(),
             Vec::<String>::new()
@@ -912,5 +982,30 @@ mod tests {
             let file = format!("HEADER;\nENDSEC;\nDATA;\n{bad}\nENDSEC;");
             assert!(parse(&file).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn named_data_sections_duplicates_and_limits() {
+        let f = parse(
+            "HEADER;\nENDSEC;\nDATA('part',('AP242'));\n#1=A(1.);\n#1=B(2.);\n#2=C();\nENDSEC;",
+        )
+        .unwrap();
+        assert_eq!(f.entities.len(), 2);
+        assert_eq!(f.get(1).unwrap().name, "A");
+        assert_eq!(f.duplicates, vec![1]);
+        assert!(parse("HEADER;\nENDSEC;\nDATA ;\n#1=A();\nENDSEC;").is_ok());
+        assert!(parse("HEADER;\nENDSEC;\nMYDATA;\n#1=A();\nENDSEC;").is_err());
+        let many = "HEADER;\nENDSEC;\nDATA;\n#1=A();\n#2=A();\n#3=A();\nENDSEC;";
+        assert!(
+            parse_limited(many, 2, u64::MAX)
+                .unwrap_err()
+                .contains("more than 2")
+        );
+        assert!(
+            parse_limited(many, 9, 100)
+                .unwrap_err()
+                .contains("bytes of memory")
+        );
+        assert!(parse_limited(many, 9, 100_000).is_ok());
     }
 }

@@ -300,3 +300,67 @@ fn retessellate_refuses_bad_input() {
         Err(MeshError::Empty)
     ));
 }
+
+/// Planes must look away from the middle of the solid, bores must say that they are concave.
+fn check_info(e: &ExactSolid) -> (usize, usize) {
+    let lo = e
+        .vertices
+        .iter()
+        .fold(DVec3::splat(f64::INFINITY), |a, v| a.min(*v));
+    let hi = e
+        .vertices
+        .iter()
+        .fold(DVec3::splat(f64::NEG_INFINITY), |a, v| a.max(*v));
+    let mid = (lo + hi) / 2.0;
+    let info = e.info(100);
+    let (mut planes, mut concave) = (0, 0);
+    for f in info["list"].as_array().unwrap() {
+        if f["kind"] == "plane" {
+            let v = |k: &str| {
+                let a = f[k].as_array().unwrap();
+                DVec3::new(
+                    a[0].as_f64().unwrap(),
+                    a[1].as_f64().unwrap(),
+                    a[2].as_f64().unwrap(),
+                )
+            };
+            assert!(v("normal").dot(v("point") - mid) > 0.0, "{f}");
+            planes += 1;
+        }
+        if f["concave"] == true {
+            concave += 1;
+        }
+    }
+    (planes, concave)
+}
+
+#[test]
+fn info_after_a_mirror_names_the_same_normals_and_bores() {
+    let mirror = DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0));
+    let mirror_z = DAffine3::from_cols(DVec3::X, DVec3::Y, -DVec3::Z, DVec3::new(0.0, 0.0, 5.0));
+    for (file, planes, concave) in [
+        ("box.step", 6, 0),
+        ("cylinder.step", 2, 0),
+        ("plate_hole.step", 6, 1),
+    ] {
+        let imp = load(file, &StepOptions::default());
+        let e = exact_of(&imp);
+        assert_eq!(check_info(e), (planes, concave), "{file}");
+        for m in [mirror, mirror_z] {
+            let moved = e.transformed(&m).unwrap();
+            assert_eq!(check_info(&moved), (planes, concave), "{file} mirrored");
+        }
+    }
+}
+
+#[test]
+fn a_face_that_cannot_be_cut_any_more_does_not_open_a_closed_solid() {
+    let imp = load("box.step", &StepOptions::default());
+    let mut e = exact_of(&imp).clone();
+    // A loop of two edges bounds nothing: the face gives no triangles.
+    e.faces[0].loops[0].items.truncate(2);
+    match retessellate(&e, 0.1, 15.0, &Limits::default()) {
+        Err(MeshError::Unsupported(why)) => assert!(why.contains("old mesh is kept"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}

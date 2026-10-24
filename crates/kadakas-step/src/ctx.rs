@@ -56,6 +56,8 @@ pub struct Ctx<'a> {
     pub limits: &'a StepLimits,
     /// The chord tolerance in file units of the representation that is being read.
     pub tol: f64,
+    /// The tolerance of the first representation, in millimeters.
+    pub tol_mm: Option<f64>,
     /// The angle step in radians.
     pub angle: f64,
     /// Radians in one plane angle unit of the representation that is being read.
@@ -71,6 +73,15 @@ pub struct Ctx<'a> {
     /// Triangles and vertices made so far, for the limits.
     pub triangles: u64,
     pub vertices: u64,
+    /// Steps of work done so far (entities visited, points made, curve and surface evaluations).
+    /// It is a count, not a clock, so a run is the same everywhere.
+    pub work: u64,
+    /// Bytes of exact data that copies of geometry hold, for the memory limit.
+    pub extra_bytes: u64,
+    /// Bodies that copies have made (instances after the first, mapped items).
+    pub bodies_copied: u64,
+    /// Representations that a mapped item has used.
+    pub mapped_used: HashSet<u64>,
 }
 
 const MAX_NOTES: usize = 100;
@@ -87,6 +98,7 @@ impl<'a> Ctx<'a> {
             opts,
             limits,
             tol: 0.1,
+            tol_mm: None,
             angle: 0.3,
             angle_unit: 1.0,
             curves: HashMap::new(),
@@ -97,6 +109,10 @@ impl<'a> Ctx<'a> {
             unit_from_file: true,
             triangles: 0,
             vertices: 0,
+            work: 0,
+            extra_bytes: 0,
+            bodies_copied: 0,
+            mapped_used: HashSet::new(),
         }
     }
 
@@ -106,6 +122,7 @@ impl<'a> Ctx<'a> {
 
     /// The entity with this number, marked as used.
     pub fn ent(&mut self, id: u64) -> R<&'a Entity> {
+        self.charge(1)?;
         let file = self.file;
         match self.position(id) {
             Some(i) => {
@@ -189,6 +206,41 @@ impl<'a> Ctx<'a> {
         (used_n, used, unseen)
     }
 
+    /// Adds steps of work and stops the import at the limit.
+    pub fn charge(&mut self, n: u64) -> R<()> {
+        self.work = self.work.saturating_add(n);
+        if self.work > self.limits.max_work {
+            return Err(Fail::Abort(MeshError::TooMuchWork {
+                units: self.work,
+                limit: self.limits.max_work,
+            }));
+        }
+        Ok(())
+    }
+
+    /// Charges a copy of geometry (an instance, a mapped item) before it is made: its vertices
+    /// and triangles, and the exact data it holds, count against the limits.
+    pub fn charge_copy(
+        &mut self,
+        vertices: u64,
+        triangles: u64,
+        bodies: u64,
+        payload: u64,
+    ) -> R<()> {
+        self.charge(vertices + triangles + bodies * 64 + payload / 16)?;
+        self.bodies_copied += bodies;
+        let cap = self.limits.max_instances as u64 * 2;
+        if self.bodies_copied > cap {
+            return Err(Fail::Abort(MeshError::TooManyParts {
+                count: self.bodies_copied,
+                limit: cap,
+            }));
+        }
+        // The exact data takes about three times its estimate in memory.
+        self.extra_bytes = self.extra_bytes.saturating_add(payload.saturating_mul(3));
+        self.count(vertices, triangles)
+    }
+
     /// Adds triangles to the count and checks the limits.
     pub fn count(&mut self, vertices: u64, triangles: u64) -> R<()> {
         self.vertices += vertices;
@@ -206,7 +258,8 @@ impl<'a> Ctx<'a> {
                 limit: l.max_vertices,
             }));
         }
-        let need = kadakas_meshio::Limits::memory_of(self.vertices, self.triangles);
+        let need = kadakas_meshio::Limits::memory_of(self.vertices, self.triangles)
+            .saturating_add(self.extra_bytes);
         if need > l.max_memory {
             return Err(Fail::Abort(MeshError::TooMuchMemory {
                 bytes: need,

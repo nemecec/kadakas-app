@@ -435,12 +435,11 @@ fn the_payload_survives_a_save_and_a_load() {
     assert!(again.contains("from_the_future"));
 }
 
-/// A flat bicubic patch with n x n control points: the exact data is big.
-fn big_patch(n: usize) -> String {
-    let mut out = String::from(
-        "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n",
-    );
-    let mut id = 0;
+/// The entities of a flat bicubic patch with n x n control points, from entity number `base`
+/// on: the exact data is big.
+fn patch_body(n: usize, base_id: usize, name: &str) -> String {
+    let mut out = String::new();
+    let mut id = base_id;
     let mut rows = Vec::new();
     for i in 0..n {
         let mut row = Vec::new();
@@ -456,8 +455,6 @@ fn big_patch(n: usize) -> String {
         rows.push(format!("({})", row.join(",")));
     }
     let grid = rows.join(",");
-    let mut knots = vec![3.0f64; 1];
-    knots.clear();
     let mult = format!("(4,{},4)", "1,".repeat(n - 4).trim_end_matches(','));
     let kn = format!(
         "(0.,{},{}.)",
@@ -500,10 +497,18 @@ fn big_patch(n: usize) -> String {
     }
     let l = base + 20;
     out.push_str(&format!(
-        "#{l}=EDGE_LOOP('',({}));\n#{}=FACE_OUTER_BOUND('',#{l},.T.);\n#{}=ADVANCED_FACE('',(#{}),#{surf},.T.);\n#{}=OPEN_SHELL('',(#{}));\n#{}=SHELL_BASED_SURFACE_MODEL('patch',(#{}));\nENDSEC;\nEND-ISO-10303-21;\n",
+        "#{l}=EDGE_LOOP('',({}));\n#{}=FACE_OUTER_BOUND('',#{l},.T.);\n#{}=ADVANCED_FACE('',(#{}),#{surf},.T.);\n#{}=OPEN_SHELL('',(#{}));\n#{}=SHELL_BASED_SURFACE_MODEL('{name}',(#{}));\n",
         oe.join(","), l + 1, l + 2, l + 1, l + 3, l + 2, l + 4, l + 3
     ));
     out
+}
+
+/// A whole file with one patch.
+fn big_patch(n: usize) -> String {
+    format!(
+        "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n{}ENDSEC;\nEND-ISO-10303-21;\n",
+        patch_body(n, 0, "patch")
+    )
 }
 
 #[test]
@@ -567,4 +572,85 @@ fn hostile_files_are_refused_cleanly() {
     let e = run("deep.step", deep);
     assert_eq!(e.reason, Some("mesh_malformed"));
     assert!(e.message.contains("nested"));
+}
+
+#[test]
+fn join_over_the_cap_keeps_the_triangles_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    // Three patches of 250 x 250 control points: each fits the cap of an object (3.7 MB of
+    // estimate), the three together do not.
+    let mut text = String::from(
+        "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n",
+    );
+    for k in 0..3 {
+        text.push_str(&patch_body(250, k * 100_000, &format!("patch{k}")));
+    }
+    text.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
+    let p = dir.path().join("three.step");
+    std::fs::write(&p, text).unwrap();
+    let path = p.display().to_string();
+    let mut s = Session::with_sequential_ids();
+    let r = ok(&mut s, "import.file", json!({"path": path}));
+    assert_eq!(r["imported"], 3, "{r}");
+    assert_eq!(r["report"]["exact"]["kept_objects"], 3);
+    let mut s = Session::with_sequential_ids();
+    let r = ok(
+        &mut s,
+        "import.file",
+        json!({"path": path, "options": {"join": true}}),
+    );
+    assert_eq!(r["imported"], 1, "the import is not refused: {r}");
+    assert_eq!(r["report"]["exact"]["kept_objects"], 0);
+    let why = r["report"]["exact"]["without"][0]["reason"]
+        .as_str()
+        .unwrap();
+    assert!(
+        why.contains("joined parts") && why.contains("only the triangles"),
+        "{why}"
+    );
+    assert!(first_mesh(&s).1.exact.is_none());
+}
+
+#[test]
+fn a_payload_of_a_later_version_is_kept_reported_and_never_stops_the_load() {
+    let mut s = Session::with_sequential_ids();
+    import(&mut s, "plate_hole.step", json!({}));
+    let text = serde_json::to_string(s.editor.doc()).unwrap();
+    // A later program wrote version 2, with a kind of surface that this one does not know.
+    let mut v: Value = serde_json::from_str(&text).unwrap();
+    fn later(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                if m.contains_key("mesh_hash") {
+                    m.insert("version".into(), json!(2));
+                    m["faces"][0]["surface"] = json!({"kind": "helicoid", "pitch": 3});
+                }
+                m.values_mut().for_each(later);
+            }
+            Value::Array(a) => a.iter_mut().for_each(later),
+            _ => {}
+        }
+    }
+    later(&mut v);
+    let doc: Document = serde_json::from_value(v).unwrap();
+    let mut s = Session::with_sequential_ids();
+    s.replace_document(doc);
+    let (id, m) = first_mesh(&s);
+    assert!(m.exact.is_none() && m.exact_unusable.is_some());
+    let r = ok(&mut s, "mesh3d.exact_info", json!({"id": id.0}));
+    assert_eq!(r["state"], "unusable");
+    assert!(r["reason"].as_str().unwrap().contains("version 2"));
+    let e = err(
+        &mut s,
+        "mesh3d.retessellate",
+        json!({"id": id.0, "tolerance": 0.1}),
+    );
+    assert!(
+        format!("{:?}", e.details).contains("exact_unusable"),
+        "{:?}",
+        e.details
+    );
+    // The document still writes it as it was read.
+    let again = serde_json::to_string(s.editor.doc()).unwrap();
+    assert!(again.contains("helicoid"));
 }

@@ -435,6 +435,7 @@ mod tests {
             triangles: vec![[0, 1, 2]],
             color: None,
             exact: None,
+            exact_unusable: None,
         };
         let (out, _) = run(Shape::Mesh3d(Box::new(mesh)), None);
         let Shape::Mesh3d(m) = &out[0].shape else {

@@ -960,6 +960,7 @@ mod tests {
                 triangles: vec![[0, 1, 2]],
                 color: None,
                 exact: None,
+                exact_unusable: None,
             }))
         };
         assert_eq!(run(mesh(50.0), &r).0.len(), 1);

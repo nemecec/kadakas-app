@@ -34,6 +34,7 @@ fn cube_mesh() -> Mesh3d {
             .collect(),
         color: Some(Color([200, 10, 10, 255])),
         exact: None,
+        exact_unusable: None,
     }
 }
 
@@ -147,6 +148,7 @@ fn a_refusal_changes_nothing() {
             triangles: t,
             color: None,
             exact: None,
+            exact_unusable: None,
         })),
     );
     let before = ed.doc().clone();

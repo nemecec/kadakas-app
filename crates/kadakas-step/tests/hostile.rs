@@ -51,11 +51,19 @@ fn a_file_cut_anywhere_never_panics() {
         cut += 37;
     }
     // A file that stops inside the data section is a truncation.
-    let half = &t[..t.find("ENDSEC;\nEND").unwrap()];
+    // Lines may end with CRLF in a checkout: cut at the last end of the data section.
+    let half = &t[..t.rfind("ENDSEC;").unwrap()];
     assert!(matches!(
         read(half.as_bytes(), &StepOptions::default()),
         Err(MeshError::Truncated { .. })
     ));
+    let crlf = t.replace('\n', "\r\n");
+    let half = &crlf[..crlf.rfind("ENDSEC;").unwrap()];
+    assert!(matches!(
+        read(half.as_bytes(), &StepOptions::default()),
+        Err(MeshError::Truncated { .. })
+    ));
+    assert!(read(crlf.as_bytes(), &StepOptions::default()).is_ok());
 }
 
 #[test]
@@ -143,8 +151,18 @@ fn cycles_in_references_end() {
             selfref.push('\n');
         }
     }
+    // The part is its own child: the usage is skipped, the file is still read, nothing loops.
     let r = read(selfref.as_bytes(), &StepOptions::default());
-    assert!(r.is_ok() || r.is_err());
+    match r {
+        Ok(i) => assert!(!i.set.parts.is_empty() && i.report.entities_read > 0),
+        Err(e) => assert!(
+            matches!(
+                e,
+                MeshError::TooManyParts { .. } | MeshError::Unsupported(_) | MeshError::Empty
+            ),
+            "{e}"
+        ),
+    }
     // A mapped item that maps its own representation.
     let r = run(
         "#1=AXIS2_PLACEMENT_3D('',#2,$,$);\n#2=CARTESIAN_POINT('',(0.,0.,0.));\n\

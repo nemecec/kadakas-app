@@ -14,6 +14,10 @@ pub enum MeshError {
     TooMuchMemory { bytes: u64, limit: u64 },
     #[error("the file has {count} parts, more than the limit of {limit}")]
     TooManyParts { count: u64, limit: u64 },
+    #[error(
+        "reading the file needs more work than the limit allows: {units} steps, the limit is {limit}"
+    )]
+    TooMuchWork { units: u64, limit: u64 },
     #[error("{what} ends too soon: found {have}, needed {need}")]
     Truncated { what: String, have: u64, need: u64 },
     #[error("{0}")]
@@ -47,6 +51,7 @@ impl MeshError {
             MeshError::TooManyVertices { .. } => "mesh_too_many_vertices",
             MeshError::TooMuchMemory { .. } => "mesh_too_much_memory",
             MeshError::TooManyParts { .. } => "mesh_too_many_parts",
+            MeshError::TooMuchWork { .. } => "mesh_too_much_work",
             MeshError::Truncated { .. } => "mesh_truncated",
             MeshError::Malformed(_) => "mesh_malformed",
             MeshError::NotFinite { .. } => "mesh_not_finite",
@@ -66,6 +71,7 @@ impl MeshError {
                 | MeshError::TooManyVertices { .. }
                 | MeshError::TooMuchMemory { .. }
                 | MeshError::TooManyParts { .. }
+                | MeshError::TooMuchWork { .. }
         )
     }
 }
@@ -80,6 +86,7 @@ impl MeshError {
             | MeshError::TooManyVertices { count, limit }
             | MeshError::TooManyParts { count, limit } => json!({"count": count, "limit": limit}),
             MeshError::TooMuchMemory { bytes, limit } => json!({"bytes": bytes, "limit": limit}),
+            MeshError::TooMuchWork { units, limit } => json!({"units": units, "limit": limit}),
             MeshError::Truncated { have, need, .. } => json!({"have": have, "need": need}),
             MeshError::BadIndex { index, count, .. } => json!({"index": index, "count": count}),
             MeshError::OutOfRange { value, limit, .. } => json!({"value": value, "limit": limit}),

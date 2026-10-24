@@ -245,6 +245,7 @@ fn mesh(n: usize) -> Mesh3d {
         triangles,
         color: None,
         exact: None,
+        exact_unusable: None,
     }
 }
 

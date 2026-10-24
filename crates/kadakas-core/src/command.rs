@@ -1301,6 +1301,8 @@ struct Tx<'a> {
     /// once, at its end, so a command that changes only data (`SetData`) does not scan all objects
     /// each time.
     batch_depth: usize,
+    /// Copies that lost their exact data, because the document passes its cap (`exact`).
+    exact_dropped: usize,
 }
 
 impl<'a> Tx<'a> {
@@ -1312,6 +1314,7 @@ impl<'a> Tx<'a> {
             added_set: HashSet::new(),
             removed: Vec::new(),
             batch_depth: 0,
+            exact_dropped: 0,
         }
     }
 
@@ -2675,7 +2678,16 @@ impl Editor {
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            body(&mut tx, &mut out).and_then(|()| tx.check_result())
+            body(&mut tx, &mut out).and_then(|()| {
+                if tx.exact_dropped > 0 {
+                    out.notes.push(format!(
+                        "{} copies keep their triangles only: the exact data of the document would pass the limit of {} bytes",
+                        tx.exact_dropped,
+                        crate::exact::MAX_DOCUMENT_BYTES
+                    ));
+                }
+                tx.check_result()
+            })
         }));
         let result = match ran {
             Ok(r) => r,

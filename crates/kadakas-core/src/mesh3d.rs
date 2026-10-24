@@ -14,20 +14,89 @@ use crate::model::{Color, MAX_COORD};
 pub const MAX_VERTICES: usize = 4_000_000;
 pub const MAX_TRIANGLES: usize = 8_000_000;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mesh3d {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub vertices: Vec<DVec3>,
     /// Three vertex indices per triangle, counterclockwise seen from outside.
     pub triangles: Vec<[u32; 3]>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
     /// The exact surfaces that the triangles were cut from (a STEP import). The triangles stay
     /// the source for drawing and for every tool; see [`crate::exact`]. A tool that edits the
     /// triangles does not need to know: the payload is stale then (`exact_state`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exact: Option<Box<ExactSolid>>,
+    /// A payload that this program cannot use (a newer version, an unknown kind of surface,
+    /// damaged data). It is kept as it is, written back unchanged and never touched by an edit.
+    /// At most one of `exact` and `exact_unusable` is set.
+    pub exact_unusable: Option<Box<UnusableExact>>,
+}
+
+/// A payload that the program does not understand, as it came from the file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnusableExact {
+    pub raw: serde_json::Value,
+    pub reason: String,
+}
+
+/// The form of a mesh in the file. The payload is read as plain JSON first, so a payload that
+/// the program does not understand never makes the document unreadable.
+#[derive(Deserialize)]
+struct Wire {
+    #[serde(default)]
+    name: String,
+    vertices: Vec<DVec3>,
+    triangles: Vec<[u32; 3]>,
+    #[serde(default)]
+    color: Option<Color>,
+    #[serde(default)]
+    exact: Option<serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for Mesh3d {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let w = Wire::deserialize(d)?;
+        let (exact, exact_unusable) = match w.exact {
+            None | Some(serde_json::Value::Null) => (None, None),
+            Some(raw) => match ExactSolid::from_json(&raw) {
+                Ok(e) => (Some(Box::new(e)), None),
+                Err(reason) => (None, Some(Box::new(UnusableExact { raw, reason }))),
+            },
+        };
+        Ok(Mesh3d {
+            name: w.name,
+            vertices: w.vertices,
+            triangles: w.triangles,
+            color: w.color,
+            exact,
+            exact_unusable,
+        })
+    }
+}
+
+impl Serialize for Mesh3d {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let payload = self.exact.is_some() || self.exact_unusable.is_some();
+        let n = 2
+            + usize::from(!self.name.is_empty())
+            + usize::from(self.color.is_some())
+            + usize::from(payload);
+        let mut st = s.serialize_struct("Mesh3d", n)?;
+        if !self.name.is_empty() {
+            st.serialize_field("name", &self.name)?;
+        }
+        st.serialize_field("vertices", &self.vertices)?;
+        st.serialize_field("triangles", &self.triangles)?;
+        if let Some(c) = &self.color {
+            st.serialize_field("color", c)?;
+        }
+        if let Some(e) = &self.exact {
+            st.serialize_field("exact", e)?;
+        } else if let Some(u) = &self.exact_unusable {
+            st.serialize_field("exact", &u.raw)?;
+        }
+        st.end()
+    }
 }
 
 impl Mesh3d {
@@ -130,11 +199,6 @@ impl Mesh3d {
         if self.triangles.iter().any(|t| t.iter().any(|&i| i >= n)) {
             return Some("a triangle refers to a vertex that does not exist".into());
         }
-        if let Some(e) = &self.exact
-            && let Err(why) = e.validate()
-        {
-            return Some(format!("the exact data is not valid: {why}"));
-        }
         None
     }
 
@@ -177,6 +241,7 @@ mod tests {
             triangles: vec![[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]],
             color: None,
             exact: None,
+            exact_unusable: None,
         }
     }
 
@@ -278,10 +343,54 @@ mod tests {
         assert_eq!(m.exact_state(), Some(State::Stale));
         m.translate_xy(DVec2::new(1.0, 1.0));
         assert_eq!(m.exact_state(), Some(State::Stale));
-        // A payload with a damaged index is a problem of the mesh.
-        let mut bad = with_exact();
-        bad.exact.as_mut().unwrap().edges[0].end = 99;
-        assert!(bad.problem().unwrap().contains("exact data"));
+        // A payload with a damaged index does not make the mesh unreadable: it is unusable.
+        let mut v = serde_json::to_value(with_exact()).unwrap();
+        v["exact"]["edges"][0]["end"] = serde_json::json!(99);
+        let bad: Mesh3d = serde_json::from_value(v.clone()).unwrap();
+        assert!(bad.exact.is_none() && bad.problem().is_none());
+        assert!(
+            bad.exact_unusable
+                .as_ref()
+                .unwrap()
+                .reason
+                .contains("not valid")
+        );
+        assert_eq!(serde_json::to_value(&bad).unwrap(), v);
+    }
+
+    #[test]
+    fn a_payload_of_a_later_version_loads_stays_and_is_not_touched() {
+        let mut v = serde_json::to_value(with_exact()).unwrap();
+        v["exact"]["version"] = serde_json::json!(2);
+        v["exact"]["faces"][0]["surface"] = serde_json::json!({"kind": "helicoid", "pitch": 3});
+        let mut m: Mesh3d = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(m.exact.is_none() && m.exact_state().is_none() && m.problem().is_none());
+        let u = m.exact_unusable.as_ref().unwrap();
+        assert!(u.reason.contains("version 2"), "{}", u.reason);
+        // Edits of the triangles leave it as it is, and the file writes it back unchanged.
+        m.translate_xy(DVec2::new(5.0, 5.0));
+        assert!(
+            m.transform(&DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)))
+                .is_none()
+        );
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["exact"], v["exact"]);
+        // A payload of an unknown kind in the version that is known is unusable too.
+        let mut w = v.clone();
+        w["exact"]["version"] = serde_json::json!(1);
+        let m: Mesh3d = serde_json::from_value(w.clone()).unwrap();
+        assert!(
+            m.exact_unusable
+                .as_ref()
+                .unwrap()
+                .reason
+                .contains("not understood")
+        );
+        assert_eq!(serde_json::to_value(&m).unwrap()["exact"], w["exact"]);
+        // A payload that is not an object also loads.
+        w["exact"] = serde_json::json!("junk");
+        let m: Mesh3d = serde_json::from_value(w).unwrap();
+        assert!(m.exact_unusable.is_some());
     }
 
     #[test]

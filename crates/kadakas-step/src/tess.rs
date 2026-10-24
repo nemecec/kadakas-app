@@ -51,22 +51,54 @@ impl Builder {
         i
     }
 
+    /// Is every edge of the pending triangles used once in each direction?
+    fn pending_is_closed(&self) -> bool {
+        if self.pending.is_empty() {
+            return false;
+        }
+        let mut e: HashMap<(u32, u32), (u32, u32)> = HashMap::new();
+        for (_, t) in &self.pending {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                let c = e.entry((a.min(b), a.max(b))).or_default();
+                if a < b {
+                    c.0 += 1;
+                } else {
+                    c.1 += 1;
+                }
+            }
+        }
+        e.values().all(|c| *c == (1, 1))
+    }
+
     /// Moves the triangles of the faces since the last call into the groups. For a closed
-    /// shell, `outward` says that the volume must be positive (false for a void). A shell
-    /// with the other sign is turned inside out. Returns true when it was turned.
+    /// shell, `outward` says that the volume must be positive (false for a void). A closed
+    /// shell with the other sign is turned inside out, and the result is true. A shell with
+    /// a face missing is never turned: its volume means nothing.
     pub fn commit(&mut self, outward: Option<bool>) -> bool {
         let mut turned = false;
-        if let Some(out) = outward {
+        if let Some(out) = outward
+            && self.pending_is_closed()
+        {
+            // The volume is measured from the middle of the shell, so a solid far from the
+            // origin is not misjudged by rounding.
+            let mut c = DVec3::ZERO;
+            for (_, t) in &self.pending {
+                for i in t {
+                    c += self.positions[*i as usize];
+                }
+            }
+            c /= (3 * self.pending.len()) as f64;
             let vol: f64 = self
                 .pending
                 .iter()
                 .map(|(_, t)| {
-                    let (a, b, c) = (
-                        self.positions[t[0] as usize],
-                        self.positions[t[1] as usize],
-                        self.positions[t[2] as usize],
+                    let (a, b, d) = (
+                        self.positions[t[0] as usize] - c,
+                        self.positions[t[1] as usize] - c,
+                        self.positions[t[2] as usize] - c,
                     );
-                    a.dot(b.cross(c))
+                    a.dot(b.cross(d))
                 })
                 .sum();
             if (vol > 0.0) != out && vol != 0.0 {
@@ -431,6 +463,18 @@ pub struct TessParams {
     pub triangles_left: usize,
 }
 
+/// What a step of the job costs: output that is kept, or work that is done.
+#[derive(Clone, Copy, Debug)]
+pub enum Cost {
+    /// Vertices and triangles that were made.
+    Output(u64, u64),
+    /// Steps of work (see `Ctx::work`).
+    Work(u64),
+}
+
+/// The most points of the boundary of one face.
+pub const MAX_FACE_POINTS: usize = crate::mesh2d::MAX_POLYGON_POINTS;
+
 /// The result of cutting a solid.
 #[derive(Default)]
 pub struct Tessellation {
@@ -450,7 +494,7 @@ pub struct Tessellation {
 pub fn tessellate(
     solid: &ExactSolid,
     p: &TessParams,
-    spend: &mut dyn FnMut(u64, u64) -> Result<(), MeshError>,
+    spend: &mut dyn FnMut(Cost) -> Result<(), MeshError>,
 ) -> Result<Tessellation, MeshError> {
     let mut t = Tessellator {
         solid,
@@ -492,7 +536,7 @@ struct Tessellator<'a> {
     edges: HashMap<u32, Arc<Vec<Pt>>>,
     notes: Vec<String>,
     kinds: BTreeMap<String, (u64, u64)>,
-    spend: &'a mut dyn FnMut(u64, u64) -> Result<(), MeshError>,
+    spend: &'a mut dyn FnMut(Cost) -> Result<(), MeshError>,
     used: usize,
 }
 
@@ -503,14 +547,19 @@ impl Tessellator<'_> {
 
     fn spend(&mut self, vertices: u64, triangles: u64) -> Result<(), TErr> {
         self.used += triangles as usize;
-        (self.spend)(vertices, triangles)?;
+        (self.spend)(Cost::Output(vertices, triangles))?;
+        Ok(())
+    }
+
+    fn work(&mut self, n: u64) -> Result<(), TErr> {
+        (self.spend)(Cost::Work(n))?;
         Ok(())
     }
 
     /// The points of an edge from its start vertex to its end vertex, cut once.
-    fn edge_points(&mut self, ei: u32) -> Arc<Vec<Pt>> {
+    fn edge_points(&mut self, ei: u32) -> Result<Arc<Vec<Pt>>, TErr> {
         if let Some(p) = self.edges.get(&ei) {
-            return p.clone();
+            return Ok(p.clone());
         }
         let e = &self.solid.edges[ei as usize];
         let sp = self.solid.vertices[e.start as usize];
@@ -527,6 +576,12 @@ impl Tessellator<'_> {
             ),
             None => vec![sp, ep],
         };
+        // A spline, a polyline or a composite curve is searched for its ends: that costs.
+        let search = match &e.curve {
+            Some(Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. }) | None => 0,
+            Some(_) => 4_000,
+        };
+        self.work(pts.len() as u64 + search)?;
         let n = pts.len();
         let out: Vec<Pt> = pts
             .into_iter()
@@ -544,30 +599,46 @@ impl Tessellator<'_> {
             .collect();
         let out = Arc::new(out);
         self.edges.insert(ei, out.clone());
-        out
+        Ok(out)
     }
 
-    /// The points of a loop in order. The last point is not the first again.
-    fn loop_points(&mut self, items: &[LoopItem]) -> Vec<Pt> {
+    /// The points of a loop in order. The last point is not the first again. `total` counts the
+    /// points of the face so far: a face over the limit is refused before the points are made.
+    fn loop_points(&mut self, items: &[LoopItem], total: &mut usize) -> Result<Vec<Pt>, TErr> {
         let mut out: Vec<Pt> = Vec::new();
         for it in items {
             match it {
                 LoopItem::Edge { edge, forward } => {
-                    let poly = self.edge_points(*edge);
+                    let poly = self.edge_points(*edge)?;
                     let n = poly.len();
+                    *total += n - 1;
+                    if *total > MAX_FACE_POINTS {
+                        return skip(format!(
+                            "the boundary of the face has more than {MAX_FACE_POINTS} points"
+                        ));
+                    }
+                    self.work(n as u64)?;
                     if *forward {
                         out.extend(poly[..n - 1].iter().copied());
                     } else {
                         out.extend(poly[1..].iter().rev().copied());
                     }
                 }
-                LoopItem::Vertex { vertex } => out.push((
-                    self.solid.vertices[*vertex as usize],
-                    VKey::Vertex(u64::from(*vertex)),
-                )),
+                LoopItem::Vertex { vertex } => {
+                    *total += 1;
+                    if *total > MAX_FACE_POINTS {
+                        return skip(format!(
+                            "the boundary of the face has more than {MAX_FACE_POINTS} points"
+                        ));
+                    }
+                    out.push((
+                        self.solid.vertices[*vertex as usize],
+                        VKey::Vertex(u64::from(*vertex)),
+                    ));
+                }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Cuts one face and adds its triangles to the pending triangles of the mesh.
@@ -575,9 +646,11 @@ impl Tessellator<'_> {
         let solid = self.solid;
         let f = &solid.faces[fi];
         let (face, same_sense, flip, color) = (fi as u64, f.same_sense, f.flip, f.color);
+        self.work(50)?;
         let mut loops: Vec<(Vec<Pt>, bool)> = Vec::new();
+        let mut total = 0usize;
         for l in &f.loops {
-            let pts = self.loop_points(&l.items);
+            let pts = self.loop_points(&l.items, &mut total)?;
             loops.push((pts, l.outer));
         }
         if loops.is_empty() {
@@ -599,6 +672,7 @@ impl Tessellator<'_> {
             if pts.len() < 3 {
                 continue;
             }
+            self.work(pts.len() as u64 * surface.uv_cost())?;
             match to_uv(surface, pts, &mut hint, self.p.angle) {
                 Some(l) => uvloops.push((l, *outer)),
                 None => return skip("a boundary loop cannot be placed on the surface"),
@@ -843,9 +917,14 @@ impl Tessellator<'_> {
             angle: self.p.angle * 1.1,
             max_triangles: max_tris.max(8),
         };
+        let seed = crate::mesh2d::seed_cost(&points, &loop_ix);
+        let n = points.uv.len() as u64;
+        // Ear clipping is quadratic in the worst case.
+        self.work(n * 10 + n * n / 16 + seed.min(crate::mesh2d::SEED_MAX_COST))?;
         let Some((tris, truncated)) = mesh_face(&mut points, &loop_ix, &refine) else {
             return skip("the outline of the face cannot be cut into triangles");
         };
+        self.work(tris.len() as u64 * 40 + points.uv.len() as u64 * 10)?;
         if truncated {
             self.notes.push(format!(
                 "a face on a {kind} was cut at the limit of {} triangles, so the tolerance is not met there",

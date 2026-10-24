@@ -49,7 +49,10 @@ meshio-ui-step-tolerance-auto = Tolerance from the size of the part
 meshio-ui-step-tolerance = Tolerance (mm)
 meshio-ui-step-per-product = One mesh for each product (off: one for each body)
 meshio-ui-step-keep-exact = Keep the exact surfaces next to the triangles
-meshio-ui-exact-kept = Exact data kept: { $faces } faces ({ $kinds })
+meshio-ui-exact-kept = Exact data kept: { $faces } { $faces ->
+    [one] face
+   *[other] faces
+} ({ $kinds })
 meshio-ui-exact-stale = The triangles were edited after the import. The exact data no longer fits them.
 meshio-ui-kind-plane = plane
 meshio-ui-kind-cylinder = cylinder
@@ -59,3 +62,4 @@ meshio-ui-kind-torus = torus
 meshio-ui-kind-revolution = revolved surface
 meshio-ui-kind-extrusion = extruded surface
 meshio-ui-kind-spline = spline surface
+meshio-ui-exact-unusable = Exact data is kept but this program cannot use it: { $reason }

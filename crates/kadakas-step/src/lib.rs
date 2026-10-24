@@ -40,7 +40,17 @@ pub struct StepLimits {
     pub max_face_triangles: usize,
     pub max_assembly_depth: usize,
     pub max_instances: usize,
+    /// Steps of work (see `Ctx::work`). One step is about a curve or surface evaluation.
+    pub max_work: u64,
+    /// The largest STEP file in bytes. The parsed file takes about 18 times its size in memory
+    /// (measured: a file of 20 MB took 365 MB), so this is below the general file limit.
+    pub max_bytes: u64,
+    /// The most memory, estimated, that the parsed entities may take.
+    pub max_parse_memory: u64,
 }
+
+/// The largest STEP file that is read by default.
+pub const DEFAULT_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 impl Default for StepLimits {
     fn default() -> Self {
@@ -51,6 +61,9 @@ impl Default for StepLimits {
             max_face_triangles: 200_000,
             max_assembly_depth: 32,
             max_instances: 20_000,
+            max_work: 400_000_000,
+            max_bytes: DEFAULT_MAX_BYTES,
+            max_parse_memory: 3 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -218,10 +231,11 @@ fn unused_reason(name: &str) -> &'static str {
 
 /// Reads a STEP file into parts in millimeters, Z up.
 pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
-    if bytes.len() as u64 > opts.limits.max_bytes {
+    let max_bytes = opts.limits.max_bytes.min(opts.step.max_bytes);
+    if bytes.len() as u64 > max_bytes {
         return Err(MeshError::FileTooLarge {
             bytes: bytes.len() as u64,
-            limit: opts.limits.max_bytes,
+            limit: max_bytes,
         });
     }
     let text = String::from_utf8_lossy(bytes);
@@ -234,17 +248,24 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
             "this is not a STEP file: it does not start with ISO-10303-21".into(),
         ));
     }
-    let file = part21::parse(&text).map_err(|m| {
-        if m.contains("end of file") || m.contains("not closed") || m.contains("no DATA") {
-            MeshError::Truncated {
-                what: "the STEP file".into(),
-                have: bytes.len() as u64,
-                need: bytes.len() as u64 + 1,
+    let file = part21::parse_limited(&text, opts.step.max_entities, opts.step.max_parse_memory)
+        .map_err(|m| {
+            if m.contains("more than") {
+                MeshError::TooManyParts {
+                    count: opts.step.max_entities as u64 + 1,
+                    limit: opts.step.max_entities as u64,
+                }
+            } else if m.contains("end of file") || m.contains("not closed") || m.contains("no DATA")
+            {
+                MeshError::Truncated {
+                    what: "the STEP file".into(),
+                    have: bytes.len() as u64,
+                    need: bytes.len() as u64 + 1,
+                }
+            } else {
+                MeshError::Malformed(format!("STEP syntax: {m}"))
             }
-        } else {
-            MeshError::Malformed(format!("STEP syntax: {m}"))
-        }
-    })?;
+        })?;
     drop(text);
     if file.entities.len() > opts.step.max_entities {
         return Err(MeshError::TooManyParts {
@@ -266,6 +287,24 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
             schemas.join(", ")
         ));
     }
+    if !file.duplicates.is_empty() {
+        let shown: Vec<String> = file
+            .duplicates
+            .iter()
+            .take(5)
+            .map(|n| format!("#{n}"))
+            .collect();
+        c.note(format!(
+            "{} entity numbers are defined more than once ({}{}): the first definition is used",
+            file.duplicates.len(),
+            shown.join(", "),
+            if file.duplicates.len() > 5 {
+                ", ..."
+            } else {
+                ""
+            }
+        ));
+    }
     c.read_colors();
     let structure = match c.structure() {
         Ok(s) => s,
@@ -276,11 +315,14 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
     let mut curves: Vec<CurvePart> = Vec::new();
     let mut welded = 0u64;
     let mut degenerate = 0u64;
+    let mut cancelled = 0u64;
     let mut exacts: Vec<Option<ExactSolid>> = Vec::new();
     let mut exact_bytes = 0usize;
     let mut exact_dropped: Vec<(String, String)> = Vec::new();
-    let tol_mm = c.tol * c.unit_scales.first().copied().unwrap_or(1.0);
-    let weld_eps = (tol_mm * 1e-3).max(1e-6);
+    // The tolerance of the first representation, in millimeters: the report and the weld use
+    // the same number, whatever units other representations have.
+    let tol_mm = c.tol_mm.unwrap_or(c.tol);
+    let weld_eps = (tol_mm * 1e-3).max(1e-3);
     for inst in &structure.instances {
         let moved = if inst.placement == DAffine3::IDENTITY {
             None
@@ -343,9 +385,10 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
                         limit: opts.limits.max_coord_mm,
                     });
                 }
-                let (positions, triangles, w, d) = weld(&pos, &tris, weld_eps);
+                let (positions, triangles, w, d, x) = weld(&pos, &tris, weld_eps);
                 welded += w;
                 degenerate += d;
+                cancelled += x;
                 if triangles.is_empty() {
                     continue;
                 }
@@ -437,13 +480,18 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         instances: structure.instances.len(),
         unit_mm: c.unit_scales.clone(),
         unit_from_file: c.unit_from_file && opts.unit.is_none(),
-        tolerance_mm: Some(c.tol * c.unit_scales.first().copied().unwrap_or(1.0)),
+        tolerance_mm: Some(tol_mm),
         angle_deg: opts.angle_deg,
         welded_vertices: welded,
         exact_kept: exacts.iter().flatten().count(),
         exact_bytes,
         exact_dropped,
     };
+    if cancelled > 0 {
+        c.note(format!(
+            "{cancelled} triangles that repeat or cancel each other were removed"
+        ));
+    }
     let notes = c.notes.clone();
     let frame = Frame {
         unit: Unit::Millimetre,
@@ -501,7 +549,7 @@ fn weld(
     pos: &[glam::DVec3],
     tris: &[[u32; 3]],
     eps: f64,
-) -> (Vec<[f64; 3]>, Vec<[u32; 3]>, u64, u64) {
+) -> (Vec<[f64; 3]>, Vec<[u32; 3]>, u64, u64, u64) {
     use std::collections::HashMap;
     let inv = 1.0 / eps;
     let cell = |p: &glam::DVec3| -> [i64; 3] {
@@ -547,7 +595,8 @@ fn weld(
         }
     }
     let mut out_tris = Vec::with_capacity(tris.len());
-    let mut dropped = 0u64;
+    let mut degenerate = 0u64;
+    let mut cancelled = 0u64;
     let mut used = vec![u32::MAX; kept.len()];
     let mut out_pos: Vec<[f64; 3]> = Vec::new();
     for t in tris {
@@ -557,7 +606,7 @@ fn weld(
             remap[t[2] as usize],
         ];
         if m[0] == m[1] || m[1] == m[2] || m[0] == m[2] {
-            dropped += 1;
+            degenerate += 1;
             continue;
         }
         let mut n = [0u32; 3];
@@ -593,11 +642,11 @@ fn weld(
         while let (Some(a), Some(b)) = (plus.pop(), minus.pop()) {
             remove[a] = true;
             remove[b] = true;
-            dropped += 2;
+            cancelled += 2;
         }
         for extra in plus.into_iter().skip(1).chain(minus.into_iter().skip(1)) {
             remove[extra] = true;
-            dropped += 1;
+            cancelled += 1;
         }
     }
     let mut k = 0;
@@ -605,7 +654,7 @@ fn weld(
         k += 1;
         !remove[k - 1]
     });
-    (out_pos, out_tris, joined, dropped)
+    (out_pos, out_tris, joined, degenerate, cancelled)
 }
 
 /// The triangles of a payload, cut again at another tolerance.
@@ -645,7 +694,22 @@ pub fn retessellate(
         triangles_left: limits.max_triangles as usize,
     };
     let (mut vertices, mut triangles) = (0u64, 0u64);
-    let mut spend = |v: u64, t: u64| -> Result<(), MeshError> {
+    let max_work = StepLimits::default().max_work;
+    let mut work = 0u64;
+    let mut spend = |c: tess::Cost| -> Result<(), MeshError> {
+        let (v, t) = match c {
+            tess::Cost::Output(v, t) => (v, t),
+            tess::Cost::Work(n) => {
+                work = work.saturating_add(n);
+                if work > max_work {
+                    return Err(MeshError::TooMuchWork {
+                        units: work,
+                        limit: max_work,
+                    });
+                }
+                return Ok(());
+            }
+        };
         vertices += v;
         triangles += t;
         if triangles > limits.max_triangles {
@@ -670,6 +734,24 @@ pub fn retessellate(
         Ok(())
     };
     let t = tess::tessellate(solid, &params, &mut spend)?;
+    // A face of a closed shell that cannot be cut now would open the solid: the old mesh stays.
+    let opened: Vec<&(usize, String)> = t
+        .skipped
+        .iter()
+        .filter(|(f, _)| {
+            solid
+                .faces
+                .get(*f)
+                .and_then(|face| solid.shells.get(face.shell as usize))
+                .is_some_and(|sh| sh.closed)
+        })
+        .collect();
+    if let Some((face, why)) = opened.first() {
+        return Err(MeshError::Unsupported(format!(
+            "{} faces of a closed solid cannot be cut at this tolerance (face {face}: {why}), so the solid would open: the old mesh is kept",
+            opened.len()
+        )));
+    }
     let mut pos = t.positions;
     let mut tris: Vec<[u32; 3]> = Vec::new();
     for (_, g) in t.groups {
@@ -678,10 +760,9 @@ pub fn retessellate(
     if tris.is_empty() {
         return Err(MeshError::Empty);
     }
-    let (positions, triangles, _, _) = {
-        let eps = (tolerance_mm * 1e-3).max(1e-6);
-        let r = weld(&std::mem::take(&mut pos), &tris, eps);
-        (r.0, r.1, r.2, r.3)
+    let (positions, triangles, _, _, _) = {
+        let eps = (tolerance_mm * 1e-3).max(1e-3);
+        weld(&std::mem::take(&mut pos), &tris, eps)
     };
     Ok(Retessellation {
         positions,

@@ -117,6 +117,7 @@ fn mesh_entity_falls_back_before_release_2010() {
         triangles: vec![[0, 1, 2]],
         color: None,
         exact: None,
+        exact_unusable: None,
     }));
     for (v, has_mesh) in [
         (DxfVersion::R2000, false),
@@ -150,6 +151,7 @@ fn release_12_writes_plain_entities_and_counts_what_it_drops() {
         triangles: vec![[0, 1, 2]],
         color: None,
         exact: None,
+        exact_unusable: None,
     })));
     let (bytes, report) = export(shapes, DxfVersion::R12);
     let t = String::from_utf8_lossy(&bytes).into_owned();

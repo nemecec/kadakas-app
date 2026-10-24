@@ -139,6 +139,41 @@ impl Surface {
         }
     }
 
+    /// False for a surface whose frame is left-handed (a mirror made it so). Then the normal
+    /// `dP/du x dP/dv` points to the other side than for a right-handed frame.
+    pub fn right_handed(&self) -> bool {
+        match self {
+            Surface::Plane { f }
+            | Surface::Cylinder { f, .. }
+            | Surface::Cone { f, .. }
+            | Surface::Sphere { f, .. }
+            | Surface::Torus { f, .. } => f.matrix3.determinant() > 0.0,
+            _ => true,
+        }
+    }
+
+    /// About how many evaluations one call of `uv_of` takes, for the work budget of an import.
+    pub fn uv_cost(&self) -> u64 {
+        match self {
+            Surface::Revolution { curve, .. } | Surface::Extrusion { curve, .. } => {
+                // A search along the curve: samples and a golden section.
+                let samples = match curve.as_ref() {
+                    Curve::Spline(s) => {
+                        (s.points.len() * s.knots.degree * 2).clamp(32, 4096) as u64
+                    }
+                    Curve::Poly { points } => (points.len().clamp(2, 100_000) * 4) as u64,
+                    _ => 256,
+                };
+                samples + 90
+            }
+            Surface::Spline(s) => {
+                let n = ((s.u.count * 2).clamp(8, 40) * (s.v.count * 2).clamp(8, 40)) as u64;
+                n + 40 * 4
+            }
+            _ => 2,
+        }
+    }
+
     /// A short name: `plane`, `cylinder`, `cone`, `sphere`, `torus`, `revolution`,
     /// `extrusion`, `spline`.
     pub fn short_kind(&self) -> &'static str {
@@ -164,9 +199,11 @@ impl Surface {
             })
         };
         let mut v = match self {
+            // The normal of the surface is x cross y: for a frame that a mirror made left-handed
+            // it is the opposite of the third axis.
             Surface::Plane { f } => json!({
                 "point": f.translation.to_array(),
-                "normal": f.matrix3.z_axis.to_array(),
+                "normal": f.matrix3.x_axis.cross(f.matrix3.y_axis).normalize_or_zero().to_array(),
             }),
             Surface::Cylinder { f, r } => {
                 let mut o = frame(f);

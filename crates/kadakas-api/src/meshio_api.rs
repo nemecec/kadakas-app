@@ -312,7 +312,7 @@ pub(crate) fn describe() -> Value {
                 "keep_exact": "STEP only. true (default): each mesh keeps the exact surfaces (radii, normals, curves) next to its triangles, up to 8 MiB for one object and 64 MiB for the document. false keeps the triangles only. Over a cap the mesh keeps its triangles and the report names the part",
                 "merge": "to_surface: true (default) merges coplanar triangles into faces, false keeps every triangle a face",
                 "preview": "true reads the file and answers with the report, including the number of edges that soften_below_angle would soften, and changes nothing",
-                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session",
+                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session. A STEP file is limited to 134217728 (128 MiB) because it takes about 18 times its size in memory",
                 "max_triangles": "Default and most 8000000, in all parts together",
                 "max_vertices": "Default and most 4000000, in all parts together"
             },
@@ -478,6 +478,15 @@ impl Session {
                 .min(mesh3d::MAX_VERTICES as u64),
             ..Limits::default()
         };
+        // A STEP file takes about 18 times its size in memory: its limit is lower.
+        let limits = if step {
+            Limits {
+                max_bytes: limits.max_bytes.min(kadakas_step::DEFAULT_MAX_BYTES),
+                ..limits
+            }
+        } else {
+            limits
+        };
         let size = std::fs::metadata(&path)
             .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?
             .len();
@@ -559,8 +568,21 @@ impl Session {
             vec![None; set.parts.len()]
         };
         let mut join_note = None;
+        let mut join_without: Vec<Value> = Vec::new();
         let mut parts = if o.join && !set.parts.is_empty() {
-            let merged = if part_exact.iter().all(Option::is_some) {
+            let total: usize = part_exact.iter().flatten().map(|e| e.approx_bytes()).sum();
+            let merged = if total > exact::MAX_OBJECT_BYTES {
+                // One mesh cannot hold more exact data than one object may: the triangles stay.
+                join_without.push(json!({
+                    "part": stem,
+                    "reason": format!(
+                        "the exact data of the joined parts is about {total} bytes, over the limit of {} bytes for one object: only the triangles are kept",
+                        exact::MAX_OBJECT_BYTES
+                    ),
+                    "approx_bytes": total,
+                }));
+                None
+            } else if part_exact.iter().all(Option::is_some) {
                 let mut it = part_exact.drain(..).flatten();
                 it.next().map(|mut first| {
                     for e in it {
@@ -635,6 +657,7 @@ impl Session {
                 triangles: p.triangles,
                 color: p.color.map(Color),
                 exact: None,
+                exact_unusable: None,
             };
             let mut mesh = mesh;
             if let Some(Some(x)) = part_exact.get_mut(index).map(Option::take) {
@@ -648,9 +671,20 @@ impl Session {
                         ),
                         "approx_bytes": bytes,
                     }));
-                } else if let Ok(moved) = x.transformed(&glam::DAffine3::from_translation(shift)) {
-                    exact_total += bytes;
-                    mesh.set_exact(moved);
+                } else {
+                    match x.transformed(&glam::DAffine3::from_translation(shift)) {
+                        Ok(moved) => {
+                            exact_total += bytes;
+                            mesh.set_exact(moved);
+                        }
+                        Err(e) => exact_over_cap.push(json!({
+                            "part": name,
+                            "reason": format!(
+                                "the exact data could not follow the move to the origin ({e}): only the triangles are kept"
+                            ),
+                            "approx_bytes": bytes,
+                        })),
+                    }
                 }
             }
             if let Some(why) = mesh.problem() {
@@ -761,6 +795,7 @@ impl Session {
                 .cloned()
                 .unwrap_or_default();
             without.extend(exact_over_cap);
+            without.extend(join_without);
             report["exact"] = json!({
                 "enabled": o.keep_exact.unwrap_or(true),
                 "kept_objects": kept,

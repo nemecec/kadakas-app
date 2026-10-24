@@ -150,11 +150,35 @@ impl Tx<'_> {
         for &old in &all {
             map.insert(old, ObjectId(self.alloc()?));
         }
+        // The exact data of meshes counts against the cap of the document: a copy that would
+        // pass it keeps its triangles and loses the data.
+        let mut exact_total: Option<usize> = None;
         for &old in &all {
             let mut o = self.doc.object(old).expect("exists").clone();
             o.id = map[&old];
             o.parent = o.parent.map(|p| map.get(&p).copied().unwrap_or(p));
             change(&*self.doc, &mut o).map_err(invalid)?;
+            if let Shape::Mesh3d(m) = &mut o.shape
+                && let Some(e) = &m.exact
+            {
+                let bytes = e.approx_bytes();
+                let total = exact_total.get_or_insert_with(|| {
+                    self.doc
+                        .objects
+                        .values()
+                        .filter_map(|x| match &x.shape {
+                            Shape::Mesh3d(m) => m.exact.as_ref().map(|e| e.approx_bytes()),
+                            _ => None,
+                        })
+                        .sum()
+                });
+                if *total + bytes > crate::exact::MAX_DOCUMENT_BYTES {
+                    m.exact = None;
+                    self.exact_dropped += 1;
+                } else {
+                    *total += bytes;
+                }
+            }
             o.data.remove(EDITING_KEY);
             o.data.remove(EDIT_GROUP_KEY);
             crate::provenance::strip_copy(&mut o.data);

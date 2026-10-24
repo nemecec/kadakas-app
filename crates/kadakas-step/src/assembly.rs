@@ -34,6 +34,21 @@ struct Usage {
     child: u64,
 }
 
+/// The product graph, for the walk.
+struct Graph<'g> {
+    pd_name: &'g HashMap<u64, String>,
+    pd_reps: &'g HashMap<u64, Vec<u64>>,
+    kids: &'g HashMap<u64, Vec<&'g Usage>>,
+    tf: &'g HashMap<u64, DAffine3>,
+}
+
+/// What the walk keeps between its two runs.
+#[derive(Default)]
+struct Walk {
+    used_reps: HashSet<u64>,
+    visits: usize,
+}
+
 struct Place {
     rep_1: u64,
     rep_2: u64,
@@ -79,6 +94,7 @@ impl<'a> Ctx<'a> {
             .tolerance_mm
             .unwrap_or_else(|| (self.diag_mm(scale) / 2000.0).clamp(0.01, 0.5));
         self.tol = tol_mm / scale;
+        self.tol_mm.get_or_insert(tol_mm);
         self.angle = self.opts.angle_deg.to_radians().clamp(0.02, 1.5);
         scale
     }
@@ -136,8 +152,8 @@ impl<'a> Ctx<'a> {
             let e = self.ent(m)?;
             match self.mapped_item(e, scale, cache, depth) {
                 Ok(g) => {
-                    geom.bodies.extend(g.bodies.iter().cloned());
-                    geom.curves.extend(g.curves.iter().cloned());
+                    geom.bodies.extend(g.bodies);
+                    geom.curves.extend(g.curves);
                 }
                 Err(Fail::Skip(why)) => self.skip_entity(e, &why),
                 Err(f) => return Err(f),
@@ -165,10 +181,13 @@ impl<'a> Ctx<'a> {
         let origin = self.axis2(reference(attr(map, 0)?).unwrap_or(0))?;
         let target = self.axis2(reference(attr(e, 2)?).unwrap_or(0))?;
         let (_, ctx_id) = self.rep_parts(rep)?;
+        self.mapped_used.insert(rep);
         let inner = self.rep_geometry(rep, cache, depth + 1)?;
         let (inner_len, _) = self.context_units(ctx_id);
         let inner_scale = self.opts.unit.map_or(inner_len.unwrap_or(1.0), |u| u.mm());
         let m = mm_frame(target, scale) * mm_frame(origin, inner_scale).inverse();
+        // The copy is paid for before it is made.
+        inner.charge_copy(self)?;
         Ok(inner.transformed(&m))
     }
 
@@ -271,20 +290,37 @@ impl<'a> Ctx<'a> {
         }
         // Transform of each usage.
         let mut tf: HashMap<u64, DAffine3> = HashMap::new();
+        let (mut missing, mut unreadable) = (0u64, 0u64);
         for u in &usages {
-            let Some(pds) = pds_of_nauo.get(&u.nauo) else {
+            let Some(pl) = pds_of_nauo.get(&u.nauo).and_then(|pds| places.get(pds)) else {
+                missing += 1;
                 continue;
             };
-            let Some(pl) = places.get(pds) else { continue };
             let child_reps = pd_reps.get(&u.child).cloned().unwrap_or_default();
             if let Some(m) = self.place_matrix(pl, &child_reps) {
                 tf.insert(u.nauo, m);
             } else {
-                self.note(
-                    "an assembly usage has a placement that cannot be read: identity is used",
-                );
+                unreadable += 1;
             }
         }
+        if missing > 0 {
+            self.note(format!(
+                "{missing} assembly usages have no placement in the file: the part stands where its own coordinates put it"
+            ));
+        }
+        if unreadable > 0 {
+            self.note(format!(
+                "{unreadable} assembly usages have a placement that cannot be read: the part stands where its own coordinates put it"
+            ));
+        }
+        // A product whose representation is mapped by another representation is placed by
+        // the mapped items. It is not also a root at the origin.
+        let mapped_targets: HashSet<u64> = file
+            .entities
+            .iter()
+            .filter(|e| e.name == "REPRESENTATION_MAP")
+            .filter_map(|e| e.attrs.get(1).and_then(reference))
+            .collect();
         let children: HashSet<u64> = usages.iter().map(|u| u.child).collect();
         let mut kids: HashMap<u64, Vec<&Usage>> = HashMap::new();
         for u in &usages {
@@ -296,14 +332,69 @@ impl<'a> Ctx<'a> {
             .filter(|p| !children.contains(p))
             .collect();
         roots.sort_unstable();
-        let mut used_reps: HashSet<u64> = HashSet::new();
-        // Depth-first walk with an explicit stack.
-        let mut stack: Vec<(u64, DAffine3, usize, Vec<u64>)> = roots
+        let mut held_back: Vec<u64> = Vec::new();
+        roots.retain(|p| {
+            let mapped = pd_reps
+                .get(p)
+                .is_some_and(|rs| rs.iter().any(|r| mapped_targets.contains(r)));
+            if mapped {
+                held_back.push(*p);
+            }
+            !mapped
+        });
+        let graph = Graph {
+            pd_name: &pd_name,
+            pd_reps: &pd_reps,
+            kids: &kids,
+            tf: &tf,
+        };
+        let mut state = Walk::default();
+        let first: Vec<(u64, DAffine3, usize, Vec<u64>)> = roots
             .into_iter()
             .rev()
             .map(|r| (r, DAffine3::IDENTITY, 0, vec![r]))
             .collect();
+        self.walk(&graph, first, &mut state, &mut out, &mut cache)?;
+        // A mapped product that no mapped item reached stands at the origin after all.
+        let lost: Vec<(u64, DAffine3, usize, Vec<u64>)> = held_back
+            .into_iter()
+            .filter(|pd| {
+                !pd_reps
+                    .get(pd)
+                    .is_some_and(|rs| rs.iter().any(|r| self.mapped_used.contains(r)))
+            })
+            .map(|pd| (pd, DAffine3::IDENTITY, 0, vec![pd]))
+            .collect();
+        if !lost.is_empty() {
+            self.note(format!(
+                "{} products that other representations map were not used by any of them: they stand at the origin",
+                lost.len()
+            ));
+            self.walk(&graph, lost, &mut state, &mut out, &mut cache)?;
+        }
+        Ok(out)
+    }
+
+    /// Walks the product graph depth first from the given starts, and adds the instances.
+    fn walk(
+        &mut self,
+        g: &Graph,
+        mut stack: Vec<(u64, DAffine3, usize, Vec<u64>)>,
+        st: &mut Walk,
+        out: &mut Structure,
+        cache: &mut HashMap<u64, Rc<RepGeom>>,
+    ) -> R<()> {
         while let Some((pd, m, depth, path)) = stack.pop() {
+            // Every usage that is visited counts, with or without geometry: a file of a few
+            // kilobytes can name 2^24 paths through a graph of 24 levels.
+            st.visits += 1;
+            self.charge(1 + path.len() as u64)?;
+            if st.visits > self.limits.max_instances {
+                return Err(Fail::Abort(kadakas_meshio::MeshError::TooManyParts {
+                    count: st.visits as u64,
+                    limit: self.limits.max_instances as u64,
+                }));
+            }
             if depth > self.limits.max_assembly_depth {
                 self.note(format!(
                     "an assembly is nested deeper than {} levels: the rest is left out",
@@ -311,10 +402,10 @@ impl<'a> Ctx<'a> {
                 ));
                 continue;
             }
-            let name = pd_name.get(&pd).cloned().unwrap_or_default();
-            for rep in pd_reps.get(&pd).cloned().unwrap_or_default() {
-                let geom = match self.rep_geometry(rep, &mut cache, 0) {
-                    Ok(g) => g,
+            let name = g.pd_name.get(&pd).cloned().unwrap_or_default();
+            for rep in g.pd_reps.get(&pd).cloned().unwrap_or_default() {
+                let geom = match self.rep_geometry(rep, cache, 0) {
+                    Ok(x) => x,
                     Err(Fail::Skip(why)) => {
                         self.skip_id(rep, &why);
                         continue;
@@ -330,9 +421,8 @@ impl<'a> Ctx<'a> {
                         limit: self.limits.max_instances as u64,
                     }));
                 }
-                let repeated = !used_reps.insert(rep);
-                if repeated {
-                    self.count(geom.vertices(), geom.triangles())?;
+                if !st.used_reps.insert(rep) {
+                    geom.charge_copy(self)?;
                 }
                 out.instances.push(Instance {
                     name: name.clone(),
@@ -340,20 +430,20 @@ impl<'a> Ctx<'a> {
                     placement: m,
                 });
             }
-            if let Some(ks) = kids.get(&pd) {
+            if let Some(ks) = g.kids.get(&pd) {
                 for u in ks.iter().rev() {
                     if path.contains(&u.child) {
                         self.note("an assembly contains itself: the loop is cut");
                         continue;
                     }
-                    let t = tf.get(&u.nauo).copied().unwrap_or(DAffine3::IDENTITY);
+                    let t = g.tf.get(&u.nauo).copied().unwrap_or(DAffine3::IDENTITY);
                     let mut p = path.clone();
                     p.push(u.child);
                     stack.push((u.child, m * t, depth + 1, p));
                 }
             }
         }
-        Ok(out)
+        Ok(())
     }
 
     /// A file with no product structure: every solid, surface model and tessellated item that

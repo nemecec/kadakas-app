@@ -130,11 +130,11 @@ class Step:
             self.pts[key] = self.vertex(p)
         return self.pts[key]
 
-    def polyhedron(self, verts, faces, name="solid"):
+    def polyhedron(self, verts, faces, name="solid", bad_face=None):
         """Faces are lists of corner indices, counterclockwise seen from outside."""
         cache = {}
         fs = []
-        for f in faces:
+        for k, f in enumerate(faces):
             corners = [tuple(verts[i]) for i in f]
             nrm = (0, 0, 0)
             for i in range(len(corners)):
@@ -142,15 +142,18 @@ class Step:
                 nrm = tuple(x + y for x, y in zip(nrm, c))
             x = sub(corners[1], corners[0])
             surf = self.plane(corners[0], nrm, x)
+            if k == bad_face:
+                # A surface type that is not read: this face is skipped.
+                surf = self.add(f"OFFSET_SURFACE('',#{surf},1.,.F.)")
             loop = self.loop(self.poly_face_edges(corners, cache))
             fs.append(self.face([self.bound(loop)], surf))
         return self.solid(self.shell(fs), name)
 
-    def box(self, w, d, h, at=(0, 0, 0), name="box"):
+    def box(self, w, d, h, at=(0, 0, 0), name="box", bad_face=None):
         x0, y0, z0 = at
         v = [(x0 + (i & 1) * w, y0 + ((i >> 1) & 1) * d, z0 + ((i >> 2) & 1) * h) for i in range(8)]
         faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]
-        return self.polyhedron(v, faces, name)
+        return self.polyhedron(v, faces, name, bad_face)
 
     def cylinder(self, r, h, at=(0, 0, 0), name="cylinder", hole_in=None):
         """A cylinder along Z. Returns the solid."""
@@ -441,8 +444,9 @@ class Step:
         )
         return self.ctx
 
-    def product(self, name, items):
-        """A product with a shape representation of the items. Returns (product definition,
+    def product(self, name, items, frame=None):
+        """A product with a shape representation of the items. `frame` is the (origin, z, x)
+        of the axis that the placements refer to. Returns (product definition,
         representation, shape representation items placement axis)."""
         ctx = self.context()
         app = self.add("APPLICATION_CONTEXT('automotive design')")
@@ -452,7 +456,7 @@ class Step:
         dc = self.add(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')")
         pd = self.add(f"PRODUCT_DEFINITION('design','',#{pf},#{dc})")
         pds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{pd})")
-        origin = self.axis()
+        origin = self.axis(*frame) if frame else self.axis()
         its = [origin] + list(items)
         rep = self.add(
             "ADVANCED_BREP_SHAPE_REPRESENTATION('" + name + "',(" + ",".join(f"#{i}" for i in its) + f"),#{ctx})"
@@ -474,13 +478,22 @@ class Step:
         origin = self.axis()
         rep = self.add(f"SHAPE_REPRESENTATION('{name}',(#{origin}),#{ctx})")
         self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{rep})")
-        for child_pd, child_rep, child_origin, place in parts:
+        for child_pd, child_rep, child_origin, place, *flags in parts:
             nauo = self.add(f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#{pd},#{child_pd},$)")
+            if place is None:
+                # A usage that no placement belongs to.
+                continue
             npds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{nauo})")
             target = self.axis(*place)
-            idt = self.add(f"ITEM_DEFINED_TRANSFORMATION('','',#{child_origin},#{target})")
+            if flags and flags[0] == "reverse":
+                # The parent is the first representation of the relationship.
+                idt = self.add(f"ITEM_DEFINED_TRANSFORMATION('','',#{target},#{child_origin})")
+                first, second = rep, child_rep
+            else:
+                idt = self.add(f"ITEM_DEFINED_TRANSFORMATION('','',#{child_origin},#{target})")
+                first, second = child_rep, rep
             rel = self.add(
-                f"(REPRESENTATION_RELATIONSHIP('','',#{child_rep},#{rep}) "
+                f"(REPRESENTATION_RELATIONSHIP('','',#{first},#{second}) "
                 f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{idt}) SHAPE_REPRESENTATION_RELATIONSHIP())"
             )
             self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
@@ -850,6 +863,7 @@ def fixtures():
     s.box(10, 10, 10, name="loose box")
     s.cylinder(5, 20, at=(30, 0, 0), name="loose cylinder")
     out["loose.step"] = s
+    out["partial_box.step"] = single(lambda s: s.box(20, 30, 40, at=(10000, 0, 0), bad_face=1), "Partial box")
     out["bead.step"] = single(lambda s: s.sphere_zone(12, 6), "Bead")
     out["closed_edges.step"] = single(lambda s: s.closed_edges(), "Closed")
     # An assembly: a leg product used twice, with two placements.
@@ -859,6 +873,25 @@ def fixtures():
     pd, rep, origin = s.product("Leg", [leg])
     s.assembly("Table", [(pd, rep, origin, ((100, 0, 0), (0, 0, 1), (1, 0, 0))), (pd, rep, origin, ((0, 200, 0), (0, 0, 1), (0, 1, 0)))])
     out["assembly.step"] = s
+    # A child whose own frame is not the origin (item 1 is moved and turned), used with the
+    # child as the first representation and then with the parent as the first one.
+    s = Step()
+    cube = s.box(10, 10, 10, name="cube")
+    pd, rep, origin = s.product("Cube", [cube], frame=((2, 0, 0), (0, 0, 1), (0, 1, 0)))
+    s.assembly(
+        "Frames",
+        [
+            (pd, rep, origin, ((100, 0, 0), (0, 0, 1), (1, 0, 0))),
+            (pd, rep, origin, ((200, 0, 0), (0, 0, 1), (1, 0, 0)), "reverse"),
+        ],
+    )
+    out["assembly_frames.step"] = s
+    # One usage has a placement and one has none.
+    s = Step()
+    leg = s.box(10, 10, 50, name="leg")
+    pd, rep, origin = s.product("Leg", [leg])
+    s.assembly("Table", [(pd, rep, origin, ((100, 0, 0), (0, 0, 1), (1, 0, 0))), (pd, rep, origin, None)])
+    out["assembly_unplaced.step"] = s
     return out
 
 

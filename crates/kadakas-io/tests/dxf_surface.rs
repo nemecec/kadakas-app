@@ -38,6 +38,7 @@ fn cube_mesh(z0: f64) -> Mesh3d {
             .collect(),
         color: None,
         exact: None,
+        exact_unusable: None,
     }
 }
 

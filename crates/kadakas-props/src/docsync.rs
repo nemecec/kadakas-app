@@ -26,6 +26,9 @@
 //!   `drawing.sheets.<layer id>` for the page settings of each sheet layer;
 //! - a layer or resource: its top-level fields (`name`, `visible`, `body`, `order`).
 //!
+//! - the exact data of a mesh from a STEP file: `shape.exact` (the triangles stay in `shape`).
+//!   Data over [`MAX_SYNC_EXACT_BYTES`] is not shared: the others get the triangles only.
+//!
 //! The **shape** is one property, except for a site model. The chunks of its points are cut by
 //! *position*, so if one user inserts or removes a point while another moves a point of the same
 //! model, the chunks no longer fit together and points can end up wrong. Edits that only move
@@ -140,6 +143,20 @@ pub fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Value> {
                 }
             }
             (Kind::Object, "shape", Value::Object(mut m))
+                if m.get("kind").and_then(Value::as_str) == Some("mesh3d")
+                    && m.contains_key("exact") =>
+            {
+                // The exact data of a mesh is a property of its own, so that the triangles and
+                // the data are never one value that passes the limit of a value. Data over the
+                // budget stays on the computer that made it: the others get the triangles.
+                if let Some(e) = m.remove("exact")
+                    && serde_json::to_vec(&e).is_ok_and(|b| b.len() <= MAX_SYNC_EXACT_BYTES)
+                {
+                    out.insert("shape.exact".into(), e);
+                }
+                out.insert("shape".into(), Value::Object(m));
+            }
+            (Kind::Object, "shape", Value::Object(mut m))
                 if m.get("kind").and_then(Value::as_str) == Some("site_model") =>
             {
                 // The points of a site model go in chunks and the lines one by one, so moving one
@@ -224,6 +241,7 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
     let mut has_points = false;
     let mut has_lines = false;
     let mut viewpoints: Vec<Value> = Vec::new();
+    let mut exact: Option<Value> = None;
     for (k, v) in flat {
         if kind == Kind::Issue && k.starts_with("viewpoints.") {
             viewpoints.push(v.clone());
@@ -236,6 +254,10 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
                 if let Value::Array(a) = v {
                     points.extend(a.iter().cloned());
                 }
+                continue;
+            }
+            if k == "shape.exact" {
+                exact = Some(v.clone());
                 continue;
             }
             if k.starts_with("shape.lines.") {
@@ -279,6 +301,9 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
             shape.insert("lines".into(), Value::Array(lines));
         }
     }
+    if let Some(e) = exact {
+        sub(&mut out, "shape").insert("exact".into(), e);
+    }
     if !viewpoints.is_empty() {
         // The order of the list is the time of the viewpoints, then their IDs.
         let key = |v: &Value| {
@@ -305,6 +330,11 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
     }
     out
 }
+
+/// The largest exact data of a mesh (see `kadakas_core::exact`) that is shared, in bytes of JSON.
+/// One object holds 8 MiB of it at most, in the size that the program counts. The JSON is
+/// larger than that count, and one value can have 32 MiB, so this is half of it.
+pub const MAX_SYNC_EXACT_BYTES: usize = 16 * 1024 * 1024;
 
 /// The most points of a site model in one property.
 pub const POINT_CHUNK: usize = 256;
@@ -780,6 +810,37 @@ mod tests {
             .cloned()
             .unwrap()
             .clone()
+    }
+
+    #[test]
+    fn the_exact_data_of_a_mesh_is_a_property_of_its_own_and_big_data_is_not_shared() {
+        let mesh = |exact: Value| {
+            let Value::Object(m) = serde_json::json!({
+                "kind": "mesh3d",
+                "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+                "triangles": [[0, 1, 2]],
+                "exact": exact,
+            }) else {
+                unreachable!()
+            };
+            let mut whole = Map::new();
+            whole.insert("shape".into(), Value::Object(m));
+            whole
+        };
+        let small = serde_json::json!({"version": 1, "faces": [1, 2, 3]});
+        let flat = flatten(Kind::Object, mesh(small.clone()));
+        assert_eq!(flat["shape.exact"], small);
+        assert!(flat["shape"].get("exact").is_none());
+        // The properties put together give the same thing back.
+        assert_eq!(
+            unflatten(Kind::Object, &flat)["shape"],
+            mesh(small)["shape"]
+        );
+        // Data over the budget stays where it was made: the others get the triangles.
+        let big = serde_json::json!({"pad": "x".repeat(MAX_SYNC_EXACT_BYTES + 1)});
+        let flat = flatten(Kind::Object, mesh(big));
+        assert!(!flat.contains_key("shape.exact") && flat["shape"].get("exact").is_none());
+        assert_eq!(flat["shape"]["triangles"], serde_json::json!([[0, 1, 2]]));
     }
 
     #[test]
