@@ -334,6 +334,15 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         }
         for g in groups {
             for (color, (pos, tris)) in g.by_color {
+                // A number out of range (a huge unit) is refused like in the other readers.
+                let far = pos.iter().fold(0.0f64, |m, p| m.max(p.abs().max_element()));
+                if !far.is_finite() || far > opts.limits.max_coord_mm {
+                    return Err(MeshError::OutOfRange {
+                        what: format!("a vertex of '{}'", g.name),
+                        value: far,
+                        limit: opts.limits.max_coord_mm,
+                    });
+                }
                 let (positions, triangles, w, d) = weld(&pos, &tris, weld_eps);
                 welded += w;
                 degenerate += d;
@@ -512,8 +521,11 @@ fn weld(
         'search: for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    if let Some(&i) = grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz])
-                        && kept[i as usize].distance(*p) <= eps
+                    if let Some(&i) = grid.get(&[
+                        c[0].saturating_add(dx),
+                        c[1].saturating_add(dy),
+                        c[2].saturating_add(dz),
+                    ]) && kept[i as usize].distance(*p) <= eps
                     {
                         found = Some(i);
                         break 'search;

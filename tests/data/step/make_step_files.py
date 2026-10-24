@@ -421,6 +421,8 @@ class Step:
             length = self.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))")
         elif self.unit == "m":
             length = self.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT($,.METRE.))")
+        elif self.unit == "mm_deg":
+            length = self.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))")
         elif self.unit == "inch":
             mm = self.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))")
             dim = self.add("DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.)")
@@ -429,6 +431,10 @@ class Step:
         else:
             raise ValueError(self.unit)
         ang = self.add("(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.))")
+        if self.unit == "mm_deg":
+            dim = self.add("DIMENSIONAL_EXPONENTS(0.,0.,0.,0.,0.,0.,0.)")
+            m = self.add(f"PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE({math.pi / 180!r}),#{ang})")
+            ang = self.add(f"(CONVERSION_BASED_UNIT('DEGREE',#{m}) NAMED_UNIT(#{dim}) PLANE_ANGLE_UNIT())")
         sol = self.add("(NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT())")
         self.ctx = self.add(
             f"(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{length},#{ang},#{sol})) REPRESENTATION_CONTEXT('Context','3D'))"
@@ -480,6 +486,297 @@ class Step:
             self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
         return pd, rep, origin
 
+
+    # More shapes, for the tests of the less common paths.
+
+    def inverted_box(self, w, d, h, name="inverted"):
+        """A box whose faces point inward (the corners run clockwise seen from outside)."""
+        v = [((i & 1) * w, ((i >> 1) & 1) * d, ((i >> 2) & 1) * h) for i in range(8)]
+        faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]
+        return self.polyhedron(v, [list(reversed(f)) for f in faces], name)
+
+    def box_with_void(self, w, d, h, m, name="hollow"):
+        """A box with a box-shaped hole in the middle: a solid with one void."""
+        def shell_of(x0, y0, z0, a, b, c):
+            v = [(x0 + (i & 1) * a, y0 + ((i >> 1) & 1) * b, z0 + ((i >> 2) & 1) * c) for i in range(8)]
+            faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]]
+            cache = {}
+            out = []
+            for f in faces:
+                corners = [v[i] for i in f]
+                nrm = (0, 0, 0)
+                for i in range(len(corners)):
+                    cc = cross(corners[i], corners[(i + 1) % len(corners)])
+                    nrm = tuple(x + y for x, y in zip(nrm, cc))
+                surf = self.plane(corners[0], nrm, sub(corners[1], corners[0]))
+                loop = self.loop(self.poly_face_edges(corners, cache))
+                out.append(self.face([self.bound(loop)], surf))
+            return self.shell(out)
+        outer = shell_of(0, 0, 0, w, d, h)
+        inner = shell_of(m, m, m, w - 2 * m, d - 2 * m, h - 2 * m)
+        oriented = self.add(f"ORIENTED_CLOSED_SHELL('',*,#{inner},.F.)")
+        return self.add(f"BREP_WITH_VOIDS('{name}',#{outer},(#{oriented}))")
+
+    def cylinder_two_loops(self, r, h, name="no_seam"):
+        """A cylinder whose side face has two loops (the two circles) and no seam edge."""
+        p0, p1 = (r, 0, 0), (r, 0, h)
+        v0, v1 = self.vertex(p0), self.vertex(p1)
+        a0, a1 = self.axis(), self.axis((0, 0, h))
+        e0, e1 = self.edge(v0, v0, self.circle(a0, r)), self.edge(v1, v1, self.circle(a1, r))
+        side_surf = self.add(f"CYLINDRICAL_SURFACE('',#{a0},{num(r)})")
+        side = self.face(
+            [self.bound(self.loop([self.oriented(e0)])), self.bound(self.loop([self.oriented(e1, False)]), outer=False)],
+            side_surf,
+        )
+        top = self.face([self.bound(self.loop([self.oriented(e1)]))], self.add(f"PLANE('',#{a1})"))
+        bot_ax = self.axis((0, 0, 0), (0, 0, -1), (1, 0, 0))
+        bot = self.face([self.bound(self.loop([self.oriented(e0, False)]))], self.add(f"PLANE('',#{bot_ax})"))
+        return self.solid(self.shell([side, top, bot]), name)
+
+    def cone_with_apex(self, r, h, name="cone", degrees=False):
+        """A cone: the side face has one loop (the base circle) and the apex is a pole."""
+        p0 = (r, 0, 0)
+        v0 = self.vertex(p0)
+        a0 = self.axis()
+        e0 = self.edge(v0, v0, self.circle(a0, r))
+        half = math.atan2(r, h)
+        # The cone narrows upward: a negative half angle with the radius r at z = 0.
+        side = self.face(
+            [self.bound(self.loop([self.oriented(e0)]))],
+            self.add(f"CONICAL_SURFACE('',#{a0},{num(r)},{num(-(math.degrees(half) if degrees else half))})"),
+        )
+        bot_ax = self.axis((0, 0, 0), (0, 0, -1), (1, 0, 0))
+        bot = self.face([self.bound(self.loop([self.oriented(e0, False)]))], self.add(f"PLANE('',#{bot_ax})"))
+        return self.solid(self.shell([side, bot]), name)
+
+    def oriented_face_model(self, name="faces"):
+        """A face based surface model: one connected face set holding an oriented face of a
+        polygon on a FACE_SURFACE, and a face of polygon loops with no surface."""
+        pts = [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]
+        ids = [self.point(p) for p in pts]
+        pl = self.add("POLY_LOOP('',(" + ",".join(f"#{i}" for i in ids) + "))")
+        b = self.add(f"FACE_OUTER_BOUND('',#{pl},.T.)")
+        plane = self.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))
+        f1 = self.add(f"FACE_SURFACE('',(#{b}),#{plane},.T.)")
+        of = self.add(f"ORIENTED_FACE('',*,#{f1},.F.)")
+        pts2 = [(20, 0, 0), (30, 0, 0), (30, 10, 0)]
+        ids2 = [self.point(p) for p in pts2]
+        pl2 = self.add("POLY_LOOP('',(" + ",".join(f"#{i}" for i in ids2) + "))")
+        b2 = self.add(f"FACE_BOUND('',#{pl2},.T.)")
+        f2 = self.add(f"FACE('',(#{b2}))")
+        cfs = self.add(f"CONNECTED_FACE_SET('',(#{of},#{f2}))")
+        return self.add(f"FACE_BASED_SURFACE_MODEL('{name}',(#{cfs}))")
+
+    def patch_variants(self, name="patches"):
+        """Patches with the other kinds of B-spline surfaces and curves: Bezier, quasi uniform and
+        uniform, a rectangular trimmed surface, and one surface type that is not read."""
+        def net(n, m, z=0.0):
+            return [[self.point((i * 10.0, j * 10.0, z + 0.5 * i * j)) for j in range(m)] for i in range(n)]
+        def rows(ids):
+            return "(" + ",".join("(" + ",".join(f"#{i}" for i in r) + ")" for r in ids) + ")"
+        out = []
+        bez = self.add(f"BEZIER_SURFACE('',2,2,{rows(net(3, 3))},.UNSPECIFIED.,.F.,.F.,.F.)")
+        qu = self.add(f"QUASI_UNIFORM_SURFACE('',2,2,{rows(net(4, 4))},.UNSPECIFIED.,.F.,.F.,.F.)")
+        un = self.add(f"UNIFORM_SURFACE('',2,2,{rows(net(4, 4))},.UNSPECIFIED.,.F.,.F.,.F.)")
+        plane = self.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))
+        rt = self.add(f"RECTANGULAR_TRIMMED_SURFACE('',#{plane},0.,20.,0.,20.,.T.,.T.)")
+        off = self.add(f"OFFSET_SURFACE('',#{plane},1.,.F.)")
+        for surf in (bez, qu, un, rt, off):
+            out.append(self.patch_face(surf, [(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0)]))
+        sh = self.add("OPEN_SHELL('',(" + ",".join(f"#{f}" for f in out) + "))")
+        return self.add(f"SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))")
+
+    def patch_face(self, surf, corners):
+        cache = {}
+        loop = self.loop(self.poly_face_edges(corners, cache))
+        return self.face([self.bound(loop)], surf)
+
+    def curve_zoo(self, name="zoo"):
+        """A geometric set with the less common curves: a composite curve of a line and an arc, a
+        surface curve, Bezier, quasi uniform and uniform B-spline curves, trims by point, an
+        ellipse, a bare line (no ends) and a hyperbola (not read)."""
+        o = self.point((0, 0, 0))
+        a = self.point((10, 0, 0))
+        b = self.point((10, 10, 0))
+        ids = []
+        line = self.line((0, 0, 0), (10, 0, 0))
+        seg1 = self.add(f"TRIMMED_CURVE('',#{line},(#{o}),(#{a}),.T.,.CARTESIAN.)")
+        ax = self.axis((10, 5, 0), (0, 0, 1), (0, -1, 0))
+        circ = self.circle(ax, 5.0)
+        seg2 = self.add(f"TRIMMED_CURVE('',#{circ},(#{a}),(#{b}),.T.,.CARTESIAN.)")
+        cs1 = self.add(f"COMPOSITE_CURVE_SEGMENT(.CONTINUOUS.,.T.,#{seg1})")
+        cs2 = self.add(f"COMPOSITE_CURVE_SEGMENT(.CONTINUOUS.,.T.,#{seg2})")
+        ids.append(self.add(f"COMPOSITE_CURVE('',(#{cs1},#{cs2}),.F.)"))
+        ids.append(self.add(f"SURFACE_CURVE('',#{seg1},(),.CURVE_3D.)"))
+        pts = [self.point((0, 0, 0)), self.point((5, 5, 0)), self.point((10, 0, 0)), self.point((15, 5, 2))]
+        pl = ",".join(f"#{i}" for i in pts)
+        ids.append(self.add(f"BEZIER_CURVE('',3,({pl}),.UNSPECIFIED.,.F.,.F.)"))
+        ids.append(self.add(f"QUASI_UNIFORM_CURVE('',2,({pl}),.UNSPECIFIED.,.F.,.F.)"))
+        ids.append(self.add(f"UNIFORM_CURVE('',2,({pl}),.UNSPECIFIED.,.F.,.F.)"))
+        eax = self.axis((0, 0, 30))
+        ell = self.add(f"ELLIPSE('',#{eax},8.,4.)")
+        ids.append(self.add(f"TRIMMED_CURVE('',#{ell},(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(3.0)),.F.,.PARAMETER.)"))
+        ids.append(self.add(f"TRIMMED_CURVE('',#{circ},(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.5)),.T.,.UNSPECIFIED.)"))
+        ids.append(line)  # a line has no ends: not drawn
+        hyp = self.add(f"HYPERBOLA('',#{eax},3.,2.)")
+        ids.append(hyp)
+        return self.add(f"GEOMETRIC_SET('{name}',(" + ",".join(f"#{i}" for i in ids) + "))")
+
+    def edge_zoo(self, name="edges"):
+        """A face whose edges are a trimmed circle, a polyline, a B-spline curve and a composite
+        curve, on a plane."""
+        pts = [(0, 0, 0), (20, 0, 0), (20, 10, 0), (10, 20, 0), (0, 10, 0)]
+        vs = [self.vertex(p) for p in pts]
+        # An arc from (20, 0) to (20, 10) around (20, 5)... as a trimmed circle edge.
+        ax = self.axis((20, 5, 0), (0, 0, 1), (1, 0, 0))
+        circ = self.circle(ax, 5.0)
+        arc = self.add(f"TRIMMED_CURVE('',#{circ},(#{self.point(pts[1])}),(#{self.point(pts[2])}),.T.,.CARTESIAN.)")
+        e1 = self.edge(vs[0], vs[1], self.line(pts[0], pts[1]))
+        e2 = self.edge(vs[1], vs[2], arc)
+        # A polyline edge from (20, 10) over (15, 15) to (10, 20).
+        mid = self.point((15, 15, 0))
+        poly = self.add(f"POLYLINE('',(#{self.point(pts[2])},#{mid},#{self.point(pts[3])}))")
+        e3 = self.edge(vs[2], vs[3], poly)
+        # A B-spline edge from (10, 20) to (0, 10).
+        cps = [self.point(pts[3]), self.point((5, 18, 0)), self.point(pts[4])]
+        spl = self.add(
+            f"B_SPLINE_CURVE_WITH_KNOTS('',2,(" + ",".join(f"#{i}" for i in cps) + "),.UNSPECIFIED.,.F.,.F.,(3,3),(0.,1.),.UNSPECIFIED.)"
+        )
+        e4 = self.edge(vs[3], vs[4], spl)
+        # A composite curve edge from (0, 10) back to (0, 0), against its direction.
+        l1 = self.add(f"TRIMMED_CURVE('',#{self.line((0, 0, 0), (0, 10, 0))},(#{self.point((0, 0, 0))}),(#{self.point((0, 10, 0))}),.T.,.CARTESIAN.)")
+        c1 = self.add(f"COMPOSITE_CURVE_SEGMENT(.CONTINUOUS.,.T.,#{l1})")
+        comp = self.add(f"COMPOSITE_CURVE('',(#{c1}),.F.)")
+        e5 = self.edge(vs[0], vs[4], comp)
+        loop = self.loop([self.oriented(e1), self.oriented(e2), self.oriented(e3), self.oriented(e4), self.oriented(e5, False)])
+        plane = self.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))
+        f = self.face([self.bound(loop)], plane)
+        sh = self.shell([f], closed=False)
+        return self.add(f"SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))")
+
+    def tessellated_variants(self):
+        """Triangulated items with a point index, strips and fans, and a shell of them. One
+        triangle names a point that does not exist."""
+        pts = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0), (5.0, 5.0, 8.0)]
+        cl = self.add("COORDINATES_LIST('',5,(" + ",".join(vec(p) for p in pts) + "))")
+        # With a point index: the index maps 1..4 to the points 5, 1, 2, 3 (so (2,3,4) is 1,2,3).
+        tf = self.add(f"TRIANGULATED_FACE('',#{cl},5,(),$,(5,1,2,3),((2,3,4),(2,4,1),(1,1,9)))")
+        ts = self.add(f"TRIANGULATED_SURFACE_SET('',#{cl},5,(),(),((1,2,5),(2,3,5)))")
+        cf = self.add(f"COMPLEX_TRIANGULATED_FACE('',#{cl},5,(),$,(),((1,2,5,3,4)),((5,1,2,3)))")
+        shell = self.add(f"TESSELLATED_SHELL('',(#{tf},#{ts},#{cf}),$)")
+        bad = self.add(f"TRIANGULATED_FACE('',#{cl},5,(),$,(),((1,2,3),(3,4,1)))")
+        wire = self.add("TESSELLATED_CURVE_SET('',#" + str(cl) + ",((1,2)))")
+        solid = self.add(f"TESSELLATED_SOLID('mixed',(#{bad},#{wire}),$)")
+        return shell, solid
+
+    def style_variants(self, items):
+        """Colors: predefined names, a transparent one, and a style on a face."""
+        c = self.add("DRAUGHTING_PRE_DEFINED_COLOUR('green')")
+        r = self.add(f"SURFACE_STYLE_RENDERING(.NORMAL_SHADING.,#{c})")
+        tr = self.add("SURFACE_STYLE_TRANSPARENT(0.25)")
+        rr = self.add(f"SURFACE_STYLE_RENDERING_WITH_PROPERTIES(.NORMAL_SHADING.,#{c},(#{tr}))")
+        side = self.add(f"SURFACE_SIDE_STYLE('',(#{r},#{rr}))")
+        use = self.add(f"SURFACE_STYLE_USAGE(.BOTH.,#{side})")
+        psa = self.add(f"PRESENTATION_STYLE_ASSIGNMENT((#{use}))")
+        for it in items:
+            self.add(f"STYLED_ITEM('',(#{psa}),#{it})")
+        for name, rgb in (("red", 0), ("blue", 0), ("yellow", 0), ("cyan", 0), ("magenta", 0), ("black", 0), ("white", 0), ("unknown", 0)):
+            c2 = self.add(f"DRAUGHTING_PRE_DEFINED_COLOUR('{name}')")
+            r2 = self.add(f"SURFACE_STYLE_RENDERING(.NORMAL_SHADING.,#{c2})")
+            s2 = self.add(f"SURFACE_SIDE_STYLE('',(#{r2}))")
+            u2 = self.add(f"SURFACE_STYLE_USAGE(.BOTH.,#{s2})")
+            p2 = self.add(f"PRESENTATION_STYLE_ASSIGNMENT((#{u2}))")
+            self.add(f"STYLED_ITEM('',(#{p2}),#{items[0]})")
+
+    def mapped_assembly(self, name="Plate", count=2):
+        """A product of one box and an assembly that maps its representation twice."""
+        box = self.box(10, 10, 5, name="plate")
+        pd, rep, origin = self.product(name, [box])
+        ctx = self.context()
+        app = self.add("APPLICATION_CONTEXT('automotive design')")
+        pc = self.add(f"PRODUCT_CONTEXT('',#{app},'mechanical')")
+        prod = self.add(f"PRODUCT('Frame','Frame','',(#{pc}))")
+        pf = self.add(f"PRODUCT_DEFINITION_FORMATION('','',#{prod})")
+        dc = self.add(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')")
+        apd = self.add(f"PRODUCT_DEFINITION('design','',#{pf},#{dc})")
+        pds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{apd})")
+        rmap = self.add(f"REPRESENTATION_MAP(#{origin},#{rep})")
+        items = []
+        for k in range(count):
+            target = self.axis((50.0 * (k + 1), 0, 0), (0, 0, 1), (1, 0, 0) if k == 0 else (0, 1, 0))
+            items.append(self.add(f"MAPPED_ITEM('',#{rmap},#{target})"))
+        arep = self.add("SHAPE_REPRESENTATION('Frame',(" + ",".join(f"#{i}" for i in items) + f"),#{ctx})")
+        self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{arep})")
+
+    def related_representations(self, name="Related"):
+        """A product whose shape representation holds no geometry. The geometry is in another
+        representation that a plain relationship ties to it."""
+        ctx = self.context()
+        box = self.box(10, 20, 30, name="related box")
+        app = self.add("APPLICATION_CONTEXT('automotive design')")
+        pc = self.add(f"PRODUCT_CONTEXT('',#{app},'mechanical')")
+        prod = self.add(f"PRODUCT('{name}','{name}','',(#{pc}))")
+        pf = self.add(f"PRODUCT_DEFINITION_FORMATION('','',#{prod})")
+        dc = self.add(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')")
+        pd = self.add(f"PRODUCT_DEFINITION('design','',#{pf},#{dc})")
+        pds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{pd})")
+        empty = self.add(f"SHAPE_REPRESENTATION('empty',(#{self.axis()}),#{ctx})")
+        geo = self.add(f"ADVANCED_BREP_SHAPE_REPRESENTATION('geo',(#{self.axis()},#{box}),#{ctx})")
+        self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{empty})")
+        self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{empty},#{geo})")
+
+
+    def sphere_zone(self, r, z, name="bead"):
+        """The part of a ball between the planes z = -z and z = +z: a spherical face with two
+        loops (the two circles) and no seam, and two disks."""
+        rho = math.sqrt(r * r - z * z)
+        pb, pt = (rho, 0, -z), (rho, 0, z)
+        vb, vt = self.vertex(pb), self.vertex(pt)
+        ab, at_ = self.axis((0, 0, -z)), self.axis((0, 0, z))
+        eb, et = self.edge(vb, vb, self.circle(ab, rho)), self.edge(vt, vt, self.circle(at_, rho))
+        sph = self.add(f"SPHERICAL_SURFACE('',#{self.axis()},{num(r)})")
+        side = self.face(
+            [self.bound(self.loop([self.oriented(eb)])), self.bound(self.loop([self.oriented(et, False)]), outer=False)],
+            sph,
+        )
+        top = self.face([self.bound(self.loop([self.oriented(et)]))], self.add(f"PLANE('',#{at_})"))
+        bot_ax = self.axis((0, 0, -z), (0, 0, -1), (1, 0, 0))
+        bot = self.face([self.bound(self.loop([self.oriented(eb, False)]))], self.add(f"PLANE('',#{bot_ax})"))
+        return self.solid(self.shell([side, top, bot]), name)
+
+    def closed_edges(self, name="closed"):
+        """Three planar faces whose single edge is a closed curve: a rational B-spline circle, a
+        closed polyline and a trimmed B-spline circle that runs against its direction."""
+        w = math.sqrt(0.5)
+        r = 10.0
+        def spline(z):
+            ring = [(r, 0), (r, r), (0, r), (-r, r), (-r, 0), (-r, -r), (0, -r), (r, -r), (r, 0)]
+            ids = ",".join(f"#{self.point((x, y, z))}" for x, y in ring)
+            wts = ",".join(num(x) for x in [1, w, 1, w, 1, w, 1, w, 1])
+            return self.add(
+                f"(BOUNDED_CURVE() B_SPLINE_CURVE(2,({ids}),.UNSPECIFIED.,.T.,.F.) "
+                f"B_SPLINE_CURVE_WITH_KNOTS((3,2,2,2,3),(0.,1.,2.,3.,4.),.UNSPECIFIED.) CURVE() "
+                f"GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(({wts})) REPRESENTATION_ITEM(''))"
+            )
+        faces = []
+        # 1. The rational circle at z = 0.
+        v = self.vertex((r, 0, 0))
+        e = self.edge(v, v, spline(0.0))
+        faces.append(self.face([self.bound(self.loop([self.oriented(e)]))], self.plane((0, 0, 0), (0, 0, 1), (1, 0, 0))))
+        # 2. A closed polyline square at z = 20.
+        sq = [(0, 0, 20), (10, 0, 20), (10, 10, 20), (0, 10, 20), (0, 0, 20)]
+        poly = self.add("POLYLINE('',(" + ",".join(f"#{self.point(p)}" for p in sq) + "))")
+        v2 = self.vertex((0, 0, 20))
+        e2 = self.edge(v2, v2, poly)
+        faces.append(self.face([self.bound(self.loop([self.oriented(e2)]))], self.plane((0, 0, 20), (0, 0, 1), (1, 0, 0))))
+        # 3. A trimmed copy of the rational circle at z = 40, edge sense against the curve.
+        v3 = self.vertex((r, 0, 40))
+        tr = self.add(f"TRIMMED_CURVE('',#{spline(40.0)},(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(4.)),.T.,.PARAMETER.)")
+        e3 = self.edge(v3, v3, tr, same=False)
+        faces.append(self.face([self.bound(self.loop([self.oriented(e3, False)]))], self.plane((0, 0, 40), (0, 0, 1), (1, 0, 0))))
+        sh = self.shell(faces, closed=False)
+        return self.add(f"SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))")
+
     def text(self):
         head = (
             "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('Kadakas test file'),'2;1');\n"
@@ -519,6 +816,42 @@ def fixtures():
         lambda s: s.tessellated_box(10, 20, 30), "Tessellated", schema="AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }"
     )
     out["curves.step"] = single(lambda s: s.curve_set(), "Curves")
+
+    # Files for the less common paths.
+    out["inverted.step"] = single(lambda s: s.inverted_box(10, 20, 30), "Inverted")
+    out["hollow.step"] = single(lambda s: s.box_with_void(40, 40, 40, 10), "Hollow")
+    out["no_seam.step"] = single(lambda s: s.cylinder_two_loops(10, 20), "No seam")
+    out["cone.step"] = single(lambda s: s.cone_with_apex(10, 25), "Cone")
+    out["oriented_faces.step"] = single(lambda s: s.oriented_face_model(), "Faces")
+    out["patch_variants.step"] = single(lambda s: s.patch_variants(), "Patches")
+    out["curve_zoo.step"] = single(lambda s: s.curve_zoo(), "Zoo")
+    out["edge_zoo.step"] = single(lambda s: s.edge_zoo(), "Edges")
+    s = Step(unit="mm")
+    shell, solid = s.tessellated_variants()
+    s.product("Tessellated variants", [shell, solid])
+    out["tessellated_variants.step"] = s
+    s = Step(unit="mm_deg")
+    box = s.box(10, 10, 10, name="colored")
+    s.style_variants([box])
+    cone = s.cone_with_apex(10, 25, name="cone in degrees", degrees=True)
+    ax = s.axis((0, 0, 40))
+    quarter = s.add(f"TRIMMED_CURVE('',#{s.circle(ax, 10.0)},(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(90.)),.T.,.PARAMETER.)")
+    curves = s.add(f"GEOMETRIC_CURVE_SET('arc in degrees',(#{quarter}))")
+    s.product("Styled", [box, cone, curves])
+    out["styles.step"] = s
+    s = Step()
+    s.mapped_assembly()
+    out["mapped.step"] = s
+    s = Step()
+    s.related_representations()
+    out["related.step"] = s
+    # No product structure at all and no units: bare solids.
+    s = Step()
+    s.box(10, 10, 10, name="loose box")
+    s.cylinder(5, 20, at=(30, 0, 0), name="loose cylinder")
+    out["loose.step"] = s
+    out["bead.step"] = single(lambda s: s.sphere_zone(12, 6), "Bead")
+    out["closed_edges.step"] = single(lambda s: s.closed_edges(), "Closed")
     # An assembly: a leg product used twice, with two placements.
     s = Step()
     leg = s.box(10, 10, 50, name="leg")
