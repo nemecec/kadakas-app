@@ -112,6 +112,23 @@ impl Mesh3d {
         )
     }
 
+    /// The size of the exact payload that the mesh holds, usable or not, by the count that the
+    /// caps use (`exact::MAX_OBJECT_BYTES`, `exact::MAX_DOCUMENT_BYTES`). Zero without payload.
+    /// A payload that cannot be used counts by its JSON, because the file keeps it as it is.
+    pub fn exact_bytes(&self) -> usize {
+        match (&self.exact, &self.exact_unusable) {
+            (Some(e), _) => e.approx_bytes(),
+            (None, Some(u)) => exact::json_bytes(&u.raw),
+            (None, None) => 0,
+        }
+    }
+
+    /// Takes the exact payload away (usable or not). The triangles stay.
+    pub fn drop_exact(&mut self) {
+        self.exact = None;
+        self.exact_unusable = None;
+    }
+
     /// Puts a payload on the mesh and ties it to the triangles as they are now.
     pub fn set_exact(&mut self, mut e: ExactSolid) {
         e.mesh_hash = exact::fingerprint(&self.vertices, &self.triangles);

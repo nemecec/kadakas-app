@@ -40,17 +40,29 @@ pub struct StepLimits {
     pub max_face_triangles: usize,
     pub max_assembly_depth: usize,
     pub max_instances: usize,
-    /// Steps of work (see `Ctx::work`). One step is about a curve or surface evaluation.
+    /// Steps of work that a read may take whatever it makes (see `Ctx::work`). One step is
+    /// about 65 ns of a current computer: a surface evaluation takes a few steps and a
+    /// triangle of a curved face about 50.
     pub max_work: u64,
-    /// The largest STEP file in bytes. The parsed file takes about 18 times its size in memory
-    /// (measured: a file of 20 MB took 365 MB), so this is below the general file limit.
+    /// More steps that each triangle made adds to the limit. A file that makes many
+    /// triangles has earned the time; a file that makes none has not.
+    pub work_per_triangle: u64,
+    /// The longest read in milliseconds by the wall clock: a guard for slow computers and for
+    /// builds without optimisation. The browser build has no clock and does not check it.
+    pub max_millis: u64,
+    /// The largest STEP file in bytes. The parsed file takes 9 to 14 times its size in memory
+    /// (measured, see `docs/interop.md`), so this is below the general file limit.
     pub max_bytes: u64,
     /// The most memory, estimated, that the parsed entities may take.
     pub max_parse_memory: u64,
 }
 
-/// The largest STEP file that is read by default.
+/// The largest STEP file that is read by default: 128 MiB, and 64 MiB in the browser, which
+/// has less memory to give. A parsed file takes 9 to 14 times its size in memory.
+#[cfg(not(target_arch = "wasm32"))]
 pub const DEFAULT_MAX_BYTES: u64 = 128 * 1024 * 1024;
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Default for StepLimits {
     fn default() -> Self {
@@ -61,7 +73,9 @@ impl Default for StepLimits {
             max_face_triangles: 200_000,
             max_assembly_depth: 32,
             max_instances: 20_000,
-            max_work: 400_000_000,
+            max_work: 60_000_000,
+            work_per_triangle: 100,
+            max_millis: 60_000,
             max_bytes: DEFAULT_MAX_BYTES,
             max_parse_memory: 3 * 1024 * 1024 * 1024,
         }
@@ -129,6 +143,8 @@ pub struct StepReport {
     pub tolerance_mm: Option<f64>,
     pub angle_deg: f64,
     pub welded_vertices: u64,
+    /// Steps of work that the read took (see `StepLimits::max_work`).
+    pub work_units: u64,
     /// Parts that keep their exact surfaces, and the size of that data.
     pub exact_kept: usize,
     pub exact_bytes: usize,
@@ -152,6 +168,7 @@ impl StepReport {
             "unit_from_file": self.unit_from_file,
             "tolerance_mm": self.tolerance_mm,
             "angle_deg": self.angle_deg,
+            "work_units": self.work_units,
             "welded_vertices": self.welded_vertices,
             "exact": {
                 "kept_parts": self.exact_kept,
@@ -249,26 +266,30 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         ));
     }
     let file = part21::parse_limited(&text, opts.step.max_entities, opts.step.max_parse_memory)
-        .map_err(|m| {
-            if m.contains("more than") {
-                MeshError::TooManyParts {
-                    count: opts.step.max_entities as u64 + 1,
-                    limit: opts.step.max_entities as u64,
+        .map_err(|e| match e {
+            part21::ParseError::TooManyEntities { limit } => MeshError::TooManyEntities {
+                count: limit as u64 + 1,
+                limit: limit as u64,
+            },
+            part21::ParseError::TooMuchMemory { estimate, limit } => MeshError::TooMuchMemory {
+                bytes: estimate,
+                limit,
+            },
+            part21::ParseError::Syntax(m) => {
+                if m.contains("end of file") || m.contains("not closed") || m.contains("no DATA") {
+                    MeshError::Truncated {
+                        what: "the STEP file".into(),
+                        have: bytes.len() as u64,
+                        need: bytes.len() as u64 + 1,
+                    }
+                } else {
+                    MeshError::Malformed(format!("STEP syntax: {m}"))
                 }
-            } else if m.contains("end of file") || m.contains("not closed") || m.contains("no DATA")
-            {
-                MeshError::Truncated {
-                    what: "the STEP file".into(),
-                    have: bytes.len() as u64,
-                    need: bytes.len() as u64 + 1,
-                }
-            } else {
-                MeshError::Malformed(format!("STEP syntax: {m}"))
             }
         })?;
     drop(text);
     if file.entities.len() > opts.step.max_entities {
-        return Err(MeshError::TooManyParts {
+        return Err(MeshError::TooManyEntities {
             count: file.entities.len() as u64,
             limit: opts.step.max_entities as u64,
         });
@@ -483,6 +504,7 @@ pub fn read(bytes: &[u8], opts: &StepOptions) -> Result<StepImport, MeshError> {
         tolerance_mm: Some(tol_mm),
         angle_deg: opts.angle_deg,
         welded_vertices: welded,
+        work_units: c.work,
         exact_kept: exacts.iter().flatten().count(),
         exact_bytes,
         exact_dropped,
@@ -694,18 +716,27 @@ pub fn retessellate(
         triangles_left: limits.max_triangles as usize,
     };
     let (mut vertices, mut triangles) = (0u64, 0u64);
-    let max_work = StepLimits::default().max_work;
+    let (max_work, per_triangle) = {
+        let d = StepLimits::default();
+        (d.max_work, d.work_per_triangle)
+    };
+    let max_millis = StepLimits::default().max_millis;
+    let mut clock = ctx::Clock::default();
     let mut work = 0u64;
     let mut spend = |c: tess::Cost| -> Result<(), MeshError> {
         let (v, t) = match c {
             tess::Cost::Output(v, t) => (v, t),
             tess::Cost::Work(n) => {
                 work = work.saturating_add(n);
-                if work > max_work {
+                let allowed = max_work.saturating_add(per_triangle.saturating_mul(triangles));
+                if work > allowed {
                     return Err(MeshError::TooMuchWork {
                         units: work,
-                        limit: max_work,
+                        limit: allowed,
                     });
+                }
+                if let Some((millis, limit)) = clock.check(work, max_millis) {
+                    return Err(MeshError::TooMuchTime { millis, limit });
                 }
                 return Ok(());
             }

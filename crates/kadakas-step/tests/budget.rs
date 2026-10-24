@@ -137,7 +137,7 @@ fn a_graph_of_products_with_two_usages_a_level_ends_at_the_instance_limit() {
     let e = within(Duration::from_secs(5), "the product graph", || {
         read(w.as_bytes(), &StepOptions::default())
     });
-    assert!(matches!(e, MeshError::TooManyParts { .. }), "{e}");
+    assert!(matches!(e, MeshError::TooManyInstances { .. }), "{e}");
 }
 
 #[test]
@@ -184,7 +184,8 @@ fn mapped_items_that_multiply_are_paid_for_before_they_are_copied() {
     assert!(
         matches!(
             e,
-            MeshError::TooManyParts { .. }
+            MeshError::TooManyCopies { .. }
+                | MeshError::TooManyInstances { .. }
                 | MeshError::TooMuchMemory { .. }
                 | MeshError::TooMuchWork { .. }
                 | MeshError::TooManyTriangles { .. }

@@ -364,3 +364,86 @@ fn a_face_that_cannot_be_cut_any_more_does_not_open_a_closed_solid() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The kinds of surface of the fixtures, to mirror one by one.
+const MIRROR_FILES: [&str; 16] = [
+    "box.step",
+    "cylinder.step",
+    "sphere.step",
+    "hemisphere.step",
+    "torus.step",
+    "frustum.step",
+    "cone.step",
+    "revolved.step",
+    "extrusion.step",
+    "plate_hole.step",
+    "hollow.step",
+    "patch_rational.step",
+    "patch_bump.step",
+    "no_seam.step",
+    "bead.step",
+    "inverted.step",
+];
+
+fn concave_faces(e: &ExactSolid) -> Vec<(u64, bool)> {
+    let info = e.info(1000);
+    info["list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["face"].as_u64().unwrap(), f["concave"] == true))
+        .collect()
+}
+
+#[test]
+fn a_mirror_of_every_kind_of_surface_cuts_to_the_same_solid_and_says_the_same_about_bores() {
+    let mirrors = [
+        DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0)),
+        DAffine3::from_scale(DVec3::new(1.0, -1.0, 1.0)),
+        DAffine3::from_cols(DVec3::X, DVec3::Y, -DVec3::Z, DVec3::new(3.0, 4.0, 5.0)),
+        // A turn and a mirror together, and a uniform scale with a mirror.
+        DAffine3::from_mat3_translation(
+            DMat3::from_rotation_z(0.7) * DMat3::from_diagonal(DVec3::new(-2.0, 2.0, 2.0)),
+            DVec3::new(10.0, -3.0, 1.0),
+        ),
+    ];
+    let limits = Limits::default();
+    for file in MIRROR_FILES {
+        let imp = load(file, &StepOptions::default());
+        let e = exact_of(&imp);
+        let base = retessellate(e, 0.02, 15.0, &limits).unwrap();
+        let v0 = volume(&base.positions, &base.triangles);
+        let a0 = area(&base.positions, &base.triangles);
+        assert!(base.skipped.is_empty(), "{file}: {:?}", base.skipped);
+        for (k, m) in mirrors.iter().enumerate() {
+            let scale = m.matrix3.determinant().abs().cbrt();
+            let moved = e.transformed(m).unwrap();
+            assert!(moved.validate().is_ok(), "{file} {k}");
+            let r = retessellate(&moved, 0.02 * scale, 15.0, &limits)
+                .unwrap_or_else(|err| panic!("{file} mirror {k}: {err}"));
+            assert!(r.skipped.is_empty(), "{file} mirror {k}: {:?}", r.skipped);
+            let v = volume(&r.positions, &r.triangles);
+            let a = area(&r.positions, &r.triangles);
+            // The volume keeps its sign for a turn and flips for a mirror in the triangles
+            // (they are turned inside out by the mirror only if the payload is wrong).
+            let want_v = v0 * scale.powi(3);
+            let want_a = a0 * scale.powi(2);
+            // The volume of a surface that is not closed depends on where the origin is.
+            if e.shells.iter().all(|s| s.closed) {
+                assert!(
+                    (v - want_v).abs() <= 0.02 * want_v.abs().max(1.0),
+                    "{file} mirror {k}: volume {v} instead of {want_v}"
+                );
+            }
+            assert!(
+                (a - want_a).abs() <= 0.02 * want_a,
+                "{file} mirror {k}: area {a} instead of {want_a}"
+            );
+            assert_eq!(
+                concave_faces(&moved),
+                concave_faces(e),
+                "{file} mirror {k}: the bores differ"
+            );
+        }
+    }
+}

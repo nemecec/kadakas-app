@@ -158,7 +158,7 @@ fn cycles_in_references_end() {
         Err(e) => assert!(
             matches!(
                 e,
-                MeshError::TooManyParts { .. } | MeshError::Unsupported(_) | MeshError::Empty
+                MeshError::TooManyInstances { .. } | MeshError::Unsupported(_) | MeshError::Empty
             ),
             "{e}"
         ),
@@ -255,7 +255,7 @@ fn the_limits_stop_a_read_with_the_counts() {
         }),
     )
     .unwrap_err();
-    assert!(matches!(e, MeshError::TooManyParts { limit: 5, .. }));
+    assert!(matches!(e, MeshError::TooManyEntities { limit: 5, .. }));
     // The assembly limits.
     let asm = text("assembly.step");
     let e = read(
@@ -266,7 +266,7 @@ fn the_limits_stop_a_read_with_the_counts() {
         }),
     )
     .unwrap_err();
-    assert!(matches!(e, MeshError::TooManyParts { limit: 1, .. }));
+    assert!(matches!(e, MeshError::TooManyInstances { limit: 1, .. }));
     // With no depth at all the parts of the assembly are left out.
     let e = read(
         asm.as_bytes(),

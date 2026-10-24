@@ -80,22 +80,117 @@ pub fn ear_clip(
             .fold(f64::NEG_INFINITY, f64::max)
     };
     holes.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
-    for h in holes {
-        poly = bridge(uv, poly, h)?;
+    for (k, h) in holes.iter().enumerate() {
+        poly = bridge(uv, poly, h, &holes[k + 1..])?;
     }
     clip(uv, xyz, scale, &poly)
 }
 
+fn cross0(u: [f64; 2], v: [f64; 2]) -> f64 {
+    u[0] * v[1] - u[1] * v[0]
+}
+
+fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+/// Does the direction `d` from the corner `v` run into the inside of a counterclockwise polygon
+/// (not along an edge)? `next` and `prev` are the neighbours of the corner.
+fn in_wedge(v: [f64; 2], next: [f64; 2], prev: [f64; 2], target: [f64; 2]) -> bool {
+    let (a, b, d) = (sub2(next, v), sub2(prev, v), sub2(target, v));
+    let turn = cross0(a, b);
+    if turn > 0.0 {
+        cross0(a, d) > 0.0 && cross0(d, b) > 0.0
+    } else if turn < 0.0 {
+        !(cross0(b, d) >= 0.0 && cross0(d, a) >= 0.0)
+    } else if a[0] * b[0] + a[1] * b[1] < 0.0 {
+        // A straight corner: the inside is on the left of the edge.
+        cross0(a, d) > 0.0
+    } else {
+        false
+    }
+}
+
+fn on_segment(p: [f64; 2], q: [f64; 2], r: [f64; 2]) -> bool {
+    r[0] >= p[0].min(q[0])
+        && r[0] <= p[0].max(q[0])
+        && r[1] >= p[1].min(q[1])
+        && r[1] <= p[1].max(q[1])
+}
+
+/// Do the segments pq and ab share a point (also one end on the other, or an overlap)?
+fn segments_meet(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    if p[0].max(q[0]) < a[0].min(b[0])
+        || a[0].max(b[0]) < p[0].min(q[0])
+        || p[1].max(q[1]) < a[1].min(b[1])
+        || a[1].max(b[1]) < p[1].min(q[1])
+    {
+        return false;
+    }
+    let o1 = cross(p, q, a);
+    let o2 = cross(p, q, b);
+    let o3 = cross(a, b, p);
+    let o4 = cross(a, b, q);
+    if ((o1 > 0.0 && o2 < 0.0) || (o1 < 0.0 && o2 > 0.0))
+        && ((o3 > 0.0 && o4 < 0.0) || (o3 < 0.0 && o4 > 0.0))
+    {
+        return true;
+    }
+    (o1 == 0.0 && on_segment(p, q, a))
+        || (o2 == 0.0 && on_segment(p, q, b))
+        || (o3 == 0.0 && on_segment(a, b, p))
+        || (o4 == 0.0 && on_segment(a, b, q))
+}
+
 /// Joins a hole to the polygon by two coincident edges between the rightmost point of the
-/// hole and a point of the polygon that it can see.
-fn bridge(uv: &[[f64; 2]], poly: Vec<usize>, hole: &[usize]) -> Option<Vec<usize>> {
+/// hole and a point of the polygon that it can see. The point comes from the ray to the right
+/// (and the corners in the triangle, as usual). Every choice is checked: the bridge must run
+/// inside the polygon at both ends, and must not meet any edge of the merged polygon (with
+/// the bridges that are in it already), of the holes that wait, or of the hole itself. A
+/// corner that the polygon has twice (a bridge made it) is taken at the copy that has the
+/// bridge inside its angle. When the usual point does not fit, the nearest corner that fits
+/// is taken.
+fn bridge(
+    uv: &[[f64; 2]],
+    poly: Vec<usize>,
+    hole: &[usize],
+    waiting: &[&Vec<usize>],
+) -> Option<Vec<usize>> {
     let (mi, _) = hole
         .iter()
         .enumerate()
         .max_by(|a, b| uv[*a.1][0].total_cmp(&uv[*b.1][0]))?;
     let m = uv[hole[mi]];
-    // The edge that the ray to the right hits first.
     let n = poly.len();
+    let h = hole.len();
+    // The edges that the bridge must not meet.
+    let mut edges: Vec<([f64; 2], [f64; 2])> = Vec::with_capacity(n + h + 16);
+    for i in 0..n {
+        edges.push((uv[poly[i]], uv[poly[(i + 1) % n]]));
+    }
+    for i in 0..h {
+        edges.push((uv[hole[i]], uv[hole[(i + 1) % h]]));
+    }
+    for w in waiting {
+        for i in 0..w.len() {
+            edges.push((uv[w[i]], uv[w[(i + 1) % w.len()]]));
+        }
+    }
+    let (hp, hn) = (uv[hole[(mi + h - 1) % h]], uv[hole[(mi + 1) % h]]);
+    let fits = |k: usize| -> bool {
+        let v = uv[poly[k]];
+        if v == m {
+            return false;
+        }
+        let (pp, pn) = (uv[poly[(k + n - 1) % n]], uv[poly[(k + 1) % n]]);
+        if !in_wedge(v, pn, pp, m) || !in_wedge(m, hn, hp, v) {
+            return false;
+        }
+        edges
+            .iter()
+            .all(|&(a, b)| a == m || b == m || a == v || b == v || !segments_meet(m, v, a, b))
+    };
+    // The usual point: the edge that the ray to the right hits first.
     let mut best: Option<(f64, usize)> = None;
     for i in 0..n {
         let (a, b) = (uv[poly[i]], uv[poly[(i + 1) % n]]);
@@ -107,23 +202,23 @@ fn bridge(uv: &[[f64; 2]], poly: Vec<usize>, hole: &[usize]) -> Option<Vec<usize
             best = Some((x, i));
         }
     }
-    let (ix, ei) = best?;
-    let (a, b) = (poly[ei], poly[(ei + 1) % n]);
-    let p_idx = if uv[a][0] > uv[b][0] {
-        ei
-    } else {
-        (ei + 1) % n
-    };
-    let ipt = [ix, m[1]];
-    let ppt = uv[poly[p_idx]];
-    let mut vi = p_idx;
-    // A point inside the triangle (M, I, P) that blocks the view: take the one with the
-    // smallest angle to the ray.
-    {
+    let mut usual: Option<usize> = None;
+    if let Some((ix, ei)) = best {
+        let (a, b) = (poly[ei], poly[(ei + 1) % n]);
+        let p_idx = if uv[a][0] > uv[b][0] {
+            ei
+        } else {
+            (ei + 1) % n
+        };
+        let ipt = [ix, m[1]];
+        let ppt = uv[poly[p_idx]];
+        let mut vi = p_idx;
+        // A corner inside the triangle (M, I, P) that blocks the view: take the one with the
+        // smallest angle to the ray.
         let mut best_ang = f64::INFINITY;
         for (k, &q) in poly.iter().enumerate() {
             let t = uv[q];
-            if k == p_idx || !in_triangle(m, ipt, ppt, t) {
+            if q == poly[p_idx] || !in_triangle(m, ipt, ppt, t) {
                 continue;
             }
             let ang = (t[1] - m[1]).abs().atan2(t[0] - m[0]);
@@ -134,14 +229,28 @@ fn bridge(uv: &[[f64; 2]], poly: Vec<usize>, hole: &[usize]) -> Option<Vec<usize
                 vi = k;
             }
         }
+        usual = Some(vi);
     }
+    // The positions to try: the copies of the usual corner, then all corners by distance.
+    let mut tries: Vec<usize> = Vec::new();
+    if let Some(vi) = usual {
+        tries.extend((0..n).filter(|&k| poly[k] == poly[vi]));
+    }
+    let k = match tries.iter().copied().find(|&k| fits(k)) {
+        Some(k) => k,
+        None => {
+            let mut all: Vec<usize> = (0..n).collect();
+            all.sort_by(|&a, &b| dist2(m, uv[poly[a]]).total_cmp(&dist2(m, uv[poly[b]])));
+            all.into_iter().find(|&k| fits(k))?
+        }
+    };
     let mut out = Vec::with_capacity(poly.len() + hole.len() + 2);
-    out.extend_from_slice(&poly[..=vi]);
-    for k in 0..=hole.len() {
-        out.push(hole[(mi + k) % hole.len()]);
+    out.extend_from_slice(&poly[..=k]);
+    for j in 0..=h {
+        out.push(hole[(mi + j) % h]);
     }
-    out.push(poly[vi]);
-    out.extend_from_slice(&poly[vi + 1..]);
+    out.push(poly[k]);
+    out.extend_from_slice(&poly[k + 1..]);
     Some(out)
 }
 
@@ -982,6 +1091,186 @@ mod tests {
         assert!((area_of(&uv, &t) - 12.0).abs() < 1e-9);
         assert!(ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[]).is_none());
         assert!(ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &[vec![0, 1]]).is_none());
+    }
+
+    /// A rectangle with a grid of square holes (clockwise), some of them jittered or left out.
+    /// Returns the points, the loops and the area that must be covered.
+    fn grid_holes(
+        nx: usize,
+        ny: usize,
+        jitter: f64,
+        seed: u64,
+        skip: u64,
+    ) -> (Vec<[f64; 2]>, Vec<Vec<usize>>, f64) {
+        let mut state = seed | 1;
+        let mut rnd = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % 10_000) as f64 / 10_000.0 - 0.5
+        };
+        let (w, h) = (nx as f64 * 2.0 + 1.0, ny as f64 * 2.0 + 1.0);
+        let mut uv = vec![[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]];
+        let mut loops = vec![vec![0, 1, 2, 3]];
+        let mut want = w * h;
+        for j in 0..ny {
+            for i in 0..nx {
+                if skip > 0 && ((i * 7 + j * 13) as u64 + seed).is_multiple_of(skip) {
+                    continue;
+                }
+                let (cx, cy) = (2.0 * i as f64 + 1.5, 2.0 * j as f64 + 1.5);
+                let base = uv.len();
+                let corners = [[-0.5, -0.5], [-0.5, 0.5], [0.5, 0.5], [0.5, -0.5]];
+                let mut pts = Vec::new();
+                for c in corners {
+                    pts.push([cx + c[0] + rnd() * jitter, cy + c[1] + rnd() * jitter]);
+                }
+                let a = area(&pts, &[0, 1, 2, 3]);
+                want += a;
+                uv.extend(pts);
+                loops.push((base..base + 4).collect());
+            }
+        }
+        (uv, loops, want)
+    }
+
+    /// The triangles cover the region once: positive areas, the area of the region, and every
+    /// edge is used by one triangle on each side, except the edges of the loops.
+    fn assert_covers(uv: &[[f64; 2]], loops: &[Vec<usize>], want: f64, t: &[[u32; 3]]) {
+        let got = area_of(uv, t);
+        assert!(
+            (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+            "{got} {want}"
+        );
+        let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
+        for tri in t {
+            assert!(
+                cross(
+                    uv[tri[0] as usize],
+                    uv[tri[1] as usize],
+                    uv[tri[2] as usize]
+                ) >= -1e-12,
+                "a triangle looks the wrong way"
+            );
+            for k in 0..3 {
+                *directed.entry((tri[k], tri[(k + 1) % 3])).or_default() += 1;
+            }
+        }
+        let boundary: std::collections::HashSet<(u32, u32)> = loops
+            .iter()
+            .flat_map(|l| (0..l.len()).map(move |i| (l[i] as u32, l[(i + 1) % l.len()] as u32)))
+            .collect();
+        for (&(a, b), &n) in &directed {
+            assert_eq!(n, 1, "the edge {a}-{b} is used {n} times in one direction");
+            if boundary.contains(&(a, b)) {
+                assert!(
+                    !directed.contains_key(&(b, a)),
+                    "a loop edge has a triangle on both sides"
+                );
+            } else {
+                assert!(
+                    directed.contains_key(&(b, a)),
+                    "the edge {a}-{b} has no neighbour"
+                );
+            }
+        }
+        for &(a, b) in &boundary {
+            if area_of_edge_is_real(uv, a, b) {
+                assert!(
+                    directed.contains_key(&(a, b)),
+                    "the loop edge {a}-{b} has no triangle"
+                );
+            }
+        }
+    }
+
+    fn area_of_edge_is_real(uv: &[[f64; 2]], a: u32, b: u32) -> bool {
+        uv[a as usize] != uv[b as usize]
+    }
+
+    #[test]
+    fn grids_of_holes_in_columns_rows_and_blocks_are_cut() {
+        for (nx, ny) in [
+            (1, 2),
+            (1, 3),
+            (1, 4),
+            (3, 1),
+            (2, 3),
+            (3, 3),
+            (4, 4),
+            (10, 10),
+        ] {
+            for jitter in [0.0, 0.3] {
+                for seed in [1u64, 7] {
+                    let (uv, loops, want) = grid_holes(nx, ny, jitter, seed, 0);
+                    let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops)
+                        .unwrap_or_else(|| panic!("{nx}x{ny} jitter {jitter}"));
+                    assert_covers(&uv, &loops, want, &t);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_big_grid_of_holes_is_cut() {
+        let (uv, loops, want) = grid_holes(45, 45, 0.2, 3, 0);
+        let start = std::time::Instant::now();
+        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).expect("45x45 holes");
+        assert_covers(&uv, &loops, want, &t);
+        assert!(start.elapsed().as_secs() < 60, "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_hole_that_touches_nothing_and_holes_in_a_concave_outline() {
+        // A C-shaped outline with two holes in the arms and one in the middle of the back.
+        let mut uv = vec![
+            [0.0, 0.0],
+            [12.0, 0.0],
+            [12.0, 4.0],
+            [4.0, 4.0],
+            [4.0, 8.0],
+            [12.0, 8.0],
+            [12.0, 12.0],
+            [0.0, 12.0],
+        ];
+        let mut loops = vec![(0..8).collect::<Vec<usize>>()];
+        let mut want = area(&uv, &loops[0]);
+        for (cx, cy, s) in [
+            (8.0, 2.0, 0.8),
+            (8.0, 10.0, 0.8),
+            (2.0, 6.0, 1.0),
+            (2.0, 2.0, 0.5),
+            (2.0, 10.0, 0.5),
+        ] {
+            let base = uv.len();
+            uv.extend([
+                [cx - s, cy - s],
+                [cx - s, cy + s],
+                [cx + s, cy + s],
+                [cx + s, cy - s],
+            ]);
+            want -= 4.0 * s * s;
+            loops.push((base..base + 4).collect());
+        }
+        let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
+        assert_covers(&uv, &loops, want, &t);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        #[test]
+        fn random_grids_are_covered_once(
+            nx in 1usize..8,
+            ny in 1usize..8,
+            jitter in 0.0f64..0.45,
+            seed in 1u64..1_000_000,
+            skip in 0u64..5,
+        ) {
+            let (uv, loops, want) = grid_holes(nx, ny, jitter, seed, skip);
+            let t = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops);
+            proptest::prop_assert!(t.is_some(), "{}x{} jitter {} seed {} skip {}", nx, ny, jitter, seed, skip);
+            assert_covers(&uv, &loops, want, &t.unwrap());
+        }
     }
 
     #[test]

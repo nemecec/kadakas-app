@@ -136,6 +136,24 @@ pub enum State {
     Stale,
 }
 
+/// About how many bytes the JSON of a value takes, found without writing it. The caps count a
+/// payload that cannot be used (`Mesh3d::exact_bytes`) by this.
+pub fn json_bytes(v: &Value) -> usize {
+    match v {
+        Value::Null => 4,
+        Value::Bool(_) => 5,
+        Value::Number(_) => 12,
+        Value::String(s) => s.len() + 2,
+        Value::Array(a) => 2 + a.iter().map(|x| json_bytes(x) + 1).sum::<usize>(),
+        Value::Object(m) => {
+            2 + m
+                .iter()
+                .map(|(k, x)| k.len() + 4 + json_bytes(x))
+                .sum::<usize>()
+        }
+    }
+}
+
 /// A hash of the vertices and triangles (FNV-1a over the bits).
 pub fn fingerprint(vertices: &[DVec3], triangles: &[[u32; 3]]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -317,7 +335,22 @@ impl ExactSolid {
         for f in &mut out.faces {
             f.surface = f.surface.as_ref().map(|s| s.transformed(&sim));
             if sim.mirror {
-                f.same_sense = !f.same_sense;
+                // A mirror turns the sense of every angle. The normal `dP/du x dP/dv` of a
+                // surface that keeps its parameters turns around, so the face turns with it. A
+                // face with no surface has the plane of its loop, and that follows the loop.
+                // The loops run the other way round: the inside of a face is on the left of
+                // its loops, seen from the normal, and a mirror changes the left into the right.
+                if f.surface.is_some() {
+                    f.same_sense = !f.same_sense;
+                }
+                for l in &mut f.loops {
+                    l.items.reverse();
+                    for it in &mut l.items {
+                        if let LoopItem::Edge { forward, .. } = it {
+                            *forward = !*forward;
+                        }
+                    }
+                }
             }
         }
         out.unit_mm = self.unit_mm;
@@ -466,7 +499,7 @@ impl ExactSolid {
                     let outward = f.same_sense != f.flip;
                     // The face looks along the normal of the surface (outward) or against it,
                     // and the normal of the surface turns with the handedness of the frame.
-                    let handed = f.surface.as_ref().is_none_or(Surface::right_handed);
+                    let handed = f.surface.as_ref().is_none_or(Surface::natural_outward);
                     if m.get("kind") == Some(&json!("plane")) {
                         if !outward && let Some(n) = m.get("normal").and_then(|n| n.as_array()) {
                             let neg: Vec<Value> = n

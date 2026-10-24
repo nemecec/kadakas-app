@@ -19,7 +19,7 @@ The payload is opaque to the document. A file is always loaded, whatever the pay
 - A move, a turn or any other edit leaves such a payload as it is. It does not follow the edit, because the program cannot read it.
 - Object Info says "Exact data is kept but this program cannot use it" and gives the reason.
 - `mesh3d.exact_info` answers with `state: "unusable"` and the reason. `mesh3d.retessellate` refuses with `error_id: exact_unusable`.
-- A program of a later version that reads the file again can use the payload again.
+- A program of a later version that reads the file again uses the payload again.
 
 The payload is in millimeters, in the frame of the vertices of the mesh. A move or a turn of the object moves the payload too.
 
@@ -71,6 +71,7 @@ Not kept:
 - curve sets (they are polylines)
 - PMI and everything that is not geometry
 - faces that the importer failed to read (they are in the report)
+- the payloads of parts that the reader joined by color, because a file has more than 5,000 parts (`report.exact.without` names part `all` and the reason)
 
 ## Caps
 
@@ -84,19 +85,19 @@ An import measures the payload and keeps it only when it is small enough. The si
 | a B-spline patch with 8 by 8 control points | about 12 KB |
 | a bicubic patch with 400 by 400 control points | about 9.6 MB by `approx_bytes` |
 
-The STEP text of a part is about as long as its payload. One object keeps at most 8 MiB of `approx_bytes`. That is about 4.5 MB of JSON, or some 6,000 planar faces. One document keeps at most 64 MiB in all. The triangles of such a part take 10 to 30 MB. So the payload costs less than the mesh.
+The STEP text of a part is about as long as its payload. One object keeps at most 8 MiB of `approx_bytes`. That is about 4.5 MB of JSON (the count is 1.8 times the JSON for a usable payload, measured on a box: 6.7 KB against 3.6 KB), or some 7,500 planar faces. One document keeps at most 64 MiB in all. The triangles of such a part take 10 to 30 MB. So the payload costs less than the mesh.
 
 Over a cap, the mesh keeps its triangles and loses the payload. The report says so: `report.exact.without` lists each part with the reason and the size. The option `keep_exact` (default true) turns the payload off for a whole import.
 
 With the option `join`, the payloads of the parts are joined too. If the joined payload is over the cap of one object, the import does not fail. The joined mesh keeps its triangles, and `report.exact.without` names the reason.
 
-A copy of an object (duplicate, array, copy with a move) counts against the cap of the document too. A copy that would pass 64 MiB keeps its triangles only. The command answers with a note that counts these copies.
+Every way to bring payload bytes into a document is under the caps, in one place at the end of each command (`Tx::cap_exact`): a new object (`add_object`, `Command::AddObject`), a copy, a duplicate, an array, a group copy, and a changed shape. An object that would pass 8 MiB for one object or 64 MiB for the document keeps its triangles and loses its payload. The command answers with a note and with `exact_capped`, the count. The desktop app shows it in the status line (en-US and et). A payload that cannot be used counts by its JSON, because the file keeps it as it is. An object that did not grow keeps what it has, also in a file that is over the cap already. A file that is loaded or a document that a peer sends is not cut: the load never fails because of a payload.
 
 ## Collaboration
 
 A shared document sends the changes of a shape as properties (`kadakas-props`, `docsync`). The exact data of a mesh is a property of its own, `shape.exact`. A move of the object sends the triangles and the data, but a change of the colour sends neither. The value limit of a property is 32 MiB. One payload is at most 8 MiB by `approx_bytes`, which is some 4.5 MB of JSON.
 
-The sync budget is 16 MiB of JSON for one payload (`MAX_SYNC_EXACT_BYTES`). A payload over it is not sent. The other users get the triangles. The payload stays on the computer that made it and in its saved file. This case is rare: only a payload that is not usable can be so big, because the cap of one object is lower.
+The sync budget is 16 MiB of JSON for one payload (`MAX_SYNC_EXACT_BYTES`). A payload over it is not sent. The other users get the triangles. The payload stays on the computer that has it and in its saved file. A change of the others does not take it away: the document that is built from the shared state keeps the local payload of an object when the shared state has none and the payload is over the budget (`docsync::exact_syncs`). This case is rare: only a payload that is not usable can be so big, because the cap of one object is lower.
 
 Plan for later: if the data of a payload must be shared in parts, cut it by face into chunks of `shape.exact.<n>`, like the points of a site model. Then a change of one face sends one chunk.
 

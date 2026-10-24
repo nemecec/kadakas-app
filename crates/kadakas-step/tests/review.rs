@@ -314,7 +314,7 @@ fn a_file_with_more_entities_than_the_limit_stops_in_the_parser() {
     assert!(
         matches!(
             e,
-            kadakas_meshio::MeshError::TooManyParts { limit: 1000, .. }
+            kadakas_meshio::MeshError::TooManyEntities { limit: 1000, .. }
         ),
         "{e}"
     );
@@ -334,4 +334,255 @@ fn a_file_with_more_entities_than_the_limit_stops_in_the_parser() {
         ),
         "{e}"
     );
+}
+
+#[test]
+fn mapped_items_with_a_usage_and_a_plain_relationship_are_not_doubled() {
+    // The frame maps the plate twice and also uses the plate as a product, with a relationship
+    // that has no transformation. The mapped items place the plates: 24 triangles, no third
+    // plate at the origin, and no note about a missing placement.
+    let r = load("mapped_nauo.step");
+    let triangles: usize = r.set.parts.iter().map(|p| p.triangles.len()).sum();
+    assert_eq!(
+        triangles,
+        24,
+        "{:?}",
+        r.set.parts.iter().map(|p| &p.name).collect::<Vec<_>>()
+    );
+    assert_eq!(r.set.parts.len(), 1);
+    assert!(
+        !r.set
+            .notes
+            .iter()
+            .any(|n| n.contains("no placement") || n.contains("stand at the origin")),
+        "{:?}",
+        r.set.notes
+    );
+}
+
+#[test]
+fn a_file_with_many_mapped_items_of_an_empty_representation_is_read_in_a_blink() {
+    // 20,000 mapped items of a representation without geometry, and 100,000 points in the file.
+    // The size of the file was found again at every mapped item: 40 seconds.
+    let mut w = String::from(HEAD);
+    w.push_str(
+        "#1=(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNIT_ASSIGNED_CONTEXT((#2)) REPRESENTATION_CONTEXT('',''));\n\
+         #2=(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.));\n\
+         #3=CARTESIAN_POINT('',(0.,0.,0.));\n#4=AXIS2_PLACEMENT_3D('',#3,$,$);\n\
+         #5=SHAPE_REPRESENTATION('empty',(#4),#1);\n#6=REPRESENTATION_MAP(#4,#5);\n",
+    );
+    let items: Vec<String> = (0..20_000).map(|i| format!("#{}", 100 + i)).collect();
+    for i in 0..20_000 {
+        w.push_str(&format!("#{}=MAPPED_ITEM('',#6,#4);\n", 100 + i));
+    }
+    w.push_str(&format!(
+        "#50000=SHAPE_REPRESENTATION('top',({}),#1);\n",
+        items.join(",")
+    ));
+    for i in 0..100_000 {
+        w.push_str(&format!(
+            "#{}=CARTESIAN_POINT('',({i}.,0.,0.));\n",
+            200_000 + i
+        ));
+    }
+    w.push_str(TAIL);
+    let start = std::time::Instant::now();
+    let r = read(w.as_bytes(), &StepOptions::default());
+    // Debug builds are slow: a second is 100 times what a release build needs.
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    assert!(
+        matches!(r, Err(kadakas_meshio::MeshError::Empty)),
+        "{:?}",
+        r.map(|i| i.set.parts.len())
+    );
+}
+
+#[test]
+fn each_limit_has_its_own_error_and_words() {
+    use kadakas_meshio::MeshError;
+    use kadakas_step::StepLimits;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/step");
+    let bytes = |n: &str| std::fs::read(path.join(n)).unwrap();
+    let with = |step: StepLimits| StepOptions {
+        step,
+        ..Default::default()
+    };
+    // The memory of the parser.
+    let e = read(
+        &bytes("plate_hole.step"),
+        &with(StepLimits {
+            max_parse_memory: 2000,
+            ..Default::default()
+        }),
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(e, MeshError::TooMuchMemory { .. }), "{e}");
+    assert_eq!(e.kind(), "mesh_too_much_memory");
+    // The number of entities.
+    let e = read(
+        &bytes("plate_hole.step"),
+        &with(StepLimits {
+            max_entities: 10,
+            ..Default::default()
+        }),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(e.kind(), "mesh_too_many_entities");
+    assert!(
+        e.to_string().contains("entities") && !e.to_string().contains("parts"),
+        "{e}"
+    );
+    // The uses of products in an assembly, and the copies of mapped items.
+    let e = read(
+        &bytes("assembly.step"),
+        &with(StepLimits {
+            max_instances: 1,
+            ..Default::default()
+        }),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(e.kind(), "mesh_too_many_instances");
+    assert!(e.to_string().contains("uses products"), "{e}");
+    let e = read(
+        &bytes("mapped5.step"),
+        &with(StepLimits {
+            max_instances: 1,
+            ..Default::default()
+        }),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        matches!(e, MeshError::TooManyCopies { .. }) && e.to_string().contains("copy"),
+        "{e}"
+    );
+    // The clock: a limit of no time at all.
+    let e = read(
+        &bytes("sphere.step"),
+        &StepOptions {
+            tolerance_mm: Some(0.002),
+            step: StepLimits {
+                max_millis: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(e.kind(), "mesh_too_much_time", "{e}");
+    assert!(e.is_limit());
+}
+
+#[test]
+fn parts_that_are_joined_by_color_lose_their_exact_data_and_the_report_says_so() {
+    // More parts than `max_parts` are joined by color. The payloads of the parts do not fit the
+    // joined parts, so none is kept, and the report names the reason.
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/step/assembly.step");
+    let opts = StepOptions {
+        limits: kadakas_meshio::Limits {
+            max_parts: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = read(&std::fs::read(path).unwrap(), &opts).unwrap();
+    assert_eq!(r.set.parts.len(), 1);
+    assert!(r.exact.iter().all(Option::is_none));
+    assert_eq!(r.report.exact_kept, 0);
+    assert!(
+        r.report
+            .exact_dropped
+            .iter()
+            .any(|(_, why)| why.contains("joined by color")),
+        "{:?}",
+        r.report.exact_dropped
+    );
+    assert!(
+        r.report.to_json()["exact"]["without"][0]["reason"]
+            .as_str()
+            .is_some()
+    );
+}
+
+/// One planar face (faceted) of 10 mm squares with a grid of square holes.
+fn face_with_holes(nx: usize, ny: usize) -> (String, f64) {
+    let (w, h) = (nx as f64 * 20.0 + 10.0, ny as f64 * 20.0 + 10.0);
+    let mut s = String::new();
+    let mut id = 10usize;
+    let mut pt = |s: &mut String, x: f64, y: f64| {
+        id += 1;
+        s.push_str(&format!("#{id}=CARTESIAN_POINT('',({x:?},{y:?},0.));\n"));
+        id
+    };
+    let outer: Vec<usize> = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+        .iter()
+        .map(|p| pt(&mut s, p.0, p.1))
+        .collect();
+    let list = |v: &[usize]| {
+        v.iter()
+            .map(|i| format!("#{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    s.push_str(&format!(
+        "#1=POLY_LOOP('',({}));\n#2=FACE_OUTER_BOUND('',#1,.T.);\n",
+        list(&outer)
+    ));
+    let mut bounds = vec!["#2".to_string()];
+    let mut next = 100_000usize;
+    for j in 0..ny {
+        for i in 0..nx {
+            let (x, y) = (20.0 * i as f64 + 10.0, 20.0 * j as f64 + 10.0);
+            let c: Vec<usize> = [(x, y), (x, y + 10.0), (x + 10.0, y + 10.0), (x + 10.0, y)]
+                .iter()
+                .map(|p| pt(&mut s, p.0, p.1))
+                .collect();
+            s.push_str(&format!(
+                "#{next}=POLY_LOOP('',({}));\n#{}=FACE_BOUND('',#{next},.T.);\n",
+                list(&c),
+                next + 1
+            ));
+            bounds.push(format!("#{}", next + 1));
+            next += 2;
+        }
+    }
+    s.push_str(&format!(
+        "#3=FACE('',({}));\n#4=CLOSED_SHELL('',(#3));\n#5=FACETED_BREP('plate',#4);\n",
+        bounds.join(",")
+    ));
+    (s, w * h - 100.0 * (nx * ny) as f64)
+}
+
+#[test]
+fn a_planar_face_with_holes_in_a_column_a_row_or_a_block_is_cut() {
+    for (nx, ny) in [(1, 3), (1, 4), (3, 1), (2, 3), (3, 3), (10, 10)] {
+        let (body, want) = face_with_holes(nx, ny);
+        let r = run(&body);
+        assert!(
+            r.report
+                .skipped
+                .iter()
+                .all(|s| !s.1.contains("cannot be cut")),
+            "{nx}x{ny}: {:?}",
+            r.report.skipped
+        );
+        let p = &r.set.parts[0];
+        let area: f64 = p
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| p.positions[i as usize]);
+                (((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0).abs()
+            })
+            .sum();
+        assert!(
+            (area - want).abs() < 1e-6 * want,
+            "{nx}x{ny}: {area} instead of {want}"
+        );
+    }
 }

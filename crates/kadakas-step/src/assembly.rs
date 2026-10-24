@@ -99,22 +99,32 @@ impl<'a> Ctx<'a> {
         scale
     }
 
-    /// The size of the file: the diagonal of the box around all points, in millimeters.
-    fn diag_mm(&self, scale: f64) -> f64 {
-        let mut lo = DVec3::splat(f64::INFINITY);
-        let mut hi = DVec3::splat(f64::NEG_INFINITY);
-        for e in &self.file.entities {
-            if e.name == "CARTESIAN_POINT"
-                && let Some(c) = e.attrs.get(1).and_then(crate::ctx::reals)
-                && c.len() == 3
-            {
-                let p = DVec3::new(c[0], c[1], c[2]);
-                if p.is_finite() && p.abs().max_element() < 1e12 {
-                    lo = lo.min(p);
-                    hi = hi.max(p);
+    /// The size of the file: the diagonal of the box around all points, in millimeters. The box
+    /// is found once for the file and the scan is charged to the work counter. The unit of
+    /// each representation only scales it.
+    fn diag_mm(&mut self, scale: f64) -> f64 {
+        let (lo, hi) = match self.bbox {
+            Some(b) => b,
+            None => {
+                let mut lo = DVec3::splat(f64::INFINITY);
+                let mut hi = DVec3::splat(f64::NEG_INFINITY);
+                for e in &self.file.entities {
+                    if e.name == "CARTESIAN_POINT"
+                        && let Some(c) = e.attrs.get(1).and_then(crate::ctx::reals)
+                        && c.len() == 3
+                    {
+                        let p = DVec3::new(c[0], c[1], c[2]);
+                        if p.is_finite() && p.abs().max_element() < 1e12 {
+                            lo = lo.min(p);
+                            hi = hi.max(p);
+                        }
+                    }
                 }
+                let _ = self.charge(self.file.entities.len() as u64 / 4 + 1);
+                self.bbox = Some((lo, hi));
+                (lo, hi)
             }
-        }
+        };
         if lo.x > hi.x {
             1000.0
         } else {
@@ -181,8 +191,8 @@ impl<'a> Ctx<'a> {
         let origin = self.axis2(reference(attr(map, 0)?).unwrap_or(0))?;
         let target = self.axis2(reference(attr(e, 2)?).unwrap_or(0))?;
         let (_, ctx_id) = self.rep_parts(rep)?;
-        self.mapped_used.insert(rep);
         let inner = self.rep_geometry(rep, cache, depth + 1)?;
+        self.mapped_used.insert(rep);
         let (inner_len, _) = self.context_units(ctx_id);
         let inner_scale = self.opts.unit.map_or(inner_len.unwrap_or(1.0), |u| u.mm());
         let m = mm_frame(target, scale) * mm_frame(origin, inner_scale).inverse();
@@ -288,10 +298,27 @@ impl<'a> Ctx<'a> {
         if !any_geometry {
             return self.loose_items(&mut cache, out);
         }
+        // A product whose representation is mapped by another representation is placed by
+        // the mapped items. It is not also a child with a placement of its own, and not a root
+        // at the origin.
+        let mapped_targets: HashSet<u64> = file
+            .entities
+            .iter()
+            .filter(|e| e.name == "REPRESENTATION_MAP")
+            .filter_map(|e| e.attrs.get(1).and_then(reference))
+            .collect();
+        let mapped_prod: HashSet<u64> = pd_reps
+            .iter()
+            .filter(|(_, rs)| rs.iter().any(|r| mapped_targets.contains(r)))
+            .map(|(p, _)| *p)
+            .collect();
         // Transform of each usage.
         let mut tf: HashMap<u64, DAffine3> = HashMap::new();
         let (mut missing, mut unreadable) = (0u64, 0u64);
         for u in &usages {
+            if mapped_prod.contains(&u.child) {
+                continue;
+            }
             let Some(pl) = pds_of_nauo.get(&u.nauo).and_then(|pds| places.get(pds)) else {
                 missing += 1;
                 continue;
@@ -313,35 +340,19 @@ impl<'a> Ctx<'a> {
                 "{unreadable} assembly usages have a placement that cannot be read: the part stands where its own coordinates put it"
             ));
         }
-        // A product whose representation is mapped by another representation is placed by
-        // the mapped items. It is not also a root at the origin.
-        let mapped_targets: HashSet<u64> = file
-            .entities
-            .iter()
-            .filter(|e| e.name == "REPRESENTATION_MAP")
-            .filter_map(|e| e.attrs.get(1).and_then(reference))
-            .collect();
         let children: HashSet<u64> = usages.iter().map(|u| u.child).collect();
         let mut kids: HashMap<u64, Vec<&Usage>> = HashMap::new();
-        for u in &usages {
+        for u in usages.iter().filter(|u| !mapped_prod.contains(&u.child)) {
             kids.entry(u.parent).or_default().push(u);
         }
         let mut roots: Vec<u64> = pd_name
             .keys()
             .copied()
-            .filter(|p| !children.contains(p))
+            .filter(|p| !children.contains(p) && !mapped_prod.contains(p))
             .collect();
         roots.sort_unstable();
-        let mut held_back: Vec<u64> = Vec::new();
-        roots.retain(|p| {
-            let mapped = pd_reps
-                .get(p)
-                .is_some_and(|rs| rs.iter().any(|r| mapped_targets.contains(r)));
-            if mapped {
-                held_back.push(*p);
-            }
-            !mapped
-        });
+        let mut held_back: Vec<u64> = mapped_prod.iter().copied().collect();
+        held_back.sort_unstable();
         let graph = Graph {
             pd_name: &pd_name,
             pd_reps: &pd_reps,
@@ -390,7 +401,7 @@ impl<'a> Ctx<'a> {
             st.visits += 1;
             self.charge(1 + path.len() as u64)?;
             if st.visits > self.limits.max_instances {
-                return Err(Fail::Abort(kadakas_meshio::MeshError::TooManyParts {
+                return Err(Fail::Abort(kadakas_meshio::MeshError::TooManyInstances {
                     count: st.visits as u64,
                     limit: self.limits.max_instances as u64,
                 }));
@@ -416,7 +427,7 @@ impl<'a> Ctx<'a> {
                     continue;
                 }
                 if out.instances.len() >= self.limits.max_instances {
-                    return Err(Fail::Abort(kadakas_meshio::MeshError::TooManyParts {
+                    return Err(Fail::Abort(kadakas_meshio::MeshError::TooManyInstances {
                         count: out.instances.len() as u64 + 1,
                         limit: self.limits.max_instances as u64,
                     }));

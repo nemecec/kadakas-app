@@ -312,11 +312,11 @@ pub(crate) fn describe() -> Value {
                 "keep_exact": "STEP only. true (default): each mesh keeps the exact surfaces (radii, normals, curves) next to its triangles, up to 8 MiB for one object and 64 MiB for the document. false keeps the triangles only. Over a cap the mesh keeps its triangles and the report names the part",
                 "merge": "to_surface: true (default) merges coplanar triangles into faces, false keeps every triangle a face",
                 "preview": "true reads the file and answers with the report, including the number of edges that soften_below_angle would soften, and changes nothing",
-                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session. A STEP file is limited to 134217728 (128 MiB) because it takes about 18 times its size in memory",
+                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session. A STEP file is limited to 134217728 (128 MiB) (64 MiB in the browser build) because it takes 9 to 14 times its size in memory",
                 "max_triangles": "Default and most 8000000, in all parts together",
                 "max_vertices": "Default and most 4000000, in all parts together"
             },
-            "step_result": "A STEP import adds report.step: {schemas, entities_read, entities_used, entities_skipped (read equals used plus skipped), used: [{entity, count}], skipped: [{entity, reason, count}], tessellated: [{surface, faces, triangles}], products, instances, length_unit_mm, unit_from_file, tolerance_mm, angle_deg, welded_vertices}. It adds report.exact: {enabled, kept_objects, approx_bytes, lost_to_surface, without: [{part, reason}]} and report.curves (3D polylines made). A file with no readable geometry is refused with error_id mesh_unsupported and the reasons.",
+            "step_result": "A STEP import adds report.step: {schemas, entities_read, entities_used, entities_skipped (read equals used plus skipped), used: [{entity, count}], skipped: [{entity, reason, count}], tessellated: [{surface, faces, triangles}], products, instances, length_unit_mm, unit_from_file, tolerance_mm, angle_deg, welded_vertices, work_units}. It adds report.exact: {enabled, kept_objects, approx_bytes, lost_to_surface, without: [{part, reason}]} and report.curves (3D polylines made). A file with no readable geometry is refused with error_id mesh_unsupported and the reasons.",
             "result": "{imported, skipped, softened_edges (always, 0 when nothing was softened), report: {format, bytes, unit, up_axis, parts, vertices, triangles, degenerate_triangles, bounds_mm: {min, max, size}, objects: [{id, name, kind, vertices, triangles, color}], notes, to_surface?: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, welded_vertices, degenerate_triangles, duplicate_triangles, reversed_triangles, joined_slivers, unmerged_regions, notes}, preview?}, georeference}. A file that is too large, has too many triangles, ends too soon, has a number that is not finite or an index that does not exist is refused with an error whose reason names the problem (mesh_file_too_large, mesh_too_many_triangles, mesh_truncated, mesh_not_finite, mesh_bad_index and so on) and whose data has the counts. Nothing changes",
             "examples": [
                 {"method": "import.file", "params": {"path": "/data/model.obj", "options": {"unit": "mm", "up_axis": "z"}}},
@@ -478,7 +478,7 @@ impl Session {
                 .min(mesh3d::MAX_VERTICES as u64),
             ..Limits::default()
         };
-        // A STEP file takes about 18 times its size in memory: its limit is lower.
+        // A STEP file takes 9 to 14 times its size in memory: its limit is lower.
         let limits = if step {
             Limits {
                 max_bytes: limits.max_bytes.min(kadakas_step::DEFAULT_MAX_BYTES),
@@ -635,7 +635,7 @@ impl Session {
             .objects
             .values()
             .filter_map(|o| match &o.shape {
-                Shape::Mesh3d(m) => m.exact.as_ref().map(|e| e.approx_bytes()),
+                Shape::Mesh3d(m) => Some(m.exact_bytes()),
                 _ => None,
             })
             .sum();

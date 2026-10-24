@@ -90,3 +90,116 @@ fn a_copy_over_the_cap_of_the_document_keeps_the_triangles_only() {
     // The original keeps its data.
     assert!(kept(&ed, first));
 }
+
+fn has(ed: &Editor, id: ObjectId) -> (bool, bool) {
+    match &ed.doc().object(id).unwrap().shape {
+        Shape::Mesh3d(m) => (m.exact.is_some(), m.exact_unusable.is_some()),
+        _ => panic!(),
+    }
+}
+
+/// A mesh whose payload cannot be used (a later version), of about `bytes` of JSON.
+fn unusable(bytes: usize) -> Mesh3d {
+    let mut m = mesh(0);
+    m.drop_exact();
+    m.exact_unusable = Some(Box::new(kadakas_core::mesh3d::UnusableExact {
+        raw: serde_json::json!({"version": 9, "pad": "x".repeat(bytes)}),
+        reason: "version 9".into(),
+    }));
+    m
+}
+
+#[test]
+fn a_new_object_over_the_cap_of_one_object_keeps_its_triangles_only() {
+    let mut ed = Editor::new(Document::default());
+    let out = ed
+        .execute(&Command::AddObject {
+            shape: Shape::Mesh3d(Box::new(mesh(exact::MAX_OBJECT_BYTES + 5000))),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    assert!(
+        out.notes.iter().any(|n| n.contains("for one object")),
+        "{:?}",
+        out.notes
+    );
+    assert_eq!(has(&ed, ObjectId(out.created[0])), (false, false));
+    // Undo and redo keep it that way.
+    assert!(ed.undo());
+    assert!(ed.redo());
+    assert_eq!(has(&ed, ObjectId(out.created[0])), (false, false));
+}
+
+#[test]
+fn copy_objects_and_unusable_data_obey_the_cap_of_the_document_too() {
+    let mut ed = Editor::new(Document::default());
+    // Seven objects of 8 MiB less a little: 56 MiB. Then a payload that cannot be used.
+    let ids: Vec<ObjectId> = (0..7)
+        .map(|_| add(&mut ed, mesh(exact::MAX_OBJECT_BYTES - 1000)))
+        .collect();
+    let copy_objects = |ed: &mut Editor, id| {
+        ed.execute(&Command::CopyObjects {
+            ids: vec![id],
+            delta: glam::DVec2::new(10.0, 0.0),
+        })
+        .unwrap()
+    };
+    // The first copy fits (the 8th). The next ones do not.
+    let out = copy_objects(&mut ed, ids[0]);
+    assert!(out.notes.is_empty(), "{:?}", out.notes);
+    assert_eq!(has(&ed, ObjectId(out.created[0])), (true, false));
+    let out = copy_objects(&mut ed, ids[0]);
+    assert!(
+        out.notes.iter().any(|n| n.contains("document")),
+        "{:?}",
+        out.notes
+    );
+    assert_eq!(has(&ed, ObjectId(out.created[0])), (false, false));
+    // A new object with a payload that cannot be used is counted by its JSON: no room for it.
+    let out = ed
+        .execute(&Command::AddObject {
+            shape: Shape::Mesh3d(Box::new(unusable(6 * 1024 * 1024))),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .unwrap();
+    assert!(
+        out.notes.iter().any(|n| n.contains("document")),
+        "{:?}",
+        out.notes
+    );
+    assert_eq!(has(&ed, ObjectId(out.created[0])), (false, false));
+}
+
+#[test]
+fn ten_array_copies_of_an_unusable_payload_do_not_pass_the_cap() {
+    // The payload that the file brings is kept as it is, because the program cannot judge it.
+    // Copies of it are new payload bytes, and ten of them would pass the cap of the document.
+    let mut ed = Editor::new(Document::default());
+    let id = add(&mut ed, unusable(7 * 1024 * 1024));
+    assert_eq!(has(&ed, id), (false, true));
+    let out = ed
+        .execute(&Command::TransformObjects3d {
+            ids: vec![id],
+            matrix: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 100.0, 0.0, 0.0],
+            copy: true,
+            count: 10,
+        })
+        .unwrap();
+    let kept = out
+        .created
+        .iter()
+        .filter(|c| has(&ed, ObjectId(**c)).1)
+        .count();
+    assert!(kept <= 8, "{kept} copies keep 7 MiB each");
+    assert!(
+        out.notes
+            .iter()
+            .any(|n| n.contains("keep their triangles only")),
+        "{:?}",
+        out.notes
+    );
+}

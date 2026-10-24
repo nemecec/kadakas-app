@@ -150,7 +150,7 @@ pub fn flatten(kind: Kind, whole: Map<String, Value>) -> Map<String, Value> {
                 // the data are never one value that passes the limit of a value. Data over the
                 // budget stays on the computer that made it: the others get the triangles.
                 if let Some(e) = m.remove("exact")
-                    && serde_json::to_vec(&e).is_ok_and(|b| b.len() <= MAX_SYNC_EXACT_BYTES)
+                    && exact_value_syncs(&e)
                 {
                     out.insert("shape.exact".into(), e);
                 }
@@ -335,6 +335,25 @@ pub fn unflatten(kind: Kind, flat: &Map<String, Value>) -> Map<String, Value> {
 /// One object holds 8 MiB of it at most, in the size that the program counts. The JSON is
 /// larger than that count, and one value can have 32 MiB, so this is half of it.
 pub const MAX_SYNC_EXACT_BYTES: usize = 16 * 1024 * 1024;
+
+fn exact_value_syncs(e: &Value) -> bool {
+    serde_json::to_vec(e).is_ok_and(|b| b.len() <= MAX_SYNC_EXACT_BYTES)
+}
+
+/// Does the exact data of this mesh (usable or not) go to the others? One that does not stays on
+/// the computer that has it: a rebuilt document must keep it (see `materialize`).
+pub fn exact_syncs(m: &kadakas_core::mesh3d::Mesh3d) -> bool {
+    // The count of the caps is under the JSON for a usable payload and near it for the other:
+    // a payload far under the budget needs no check.
+    if m.exact_bytes() < MAX_SYNC_EXACT_BYTES / 4 {
+        return true;
+    }
+    match (&m.exact, &m.exact_unusable) {
+        (Some(e), _) => serde_json::to_vec(e).is_ok_and(|b| b.len() <= MAX_SYNC_EXACT_BYTES),
+        (None, Some(u)) => exact_value_syncs(&u.raw),
+        (None, None) => true,
+    }
+}
 
 /// The most points of a site model in one property.
 pub const POINT_CHUNK: usize = 256;
@@ -841,6 +860,52 @@ mod tests {
         let flat = flatten(Kind::Object, mesh(big));
         assert!(!flat.contains_key("shape.exact") && flat["shape"].get("exact").is_none());
         assert_eq!(flat["shape"]["triangles"], serde_json::json!([[0, 1, 2]]));
+    }
+
+    #[test]
+    fn exact_data_that_is_too_big_to_share_stays_on_the_computer_that_has_it() {
+        use kadakas_core::command::Command;
+        use kadakas_core::mesh3d::{Mesh3d, UnusableExact};
+        use kadakas_core::model::{Attributes, Shape};
+        let mut ed = editor();
+        let mesh = Mesh3d {
+            vertices: vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::Y],
+            triangles: vec![[0, 1, 2]],
+            ..Default::default()
+        };
+        let out = ed
+            .execute(&Command::AddObject {
+                shape: Shape::Mesh3d(Box::new(mesh)),
+                layer: None,
+                class: None,
+                attrs: Attributes::default(),
+            })
+            .unwrap();
+        // A file brought a payload that cannot be used and is too big to share.
+        let mut doc = ed.doc().clone();
+        let id = kadakas_core::model::ObjectId(out.created[0]);
+        let Some(Shape::Mesh3d(m)) = doc.object_mut(id).map(|o| &mut o.shape) else {
+            panic!()
+        };
+        m.exact_unusable = Some(Box::new(UnusableExact {
+            raw: serde_json::json!({"version": 9, "pad": "x".repeat(MAX_SYNC_EXACT_BYTES + 1)}),
+            reason: "version 9".into(),
+        }));
+        assert!(!exact_syncs(m));
+        // The others have the triangles only. The document that is built from what the
+        // others have, with this document as the base, keeps the data of this computer.
+        let view = replica_of(&doc);
+        let built = crate::materialize::materialize(&view, &doc).doc;
+        let Shape::Mesh3d(m) = &built.object(id).unwrap().shape else {
+            panic!()
+        };
+        assert!(m.exact_unusable.is_some() && m.triangles.len() == 1);
+        // Without the base, the object has the triangles only.
+        let bare = crate::materialize::materialize(&view, &Document::default()).doc;
+        let Shape::Mesh3d(m) = &bare.object(id).unwrap().shape else {
+            panic!()
+        };
+        assert!(m.exact_unusable.is_none() && m.exact.is_none());
     }
 
     #[test]

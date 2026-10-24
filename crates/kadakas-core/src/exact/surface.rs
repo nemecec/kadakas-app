@@ -140,15 +140,119 @@ impl Surface {
     }
 
     /// False for a surface whose frame is left-handed (a mirror made it so). Then the normal
-    /// `dP/du x dP/dv` points to the other side than for a right-handed frame.
+    /// `dP/du x dP/dv` points to the other side than for a right-handed frame. A plane does not
+    /// depend on its third axis.
     pub fn right_handed(&self) -> bool {
         match self {
-            Surface::Plane { f }
-            | Surface::Cylinder { f, .. }
+            Surface::Cylinder { f, .. }
             | Surface::Cone { f, .. }
             | Surface::Sphere { f, .. }
             | Surface::Torus { f, .. } => f.matrix3.determinant() > 0.0,
             _ => true,
+        }
+    }
+
+    /// The same surface with a right-handed frame, if the frame is left-handed (the angle `u`
+    /// runs the other way). The normal `dP/du x dP/dv` of the new surface is the opposite of
+    /// the old one at every point, so the one who cuts the faces turns `same_sense` too.
+    pub fn right_handed_form(&self) -> Option<Surface> {
+        if self.right_handed() {
+            return None;
+        }
+        let turn = |f: &DAffine3| DAffine3 {
+            matrix3: glam::DMat3::from_cols(f.matrix3.x_axis, -f.matrix3.y_axis, f.matrix3.z_axis),
+            translation: f.translation,
+        };
+        Some(match self {
+            Surface::Cylinder { f, r } => Surface::Cylinder { f: turn(f), r: *r },
+            Surface::Cone { f, r, angle } => Surface::Cone {
+                f: turn(f),
+                r: *r,
+                angle: *angle,
+            },
+            Surface::Sphere { f, r } => Surface::Sphere { f: turn(f), r: *r },
+            Surface::Torus { f, big, small } => Surface::Torus {
+                f: turn(f),
+                big: *big,
+                small: *small,
+            },
+            other => other.clone(),
+        })
+    }
+
+    /// Does the normal `dP/du x dP/dv` point away from the inside of the surface (away from the
+    /// axis of a cylinder or a revolution, from the centre of a sphere, from the centre of
+    /// curvature of a patch)? A face whose normal points the other way is a bore or a hollow.
+    /// A plane has no inside: it answers true.
+    pub fn natural_outward(&self) -> bool {
+        // The side of `radial` that the normal is on at some sample, the first one that tells.
+        let side = |samples: &mut dyn Iterator<Item = (f64, f64, DVec3)>| -> Option<bool> {
+            for (u, v, radial) in samples {
+                let (pu, pv) = self.partials(u, v);
+                let n = pu.cross(pv);
+                let d = n.dot(radial);
+                if n.is_finite()
+                    && radial.is_finite()
+                    && d.abs() > 1e-9 * n.length() * radial.length()
+                {
+                    return Some(d > 0.0);
+                }
+            }
+            None
+        };
+        match self {
+            Surface::Plane { .. } => true,
+            Surface::Cylinder { .. }
+            | Surface::Cone { .. }
+            | Surface::Sphere { .. }
+            | Surface::Torus { .. } => self.right_handed(),
+            Surface::Revolution { curve, o, axis } => {
+                // A line has no natural range: its parameter starts at its point.
+                let (a, b) = curve.natural_range().unwrap_or((0.0, 1.0));
+                let ax = axis.normalize_or_zero();
+                side(&mut [0.5, 0.3, 0.7, 0.1, 0.9].into_iter().map(|k| {
+                    let v = a + (b - a) * k;
+                    let rel = self.eval(0.0, v) - *o;
+                    (0.0, v, rel - ax * rel.dot(ax))
+                }))
+                .unwrap_or(true)
+            }
+            Surface::Extrusion { curve, dir } => {
+                let (a, b) = curve.natural_range().unwrap_or((0.0, 1.0));
+                let d = dir.normalize_or_zero();
+                let centre = (0..16)
+                    .map(|k| curve.eval(a + (b - a) * (k as f64 + 0.5) / 16.0))
+                    .sum::<DVec3>()
+                    / 16.0;
+                side(&mut [0.5, 0.3, 0.7, 0.1, 0.9].into_iter().map(|k| {
+                    let u = a + (b - a) * k;
+                    let rel = self.eval(u, 0.0) - centre;
+                    (u, 0.0, rel - d * rel.dot(d))
+                }))
+                .unwrap_or(true)
+            }
+            Surface::Spline(s) => {
+                let ((u0, u1), (v0, v1)) = s.domain();
+                let (u, v) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
+                let (hu, hv) = ((u1 - u0) * 0.02, (v1 - v0) * 0.02);
+                let p = |du: f64, dv: f64| self.eval(u + du, v + dv);
+                let p0 = p(0.0, 0.0);
+                let pu = (p(hu, 0.0) - p(-hu, 0.0)) / (2.0 * hu);
+                let pv = (p(0.0, hv) - p(0.0, -hv)) / (2.0 * hv);
+                let puu = (p(hu, 0.0) - 2.0 * p0 + p(-hu, 0.0)) / (hu * hu);
+                let pvv = (p(0.0, hv) - 2.0 * p0 + p(0.0, -hv)) / (hv * hv);
+                let puv = (p(hu, hv) - p(hu, -hv) - p(-hu, hv) + p(-hu, -hv)) / (4.0 * hu * hv);
+                let (e, f, g) = (pu.dot(pu), pu.dot(pv), pv.dot(pv));
+                let det = e * g - f * f;
+                if det <= 0.0 {
+                    return true;
+                }
+                // The mean curvature vector points to the centre of curvature.
+                let h = (g * puu - 2.0 * f * puv + e * pvv) / (2.0 * det);
+                let n = pu.cross(pv);
+                let d = n.dot(h);
+                !(n.is_finite() && h.is_finite() && d > 1e-9 * n.length() * h.length())
+            }
         }
     }
 
@@ -171,6 +275,27 @@ impl Surface {
                 n + 40 * 4
             }
             _ => 2,
+        }
+    }
+
+    /// About how many steps of work one call of `eval` takes, for the work budget of an import
+    /// (one step is about 40 ns on a current computer).
+    pub fn eval_cost(&self) -> u64 {
+        match self {
+            Surface::Plane { .. } => 1,
+            Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Sphere { .. } => 2,
+            Surface::Torus { .. } => 3,
+            Surface::Revolution { curve, .. } | Surface::Extrusion { curve, .. } => {
+                match curve.as_ref() {
+                    Curve::Spline(s) => (s.knots.degree as u64 + 1) * 2 + 10,
+                    Curve::Poly { points } => 4 + (points.len().max(2).ilog2() as u64),
+                    _ => 5,
+                }
+            }
+            Surface::Spline(s) => {
+                let (p, q) = (s.u.degree as u64, s.v.degree as u64);
+                (p + 1) * (q + 1) / 2 + 2 * (p + q) + 10
+            }
         }
     }
 
@@ -540,6 +665,115 @@ fn spline_uv(
 mod tests {
     use super::*;
     use crate::exact::nurbs::Knots;
+
+    fn mirror_x() -> crate::exact::Similarity {
+        crate::exact::Similarity::of(&DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0))).unwrap()
+    }
+
+    /// A mirror turns the normal of a surface that keeps its parameters, and the answer of
+    /// `natural_outward` follows it, so a face (which turns its sense too) keeps its answer.
+    fn assert_follows_mirror(s: &Surface, outward: bool) {
+        assert_eq!(s.natural_outward(), outward, "{}", s.kind());
+        let m = s.transformed(&mirror_x());
+        assert_eq!(m.natural_outward(), !outward, "{} mirrored", s.kind());
+    }
+
+    #[test]
+    fn the_inside_of_every_kind_of_surface_is_found() {
+        let f = DAffine3::from_translation(DVec3::new(1.0, 2.0, 3.0));
+        // A cylinder, a cone, a sphere and a torus are outward until a mirror leaves a left frame.
+        for s in [
+            Surface::Cylinder { f, r: 4.0 },
+            Surface::Cone {
+                f,
+                r: 4.0,
+                angle: 0.3,
+            },
+            Surface::Sphere { f, r: 5.0 },
+            Surface::Torus {
+                f,
+                big: 10.0,
+                small: 2.0,
+            },
+        ] {
+            assert_follows_mirror(&s, true);
+            let left = s.transformed(&mirror_x());
+            assert!(!left.right_handed());
+            let right = left.right_handed_form().expect("a right-handed form");
+            assert!(right.right_handed() && right.right_handed_form().is_none());
+            // The same points, and the normal of the new surface is the opposite one.
+            let (u, v) = (0.7, 0.4);
+            let p = left.eval(u, v);
+            let (u2, v2) = right.uv_of(p, None).unwrap();
+            assert!(near(right.eval(u2, v2), p), "{}", s.kind());
+            let (n1, n2) = (left.normal(u, v).unwrap(), right.normal(u2, v2).unwrap());
+            assert!(near(n1, -n2), "{}", s.kind());
+        }
+        assert!(Surface::Plane { f }.natural_outward());
+        // A revolution of a line that runs along the axis: the line one way or the other.
+        let line = |d: DVec3| {
+            Arc::new(Curve::Line {
+                o: DVec3::new(5.0, 0.0, 0.0),
+                d,
+            })
+        };
+        let rev = |d: DVec3| Surface::Revolution {
+            curve: line(d),
+            o: DVec3::ZERO,
+            axis: DVec3::Z,
+        };
+        assert_follows_mirror(&rev(DVec3::Z), true);
+        assert_follows_mirror(&rev(-DVec3::Z), false);
+        // An extrusion of a circle along its axis: up or down.
+        let circle = Arc::new(Curve::Circle {
+            f: DAffine3::IDENTITY,
+            r: 5.0,
+        });
+        assert_follows_mirror(
+            &Surface::Extrusion {
+                curve: circle.clone(),
+                dir: DVec3::Z,
+            },
+            true,
+        );
+        assert_follows_mirror(
+            &Surface::Extrusion {
+                curve: circle,
+                dir: -DVec3::Z,
+            },
+            false,
+        );
+        // A dome of a patch, seen from above or from below, and flat.
+        let patch = |z: f64, swap: bool| {
+            let mut pts = Vec::new();
+            for i in 0..3 {
+                for j in 0..3 {
+                    let h = if i == 1 && j == 1 { z } else { 0.0 };
+                    let (a, b) = if swap { (j, i) } else { (i, j) };
+                    pts.push(DVec3::new(a as f64, b as f64, h));
+                }
+            }
+            let knots = Knots {
+                degree: 2,
+                values: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                count: 3,
+            };
+            Surface::Spline(BSplineSurface {
+                u: knots.clone(),
+                v: knots,
+                points: pts,
+                weights: None,
+            })
+        };
+        let (up, down) = (patch(2.0, false), patch(-2.0, false));
+        assert_ne!(up.natural_outward(), down.natural_outward());
+        assert_ne!(up.natural_outward(), patch(2.0, true).natural_outward());
+        assert!(
+            patch(0.0, false).natural_outward(),
+            "a flat patch has no inside"
+        );
+        assert_follows_mirror(&up, up.natural_outward());
+    }
 
     fn near(a: DVec3, b: DVec3) -> bool {
         (a - b).length() < 1e-6

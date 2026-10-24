@@ -1,6 +1,11 @@
 ## panels: panels.rs
 
 panels-error = Error: { $e }
+panels-exact-capped = The exact data of { $count } { $count ->
+    [one] object is
+   *[other] objects are
+} not kept, because it is over the size limit. The triangles are kept.
+panels-command-notes = Done. { $notes }
 panels-file = File
 panels-new = New
 panels-open = Open...

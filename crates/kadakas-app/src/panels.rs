@@ -141,6 +141,12 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
         Ok(out) => {
             let doc = &session.editor.doc();
             session.selection.retain(|id| doc.object(*id).is_some());
+            // What the command did that the person did not ask for.
+            if out.exact_capped > 0 {
+                *status = tr!("panels-exact-capped", count = out.exact_capped);
+            } else if !out.notes.is_empty() {
+                *status = tr!("panels-command-notes", notes = out.notes.join(" "));
+            }
             Some(out)
         }
         Err(e) => {
@@ -2054,6 +2060,44 @@ mod tests {
             attrs: Attributes::default(),
         };
         ObjectId(session.editor.execute(&cmd).unwrap().created[0])
+    }
+
+    #[test]
+    fn a_command_that_takes_exact_data_away_says_so_in_the_status_line() {
+        use kadakas_core::exact::{self, ExactSolid};
+        let mut session = Session::with_sequential_ids();
+        let mut mesh = kadakas_core::mesh3d::Mesh3d {
+            vertices: vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::Y],
+            triangles: vec![[0, 1, 2]],
+            ..Default::default()
+        };
+        mesh.set_exact(ExactSolid {
+            version: exact::VERSION,
+            product: "p".into(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: vec![glam::DVec3::ZERO; exact::MAX_OBJECT_BYTES / 56 + 10],
+            edges: vec![],
+            shells: vec![],
+            faces: vec![],
+            mesh_hash: 0,
+            extra: Default::default(),
+        });
+        let mut status = String::new();
+        let cmd = Command::AddObject {
+            shape: Shape::Mesh3d(Box::new(mesh)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        };
+        assert!(run_command(&mut session, &cmd, &mut status).is_some());
+        assert!(status.contains("1 object is not kept"), "{status}");
+        let et = kadakas_l10n::with_language("et", || tr!("panels-exact-capped", count = 2));
+        assert!(et.contains("2 objekti"), "{et}");
+        // A note of another kind is shown too.
+        let note = tr!("panels-command-notes", notes = "x moved");
+        assert!(note.contains("x moved"));
     }
 
     #[test]

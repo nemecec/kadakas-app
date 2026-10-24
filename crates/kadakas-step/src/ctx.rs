@@ -58,6 +58,8 @@ pub struct Ctx<'a> {
     pub tol: f64,
     /// The tolerance of the first representation, in millimeters.
     pub tol_mm: Option<f64>,
+    /// The box around all points of the file, in file units. Found once (see `diag_mm`).
+    pub bbox: Option<(glam::DVec3, glam::DVec3)>,
     /// The angle step in radians.
     pub angle: f64,
     /// Radians in one plane angle unit of the representation that is being read.
@@ -82,9 +84,50 @@ pub struct Ctx<'a> {
     pub bodies_copied: u64,
     /// Representations that a mapped item has used.
     pub mapped_used: HashSet<u64>,
+    pub clock: Clock,
 }
 
 const MAX_NOTES: usize = 100;
+
+/// A safety guard against the wall clock, next to the work counter. The counter is the same on
+/// every computer, but the time of a step is not: a debug build or a slow computer takes longer
+/// than the counter says. The browser build (wasm) has no clock in the standard library, so
+/// the guard does nothing there.
+pub struct Clock {
+    #[cfg(not(target_arch = "wasm32"))]
+    start: std::time::Instant,
+    mark: u64,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock {
+            #[cfg(not(target_arch = "wasm32"))]
+            start: std::time::Instant::now(),
+            mark: 0,
+        }
+    }
+}
+
+impl Clock {
+    /// `Some((elapsed ms, limit ms))` when the time is over the limit. The clock is read only
+    /// after every 65,536 steps of work, so the check costs nothing.
+    pub fn check(&mut self, work: u64, limit_ms: u64) -> Option<(u64, u64)> {
+        if work < self.mark {
+            return None;
+        }
+        self.mark = work.saturating_add(1 << 16);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ms = self.start.elapsed().as_millis() as u64;
+            if ms > limit_ms {
+                return Some((ms, limit_ms));
+            }
+        }
+        let _ = limit_ms;
+        None
+    }
+}
 
 impl<'a> Ctx<'a> {
     pub fn new(file: &'a StepFile, opts: &'a StepOptions, limits: &'a StepLimits) -> Ctx<'a> {
@@ -99,6 +142,7 @@ impl<'a> Ctx<'a> {
             limits,
             tol: 0.1,
             tol_mm: None,
+            bbox: None,
             angle: 0.3,
             angle_unit: 1.0,
             curves: HashMap::new(),
@@ -113,6 +157,7 @@ impl<'a> Ctx<'a> {
             extra_bytes: 0,
             bodies_copied: 0,
             mapped_used: HashSet::new(),
+            clock: Clock::default(),
         }
     }
 
@@ -209,11 +254,18 @@ impl<'a> Ctx<'a> {
     /// Adds steps of work and stops the import at the limit.
     pub fn charge(&mut self, n: u64) -> R<()> {
         self.work = self.work.saturating_add(n);
-        if self.work > self.limits.max_work {
+        let allowed = self
+            .limits
+            .max_work
+            .saturating_add(self.limits.work_per_triangle.saturating_mul(self.triangles));
+        if self.work > allowed {
             return Err(Fail::Abort(MeshError::TooMuchWork {
                 units: self.work,
-                limit: self.limits.max_work,
+                limit: allowed,
             }));
+        }
+        if let Some((millis, limit)) = self.clock.check(self.work, self.limits.max_millis) {
+            return Err(Fail::Abort(MeshError::TooMuchTime { millis, limit }));
         }
         Ok(())
     }
@@ -231,7 +283,7 @@ impl<'a> Ctx<'a> {
         self.bodies_copied += bodies;
         let cap = self.limits.max_instances as u64 * 2;
         if self.bodies_copied > cap {
-            return Err(Fail::Abort(MeshError::TooManyParts {
+            return Err(Fail::Abort(MeshError::TooManyCopies {
                 count: self.bodies_copied,
                 limit: cap,
             }));

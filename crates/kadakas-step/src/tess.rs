@@ -581,7 +581,8 @@ impl Tessellator<'_> {
             Some(Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. }) | None => 0,
             Some(_) => 4_000,
         };
-        self.work(pts.len() as u64 + search)?;
+        self.work(pts.len() as u64)?;
+        self.work(search)?;
         let n = pts.len();
         let out: Vec<Pt> = pts
             .into_iter()
@@ -605,37 +606,52 @@ impl Tessellator<'_> {
     /// The points of a loop in order. The last point is not the first again. `total` counts the
     /// points of the face so far: a face over the limit is refused before the points are made.
     fn loop_points(&mut self, items: &[LoopItem], total: &mut usize) -> Result<Vec<Pt>, TErr> {
-        let mut out: Vec<Pt> = Vec::new();
+        // First the count, so that the vector is made once at its size: a vector that grows by
+        // doubling holds up to three times its content for a while.
+        let mut count = 0usize;
+        let mut polys: Vec<Option<Arc<Vec<Pt>>>> = Vec::with_capacity(items.len());
         for it in items {
             match it {
-                LoopItem::Edge { edge, forward } => {
+                LoopItem::Edge { edge, .. } => {
                     let poly = self.edge_points(*edge)?;
-                    let n = poly.len();
-                    *total += n - 1;
+                    count += poly.len() - 1;
+                    *total += poly.len() - 1;
                     if *total > MAX_FACE_POINTS {
                         return skip(format!(
                             "the boundary of the face has more than {MAX_FACE_POINTS} points"
                         ));
                     }
-                    self.work(n as u64)?;
-                    if *forward {
-                        out.extend(poly[..n - 1].iter().copied());
-                    } else {
-                        out.extend(poly[1..].iter().rev().copied());
-                    }
+                    self.work(poly.len() as u64)?;
+                    polys.push(Some(poly));
                 }
-                LoopItem::Vertex { vertex } => {
+                LoopItem::Vertex { .. } => {
+                    count += 1;
                     *total += 1;
                     if *total > MAX_FACE_POINTS {
                         return skip(format!(
                             "the boundary of the face has more than {MAX_FACE_POINTS} points"
                         ));
                     }
-                    out.push((
-                        self.solid.vertices[*vertex as usize],
-                        VKey::Vertex(u64::from(*vertex)),
-                    ));
+                    polys.push(None);
                 }
+            }
+        }
+        let mut out: Vec<Pt> = Vec::with_capacity(count);
+        for (it, poly) in items.iter().zip(polys) {
+            match (it, poly) {
+                (LoopItem::Edge { forward, .. }, Some(poly)) => {
+                    let n = poly.len();
+                    if *forward {
+                        out.extend(poly[..n - 1].iter().copied());
+                    } else {
+                        out.extend(poly[1..].iter().rev().copied());
+                    }
+                }
+                (LoopItem::Vertex { vertex }, _) => out.push((
+                    self.solid.vertices[*vertex as usize],
+                    VKey::Vertex(u64::from(*vertex)),
+                )),
+                _ => {}
             }
         }
         Ok(out)
@@ -664,6 +680,14 @@ impl Tessellator<'_> {
                 &owned
             }
         };
+        // A mirror leaves a left-handed frame: the angle runs the other way and the cutting of
+        // the pole and the seam would be wrong. The same surface in a right-handed frame has
+        // the opposite normal, so the sense of the face turns too.
+        let canonical = surface.right_handed_form();
+        let (surface, same_sense) = match &canonical {
+            Some(s) => (s, !same_sense),
+            None => (surface, same_sense),
+        };
         let kind = surface.kind();
         let periodic = surface.period_u().is_some();
         let mut hint = None;
@@ -688,6 +712,10 @@ impl Tessellator<'_> {
             .collect();
         let mut points = Points::default();
         let mut srcs: Vec<Option<VKey>> = Vec::new();
+        // The points of the boundary are known: make the vectors once.
+        points.uv.reserve(total + total / 8 + 16);
+        points.xyz.reserve(total + total / 8 + 16);
+        srcs.reserve(total + total / 8 + 16);
         let mut loop_ix: Vec<Vec<usize>> = Vec::new();
         let add = |points: &mut Points,
                    srcs: &mut Vec<Option<VKey>>,
@@ -918,13 +946,31 @@ impl Tessellator<'_> {
             max_triangles: max_tris.max(8),
         };
         let seed = crate::mesh2d::seed_cost(&points, &loop_ix);
+        // A seed grid over the limit is not made, and costs nothing. One test of a point against
+        // an edge is a few nanoseconds: a step is 16 of them.
+        let seed_units = if seed > crate::mesh2d::SEED_MAX_COST {
+            0
+        } else {
+            seed / 64
+        };
         let n = points.uv.len() as u64;
         // Ear clipping is quadratic in the worst case.
-        self.work(n * 10 + n * n / 16 + seed.min(crate::mesh2d::SEED_MAX_COST))?;
+        let lg = u64::from(64 - n.leading_zeros());
+        self.work(n * (lg + 1) / 2)?;
+        self.work(n * n / 4096)?;
+        self.work(seed_units)?;
         let Some((tris, truncated)) = mesh_face(&mut points, &loop_ix, &refine) else {
             return skip("the outline of the face cannot be cut into triangles");
         };
-        self.work(tris.len() as u64 * 40 + points.uv.len() as u64 * 10)?;
+        self.work(
+            tris.len() as u64
+                * if matches!(surface, Surface::Plane { .. }) {
+                    12
+                } else {
+                    40
+                },
+        )?;
+        self.work(points.uv.len() as u64 * (5 + 4 * surface.eval_cost()))?;
         if truncated {
             self.notes.push(format!(
                 "a face on a {kind} was cut at the limit of {} triangles, so the tolerance is not met there",

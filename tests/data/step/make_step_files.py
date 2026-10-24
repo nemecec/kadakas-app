@@ -701,7 +701,7 @@ class Step:
             p2 = self.add(f"PRESENTATION_STYLE_ASSIGNMENT((#{u2}))")
             self.add(f"STYLED_ITEM('',(#{p2}),#{items[0]})")
 
-    def mapped_assembly(self, name="Plate", count=2):
+    def mapped_assembly(self, name="Plate", count=2, with_usage=False):
         """A product of one box and an assembly that maps its representation twice."""
         box = self.box(10, 10, 5, name="plate")
         pd, rep, origin = self.product(name, [box])
@@ -720,6 +720,13 @@ class Step:
             items.append(self.add(f"MAPPED_ITEM('',#{rmap},#{target})"))
         arep = self.add("SHAPE_REPRESENTATION('Frame',(" + ",".join(f"#{i}" for i in items) + f"),#{ctx})")
         self.add(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{arep})")
+        if with_usage:
+            # The frame also uses the plate as a product. The placement is in the mapped items:
+            # the relationship of the usage has no transformation.
+            nauo = self.add(f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#{apd},#{pd},$)")
+            npds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{nauo})")
+            rel = self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{rep},#{arep})")
+            self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
 
     def related_representations(self, name="Related"):
         """A product whose shape representation holds no geometry. The geometry is in another
@@ -855,6 +862,12 @@ def fixtures():
     s = Step()
     s.mapped_assembly()
     out["mapped.step"] = s
+    s = Step()
+    s.mapped_assembly(with_usage=True)
+    out["mapped_nauo.step"] = s
+    s = Step()
+    s.mapped_assembly(count=5)
+    out["mapped5.step"] = s
     s = Step()
     s.related_representations()
     out["related.step"] = s

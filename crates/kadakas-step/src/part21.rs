@@ -640,13 +640,57 @@ fn find_data(s: &str) -> Option<usize> {
 
 /// Reads a STEP physical file. It handles the header and the simple entity instances of the data section.
 pub fn parse(text: &str) -> Result<StepFile, String> {
-    parse_limited(text, MAX_ENTITIES, u64::MAX)
+    parse_limited(text, MAX_ENTITIES, u64::MAX).map_err(|e| e.to_string())
+}
+
+/// Why [`parse_limited`] stopped.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ParseError {
+    /// The text is not a valid file. The message says where.
+    Syntax(String),
+    /// More entities than the limit.
+    TooManyEntities { limit: usize },
+    /// The entities would take more memory than the limit (an estimate, in bytes).
+    TooMuchMemory { estimate: u64, limit: u64 },
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::Syntax(m) => f.write_str(m),
+            ParseError::TooManyEntities { limit } => {
+                write!(f, "the file has more than {limit} entities")
+            }
+            ParseError::TooMuchMemory { limit, .. } => {
+                write!(
+                    f,
+                    "the file needs more than {limit} bytes of memory to read"
+                )
+            }
+        }
+    }
+}
+
+impl From<String> for ParseError {
+    fn from(m: String) -> Self {
+        ParseError::Syntax(m)
+    }
+}
+
+impl From<&str> for ParseError {
+    fn from(m: &str) -> Self {
+        ParseError::Syntax(m.to_string())
+    }
 }
 
 /// Like [`parse`], with the most entities and the most memory (an estimate, in bytes) that
 /// the parsed file may take. The reader stops at once when a limit is passed, so a hostile
 /// file cannot fill the memory before the limit is looked at.
-pub fn parse_limited(text: &str, max_entities: usize, max_memory: u64) -> Result<StepFile, String> {
+pub fn parse_limited(
+    text: &str,
+    max_entities: usize,
+    max_memory: u64,
+) -> Result<StepFile, ParseError> {
     let header_start = text.find("HEADER;").ok_or("no HEADER section")? + "HEADER;".len();
     let header_end = text[header_start..]
         .find("ENDSEC;")
@@ -669,15 +713,15 @@ pub fn parse_limited(text: &str, max_entities: usize, max_memory: u64) -> Result
             return Err("unexpected end of file: ENDSEC is missing".into());
         }
         if entities.len() >= max_entities.min(MAX_ENTITIES) {
-            return Err(format!(
-                "the file has more than {} entities",
-                max_entities.min(MAX_ENTITIES)
-            ));
+            return Err(ParseError::TooManyEntities {
+                limit: max_entities.min(MAX_ENTITIES),
+            });
         }
         if p.cost > max_memory {
-            return Err(format!(
-                "the file needs more than {max_memory} bytes of memory to read"
-            ));
+            return Err(ParseError::TooMuchMemory {
+                estimate: p.cost,
+                limit: max_memory,
+            });
         }
         p.eat(b'#')?;
         let id: u64 = p
@@ -698,20 +742,20 @@ pub fn parse_limited(text: &str, max_entities: usize, max_memory: u64) -> Result
                 }
                 let part = p.word().to_string();
                 if part.is_empty() {
-                    return Err(format!("entity #{id}: a part has no name at byte {}", p.i));
+                    return Err(format!("entity #{id}: a part has no name at byte {}", p.i).into());
                 }
                 p.eat(b'(')?;
                 let attrs = p.attr_list(id)?;
                 parts.push(Value::Typed(part, Box::new(Value::List(attrs))));
             }
             if parts.is_empty() {
-                return Err(format!("entity #{id} has no parts"));
+                return Err(format!("entity #{id} has no parts").into());
             }
             (COMPLEX.to_string(), parts)
         } else {
             let name = p.word().to_string();
             if name.is_empty() {
-                return Err(format!("entity #{id} has no name"));
+                return Err(format!("entity #{id} has no name").into());
             }
             p.eat(b'(')?;
             (name, p.attr_list(id)?)
@@ -721,9 +765,10 @@ pub fn parse_limited(text: &str, max_entities: usize, max_memory: u64) -> Result
         entities.push(Entity { id, name, attrs });
     }
     if p.cost > max_memory {
-        return Err(format!(
-            "the file needs more than {max_memory} bytes of memory to read"
-        ));
+        return Err(ParseError::TooMuchMemory {
+            estimate: p.cost,
+            limit: max_memory,
+        });
     }
     // A stable sort keeps the first definition of a number first.
     entities.sort_by_key(|e| e.id);
@@ -997,15 +1042,13 @@ mod tests {
         assert!(parse("HEADER;\nENDSEC;\nMYDATA;\n#1=A();\nENDSEC;").is_err());
         let many = "HEADER;\nENDSEC;\nDATA;\n#1=A();\n#2=A();\n#3=A();\nENDSEC;";
         assert!(
-            parse_limited(many, 2, u64::MAX)
-                .unwrap_err()
-                .contains("more than 2")
+            parse_limited(many, 2, u64::MAX).unwrap_err()
+                == ParseError::TooManyEntities { limit: 2 }
         );
-        assert!(
-            parse_limited(many, 9, 100)
-                .unwrap_err()
-                .contains("bytes of memory")
-        );
+        assert!(matches!(
+            parse_limited(many, 9, 100).unwrap_err(),
+            ParseError::TooMuchMemory { limit: 100, .. }
+        ));
         assert!(parse_limited(many, 9, 100_000).is_ok());
     }
 }

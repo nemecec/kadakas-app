@@ -205,6 +205,18 @@ pub fn materialize_with(
                 if let Some(note) = kadakas_core::hardscape::data::repair_holes(&mut o) {
                     cx.repair(note);
                 }
+                // The exact data of a mesh that is too big to share is not in the state. The
+                // computer that has it keeps it: a change of the others must not take it away.
+                if let Shape::Mesh3d(m) = &mut o.shape
+                    && m.exact.is_none()
+                    && m.exact_unusable.is_none()
+                    && let Some(Shape::Mesh3d(mine)) = base.object(o.id).map(|b| &b.shape)
+                    && (mine.exact.is_some() || mine.exact_unusable.is_some())
+                    && !crate::docsync::exact_syncs(mine)
+                {
+                    m.exact = mine.exact.clone();
+                    m.exact_unusable = mine.exact_unusable.clone();
+                }
                 objects.push(o)
             }
             Err(e) => cx.quarantine(Kind::Object, id, e),
