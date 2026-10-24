@@ -227,19 +227,26 @@ fn hatches_are_imported_with_their_islands_and_the_patterns_are_reported() {
     assert_eq!(o[0].attrs.fill, Some(Color([0, 0, 255, 255])));
     assert_eq!(o[1].attrs.fill, Some(Color([255, 255, 255, 255])));
     assert_eq!(o[1].data["hatch_island"], true);
-    // Pattern hatches are outlines without a fill, and the pattern names are counted.
+    // Pattern hatches have no fill color. They take the hatch fill of their pattern (the entities
+    // have a pattern name but no lines, so the lines come from the table), and the names are counted.
     assert_eq!(o[2].attrs.fill, None);
+    assert!(o[2].attrs.fill_pattern.is_some() && o[4].attrs.fill_pattern.is_some());
+    assert_eq!(o[2].attrs.fill_pattern, o[3].attrs.fill_pattern);
+    assert_ne!(o[2].attrs.fill_pattern, o[4].attrs.fill_pattern);
     let n = rep.notes.join("\n");
     assert!(
-        n.contains("3 hatches with a pattern were imported as outlines"),
+        n.contains("3 hatches with a pattern became hatch fills of the document: ANSI31 2, NET 1"),
         "{n}"
     );
-    assert!(n.contains("ANSI31 2, NET 1"), "{n}");
+    assert!(
+        n.contains("3 hatches had a pattern name but no pattern lines"),
+        "{n}"
+    );
     assert!(
         n.contains("1 gradient hatch was imported with a flat fill"),
         "{n}"
     );
-    assert!(n.contains("1 island of solid hatches is drawn"), "{n}");
+    assert!(n.contains("1 island of hatches is drawn"), "{n}");
     // The gradient has the fill of its first color (true color 255 = blue).
     assert_eq!(o[5].attrs.fill, Some(Color([0, 0, 255, 255])));
 }

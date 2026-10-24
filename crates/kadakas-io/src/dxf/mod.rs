@@ -11,6 +11,7 @@ pub use export::patterns::{
     MAX_EXPORT_GAP_LINES, MAX_EXPORT_UNITS, layer_names as pattern_layer_names,
 };
 pub mod hash;
+mod hatch;
 mod import;
 pub mod link;
 pub mod parse;

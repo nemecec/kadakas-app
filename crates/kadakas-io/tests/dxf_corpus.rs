@@ -173,16 +173,23 @@ fn hatch_areas_equal_the_ezdxf_reader() {
                 _ => 0.0,
             })
             .sum();
+        assert!(
+            (net - area).abs() / area < 0.005,
+            "{name}: {net} against {area}"
+        );
         if solid {
-            assert!(
-                (net - area).abs() / area < 0.005,
-                "{name}: {net} against {area}"
-            );
             assert!(hatch.iter().all(|o| o.attrs.fill.is_some()), "{name}");
         } else {
-            // A pattern hatch has no fill and no island marks: the loops are outlines.
+            // A pattern hatch has no fill color. Its outer loops have the hatch fill of the
+            // pattern, and its islands are white outlines on top (as for a solid hatch).
             assert!(
-                hatch.iter().all(|o| !o.data.contains_key("hatch_island")),
+                hatch
+                    .iter()
+                    .all(|o| o.attrs.fill.is_none() || o.data.contains_key("hatch_island")),
+                "{name}"
+            );
+            assert!(
+                hatch.iter().any(|o| o.attrs.fill_pattern.is_some()),
                 "{name}"
             );
         }

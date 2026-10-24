@@ -19,6 +19,7 @@ use kadakas_core::model::{Attributes, ClassId, Color, LayerId, Shape};
 
 mod approx;
 mod extra;
+mod hatch;
 mod paper;
 mod tilted;
 
@@ -397,6 +398,7 @@ fn walk(
         ),
         _ => b.default_layer,
     };
+    let hatches = b.hatches.clone();
     let mut w = Walker {
         dxf,
         opts,
@@ -415,6 +417,7 @@ fn walk(
         tally: Tally::default(),
         sheet: None,
         class_vis: HashMap::new(),
+        hatches: hatch::HatchLib::new(&hatches),
     };
     let root = Cx {
         xf: Xf::scale(scale),
@@ -538,6 +541,8 @@ struct Item {
     fill: Option<Color>,
     /// The fill is the pen color of the entity (a SOLID, a solid HATCH).
     fill_pen: bool,
+    /// The hatch fill of a pattern hatch (IOP-27).
+    pattern: Option<kadakas_core::resource::ResourceId>,
     /// A pen that replaces the one of the entity (a wipeout has none).
     pen: Option<Color>,
     /// Object data. Text keeps its rotation here (`rotation_deg`), because a text shape has none.
@@ -550,6 +555,7 @@ impl Item {
             shape,
             fill: None,
             fill_pen: false,
+            pattern: None,
             pen: None,
             data: BTreeMap::new(),
         }
@@ -585,6 +591,8 @@ struct Walker<'a> {
     sheet: Option<LayerId>,
     /// The classes that the import made, by DXF layer name, and whether the layer shows.
     class_vis: HashMap<String, (ClassId, bool)>,
+    /// The hatch fills of the document and of this import (IOP-27).
+    hatches: hatch::HatchLib,
 }
 
 /// Vertices and triangles of the 3D faces of one layer.
@@ -879,6 +887,9 @@ impl Walker<'_> {
             }
             if item.pen.is_some() {
                 a.pen = item.pen;
+            }
+            if item.pattern.is_some() {
+                a.fill_pattern = item.pattern;
             }
             if let Some(t) = self.tracking {
                 let part = (parts > 1).then_some(n as u32);
@@ -1574,15 +1585,6 @@ impl Walker<'_> {
                 }
                 let solid = e.int(70) == Some(1);
                 let gradient = solid && e.int(450) == Some(1);
-                if !solid {
-                    let name = e.get(2).unwrap_or("").trim();
-                    let name = if name.is_empty() { "(no name)" } else { name };
-                    *self
-                        .tally
-                        .pattern_hatches
-                        .entry(name.to_string())
-                        .or_default() += 1;
-                }
                 // A gradient has two colors; the first one is the flat fill. A plain solid hatch
                 // fills with its pen color.
                 let fill = gradient
@@ -1610,12 +1612,31 @@ impl Walker<'_> {
                         )
                     })
                     .collect();
-                let island = if solid && e.int(75).unwrap_or(0) != 2 {
+                // A pattern hatch becomes a hatch fill of the document (IOP-27).
+                let pattern = if solid {
+                    None
+                } else {
+                    let extent = extra::extent(&corner_points)
+                        * xf.cols[0].length().max(xf.cols[1].length());
+                    self.pattern_fill(e, xf, flip, extent)
+                };
+                let fills = solid || pattern.is_some();
+                let island = if fills && e.int(75).unwrap_or(0) != 2 {
                     extra::islands(&corner_points, tol / 10.0 / xf.length_scale().max(1e-12))
                 } else {
                     vec![false; loops.len()]
                 };
-                for (l, is_island) in loops.into_iter().zip(island) {
+                // An outer loop is drawn before the islands inside it.
+                let mut order: Vec<usize> = (0..loops.len()).collect();
+                if fills {
+                    let areas: Vec<f64> = corner_points.iter().map(|p| extra::area(p)).collect();
+                    order.sort_by(|a, b| areas[*b].total_cmp(&areas[*a]));
+                }
+                let mut loops: Vec<Option<Vec<Vertex>>> = loops.into_iter().map(Some).collect();
+                for k in order {
+                    let (Some(l), is_island) = (loops[k].take(), island[k]) else {
+                        continue;
+                    };
                     let pts: Vec<Vertex> = l
                         .into_iter()
                         .map(|v| Vertex::new(xf.apply(flipx(v.p, flip)), v.kind))
@@ -1632,6 +1653,8 @@ impl Walker<'_> {
                     } else if solid {
                         item.fill = fill;
                         item.fill_pen = fill.is_none();
+                    } else {
+                        item.pattern = pattern;
                     }
                     out.push(item);
                 }

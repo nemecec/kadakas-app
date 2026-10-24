@@ -113,12 +113,14 @@ def test_hatches_clip_to_the_shape_and_export_to_svg_and_dxf(cad, tmp_path):
     cad.execute(rect_cmd(0, 0, 3000, 2000, attrs={"fill_pattern": hatch, "line_type": lt}))
     svg = cad.result("render.svg")["svg"]
     assert 'data-pattern="fill"' in svg and 'data-pattern="line_type"' in svg
-    # DXF gets the lines of the hatch and the dashes as plain LINE entities.
+    # DXF gets the hatch as a HATCH entity with its pattern lines (IOP-27), and the dashes as plain LINE entities.
     out = tmp_path / "pattern.dxf"
     cad.result("export.file", {"path": str(out), "format": "dxf"})
     doc = ezdxf.readfile(str(out))
+    (h,) = [e for e in doc.modelspace() if e.dxftype() == "HATCH"]
+    assert [l.angle for l in h.pattern.lines] == approx([45.0])
     lines = [e for e in doc.modelspace() if e.dxftype() == "LINE"]
-    assert len(lines) > 40
+    assert len(lines) > 10
     # The class default fill_pattern also works: set it on the class.
     cad.execute({"op": "modify_class", "id": uid(0), "attrs": {"fill_pattern": hatch}})
     assert cad.result("resource.get", {"id": hatch})["used_by"]["classes"] == [uid(0)]

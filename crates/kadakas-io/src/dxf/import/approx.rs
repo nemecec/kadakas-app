@@ -19,8 +19,22 @@ pub(super) struct Tally {
     pub scaled_arcs: usize,
     /// LEADER entities (the arrowhead is not drawn).
     pub leaders: usize,
-    /// Pattern hatches by pattern name (imported as outlines).
+    /// Pattern hatches by pattern name that stayed outlines (see the three counts below).
     pub pattern_hatches: BTreeMap<String, usize>,
+    /// Pattern hatches that became a hatch fill of the document, by the name of the fill.
+    pub pattern_fills: BTreeMap<String, usize>,
+    /// Pattern hatches with no pattern lines in the entity: the lines come from the table of standard patterns.
+    pub pattern_from_table: usize,
+    /// Pattern lines left out because a pattern keeps at most 128 of them.
+    pub pattern_lines_cut: usize,
+    /// Pattern lines left out because they cannot be used (their lines would lie on each other).
+    pub pattern_lines_unusable: usize,
+    /// Outline hatches: no pattern lines and the name is not a standard pattern.
+    pub pattern_no_lines: usize,
+    /// Outline hatches: no pattern line could be used.
+    pub pattern_unusable: usize,
+    /// Outline hatches: the lines are denser than the drawing engine draws for the size of the hatch.
+    pub pattern_dense: usize,
     /// Gradient hatches (imported with a flat fill).
     pub gradient_hatches: usize,
     /// Islands of a solid hatch (drawn as white filled outlines on the hatch).
@@ -63,6 +77,12 @@ impl Tally {
         let mut out = Vec::new();
         let plural =
             |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let list = |m: &BTreeMap<String, usize>| {
+            m.iter()
+                .map(|(n, c)| format!("{n} {c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         if self.splines > 0 {
             out.push(format!(
                 "{} became polylines within {tol} mm: the curve is no longer exact",
@@ -109,18 +129,63 @@ impl Tally {
                 plural(self.leaders, "LEADER was", "LEADERs were")
             ));
         }
+        if !self.pattern_fills.is_empty() {
+            let total: usize = self.pattern_fills.values().sum();
+            out.push(format!(
+                "{} with a pattern became hatch fills of the document: {}",
+                plural(total, "hatch", "hatches"),
+                list(&self.pattern_fills)
+            ));
+        }
+        if self.pattern_from_table > 0 {
+            out.push(format!(
+                "{} had a pattern name but no pattern lines: the lines of the standard pattern of that name were used, with the scale and the angle of the hatch",
+                plural(self.pattern_from_table, "hatch", "hatches")
+            ));
+        }
+        if self.pattern_lines_cut > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} left out: a pattern keeps at most {} lines",
+                plural(self.pattern_lines_cut, "line", "lines"),
+                if self.pattern_lines_cut == 1 {
+                    "was"
+                } else {
+                    "were"
+                },
+                crate::dxf::hatch::MAX_LINES
+            ));
+        }
+        if self.pattern_lines_unusable > 0 {
+            out.push(format!(
+                "{} of hatch patterns {} left out: the lines of the family lie on each other or a number is not valid",
+                plural(self.pattern_lines_unusable, "line", "lines"),
+                if self.pattern_lines_unusable == 1 { "was" } else { "were" }
+            ));
+        }
         if !self.pattern_hatches.is_empty() {
             let total: usize = self.pattern_hatches.values().sum();
-            let names: Vec<String> = self
-                .pattern_hatches
-                .iter()
-                .map(|(n, c)| format!("{n} {c}"))
-                .collect();
+            let mut why = Vec::new();
+            for (n, text) in [
+                (
+                    self.pattern_no_lines,
+                    "no pattern lines and not a standard pattern",
+                ),
+                (self.pattern_unusable, "no usable pattern line"),
+                (
+                    self.pattern_dense,
+                    "lines closer than the drawing engine draws",
+                ),
+            ] {
+                if n > 0 {
+                    why.push(format!("{n} with {text}"));
+                }
+            }
             out.push(format!(
-                "{} with a pattern {} imported as outlines without the pattern: {}",
+                "{} with a pattern {} imported as outlines without the pattern ({}): {}",
                 plural(total, "hatch", "hatches"),
                 if total == 1 { "was" } else { "were" },
-                names.join(", ")
+                why.join(", "),
+                list(&self.pattern_hatches)
             ));
         }
         if self.gradient_hatches > 0 {
@@ -135,7 +200,7 @@ impl Tally {
         }
         if self.hatch_islands > 0 {
             out.push(format!(
-                "{} of solid hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes: they cover what lies below them",
+                "{} of hatches {} drawn as white filled outlines (data.hatch_island) because a filled shape has no holes: they cover what lies below them",
                 plural(self.hatch_islands, "island", "islands"),
                 if self.hatch_islands == 1 { "is" } else { "are" }
             ));
@@ -274,12 +339,20 @@ mod tests {
             transparent: 3,
             wipeouts: 1,
             subdivided_meshes: 2,
+            pattern_from_table: 2,
+            pattern_lines_cut: 3,
+            pattern_lines_unusable: 1,
+            pattern_no_lines: 1,
+            pattern_unusable: 1,
+            pattern_dense: 1,
             ..Tally::default()
         };
         t.pattern_hatches.insert("ANSI31".into(), 2);
         t.pattern_hatches.insert("NET".into(), 1);
+        t.pattern_fills.insert("EARTH".into(), 4);
+        t.pattern_fills.insert("ANSI32 x2".into(), 1);
         let notes = t.notes(1.5);
-        assert_eq!(notes.len(), 16);
+        assert_eq!(notes.len(), 20);
         let all = notes.join("\n");
         for needle in [
             "2 splines became polylines within 1.5 mm",
@@ -289,10 +362,13 @@ mod tests {
             "1 ellipse or elliptical arc became",
             "4 circles and arcs under a block scale",
             "2 LEADERs were imported as lines",
-            "3 hatches with a pattern were imported",
-            "ANSI31 2, NET 1",
+            "5 hatches with a pattern became hatch fills of the document: ANSI32 x2 1, EARTH 4",
+            "2 hatches had a pattern name but no pattern lines",
+            "3 lines of hatch patterns were left out: a pattern keeps at most 128 lines",
+            "1 line of hatch patterns was left out: the lines of the family lie on each other",
+            "3 hatches with a pattern were imported as outlines without the pattern (1 with no pattern lines and not a standard pattern, 1 with no usable pattern line, 1 with lines closer than the drawing engine draws): ANSI31 2, NET 1",
             "1 gradient hatch was imported",
-            "5 islands of solid hatches are drawn",
+            "5 islands of hatches are drawn",
             "6 entities in a tilted plane were imported as 3D polylines",
             "2 hatches in a tilted plane were imported as outlines",
             "2 block references have a clip (XCLIP)",

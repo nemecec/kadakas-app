@@ -186,6 +186,13 @@ pub struct Context {
     pub grey_layers: Vec<LayerId>,
     /// The (drawing, revision) of the import bases that the document keeps.
     pub bases: Vec<(String, String)>,
+    /// The hatch fills of the document (ID, name, definition). A pattern hatch of a DXF file that
+    /// draws the same lines as one of them uses it (IOP-27).
+    pub hatches: Vec<(
+        kadakas_core::resource::ResourceId,
+        String,
+        kadakas_core::graphics::HatchDef,
+    )>,
 }
 
 impl Context {
@@ -206,6 +213,19 @@ impl Context {
                         v["drawing"].as_str()?.to_string(),
                         v["revision"].as_str()?.to_string(),
                     )),
+                    _ => None,
+                })
+                .collect(),
+            hatches: doc
+                .resources
+                .iter()
+                .filter_map(|r| match &r.body {
+                    kadakas_core::resource::ResourceBody::Graphic(g) => match &**g {
+                        kadakas_core::graphics::GraphicResource::Hatch(h) => {
+                            Some((r.id, r.name.clone(), h.clone()))
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 })
                 .collect(),

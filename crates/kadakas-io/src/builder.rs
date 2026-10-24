@@ -45,6 +45,8 @@ pub struct Builder {
     probe: Option<(DVec2, DVec2)>,
     /// Shift (mm) that every added shape gets. Imports use it to keep geometry near the origin.
     offset: DVec2,
+    /// The hatch fills that the document had before this import (see `Context::hatches`).
+    pub hatches: Vec<(ResourceId, String, kadakas_core::graphics::HatchDef)>,
 }
 
 /// Checks the rules that `Command::AddObject` enforces, so one bad entity
@@ -132,6 +134,7 @@ impl Builder {
             last_id: kadakas_core::uid::Uid::NIL,
             probe: None,
             offset: DVec2::ZERO,
+            hatches: ctx.hatches.clone(),
         }
     }
 

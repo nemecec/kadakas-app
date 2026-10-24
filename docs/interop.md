@@ -128,7 +128,7 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file is release 2004 (`AC1018`) with its code page, unless the option `version` says another one (see the DXF files section). The audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas reads the MESH entity too (IOP-15): it becomes a `mesh3d` object with the control mesh.
 
-## DXF files (IOP-01, IOP-15, IOP-16)
+## DXF files (IOP-01, IOP-15, IOP-16, IOP-27)
 
 This section is about real-world DXF files. The research with its sources is `docs/research/dxf-real-world.md`. The code is in `crates/kadakas-io/src/dxf`.
 
@@ -156,7 +156,7 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | ATTRIB | Visible text. An invisible attribute and an ATTDEF are reported. |
 | MTEXT, TEXT | The codes `%%c`, `%%d`, `%%p`, `%%nnn`, `\U+XXXX`, the caret codes (`^J`) and the MTEXT codes for fonts, heights, colors, stacks and paragraphs. The text equals the plain text of the ezdxf reader for the corpus files. |
 | SOLID, TRACE | A filled polygon (fill = pen color). The corners are in the order 1, 2, 4, 3. |
-| HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch is an outline, and a note counts the pattern names. |
+| HATCH | Each boundary path is a closed polyline. A solid hatch is filled. An island is a white filled polyline with `data.hatch_island`. A gradient has a flat fill of its first color. A pattern hatch has a hatch fill of the document, made from its pattern lines (IOP-27, see Pattern hatches). |
 | WIPEOUT | A white polygon with no line and `data.wipeout`, above what was drawn before it. |
 | MESH | A `mesh3d` object (the control mesh). |
 | LEADER | An open polyline. The arrowhead is not drawn. |
@@ -165,6 +165,32 @@ The order is: the option `unit`, then `$INSUNITS`, then a guess. Releases before
 | Entities in a tilted plane | CIRCLE, ARC, LWPOLYLINE, POLYLINE, SOLID, ELLIPSE and the paths of a HATCH become 3D polylines (the arbitrary axis algorithm of the DXF reference). TEXT, MTEXT and INSERT in a tilted plane are reported. |
 | IMAGE, 3DSOLID, BODY, REGION, SURFACE, MLEADER, XLINE, RAY, MLINE, OLE2FRAME, XREF | Reported by name with the reason. An IMAGE names its file, an XREF its path. |
 | XCLIP of a block reference, transparency | Not applied. A note counts them. |
+
+### Pattern hatches (IOP-27)
+
+A pattern hatch has a pattern name, a scale, an angle and pattern lines. The pattern lines are stored in the file after the scale and the turn. The import uses them as they are.
+
+- Each pattern line has an angle, a base point, an offset vector and a dash list. The offset is the vector from a line to the next line of the family.
+- A hatch line of the document has an angle, a spacing across the lines, a stagger along them, an origin and a dash list. The import converts one into the other without loss. A family that runs to the other side gets a negative stagger.
+- A dash is positive, a gap is negative and a dot is 0. A dot becomes a dash of 0.1 mm, and the gap after it is shorter by that much, so the period stays the same.
+- The lines are in mm (`units: world`). The unit of the file, the scale of a block, a turn and a mirror (extrusion -Z) apply. A block with different scales in x and y works too, because a straight line stays straight.
+- The origin of a family is reduced by whole steps. Hatches of one pattern then share one resource, wherever they lie.
+- A resource that draws the same lines as one of the document is used again. Else a new hatch is made. It has the pattern name, with ` x2` or ` 30 deg` when the lines are the standard pattern at another scale or turn. A name that is taken gets ` (2)`.
+- An entity with a pattern name and no pattern lines gets the lines of the standard pattern of that name from the table. The scale (code 41) and the angle (code 52) apply. The table has 106 patterns: `ANSI31` to `ANSI38`, `AR-*`, `EARTH`, `GRASS`, `GRAVEL`, `STEEL`, `NET` and more.
+- A double hatch (code 77) adds the lines turned by 90 degrees.
+- The boundary loops are polylines with the hatch fill. An island is a white filled polyline on top, as for a solid hatch. The outer loop is always drawn before the islands in it.
+- A pattern keeps at most 128 lines. A note counts the lines that were left out. A line whose copies would lie on each other is left out and counted.
+- A pattern that is denser than the drawing engine draws for the size of the hatch (more than 100,000 lines) stays an outline, and a note says so.
+- The table of the standard patterns is `crates/kadakas-io/src/dxf/hatch/std_patterns.txt`. It is made by `tests/data/make_std_patterns.py` from the metric table of ezdxf (MIT licence).
+
+The export writes a hatch fill as a HATCH entity.
+
+- The object keeps its outline entity. The HATCH has the boundary path, the name and the pattern lines. A landscape area with holes writes the holes as more paths.
+- A fill that is a standard pattern at some scale and turn gets the name (`ANSI31`), the scale in code 41 and the turn in code 52. The turn must be a multiple of 15 degrees. A pattern of one family of lines is named at the turn 0 only.
+- Any other fill gets its own name in capital letters, as a custom pattern.
+- The numbers follow the unit, the origin and the scale of the layer (paper units).
+- A fill with a color or a weight on one of its lines stays plain LINE entities. So does a tile. Release 12 has no HATCH.
+- The report says how many HATCH entities were written, by name.
 
 ### The report
 
@@ -207,11 +233,14 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 - Every corpus file goes through the import. It must not panic, it must end in time, and its report must account for every entity. The counts of entities, layouts, viewports and MTEXT texts are compared with the ezdxf reader (`crates/kadakas-io/tests/fixtures/dxf_public_counts.json`, made by `tests/data/make_public_counts.py`).
 - Our own small files are in `tests/data/dxf-own/` (made by `tests/data/make_own_files.py`). They run offline.
 - The tests for damaged and hostile files are in `crates/kadakas-io/tests/dxf_hostile.rs`.
+- The tests of IOP-27 are `crates/kadakas-io/tests/dxf_hatch.rs` (own entities), `dxf_leftovers.rs` (public files, with facts from the ezdxf reader in `fixtures/dxf_iop27.json`, made by `tests/data/make_iop27_facts.py`) and `tests/behavior/test_dxf_hatch.py`. The last one compares the length of the pattern lines with the lines that `ezdxf.render.hatching` draws for the same hatch, for nine patterns.
 
 ### Not done
 
 - Block clips (XCLIP) and transparency are not applied.
-- Pattern hatches are outlines. The pattern is not drawn.
+- The islands of a pattern hatch are white filled outlines on top of the hatch. A polyline has no holes, so the lines of the pattern still run under the island. The export writes the island as its own polyline and not as a hole of the HATCH.
+- A hatch in a tilted plane has no fill, only its boundary as 3D polylines.
+- A pattern hatch with an associative boundary (code 330 to the entities) loses the association. The boundary becomes polylines.
 - A viewport with a twist keeps no twist.
 - TEXT, MTEXT and INSERT in a tilted plane are reported and not placed.
 - The releases 2013 and 2018 of the export are not opened in a CAD program. Release 12 is not opened in LibreCAD or a laser program by hand.
