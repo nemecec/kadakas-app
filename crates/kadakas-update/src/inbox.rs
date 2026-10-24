@@ -35,7 +35,7 @@ pub struct Running {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Delivery {
     /// A request was written for the running app.
-    Forwarded(Running),
+    Forwarded(Box<Running>),
     /// They wait for the next start of the app.
     Queued,
 }
@@ -81,7 +81,7 @@ impl Inbox {
         if let Some(run) = st.running.clone() {
             let paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
             if handshake::send_open(&self.root, &run.id, &paths).is_ok() {
-                return Delivery::Forwarded(run);
+                return Delivery::Forwarded(Box::new(run));
             }
         }
         for f in files {
@@ -219,10 +219,10 @@ mod tests {
         let inbox = Inbox::new(&d);
         inbox.set_running(run("1a-2b"));
         let got = inbox.deliver(files(&["/a.kad"]));
-        assert_eq!(got, Delivery::Forwarded(run("1a-2b")));
+        assert_eq!(got, Delivery::Forwarded(Box::new(run("1a-2b"))));
         assert_eq!(
             inbox.deliver(files(&["-odd.kad"])),
-            Delivery::Forwarded(run("1a-2b"))
+            Delivery::Forwarded(Box::new(run("1a-2b")))
         );
         assert!(inbox.unread("1a-2b"));
         assert!(inbox.take_pending().is_empty());
