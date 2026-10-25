@@ -1,0 +1,18 @@
+//! The logic of the welcome dialog (PLAT-26). The launcher shows the dialog once, before it
+//! starts any version of Kadakas. This crate has no window code:
+//!
+//! - [`choices`]: what the person can choose, and the defaults from the language and the region
+//!   of the system;
+//! - [`gate`]: when the dialog is due (first start, a newer dialog, never in tests or without a
+//!   display), and what each button does;
+//! - [`stores`]: where each choice is stored, and how it is read back.
+//!
+//! Every file is changed key by key: a key that this version does not know stays.
+
+pub mod choices;
+pub mod gate;
+pub mod stores;
+
+pub use choices::{Choices, Mode, Navigation, NumberStyle, Theme, UnitSystem};
+pub use gate::{Button, ENV_SKIP, Gate, Kind, WELCOME_VERSION};
+pub use stores::Dirs;

@@ -19,12 +19,12 @@ LIB_MIN=95
 # lower because some start-up error paths (a broken terminal, a closed stdout) cannot be reached.
 CLI_MIN=90
 
-LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d meshio step irrigation script script-js plugin-abi plugin site sheet print api update sign-manifest ui-core feedback crash)
+LIBS=(units l10n sys container file crs plants core props review collab collab-ws render io annot gis ifc x3d meshio step irrigation script script-js plugin-abi plugin site sheet print api update sign-manifest ui-core feedback crash welcome)
 
 SHARD_COUNT=4
 shard_crates() {
   case "$1" in
-    1) echo "core units l10n sys crs plants annot script script-js plugin-abi sign-manifest crash" ;;
+    1) echo "core units l10n sys crs plants annot script script-js plugin-abi sign-manifest crash welcome" ;;
     2) echo "api container file props collab collab-ws render" ;;
     3) echo "ui-core io review gis x3d meshio" ;;
     4) echo "step print site sheet ifc irrigation plugin update feedback cli" ;;

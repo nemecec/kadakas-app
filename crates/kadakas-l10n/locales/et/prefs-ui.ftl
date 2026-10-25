@@ -28,3 +28,7 @@ prefs-ui-max-versions = Versioone failis kuni
 prefs-ui-max-version-size = Versioonide suurus failis kuni (MiB)
 prefs-ui-versions-hint = Piirist ületav salvestus peatatakse ja sinult küsitakse, milliseid versioone kustutada. Ükski versioon ei kustu iseenesest.
 prefs-ui-animate-agent-view = Animeeri vaadet, kui agent seda liigutab
+prefs-ui-navigation = Hiir või puuteplaat
+prefs-ui-nav-mouse = Hiir
+prefs-ui-nav-trackpad = Puuteplaat
+prefs-ui-navigation-hint = Hiir: ratas suumib. Puuteplaat: kaks sõrme liigutavad vaadet (Shiftiga pööravad) ja näpistus suumib.

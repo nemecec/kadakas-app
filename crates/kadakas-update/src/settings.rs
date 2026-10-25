@@ -4,6 +4,7 @@
 use crate::manifest::Channel;
 use kadakas_sys::fsio::{self, Access};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The id of the main app flavor.
@@ -74,7 +75,25 @@ pub struct Settings {
     pub flavor: String,
     /// The workspace profile that the app gets. Empty: none.
     pub profile: String,
+    /// The version of the welcome dialog (PLAT-26) that the person has seen. 0: never. A later
+    /// dialog that asks something new has a higher number and is shown once more.
+    pub welcome_done: u32,
+    /// Keys that this version does not know (a newer launcher or another program wrote them).
+    /// They stay in the file when it is written again.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
+
+/// The keys that [`Settings`] knows.
+const KNOWN_KEYS: [&str; 7] = [
+    "channel",
+    "mode",
+    "keep_older",
+    "site",
+    "flavor",
+    "profile",
+    "welcome_done",
+];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -85,6 +104,8 @@ impl Default for Settings {
             site: String::new(),
             flavor: MAIN_FLAVOR.to_string(),
             profile: String::new(),
+            welcome_done: 0,
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -128,6 +149,14 @@ impl Settings {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
         {
             self.mode = m;
+        }
+        if let Some(w) = o.get("welcome_done").and_then(serde_json::Value::as_u64) {
+            self.welcome_done = w.min(u64::from(u32::MAX)) as u32;
+        }
+        for (k, v) in o {
+            if !KNOWN_KEYS.contains(&k.as_str()) {
+                self.extra.insert(k.clone(), v.clone());
+            }
         }
         if let Some(k) = o.get("keep_older").and_then(serde_json::Value::as_u64) {
             self.keep_older = k.min(u64::from(MAX_KEEP_OLDER)) as u32;
@@ -209,6 +238,8 @@ mod tests {
             site: "file:///tmp/site".into(),
             flavor: "sketch".into(),
             profile: "acad".into(),
+            welcome_done: 1,
+            extra: BTreeMap::new(),
         };
         s.save(&root.join("sub")).unwrap();
         assert_eq!(Settings::load(&root.join("sub")), s);
@@ -312,6 +343,32 @@ mod tests {
         let blocker = root.join("blocker");
         std::fs::write(&blocker, b"x").unwrap();
         assert!(Settings::update(&blocker.join("x"), |_| {}).is_err());
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
+    fn unknown_keys_and_the_welcome_mark_are_kept() {
+        let root = tmp("settings-extra");
+        std::fs::write(
+            Settings::path(&root),
+            br#"{"welcome_done":1,"future":{"a":[1,2]},"mode":"notify-only"}"#,
+        )
+        .unwrap();
+        let s = Settings::update(&root, |s| s.keep_older = 2).unwrap();
+        assert_eq!((s.welcome_done, s.keep_older), (1, 2));
+        let text = std::fs::read_to_string(Settings::path(&root)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["future"]["a"][1], 2);
+        assert_eq!(v["welcome_done"], 1);
+        // A damaged known field: the lenient path keeps the other keys too.
+        std::fs::write(
+            Settings::path(&root),
+            br#"{"flavor":5,"welcome_done":2,"future":"x"}"#,
+        )
+        .unwrap();
+        let s = Settings::load(&root);
+        assert_eq!((s.welcome_done, s.extra.len()), (2, 1));
+        assert_eq!(s.extra["future"], "x");
         crate::store::tests::rm_dir(&root);
     }
 

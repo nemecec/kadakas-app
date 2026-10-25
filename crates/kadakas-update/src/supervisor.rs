@@ -206,7 +206,12 @@ pub struct Supervisor {
     timing: Timing,
     /// Where documents wait that arrive while the app runs (a double click on a `.kad` file).
     inbox: Arc<Inbox>,
+    /// What to do when the app asks for the welcome dialog (it must not block).
+    welcome: Option<WelcomeHook>,
 }
+
+/// Called when the running app asks for the welcome dialog.
+pub type WelcomeHook = Arc<dyn Fn() + Send + Sync>;
 
 /// The newest version that restarting would start and that is newer than the running one:
 /// installed, allowed by the channel, not skipped. This is "ready".
@@ -294,7 +299,14 @@ impl Supervisor {
             spawner,
             timing: Timing::default(),
             inbox: Inbox::new(root_for_inbox),
+            welcome: None,
         }
+    }
+
+    /// Sets what happens when the app asks for the welcome dialog (Help > Show welcome).
+    pub fn with_welcome(mut self, hook: WelcomeHook) -> Supervisor {
+        self.welcome = Some(hook);
+        self
     }
 
     /// Uses a shared inbox: the thread that gets the system events puts documents in it, and the
@@ -513,6 +525,11 @@ impl Supervisor {
                     }
                 }
             }
+            if handshake::take_welcome_request(&root, &id)
+                && let Some(hook) = &self.welcome
+            {
+                hook();
+            }
             let asked = handshake::take_download_request(&root, &id);
             if worker.is_none() && (asked || Instant::now() >= next_check) {
                 // The settings are read again: the person may have changed them in the app.
@@ -574,6 +591,8 @@ mod tests {
         restart: Option<Vec<PathBuf>>,
         /// Asks for the download first.
         download: bool,
+        /// Asks for the welcome dialog at its first poll (Help > Show welcome).
+        welcome: bool,
         /// Looks at the status file and keeps what it saw.
         watch_status: bool,
         /// At this poll the system sends these files to the launcher (a double click).
@@ -615,6 +634,12 @@ mod tests {
                 && let Some(l) = &self.link
             {
                 self.opened.lock().unwrap().extend(l.take_open());
+            }
+            if self.script.welcome
+                && self.polls == 1
+                && let Some(l) = &self.link
+            {
+                l.request_welcome().unwrap();
             }
             if let Some(l) = &self.link {
                 if self.script.download && !self.asked {
@@ -1140,6 +1165,35 @@ mod tests {
         w.spawner.broken.lock().unwrap().push("bundled-dir".into());
         assert!(sup.run(vec![]).is_err());
         crate::store::tests::rm_dir(&w.root);
+    }
+
+    #[test]
+    fn the_welcome_request_of_the_app_runs_the_hook_once() {
+        let (w, sup) = world("sup-welcome", "1.0.0");
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = count.clone();
+        let sup = sup.with_welcome(Arc::new(move || {
+            c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        w.script(Script {
+            welcome: true,
+            polls: 30,
+            clean: true,
+            ..Script::default()
+        });
+        sup.run(vec![]).unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Without a hook the request is taken and ignored.
+        let (w2, sup2) = world("sup-welcome-none", "1.0.0");
+        w2.script(Script {
+            welcome: true,
+            polls: 30,
+            clean: true,
+            ..Script::default()
+        });
+        sup2.run(vec![]).unwrap();
+        crate::store::tests::rm_dir(&w.root);
+        crate::store::tests::rm_dir(&w2.root);
     }
 
     #[test]

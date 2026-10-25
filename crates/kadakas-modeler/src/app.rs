@@ -16,7 +16,7 @@ use kadakas_ui_core::keymap::{Action, Keymap};
 use kadakas_ui_core::materials::{MaterialRow, MaterialsPanel};
 use kadakas_ui_core::modeler::{self, ModelerTool, ToolState};
 use kadakas_ui_core::modeling;
-use kadakas_ui_core::nav3d::{self, Frame, Nav3d, NavAction};
+use kadakas_ui_core::nav3d::{self, Frame, Nav3d, NavAction, NavStyle};
 use kadakas_ui_core::profile::Profile;
 use kadakas_ui_core::scene_panel;
 use kadakas_view3d::input::action_for_event;
@@ -117,9 +117,12 @@ pub enum Cmd {
     /// Switch the camera transition of scenes on or off (MOD-10).
     ToggleSceneAnimation,
     Theme(ThemeChoice),
+    Navigation(NavStyle),
     /// A fixed language, or `None` for the language of the system.
     Language(Option<String>),
     About,
+    /// Help > Show welcome: the launcher shows its welcome dialog again (PLAT-26).
+    ShowWelcome,
 }
 
 /// A way to replace or end the model that waits for the answer to the question about unsaved
@@ -811,8 +814,14 @@ impl ModelerApp {
                 }
             }
             Cmd::Theme(t) => self.prefs.theme = t,
+            Cmd::Navigation(n) => self.prefs.navigation = Some(n),
             Cmd::Language(l) => self.prefs.language = l,
             Cmd::About => self.about.open(),
+            Cmd::ShowWelcome => {
+                if !self.launch.request_welcome() {
+                    self.status = tr!("panels-show-welcome-needs-launcher");
+                }
+            }
         }
     }
 
@@ -1988,6 +1997,7 @@ impl ModelerApp {
                     intersect,
                     edges,
                     hide,
+                    nav_style: self.prefs.nav_style(),
                 },
             );
         });

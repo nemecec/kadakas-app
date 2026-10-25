@@ -197,6 +197,9 @@ One schema (`kadakas_update::Settings`), one file (`launcher.json`). The app wri
 | Channel | Stable, Nightly (the `beta` manifest channel), Local | Stable |
 | Older versions to keep | 0 to 50 | 1 |
 | Local update site (channel Local) | a `file://` address | empty |
+| `welcome_done` (not a setting to edit) | the version of the welcome dialog that the person has seen, 0 for none (PLAT-26, `docs/welcome.md`) | 0 |
+
+The file keeps keys that this version does not know, and the welcome dialog writes `flavor`, `mode` and `welcome_done` in it.
 
 - **Auto-update** downloads new versions and starts the newest one that did not crash at its last start. **Auto-download** downloads, and the person chooses when to switch (the "Restart to update" button). **Notify only** shows "Kadakas X is available" with a Download button.
 - The launcher and the app talk with files only (`handshake.rs`). The app has no network code. It reads `runs/<id>.status.json`, and writes `<id>.download` (Notify only), `<id>.restart.json` (the open documents) and `<id>.clean` (the clean-exit mark).

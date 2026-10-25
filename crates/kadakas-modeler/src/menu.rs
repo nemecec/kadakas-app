@@ -428,6 +428,22 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                     choice(ui, cmds, t.label(), app.prefs.theme == t, Cmd::Theme(t));
                 }
             });
+            ui.menu_button(tr!("modeler-view-navigation"), |ui| {
+                for n in kadakas_ui_core::nav3d::NavStyle::ALL {
+                    choice(
+                        ui,
+                        cmds,
+                        match n {
+                            kadakas_ui_core::nav3d::NavStyle::Mouse => tr!("modeler-nav-mouse"),
+                            kadakas_ui_core::nav3d::NavStyle::Trackpad => {
+                                tr!("modeler-nav-trackpad")
+                            }
+                        },
+                        app.prefs.nav_style() == n,
+                        Cmd::Navigation(n),
+                    );
+                }
+            });
             ui.menu_button(tr!("modeler-view-language"), |ui| {
                 choice(
                     ui,
@@ -460,6 +476,14 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
                 String::new(),
                 true,
                 Cmd::About,
+            );
+            entry(
+                ui,
+                cmds,
+                tr!("modeler-help-show-welcome"),
+                String::new(),
+                true,
+                Cmd::ShowWelcome,
             );
         });
     });

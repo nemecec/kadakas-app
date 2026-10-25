@@ -1,0 +1,31 @@
+## welcome: the first-run welcome dialog of the launcher (PLAT-26)
+
+welcome-title = Welcome to Kadakas
+welcome-intro = Pick how you want to start.
+welcome-later = You can change all of this later in Settings.
+welcome-applies-later = Some changes apply the next time Kadakas starts.
+welcome-work-heading = How do you want to work?
+welcome-mode-modeler = 3D Modeler
+welcome-mode-modeler-hint = Simple push and pull shape modeling.
+welcome-mode-landscape = Landscape CAD
+welcome-mode-landscape-hint = Plans, sheets and plants.
+welcome-not-installed = Not installed
+welcome-language = Language
+welcome-units = Units
+welcome-units-metric = Metric (mm, m)
+welcome-units-imperial = Imperial (ft, in)
+welcome-number-format = Number format
+welcome-example = Example: { $length } and { $number }
+welcome-more = More options
+welcome-theme = Theme
+welcome-navigation = Mouse or trackpad
+welcome-nav-mouse = Mouse: the wheel zooms
+welcome-nav-trackpad = Trackpad: two fingers move the view, a pinch zooms
+welcome-crash = Crash reports
+welcome-crash-hint = A report never holds your drawings, file names or your name.
+welcome-updates = Updates
+welcome-start = Start
+welcome-use-defaults = Use defaults
+welcome-save = Save
+welcome-cancel = Cancel
+welcome-failed = Some settings could not be saved: { $problems }

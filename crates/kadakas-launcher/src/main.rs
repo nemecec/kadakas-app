@@ -19,6 +19,8 @@ mod cli;
 mod events;
 mod model;
 mod ui;
+mod welcome;
+mod welcome_ui;
 
 use kadakas_l10n::tr;
 use kadakas_update::local::{self, RoutingHttp};
@@ -96,6 +98,18 @@ fn sites_from_env(cli_site: Option<String>) -> Sites {
         env_url: std::env::var("KADAKAS_UPDATE_URL").ok(),
         loopback_http: std::env::var("KADAKAS_UPDATE_ALLOW_LOOPBACK_HTTP").is_ok_and(|v| v == "1"),
     }
+}
+
+/// True when the active version holds the 3D modeler.
+fn modeler_installed(factory: &UpdaterFactory, root: &Path) -> bool {
+    factory(&Settings::load(root))
+        .store()
+        .active()
+        .is_some_and(|a| {
+            kadakas_update::flavors::discover(&a.dir)
+                .iter()
+                .any(|f| f.id == kadakas_welcome::choices::MODELER_FLAVOR)
+        })
 }
 
 fn exe_dir() -> Option<PathBuf> {
@@ -183,24 +197,31 @@ fn start_in_bundle(
     let spawner: Arc<dyn Spawner> = Arc::new(SystemSpawner);
     let system = Arc::new(appkit::AppKitEvents);
     let forwarder = events::Forwarder::new(inbox.clone(), system.clone(), spawner.clone());
-    let supervisor = Supervisor::new(root, factory, spawner).with_inbox(inbox);
+    let welcome_root = root.clone();
+    let supervisor = Supervisor::new(root, factory, spawner)
+        .with_inbox(inbox)
+        .with_welcome(Arc::new(welcome::show_again));
     let ok = events::run_with_events(
         system,
         forwarder,
         files,
         std::time::Duration::from_secs(2),
-        move |files| match supervisor.run(files) {
-            Ok(_) => true,
-            Err(e) => {
-                // Nothing could start. The window needs the main thread, which runs the event
-                // loop, so it opens as a new process, with the reason.
-                let text = tr!("launcher-status-start-failed", error = e.to_string());
-                eprintln!("kadakas-launcher: {text}");
-                let _ = std::process::Command::new(exe)
-                    .arg("manage")
-                    .env("KADAKAS_LAUNCHER_STATUS", text)
-                    .spawn();
-                false
+        move |files| {
+            // The first start waits for the welcome dialog; the files wait in the inbox.
+            welcome::before_start(&welcome_root);
+            match supervisor.run(files) {
+                Ok(_) => true,
+                Err(e) => {
+                    // Nothing could start. The window needs the main thread, which runs the event
+                    // loop, so it opens as a new process, with the reason.
+                    let text = tr!("launcher-status-start-failed", error = e.to_string());
+                    eprintln!("kadakas-launcher: {text}");
+                    let _ = std::process::Command::new(exe)
+                        .arg("manage")
+                        .env("KADAKAS_LAUNCHER_STATUS", text)
+                        .spawn();
+                    false
+                }
             }
         },
     );
@@ -247,6 +268,21 @@ fn main() -> ExitCode {
                 }
             }
         }
+        cli::Command::Welcome { kind } => {
+            if kadakas_welcome::gate::skipped(
+                std::env::var(kadakas_welcome::ENV_SKIP).ok().as_deref(),
+            ) {
+                return ExitCode::SUCCESS;
+            }
+            let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(None));
+            match welcome::run_window(root.clone(), kind, modeler_installed(&factory, &root)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("kadakas-launcher: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         cli::Command::Manage => {
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(None));
             // A launcher that could not start anything opens this window as a new process (macOS,
@@ -271,11 +307,14 @@ fn main() -> ExitCode {
                 return start_in_bundle(root, exe, files, site);
             }
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(site));
+            // The first start waits for the welcome dialog (PLAT-26) before anything starts.
+            welcome::before_start(&root);
             let supervisor = kadakas_update::supervisor::Supervisor::new(
                 root.clone(),
                 factory.clone(),
                 Arc::new(SystemSpawner),
-            );
+            )
+            .with_welcome(Arc::new(welcome::show_again));
             match supervisor.run(files) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(e) => {

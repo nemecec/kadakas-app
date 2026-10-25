@@ -3210,9 +3210,20 @@ impl KadakasApp {
                 }
                 MenuRequest::ResetLayout => self.layouts.reset(),
                 MenuRequest::About => self.about.open(),
+                MenuRequest::ShowWelcome => self.show_welcome(),
                 MenuRequest::Feedback(what) => self.feedback.open(what),
             }
         }
+    }
+
+    /// Help > Show welcome: asks the launcher to show its welcome dialog (PLAT-26). The launcher
+    /// opens it in a window of its own; without the launcher the status line says so.
+    fn show_welcome(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.updates.request_welcome() {
+            return;
+        }
+        self.status = tr!("panels-show-welcome-needs-launcher");
     }
 
     /// The small window that asks for the name of a layout.
@@ -3420,6 +3431,7 @@ impl KadakasApp {
                                 .activity_review
                                 .clone()
                                 .filter(|_| self.activity_ui.model.show),
+                            nav_style: self.prefs.navigation,
                         },
                     );
                     let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3734,6 +3746,7 @@ impl eframe::App for KadakasApp {
                 max_versions: &mut self.prefs.max_versions,
                 max_version_mib: &mut self.prefs.max_version_mib,
                 animate_agent_view: &mut self.prefs.animate_agent_view,
+                navigation: &mut self.prefs.navigation,
                 privacy: &mut self.session.feedback.hub,
                 #[cfg(not(target_arch = "wasm32"))]
                 updates: &mut self.updates,

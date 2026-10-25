@@ -19,6 +19,14 @@ fn icon_size_or_default<'de, D: serde::Deserializer<'de>>(d: D) -> Result<IconSi
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
+/// Reads the navigation style; any value that is not known gives the mouse.
+fn nav_style_or_default<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<kadakas_ui_core::nav3d::NavStyle, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(kadakas_ui_core::nav3d::NavStyle::from_value(&v))
+}
+
 /// Settings that the user changes in the window.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +55,9 @@ pub struct Prefs {
     /// The answer to "Soften edges under an angle?" in the import of meshes (MOD-12): off, 20
     /// degrees, until the person changes it. The next import starts with the last answer.
     pub import_soften: kadakas_ui_core::mesh_import::SoftenPref,
+    /// What the wheel and the two-finger scroll do in the 3D view: mouse or trackpad (PLAT-26).
+    #[serde(deserialize_with = "nav_style_or_default")]
+    pub navigation: kadakas_ui_core::nav3d::NavStyle,
 }
 
 /// The default of `Prefs::max_versions`: the most a reader reads (no practical limit).
@@ -84,6 +95,7 @@ impl Default for Prefs {
             max_version_mib: DEFAULT_MAX_VERSION_MIB,
             animate_agent_view: true,
             import_soften: kadakas_ui_core::mesh_import::SoftenPref::default(),
+            navigation: kadakas_ui_core::nav3d::NavStyle::default(),
         }
     }
 }
@@ -185,6 +197,26 @@ mod tests {
         let (p, _) = load_from(&d);
         assert_eq!((p.max_versions, p.max_version_mib), (7, 9));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_navigation_style_is_stored_and_an_unknown_value_gives_the_mouse() {
+        use kadakas_ui_core::nav3d::NavStyle;
+        let p: Prefs =
+            serde_json::from_str(r#"{"navigation": "trackpad", "cues": false}"#).unwrap();
+        assert_eq!(p.navigation, NavStyle::Trackpad);
+        assert!(!p.cues);
+        for bad in ["\"pen\"", "3", "null"] {
+            let p: Prefs = serde_json::from_str(&format!(r#"{{"navigation": {bad}}}"#)).unwrap();
+            assert_eq!(p.navigation, NavStyle::Mouse);
+        }
+        assert_eq!(Prefs::default().navigation, NavStyle::Mouse);
+        let text = serde_json::to_string(&Prefs {
+            navigation: NavStyle::Trackpad,
+            ..Prefs::default()
+        })
+        .unwrap();
+        assert!(text.contains(r#""navigation":"trackpad""#), "{text}");
     }
 
     #[test]

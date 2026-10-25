@@ -223,3 +223,7 @@ modeler-import-title = Import
 modeler-import-button = Import
 modeler-import-cancel = Cancel
 modeler-export-title = Export
+modeler-view-navigation = Mouse or trackpad
+modeler-nav-mouse = Mouse (the wheel zooms)
+modeler-nav-trackpad = Trackpad (scroll moves, pinch zooms)
+modeler-help-show-welcome = Show welcome

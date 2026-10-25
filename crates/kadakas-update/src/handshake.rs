@@ -7,6 +7,8 @@
 //! - the app reads `<id>.status.json`: what the update check found (a newer version is available
 //!   or ready), and a note when the launcher skipped a version that crashed;
 //! - the app writes `<id>.download` to ask for the download (Notify only);
+//! - the app writes `<id>.welcome` to ask for the welcome dialog (Help > Show welcome, PLAT-26).
+//!   The launcher opens the dialog in a process of its own;
 //! - the app writes `<id>.restart.json` with the open documents and then exits. The launcher
 //!   starts the newest version again with the documents as arguments;
 //! - the app writes `<id>.clean` when it closes in the normal way (the crash marker);
@@ -322,6 +324,11 @@ pub fn take_download_request(root: &Path, id: &str) -> bool {
     std::fs::remove_file(run_file(root, id, "download")).is_ok()
 }
 
+/// True once when the app asked for the welcome dialog (the launcher does this).
+pub fn take_welcome_request(root: &Path, id: &str) -> bool {
+    std::fs::remove_file(run_file(root, id, "welcome")).is_ok()
+}
+
 /// The app's side of the handshake.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppLink {
@@ -402,6 +409,11 @@ impl AppLink {
     /// Asks the launcher to download the new version (Notify only).
     pub fn request_download(&self) -> std::io::Result<()> {
         write_atomic(&run_file(&self.root, &self.id, "download"), b"download\n")
+    }
+
+    /// Asks the launcher to show the welcome dialog again (Help > Show welcome).
+    pub fn request_welcome(&self) -> std::io::Result<()> {
+        write_atomic(&run_file(&self.root, &self.id, "welcome"), b"welcome\n")
     }
 
     /// Tells the launcher to start again after this program exits, with these documents. The
@@ -565,6 +577,10 @@ mod tests {
         l.request_download().unwrap();
         assert!(take_download_request(&d, "1a"));
         assert!(!take_download_request(&d, "1a"));
+        assert!(!take_welcome_request(&d, "1a"));
+        l.request_welcome().unwrap();
+        assert!(take_welcome_request(&d, "1a"));
+        assert!(!take_welcome_request(&d, "1a"));
 
         let docs = vec![PathBuf::from("/a/b.kad"), PathBuf::from("/c d/e.kad")];
         l.request_restart(&docs).unwrap();

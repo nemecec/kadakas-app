@@ -445,6 +445,19 @@ fn the_theme_and_the_language_menu_commands_change_the_settings() {
     assert_eq!(app.prefs.language, None);
 }
 
+#[test]
+fn the_navigation_menu_command_sets_the_style_and_the_app_choice_is_the_default() {
+    use kadakas_ui_core::nav3d::NavStyle;
+    let mut app = app();
+    let size = glam::Vec2::new(900.0, 600.0);
+    assert_eq!(app.prefs.nav_style(), NavStyle::Mouse);
+    app.prefs.app_navigation = NavStyle::Trackpad;
+    assert_eq!(app.prefs.nav_style(), NavStyle::Trackpad);
+    app.run(Cmd::Navigation(NavStyle::Mouse), size);
+    assert_eq!(app.prefs.navigation, Some(NavStyle::Mouse));
+    assert_eq!(app.prefs.nav_style(), NavStyle::Mouse);
+}
+
 // ---- the pointer: a test seam with a GPU that is only claimed ----------------------------------
 //
 // With `gpu_ready` set, the canvas lays out, reads the pointer and the wheel, navigates and puts a
@@ -1119,6 +1132,15 @@ fn a_document_that_the_launcher_sends_opens_in_the_running_modeler() {
     assert_eq!(a.path.as_deref(), Some(path.as_path()));
     a.answer(Answer::DontSave);
     assert_eq!(a.path.as_deref(), Some(second.as_path()));
+    // Help > Show welcome asks the launcher; without a launcher the status line says so.
+    let size = glam::Vec2::new(900.0, 600.0);
+    a.run(Cmd::ShowWelcome, size);
+    assert!(kadakas_update::handshake::take_welcome_request(
+        &root, "1a-2b"
+    ));
+    let mut alone = app();
+    alone.run(Cmd::ShowWelcome, size);
+    assert!(alone.status.contains("launcher"), "{}", alone.status);
     let _ = std::fs::remove_dir_all(&d);
 }
 
