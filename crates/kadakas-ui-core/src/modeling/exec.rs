@@ -169,7 +169,7 @@ fn local(doc: &Document, model: Option<ObjectId>, p: DVec3) -> [f64; 3] {
 /// ellipse, and the core drops the description then, with a note.
 fn local_circle(doc: &Document, model: Option<ObjectId>, a: &Analytic) -> Analytic {
     let mut out = a.clone();
-    out.center = local(doc, model, a.center()).into();
+    out.center = local(doc, model, a.center());
     if let Some(id) = model {
         let fr = frame_of(doc, id);
         if fr.matrix3.determinant().abs() > 1e-12 {

@@ -183,6 +183,41 @@ mod tests {
     }
 
     #[test]
+    fn every_refusal_of_a_curve_edit_is_known_and_loses_its_ids() {
+        use kadakas_core::surface::{CurveId, FaceId, VertexId};
+        let errors = [
+            CurveError::NoCurve(CurveId(3)),
+            CurveError::NoDescription(CurveId(3)),
+            CurveError::Segments {
+                segments: 2,
+                min: 3,
+                max: 1000,
+            },
+            CurveError::VertexShared {
+                vertex: VertexId(4),
+            },
+            CurveError::BordersOtherPlane { face: FaceId(5) },
+            CurveError::LoopUnclear { face: FaceId(5) },
+            CurveError::Invalid {
+                reason: "edge 9 is too short".into(),
+            },
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for e in errors {
+            let text = localize_error(&SurfaceError::Curve(e.clone()));
+            assert!(
+                !text.chars().any(|c| c.is_ascii_digit()) || text.contains("1,000"),
+                "{text}"
+            );
+            assert!(seen.insert(text), "{e}");
+            // The text path of a command error finds the same reasons, except the missing curve.
+            if !matches!(e, CurveError::NoCurve(_)) {
+                assert_ne!(localize(&e.to_string()), e.to_string(), "{e}");
+            }
+        }
+    }
+
+    #[test]
     fn known_refusals_lose_their_ids_and_keep_their_numbers() {
         let t = localize(
             "the command failed: face 12 reaches the opposite face 7 but is not fully inside it",
