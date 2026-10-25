@@ -755,3 +755,37 @@ fn the_cheap_test_for_a_volume_sees_a_missing_wall_and_a_hidden_face() {
     assert!(!info::is_watertight(&hidden));
     assert!(!info::is_watertight(&SurfaceModel::new()));
 }
+
+#[test]
+fn the_exact_centre_of_a_circle_or_an_arc_is_a_snap_centre_also_without_a_face() {
+    use crate::surface::Analytic;
+    let mut m = SurfaceModel::new();
+    m.transform = glam::DAffine3::from_translation(glam::DVec3::new(1000.0, 2000.0, 0.0));
+    let pts: Vec<[f64; 3]> = (0..=6)
+        .map(|i| {
+            let a = 0.3 + 1.2 * f64::from(i) / 6.0;
+            [400.0 * a.cos(), 400.0 * a.sin(), 0.0]
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: pts,
+        closed: false,
+        faceted: false,
+        analytic: Some(Analytic::arc(
+            glam::DVec3::ZERO,
+            glam::DVec3::Z,
+            glam::DVec3::X,
+            400.0,
+            0.3,
+            1.5,
+        )),
+    })
+    .unwrap();
+    assert_eq!(m.face_count(), 0);
+    let g = plan::snap_geometry(&[part(&m)], None, 1000);
+    assert_eq!(g.centers, [DVec2::new(1000.0, 2000.0)]);
+    // Only what is near the pointer, and the cap.
+    let away = plan::snap_geometry(&[part(&m)], Some((DVec2::new(5000.0, 0.0), 50.0)), 1000);
+    assert!(away.centers.is_empty());
+    assert!(plan::snap_geometry(&[part(&m)], None, 0).centers.is_empty());
+}

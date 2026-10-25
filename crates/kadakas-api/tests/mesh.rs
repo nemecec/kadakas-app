@@ -1560,7 +1560,7 @@ fn every_mesh_method_is_listed_documented_and_has_an_example() {
         .map(|(n, _)| *n)
         .filter(|n| n.starts_with("mesh."))
         .collect();
-    assert_eq!(names.len(), 30, "{names:?}");
+    assert_eq!(names.len(), 32, "{names:?}");
     for (n, d) in METHODS.iter().filter(|(n, _)| n.starts_with("mesh.")) {
         assert!(
             d.contains("params:") || d.contains("params "),
@@ -1587,6 +1587,7 @@ fn every_mesh_method_is_listed_documented_and_has_an_example() {
             "bounds",
             "near",
             "pick",
+            "curve_info",
             "create",
             "batch",
             "render",
@@ -2039,4 +2040,233 @@ fn a_merge_that_drops_a_material_is_noted() {
             .contains("material"),
         "{notes:?}"
     );
+}
+
+// ---- analytic curves (MOD-15) ---------------------------------------------------------------
+
+fn circle_points(c: [f64; 3], r: f64, n: usize) -> Vec<Value> {
+    (0..n)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            json!([c[0] + r * a.cos(), c[1] + r * a.sin(), c[2]])
+        })
+        .collect()
+}
+
+fn circle_with_field(s: &mut Session, r: f64, n: usize) -> (String, u64) {
+    let id = new_model(s);
+    ok(
+        s,
+        "mesh.add_curve",
+        json!({"id": id, "points": circle_points([0.0; 3], r, n), "closed": true,
+               "analytic": {"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": r}}),
+    );
+    let info = ok(s, "mesh.curve_info", json!({"id": id}));
+    let curve = info["items"][0]["curve"].as_u64().unwrap();
+    (id, curve)
+}
+
+#[test]
+fn curve_info_reads_the_exact_circle_and_the_segments() {
+    let mut s = Session::with_sequential_ids();
+    let (id, curve) = circle_with_field(&mut s, 300.0, 16);
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id, "curve": curve}));
+    let item = &info["items"][0];
+    assert_eq!(item["segments"], 16);
+    assert_eq!(item["closed"], true);
+    assert_eq!(item["edges"].as_array().unwrap().len(), 16);
+    let g = &item["geometry"];
+    assert_eq!(g["kind"], "circle");
+    assert_eq!(g["radius"], 300.0);
+    assert_eq!(g["center"], json!([0.0, 0.0, 0.0]));
+    assert!((g["length_mm"].as_f64().unwrap() - 300.0 * std::f64::consts::TAU).abs() < 1e-6);
+    assert!(g.get("start_deg").is_none());
+    // The summary and the shape of the object carry the field too.
+    let obj = ok(&mut s, "objects.get", json!({"id": id}));
+    assert!(obj["shape"]["curve_geometry"].is_array(), "{obj}");
+    // A curve that does not exist.
+    let e = err(&mut s, "mesh.curve_info", json!({"id": id, "curve": 999}));
+    assert_eq!(error_id(&e), "no_such_curve");
+}
+
+#[test]
+fn an_arc_has_angles_in_degrees_and_radians() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let pts: Vec<Value> = (0..=6)
+        .map(|i| {
+            let a = 0.5 + 1.5 * f64::from(i) / 6.0;
+            json!([100.0 * a.cos(), 100.0 * a.sin(), 0.0])
+        })
+        .collect();
+    ok(
+        &mut s,
+        "mesh.add_curve",
+        json!({"id": id, "points": pts,
+               "analytic": {"kind": "arc", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 100, "start": 0.5, "end": 2.0}}),
+    );
+    let g = ok(&mut s, "mesh.curve_info", json!({"id": id}))["items"][0]["geometry"].clone();
+    assert_eq!(g["kind"], "arc");
+    assert!((g["start_deg"].as_f64().unwrap() - 0.5_f64.to_degrees()).abs() < 1e-9);
+    assert_eq!(g["radians"]["end"], 2.0);
+}
+
+#[test]
+fn a_description_that_does_not_fit_is_dropped_and_the_notes_say_so() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let r = ok(
+        &mut s,
+        "mesh.add_curve",
+        json!({"id": id, "points": circle_points([0.0; 3], 300.0, 12), "closed": true,
+               "analytic": {"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 500}}),
+    );
+    let notes = r["notes"].as_array().unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("lost its circle description")),
+        "{r}"
+    );
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id}));
+    assert!(info["items"][0]["geometry"].is_null());
+    // A description that is not valid is refused.
+    let bad = err(
+        &mut s,
+        "mesh.add_curve",
+        json!({"id": id, "points": circle_points([900.0, 0.0, 0.0], 100.0, 12), "closed": true,
+               "analytic": {"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 0], "axis": [1, 0, 0], "radius": 1}}),
+    );
+    assert_eq!(error_id(&bad), "edit_refused");
+}
+
+#[test]
+fn set_segments_rebuilds_the_circle_in_one_undo_step() {
+    let mut s = Session::with_sequential_ids();
+    let (id, curve) = circle_with_field(&mut s, 300.0, 12);
+    let steps = s.editor.undo_depth();
+    let r = ok(
+        &mut s,
+        "mesh.set_segments",
+        json!({"id": id, "curve": curve, "segments": 40}),
+    );
+    assert_eq!(r["counts"]["edges"], 40);
+    assert_eq!(s.editor.undo_depth(), steps + 1);
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id, "curve": curve}));
+    assert_eq!(info["items"][0]["segments"], 40);
+    assert_eq!(info["items"][0]["geometry"]["radius"], 300.0);
+    // The face follows.
+    let faces = ok(&mut s, "mesh.faces", json!({"id": id}));
+    assert_eq!(faces["items"][0]["outer"].as_array().unwrap().len(), 40);
+    // Undo restores the 12 segments.
+    assert!(s.editor.undo());
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id, "curve": curve}));
+    assert_eq!(info["items"][0]["segments"], 12);
+}
+
+#[test]
+fn set_segments_refusals_have_stable_ids() {
+    let mut s = Session::with_sequential_ids();
+    let (id, curve) = circle_with_field(&mut s, 300.0, 12);
+    let e = err(
+        &mut s,
+        "mesh.set_segments",
+        json!({"id": id, "curve": curve, "segments": 2}),
+    );
+    assert_eq!(error_id(&e), "segments_out_of_range");
+    let e = err(
+        &mut s,
+        "mesh.set_segments",
+        json!({"id": id, "curve": 777, "segments": 10}),
+    );
+    assert_eq!(error_id(&e), "no_such_curve");
+    // A pushed circle: the wall is in another plane.
+    let face = face_facing(&mut s, &id, [0.0, 0.0, 1.0]);
+    ok(
+        &mut s,
+        "mesh.push_pull",
+        json!({"id": id, "face": face, "distance": 500}),
+    );
+    let before = ok(&mut s, "mesh.summary", json!({"id": id}));
+    let e = err(
+        &mut s,
+        "mesh.set_segments",
+        json!({"id": id, "curve": curve, "segments": 24}),
+    );
+    assert_eq!(error_id(&e), "curve_borders_other_plane");
+    assert_eq!(ok(&mut s, "mesh.summary", json!({"id": id})), before);
+    // Both circles of the cylinder have the field, the top one at the new height.
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id}));
+    assert_eq!(info["total"], 2);
+    let zs: Vec<f64> = info["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["geometry"]["center"][2].as_f64().unwrap())
+        .collect();
+    assert!(zs.contains(&0.0) && zs.contains(&500.0), "{zs:?}");
+    // A curve without the field.
+    let plain = new_model(&mut s);
+    ok(
+        &mut s,
+        "mesh.add_curve",
+        json!({"id": plain, "points": circle_points([0.0; 3], 300.0, 12), "closed": true}),
+    );
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": plain}));
+    assert!(info["items"][0]["geometry"].is_null());
+    let c = info["items"][0]["curve"].as_u64().unwrap();
+    let e = err(
+        &mut s,
+        "mesh.set_segments",
+        json!({"id": plain, "curve": c, "segments": 24}),
+    );
+    assert_eq!(error_id(&e), "curve_without_description");
+}
+
+#[test]
+fn set_segments_works_in_a_batch_and_a_non_uniform_scale_drops_the_field() {
+    let mut s = Session::with_sequential_ids();
+    let (id, curve) = circle_with_field(&mut s, 300.0, 12);
+    let r = ok(
+        &mut s,
+        "mesh.batch",
+        json!({"id": id, "edits": [{"method": "set_segments", "curve": curve, "segments": 20}]}),
+    );
+    assert_eq!(r["count"], 1);
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id, "curve": curve}));
+    assert_eq!(info["items"][0]["segments"], 20);
+    // A uniform scale keeps the field with a new radius.
+    let all: Vec<u64> = (1..=20).collect();
+    let verts = ok(&mut s, "mesh.vertices", json!({"id": id}));
+    let ids: Vec<u64> = verts["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids.len(), all.len());
+    ok(
+        &mut s,
+        "mesh.transform",
+        json!({"id": id, "vertices": ids, "scale": {"factor": 2}}),
+    );
+    let g = ok(&mut s, "mesh.curve_info", json!({"id": id}))["items"][0]["geometry"].clone();
+    assert_eq!(g["radius"].as_f64().map(|r| r.round()), Some(600.0));
+    // A scale along one axis drops it, and the notes of the edit say so.
+    let r = ok(
+        &mut s,
+        "mesh.transform",
+        json!({"id": id, "vertices": ids, "scale": {"factors": [2, 1, 1]}}),
+    );
+    assert!(
+        r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("lost its circle description")),
+        "{r}"
+    );
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": id}));
+    assert!(info["items"][0]["geometry"].is_null());
+    assert_eq!(info["items"][0]["segments"], 20);
 }

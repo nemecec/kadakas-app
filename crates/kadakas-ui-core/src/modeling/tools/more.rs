@@ -17,7 +17,7 @@
 
 use glam::DVec3;
 use kadakas_core::model::ObjectId;
-use kadakas_core::surface::{EdgeId, Edit, FaceId, SurfaceModel};
+use kadakas_core::surface::{Analytic, EdgeId, Edit, FaceId, SurfaceModel};
 use kadakas_l10n::tr;
 use kadakas_units::Units;
 
@@ -600,6 +600,16 @@ impl Modeling {
                 ),
                 closed: true,
                 faceted: true,
+                analytic: Some(Analytic::polygon(
+                    c,
+                    plane.n,
+                    plane.u,
+                    if self.more.circumscribed {
+                        r / (std::f64::consts::PI / f64::from(self.more.sides.max(3))).cos()
+                    } else {
+                        r
+                    },
+                )),
             }],
             redo,
             message: None,

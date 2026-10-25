@@ -54,6 +54,12 @@ pub enum TrayAction {
     Soften,
     /// The slider of the Soften Edges panel is being dragged: show what it would soften.
     SoftenPreview,
+    /// Entity Info set the number of segments of a circle or an arc (MOD-15).
+    CurveSegments {
+        model: kadakas_core::model::ObjectId,
+        curve: u32,
+        segments: u32,
+    },
 }
 
 /// What the tray draws from: the data of the program for one frame.
@@ -459,6 +465,7 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
             curve,
             faces,
             style,
+            shape,
         } => {
             let u = kadakas_units::current();
             egui::Grid::new("entity-info-edge")
@@ -489,6 +496,19 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                     row(ui, tr!("modeler-entity-soft"), yes_no(style.soft));
                     row(ui, tr!("modeler-entity-smooth"), yes_no(style.smooth));
                     row(ui, tr!("modeler-entity-hidden"), yes_no(style.hidden));
+                    if let Some(s) = shape {
+                        crate::curve_panel::rows(ui, s, out);
+                    }
+                });
+        }
+        EntityInfo::Curve { shape } => {
+            egui::Grid::new("entity-info-curve")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    row(ui, tr!("modeler-entity-type"), tr!("modeler-entity-curve"));
+                    row(ui, tr!("modeler-entity-model"), shape.model.to_string());
+                    crate::curve_panel::rows(ui, shape, out);
                 });
         }
         EntityInfo::Parts {

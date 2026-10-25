@@ -72,7 +72,15 @@ pub const MESH_ADD_EDGES: (&str, &str) = (
 );
 pub const MESH_ADD_CURVE: (&str, &str) = (
     "mesh.add_curve",
-    "Draw a chain of edges that stays one curve (a circle or an arc) when other edges cut it. params: {id, points: [[x, y, z]], closed? (the last point joins the first), faceted? (a polygon: its corners stay creases)}. Returns the change.",
+    "Draw a chain of edges that stays one curve (a circle or an arc) when other edges cut it. params: {id, points: [[x, y, z]], closed? (the last point joins the first), faceted? (a polygon: its corners stay creases), analytic? (the exact circle: {kind, center, normal, axis, radius, start?, end?}, kept only when all points lie on it)}. Returns the change. Notes say when the circle was not kept.",
+);
+pub const MESH_CURVE_INFO: (&str, &str) = (
+    "mesh.curve_info",
+    "The curves of a surface model with their exact circle (MOD-15). params: {id, curve? (one curve, else all curves, a page), offset?, limit? (default 100, at most 1000)}. Returns {total, offset, items: [{curve, edges: [edge ids in chain order], segments (the number of edges), closed, geometry: null | {kind (circle | arc | polygon), center: [x, y, z], normal, axis, radius, start_deg?, end_deg? (arcs), length_mm (arc length or circumference), radians: {start?, end?}}}]}. Coordinates are local mm. A curve without geometry is an old curve or one that an edit made inexact: its chain is still a curve.",
+);
+pub const MESH_SET_SEGMENTS: (&str, &str) = (
+    "mesh.set_segments",
+    "Rebuild a circle or an arc with another number of segments, on the same circle, in one undo step. params: {id, curve, segments (3 to 1000)}. The ends of an arc and the first vertex of a circle stay. Faces on the curve in the plane of the circle are rebuilt with the new vertices. Refused with a stable error_id: no_such_curve, curve_without_description (an old curve), segments_out_of_range, curve_vertex_shared (another edge meets the chain inside), curve_borders_other_plane (a face on another plane uses it, for example the wall of a pushed circle), curve_loop_unclear, curve_result_invalid (for example edges shorter than the length tolerance). Returns the change.",
 );
 pub const MESH_ERASE: (&str, &str) = (
     "mesh.erase",
@@ -152,7 +160,7 @@ pub const MESH_EXPLODE: (&str, &str) = (
 );
 pub const MESH_BATCH: (&str, &str) = (
     "mesh.batch",
-    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
+    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
 );
 pub const MESH_RENDER: (&str, &str) = (
     "mesh.render",
@@ -199,6 +207,13 @@ pub const ERROR_IDS: &[&str] = &[
     "exact_stale",
     "no_such_class",
     "no_such_resource",
+    "no_such_curve",
+    "curve_without_description",
+    "segments_out_of_range",
+    "curve_vertex_shared",
+    "curve_borders_other_plane",
+    "curve_loop_unclear",
+    "curve_result_invalid",
 ];
 
 /// The id of the first model in a fresh session with sequential ids, for the examples.
@@ -339,6 +354,7 @@ pub fn describe() -> Value {
         "workflow": "Make a model with mesh.create. Draw edges with mesh.add_edges and read the ids of the new faces from the answer. Pull a face with mesh.push_pull. Check with mesh.solid_report. Look at it with mesh.render. Use mesh.batch for a long run of edits that must succeed together.",
         "results": "An edit answers {op, id, counts: {vertices, edges, faces}, revision, created: {vertices, edges, faces}, removed: {vertices, edges, faces}, truncated?, notes?}. The lists in created and removed have at most 1000 ids each. Notes tell what the edit changed that you did not ask for, such as a material that a merged face dropped. model_gone is true when the edit moved the whole model away (mesh.make_group of every face), so there are no counts.",
         "soften_edges": "mesh.soften_edges answers with three numbers. considered is how many edges the angle test looked at (edges with exactly two faces, and edges between coplanar faces only with coplanar). changed is how many edges got other flags than they had. softened is how many edges are soft in the whole model after the edit. A second call with the same angle changes 0.",
+        "curves": "A curve is a chain of straight edges that stays one circle or arc when other edges cut it. A curve can also have an exact circle (MOD-15): kind (circle, arc or polygon), center, normal, axis (the direction of the angle 0), radius and, for an arc, the start and end angle (counterclockwise from the axis). The number of segments is the number of edges of the chain. mesh.add_curve takes it as analytic. The field is kept next to the chain: move, rotate, mirror and uniform scale move it with the curve. A non-uniform scale, a move of single points of the chain or any change that puts a point off the circle drops it, and the notes of the edit say so. An erase that cuts the curve gives arcs that keep the circle with new angles. The copy of a circle at another height (Push/Pull, Follow Me) and the offset of a circle (another radius) get their own field. A chain that another edge cut keeps the field: the vertex that the cut made lies on a chord. mesh.curve_info reads the curves with the field, mesh.set_segments rebuilds a chain with another count. An old curve has no field and works as before. A curve with a field is also saved with it in the file (the model field curve_geometry).",
         "to_surface": "mesh.to_surface turns a mesh3d object into a surface model (MOD-12). Imports of OBJ, STL and glTF files make mesh3d objects, which hold millions of triangles and have no edges and faces to edit. The conversion welds the vertices, merges coplanar triangles into faces with holes, and softens the edges under an angle if you pass soften_below_angle. It reports counts: the answer has softened_edges, and report has the rest. A mesh over the limits of a surface model is refused with the counts and stays a mesh. import.file does the same in one step with the options to_surface and soften_below_angle.",
         "undo": "Every edit method is one undo step, also mesh.erase with edges and faces, and mesh.batch with all its edits. A refused edit changes nothing and makes no step. The person sees the steps of an agent in the activity panel and can revert them.",
         "camera": "The camera of mesh.render and render.png is in drawing coordinates: target is a point of the drawing in mm. The answer of mesh.render has the camera that was used. Give it back as camera and the picture is the same, also after other models were added elsewhere.",
@@ -357,6 +373,7 @@ pub fn describe() -> Value {
             {"method": "mesh.add_edges", "params": {"id": m, "edges": [[[0, 0, 0], [4000, 0, 0]], [[4000, 0, 0], [4000, 3000, 0]], [[4000, 3000, 0], [0, 3000, 0]], [[0, 3000, 0], [0, 0, 0]]]}},
             {"method": "mesh.push_pull", "params": {"id": m, "face": 9, "distance": 2500}},
             {"method": "mesh.faces", "params": {"id": m, "limit": 10, "with_points": true}},
+            {"method": "mesh.curve_info", "params": {"id": m}},
             {"method": "mesh.solid_report", "params": {"id": m}},
             {"method": "mesh.transform", "params": {"id": m, "faces": [9], "scale": {"factor": 0.5, "about": [2000, 1500, 2500]}}},
             {"method": "mesh.soften_edges", "params": {"id": m, "below_angle": 20}},
@@ -386,7 +403,7 @@ pub fn handle(s: &mut Session, method: &str, p: Value) -> Option<Result<Value, R
     let op = method.strip_prefix("mesh.")?;
     let p = if p.is_null() { json!({}) } else { p };
     Some(match op {
-        "summary" | "vertices" | "edges" | "faces" | "solid_report" | "bounds" => {
+        "summary" | "vertices" | "edges" | "faces" | "solid_report" | "bounds" | "curve_info" => {
             read::handle(s.editor.doc(), op, p)
         }
         "near" | "pick" => query::handle(s, op, p),

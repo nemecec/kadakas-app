@@ -1,5 +1,73 @@
 {
   "$defs": {
+    "Analytic": {
+      "description": "The exact description of a circle, an arc or a polygon (MOD-15). All numbers are in the local\ncoordinates of the model (mm and radians). Angles run counterclockwise about `normal`, from\n`axis`.",
+      "properties": {
+        "axis": {
+          "description": "A unit vector in the plane: the direction of the angle 0.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "center": {
+          "description": "The centre.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "end": {
+          "description": "The end angle of an open chain, counterclockwise from `start`; none for a full circle.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`circle`, `arc` or `polygon`. Another word from a newer program is kept.",
+          "type": "string"
+        },
+        "normal": {
+          "description": "The unit normal of the plane of the circle.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "description": "The radius of the circle that the vertices lie on.",
+          "format": "double",
+          "type": "number"
+        },
+        "start": {
+          "description": "The start angle (radians, counterclockwise from `axis`) of an open chain; none for a full\ncircle.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "center",
+        "normal",
+        "axis",
+        "radius"
+      ],
+      "type": "object"
+    },
     "Arrange": {
       "description": "How `Command::Arrange` moves objects in the stacking order.",
       "oneOf": [
@@ -288,6 +356,12 @@
       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
       "type": "string"
     },
+    "CurveId": {
+      "description": "The id of a curve in its surface model.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
     "EdgeId": {
       "description": "The id of a edge in its surface model.",
       "format": "uint32",
@@ -426,6 +500,17 @@
               "const": "add_curve",
               "type": "string"
             },
+            "analytic": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Analytic"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact circle of the curve (MOD-15): centre, normal, radius and angles (see\n`Analytic`). It is stored when all points lie on it, else dropped with a note."
+            },
             "closed": {
               "type": "boolean"
             },
@@ -449,6 +534,29 @@
             "action",
             "points",
             "closed"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Rebuilds the chain of a curve that has an exact circle (MOD-15) with `segments` edges (3 to\n1,000) on the same circle. The ends of an arc and the first vertex of a circle stay. The\nfaces that use the chain keep their loops with the new vertices. Refused with a typed\nreason when another edge meets the chain, or a face that uses it is not in the plane of\nthe circle (a curve under a Push/Pull wall). See the module `segments`.",
+          "properties": {
+            "action": {
+              "const": "set_curve_segments",
+              "type": "string"
+            },
+            "curve": {
+              "$ref": "#/$defs/CurveId"
+            },
+            "segments": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "action",
+            "curve",
+            "segments"
           ],
           "type": "object"
         },

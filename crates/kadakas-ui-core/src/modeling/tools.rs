@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec3;
 use kadakas_core::model::ObjectId;
-use kadakas_core::surface::{EdgeId, FaceId, IntersectScope};
+use kadakas_core::surface::{Analytic, EdgeId, FaceId, IntersectScope};
 use kadakas_l10n::tr;
 use kadakas_units::Units;
 
@@ -871,6 +871,7 @@ impl Modeling {
                 points: circle_points(c, &plane, r, theta, self.sides),
                 closed: true,
                 faceted: false,
+                analytic: Some(Analytic::circle(c, plane.n, plane.u, r)),
             }],
             redo,
             message: None,
@@ -942,6 +943,7 @@ impl Modeling {
                 points: arc_points(a, b, h, &plane, self.arc_sides),
                 closed: false,
                 faceted: false,
+                analytic: arc_circle(a, b, h, &plane).map(|c| c.analytic(&plane)),
             }],
             redo,
             message: None,
@@ -1451,13 +1453,41 @@ pub fn radius_to_bulge(chord: f64, r: f64) -> Option<f64> {
     (r >= half && half > 0.0).then(|| r - (r * r - half * half).sqrt())
 }
 
-/// The corners of the arc over the chord `a`–`b` with the bulge `h` (signed, see [`bulge_of`]),
-/// in `segments` pieces. The first corner is `a` and the last is `b`.
-pub fn arc_points(a: DVec3, b: DVec3, h: f64, plane: &Plane3, segments: u32) -> Vec<DVec3> {
-    let segments = segments.max(1);
-    let Some(d) = (b - a).try_normalize() else {
-        return vec![a, b];
-    };
+/// The circle of the arc over the chord `a`–`b` with the bulge `h`, in the axes of the plane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArcCircle {
+    /// The centre in the axes of the plane.
+    pub center: glam::DVec2,
+    pub radius: f64,
+    /// The angle of `a` and the sweep up to `b`, counterclockwise positive.
+    pub start: f64,
+    pub sweep: f64,
+}
+
+impl ArcCircle {
+    /// The exact description of the arc (MOD-15) in world coordinates: counterclockwise about the
+    /// normal of the plane, from the lower angle to the higher.
+    pub fn analytic(&self, plane: &Plane3) -> Analytic {
+        let (s, e) = if self.sweep >= 0.0 {
+            (self.start, self.start + self.sweep)
+        } else {
+            (self.start + self.sweep, self.start)
+        };
+        Analytic::arc(
+            plane.at(plane.origin, self.center.x, self.center.y),
+            plane.n,
+            plane.u,
+            self.radius,
+            s,
+            e,
+        )
+    }
+}
+
+/// The circle of the arc over the chord `a`–`b` with the bulge `h` (signed, see [`bulge_of`]).
+/// `None` when the three points are on a line.
+pub fn arc_circle(a: DVec3, b: DVec3, h: f64, plane: &Plane3) -> Option<ArcCircle> {
+    let d = (b - a).try_normalize()?;
     let perp = plane.n.cross(d);
     let mid = (a + b) / 2.0;
     let top = mid + perp * h;
@@ -1465,7 +1495,7 @@ pub fn arc_points(a: DVec3, b: DVec3, h: f64, plane: &Plane3, segments: u32) -> 
     // The center of the circle through the three points, in the axes of the plane.
     let den = 2.0 * (pa.x * (pt.y - pb.y) + pt.x * (pb.y - pa.y) + pb.x * (pa.y - pt.y));
     if den.abs() < 1e-12 {
-        return vec![a, b];
+        return None;
     }
     let f = |p: glam::DVec2| p.length_squared();
     let cx = (f(pa) * (pt.y - pb.y) + f(pt) * (pb.y - pa.y) + f(pb) * (pa.y - pt.y)) / den;
@@ -1478,11 +1508,30 @@ pub fn arc_points(a: DVec3, b: DVec3, h: f64, plane: &Plane3, segments: u32) -> 
     let (a0, a1, at) = (ang(pa), ang(pb), ang(pt));
     let ccw = norm(a1 - a0);
     let sweep = if norm(at - a0) < ccw { ccw } else { ccw - tau };
+    Some(ArcCircle {
+        center: c,
+        radius: r,
+        start: a0,
+        sweep,
+    })
+}
+
+/// The corners of the arc over the chord `a`–`b` with the bulge `h` (signed, see [`bulge_of`]),
+/// in `segments` pieces. The first corner is `a` and the last is `b`.
+pub fn arc_points(a: DVec3, b: DVec3, h: f64, plane: &Plane3, segments: u32) -> Vec<DVec3> {
+    let segments = segments.max(1);
+    let Some(c) = arc_circle(a, b, h, plane) else {
+        return vec![a, b];
+    };
     let mut out = Vec::with_capacity(segments as usize + 1);
     out.push(a);
     for i in 1..segments {
-        let t = a0 + sweep * f64::from(i) / f64::from(segments);
-        out.push(plane.at(plane.origin, c.x + r * t.cos(), c.y + r * t.sin()));
+        let t = c.start + c.sweep * f64::from(i) / f64::from(segments);
+        out.push(plane.at(
+            plane.origin,
+            c.center.x + c.radius * t.cos(),
+            c.center.y + c.radius * t.sin(),
+        ));
     }
     out.push(b);
     out

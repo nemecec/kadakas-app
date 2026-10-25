@@ -368,7 +368,10 @@ impl SceneBuilder {
             }
         }
         for (cid, edges) in m.curves() {
-            if let Some(c) = curve_center(m, edges) {
+            // The exact centre of the curve (MOD-15) first: it is also there for a chain that
+            // another edge cut. Else the centre of the corners.
+            let exact = m.curve_geometry(cid).map(|a| a.center());
+            if let Some(c) = exact.or_else(|| curve_center(m, edges)) {
                 self.add_point(w(c), PointKind::Center, Tag::curve(model, cid));
             }
         }

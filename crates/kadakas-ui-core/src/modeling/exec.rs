@@ -8,7 +8,7 @@ use glam::{DAffine3, DVec3};
 use kadakas_core::command::{Command, CommandError, Editor};
 use kadakas_core::model::{Attributes, Document, ObjectId, Shape};
 use kadakas_core::resource::ResourceId;
-use kadakas_core::surface::{EdgeId, Edit, FaceId, IntersectScope};
+use kadakas_core::surface::{Analytic, EdgeId, Edit, FaceId, IntersectScope};
 
 use super::scenes::{elevation, frame_of, model_of};
 
@@ -72,6 +72,9 @@ pub enum Action {
         closed: bool,
         /// A polygon: its corners stay corners (see `Edit::AddCurve`).
         faceted: bool,
+        /// The exact circle of the curve in world coordinates (MOD-15). `run` turns it into the
+        /// local coordinates of the model.
+        analytic: Option<Analytic>,
     },
     /// Edges erased (the Eraser).
     EraseEdges { model: ObjectId, edges: Vec<EdgeId> },
@@ -159,6 +162,25 @@ fn local(doc: &Document, model: Option<ObjectId>, p: DVec3) -> [f64; 3] {
         None => p - DVec3::new(0.0, 0.0, doc_ground(doc)),
     };
     q.to_array()
+}
+
+/// The description of a circle in the local coordinates of the model (`None`: a new model on the
+/// active layer). A model that is scaled differently along the axes of the circle makes it an
+/// ellipse, and the core drops the description then, with a note.
+fn local_circle(doc: &Document, model: Option<ObjectId>, a: &Analytic) -> Analytic {
+    let mut out = a.clone();
+    out.center = local(doc, model, a.center()).into();
+    if let Some(id) = model {
+        let fr = frame_of(doc, id);
+        if fr.matrix3.determinant().abs() > 1e-12 {
+            let inv = fr.matrix3.inverse();
+            let (u, n) = (a.axis(), a.normal());
+            out.radius = (inv * (u * a.radius)).length();
+            out.axis = (inv * u).normalize_or_zero().to_array();
+            out.normal = (fr.matrix3.transpose() * n).normalize_or_zero().to_array();
+        }
+    }
+    out
 }
 
 fn doc_ground(doc: &Document) -> f64 {
@@ -501,11 +523,15 @@ fn commands(doc: &Document, id: ObjectId, fresh: bool, a: &Action) -> Vec<Comman
             points,
             closed,
             faceted,
+            analytic,
             ..
         } => vec![edit(Edit::AddCurve {
             points: points.iter().map(|p| at(*p)).collect(),
             closed: *closed,
             faceted: *faceted,
+            analytic: analytic
+                .as_ref()
+                .map(|a| local_circle(doc, if fresh { None } else { Some(id) }, a)),
         })],
         Action::EraseEdges { edges, .. } => vec![edit(Edit::EraseEdges {
             edges: edges.clone(),

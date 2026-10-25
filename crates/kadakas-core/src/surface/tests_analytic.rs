@@ -1055,3 +1055,66 @@ proptest! {
         }
     }
 }
+
+// ---- fixtures of files --------------------------------------------------------------------------
+
+/// A file that a program before MOD-15 wrote: a triangle that is a curve, no `curve_geometry`.
+const OLD_FILE: &str = r#"{"v":1,"name":"Old","next_id":9,
+ "vertices":[[1,0,0,0],[2,1000,0,0],[3,500,866.0254037844386,0]],
+ "edges":[[4,1,2],[5,2,3],[6,3,1]],
+ "faces":[{"id":7,"normal":[0,0,1],"offset":0,"outer":[1,2,3]}],
+ "curves":[[8,4,5,6]]}"#;
+
+/// The same triangle, written by a newer program: the circle has a field that this version does
+/// not know, the kind is a word that this version does not know, and the model has a field of its
+/// own.
+const FUTURE_FILE: &str = r#"{"v":1,"name":"Future","next_id":9,
+ "vertices":[[1,0,0,0],[2,1000,0,0],[3,500,866.0254037844386,0]],
+ "edges":[[4,1,2],[5,2,3],[6,3,1]],
+ "faces":[{"id":7,"normal":[0,0,1],"offset":0,"outer":[1,2,3]}],
+ "curves":[[8,4,5,6]],
+ "curve_geometry":[[8,{"kind":"spiral","center":[500,288.6751345948129,0],"normal":[0,0,1],
+   "axis":[1,0,0],"radius":577.3502691896258,"tolerance_class":"fine","weights":[1,2,3]}]],
+ "from_the_future":{"x":[1,2]}}"#;
+
+#[test]
+fn an_old_file_loads_has_no_description_and_writes_none() {
+    let m: SurfaceModel = serde_json::from_str(OLD_FILE).unwrap();
+    assert_eq!(m.curves().count(), 1);
+    assert_eq!(m.curve_geometries().count(), 0);
+    assert!(m.problem().is_none());
+    let text = serde_json::to_string(&m).unwrap();
+    assert!(!text.contains("curve_geometry"));
+    // It works as before: a move keeps the curve.
+    let mut m = m;
+    transform(&mut m, DAffine3::from_translation(DVec3::X * 50.0));
+    assert_eq!(m.curves().count(), 1);
+}
+
+#[test]
+fn a_file_of_a_newer_program_keeps_what_this_version_does_not_know() {
+    let m: SurfaceModel = serde_json::from_str(FUTURE_FILE).unwrap();
+    let a = geom_of(&m, CurveId(8));
+    assert_eq!(a.kind, "spiral");
+    assert_eq!(a.extra["tolerance_class"], "fine");
+    let back = serde_json::to_value(&m).unwrap();
+    assert_eq!(back["curve_geometry"][0][1]["tolerance_class"], "fine");
+    assert_eq!(
+        back["curve_geometry"][0][1]["weights"],
+        serde_json::json!([1, 2, 3])
+    );
+    assert_eq!(back["from_the_future"]["x"], serde_json::json!([1, 2]));
+    // An edit of the model writes them back, too.
+    let mut m = m;
+    transform(&mut m, DAffine3::from_translation(DVec3::Y * 10.0));
+    let back = serde_json::to_value(&m).unwrap();
+    assert_eq!(
+        back["curve_geometry"][0][1]["weights"],
+        serde_json::json!([1, 2, 3])
+    );
+    assert_eq!(back["from_the_future"]["x"], serde_json::json!([1, 2]));
+    assert!(near(
+        geom_of(&m, CurveId(8)).center[1],
+        288.6751345948129 + 10.0
+    ));
+}

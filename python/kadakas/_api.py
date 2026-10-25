@@ -801,10 +801,24 @@ if TYPE_CHECKING:
     }, total=False)
 
     MeshAddCurveParams = TypedDict("MeshAddCurveParams", {
+        'analytic': dict[str, Any] | None,
         'closed': bool | None,
         'faceted': bool | None,
         'id': Required[str],
         'points': Required[list[list[float]]],
+    }, total=False)
+
+    MeshCurveInfoParams = TypedDict("MeshCurveInfoParams", {
+        'curve': int | None,
+        'id': Required[str],
+        'limit': int | None,
+        'offset': int | None,
+    }, total=False)
+
+    MeshSetSegmentsParams = TypedDict("MeshSetSegmentsParams", {
+        'curve': Required[int],
+        'id': Required[str],
+        'segments': Required[int],
     }, total=False)
 
     MeshEraseParams = TypedDict("MeshEraseParams", {
@@ -4132,10 +4146,22 @@ class Api:
         return self._call("mesh.add_edges", params or None)
 
     def mesh_add_curve(self, **params: "Unpack[MeshAddCurveParams]") -> Any:
-        """Draw a chain of edges that stays one curve (a circle or an arc) when other edges cut it. params: {id, points: [[x, y, z]], closed? (the last point joins the first), faceted? (a polygon: its corners stay creases)}. Returns the change.
+        """Draw a chain of edges that stays one curve (a circle or an arc) when other edges cut it. params: {id, points: [[x, y, z]], closed? (the last point joins the first), faceted? (a polygon: its corners stay creases), analytic? (the exact circle: {kind, center, normal, axis, radius, start?, end?}, kept only when all points lie on it)}. Returns the change. Notes say when the circle was not kept.
 
         JSON-RPC method ``mesh.add_curve``."""
         return self._call("mesh.add_curve", params or None)
+
+    def mesh_curve_info(self, **params: "Unpack[MeshCurveInfoParams]") -> Any:
+        """The curves of a surface model with their exact circle (MOD-15). params: {id, curve? (one curve, else all curves, a page), offset?, limit? (default 100, at most 1000)}. Returns {total, offset, items: [{curve, edges: [edge ids in chain order], segments (the number of edges), closed, geometry: null | {kind (circle | arc | polygon), center: [x, y, z], normal, axis, radius, start_deg?, end_deg? (arcs), length_mm (arc length or circumference), radians: {start?, end?}}}]}. Coordinates are local mm. A curve without geometry is an old curve or one that an edit made inexact: its chain is still a curve.
+
+        JSON-RPC method ``mesh.curve_info``."""
+        return self._call("mesh.curve_info", params or None)
+
+    def mesh_set_segments(self, **params: "Unpack[MeshSetSegmentsParams]") -> Any:
+        """Rebuild a circle or an arc with another number of segments, on the same circle, in one undo step. params: {id, curve, segments (3 to 1000)}. The ends of an arc and the first vertex of a circle stay. Faces on the curve in the plane of the circle are rebuilt with the new vertices. Refused with a stable error_id: no_such_curve, curve_without_description (an old curve), segments_out_of_range, curve_vertex_shared (another edge meets the chain inside), curve_borders_other_plane (a face on another plane uses it, for example the wall of a pushed circle), curve_loop_unclear, curve_result_invalid (for example edges shorter than the length tolerance). Returns the change.
+
+        JSON-RPC method ``mesh.set_segments``."""
+        return self._call("mesh.set_segments", params or None)
 
     def mesh_erase(self, **params: "Unpack[MeshEraseParams]") -> Any:
         """Erase edges and faces in one undo step. params: {id, edges?, faces?} (at least one). Erased edges merge coplanar faces on their sides and remove other faces of the edge. Erased faces leave their edges. Returns the change.
@@ -4252,7 +4278,7 @@ class Api:
         return self._call("mesh.explode", params or None)
 
     def mesh_batch(self, **params: "Unpack[MeshBatchParams]") -> Any:
-        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
+        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
 
         JSON-RPC method ``mesh.batch``."""
         return self._call("mesh.batch", params or None)
@@ -6196,6 +6222,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "mesh.create",
     "mesh.add_edges",
     "mesh.add_curve",
+    "mesh.curve_info",
+    "mesh.set_segments",
     "mesh.erase",
     "mesh.reverse_faces",
     "mesh.push_pull",

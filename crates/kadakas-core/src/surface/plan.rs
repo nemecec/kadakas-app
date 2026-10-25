@@ -876,6 +876,17 @@ pub fn snap_geometry_with(
                 g.centers.push(c);
             }
         }
+        // The exact centre of a circle or an arc (MOD-15), also when it has no face.
+        for (_, a) in part.model.curve_geometries() {
+            if centers >= cap {
+                break;
+            }
+            let c = part.xf.transform_point3(a.center()).truncate();
+            if close(c) {
+                centers += 1;
+                g.centers.push(c);
+            }
+        }
     }
     g
 }

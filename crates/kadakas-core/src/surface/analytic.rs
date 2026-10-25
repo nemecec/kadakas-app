@@ -586,8 +586,9 @@ pub(super) fn reconcile(m: &mut SurfaceModel, before: &SurfaceModel, notes: &mut
             let mut k = a.clone();
             follow_chain(&mut k, &pts, closed);
             if k.kind != a.kind {
+                let article = if k.kind == KIND_ARC { "an" } else { "a" };
                 notes.push(format!(
-                    "curve {id} is now an {}: its centre and radius stay",
+                    "curve {id} is now {article} {}: its centre and radius stay",
                     k.kind
                 ));
             } else if (k.start, k.end) != (a.start, a.end) {

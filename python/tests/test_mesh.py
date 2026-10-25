@@ -39,7 +39,7 @@ def make_box(doc):
 
 def test_the_client_has_a_typed_method_for_every_mesh_call(doc):
     names = [n for n in dir(doc.api) if n.startswith("mesh_")]
-    assert len(names) == 30
+    assert len(names) == 32
     assert "mesh_soften_edges" in names and "mesh_batch" in names and "mesh_render" in names
     assert "Soften every edge under an angle" in doc.api.mesh_soften_edges.__doc__
 
@@ -179,3 +179,27 @@ def test_the_object_list_summarises_a_surface_model_like_object_info(doc):
     assert doc.api.mesh_bounds(id=model)["world"]["min"] == [100.0, 200.0, 0.0]
     doc.api.undo()
     assert doc.api.mesh_bounds(id=model)["world"]["min"] == [0.0, 0.0, 0.0]
+
+
+def test_a_circle_keeps_its_exact_description_and_takes_a_new_segment_count(doc):
+    import math
+
+    model = doc.api.mesh_create(name="Pond")["id"]
+    points = [[500 * math.cos(math.tau * i / 12), 500 * math.sin(math.tau * i / 12), 0] for i in range(12)]
+    doc.api.mesh_add_curve(
+        id=model,
+        points=points,
+        closed=True,
+        analytic={"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 500},
+    )
+    info = doc.api.mesh_curve_info(id=model)
+    item = info["items"][0]
+    assert item["segments"] == 12 and item["geometry"]["radius"] == 500
+    doc.api.mesh_set_segments(id=model, curve=item["curve"], segments=36)
+    again = doc.api.mesh_curve_info(id=model, curve=item["curve"])["items"][0]
+    assert again["segments"] == 36 and again["geometry"]["radius"] == 500
+    with pytest.raises(KadakasError) as refused:
+        doc.api.mesh_set_segments(id=model, curve=item["curve"], segments=2)
+    assert "segments_out_of_range" in str(refused.value.data)
+    doc.undo()
+    assert doc.api.mesh_curve_info(id=model, curve=item["curve"])["items"][0]["segments"] == 12

@@ -386,7 +386,12 @@ pub enum EntityInfo {
         faces: usize,
         /// Soft, smooth and hidden (MOD-08).
         style: EdgeFlags,
+        /// The exact circle of its curve, if it has one (MOD-15).
+        shape: Option<crate::modeling::CurveShape>,
     },
+    /// All edges of one curve with an exact circle are selected (MOD-15): the circle, its true
+    /// radius and its segments.
+    Curve { shape: crate::modeling::CurveShape },
     /// Several faces and edges of surface models.
     Parts {
         faces: usize,
@@ -816,14 +821,45 @@ pub fn entity_info_with_parts(
                         hidden: m.edge_hidden(*eid),
                     }
                 },
+                shape: m
+                    .curve_of(*eid)
+                    .and_then(|c| crate::modeling::curve_shape(doc, *mid, c)),
             }
         }
+        many if one_curve(doc, many).is_some() => EntityInfo::Curve {
+            shape: one_curve(doc, many).expect("checked"),
+        },
         many => EntityInfo::Parts {
             faces: many.iter().filter(|i| matches!(i, Item::Face(..))).count(),
             edges: many.iter().filter(|i| matches!(i, Item::Edge(..))).count(),
             soft_surface: is_one_soft_surface(doc, many),
         },
     }
+}
+
+/// The exact circle of the curve whose edges are exactly the selected items (MOD-15).
+fn one_curve(
+    doc: &Document,
+    items: &[crate::modeling::Item],
+) -> Option<crate::modeling::CurveShape> {
+    use crate::modeling::{Item, curve_shape, model_of};
+    let Some(Item::Edge(mid, first)) = items.first() else {
+        return None;
+    };
+    let m = model_of(doc, *mid)?;
+    let curve = m.curve_of(*first)?;
+    let edges = m.curve_edges(curve)?;
+    let chosen: std::collections::BTreeSet<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Edge(model, e) if model == mid => Some(*e),
+            _ => None,
+        })
+        .collect();
+    let all_edges = chosen.len() == items.len();
+    (all_edges && chosen.len() == edges.len() && edges.iter().all(|e| chosen.contains(e)))
+        .then(|| curve_shape(doc, *mid, curve))
+        .flatten()
 }
 
 /// What the Measurements box shows. The box shows a value and takes typed values (MOD-04).
