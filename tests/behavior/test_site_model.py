@@ -157,9 +157,9 @@ def test_terrain_texture_shows_in_the_render_and_in_exports(cad, tmp_path):
     assert cad.result("export.file", {"path": str(glb), "format": "glb"})["report"]["textures"] == 1
     obj = tmp_path / "terrain.obj"
     cad.result("export.file", {"path": str(obj)})
-    assert "map_Kd Gravel_0.png" in (tmp_path / "terrain.mtl").read_text()
+    assert "map_Kd Gravel_0.png" in (tmp_path / "terrain.mtl").read_text(encoding="utf-8")
     assert (tmp_path / "Gravel_0.png").read_bytes().startswith(b"\x89PNG")
-    assert any(line.startswith("vt ") for line in obj.read_text().splitlines())
+    assert any(line.startswith("vt ") for line in obj.read_text(encoding="utf-8").splitlines())
     # A bad tile size is refused and changes nothing.
     assert "tile" in cad.error("site.texture", {"id": site, "tile_size": 1})["message"]
     assert cad.result("site.texture", {"id": site})["tile_size"] == 400

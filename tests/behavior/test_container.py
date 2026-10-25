@@ -96,7 +96,7 @@ def test_the_two_forms_load_the_same_document(make_serve, tmp_path):
     assert cad.result("file.save", {"path": str(forced), "format": "json"})["format"] == "json"
     assert forced.read_bytes().lstrip().startswith(b"{")
     assert cad.result("file.save", {"path": str(tmp_path / "x.json"), "format": "container"})["format"] == "container"
-    text = j.read_text()
+    text = j.read_text(encoding="utf-8")
     assert text.startswith("{") and '"history"' in text and "$blob" not in text
     assert json.loads(text)["format_version"] == 3
 
@@ -139,7 +139,7 @@ def test_convert_goes_both_ways_and_keeps_pictures_and_versions(make_serve, tmp_
     assert p.returncode == 0, p.stderr
     assert b.read_bytes().startswith(b"PK")
     # container -> json -> container: the same document and the same history.
-    assert read_doc(a) == read_doc(b) == json.loads(j.read_text())
+    assert read_doc(a) == read_doc(b) == json.loads(j.read_text(encoding="utf-8"))
     other = make_serve(b)
     assert other.doc() == make_serve(a).doc()
     assert [v["name"] for v in other.result("version.list")["versions"]] == ["One"]
@@ -432,16 +432,16 @@ def test_other_zip_tools_read_the_container(make_serve, tmp_path):
     names = zipfile.ZipFile(path).namelist()
     ran = []
     if shutil.which("unzip"):
-        out = subprocess.run(["unzip", "-t", str(path)], capture_output=True, text=True)
+        out = subprocess.run(["unzip", "-t", str(path)], capture_output=True, text=True, encoding="utf-8")
         assert out.returncode == 0 and "No errors detected" in out.stdout, out.stdout + out.stderr
         ran.append("unzip -t")
     if shutil.which("bsdtar"):
-        out = subprocess.run(["bsdtar", "-tf", str(path)], capture_output=True, text=True)
+        out = subprocess.run(["bsdtar", "-tf", str(path)], capture_output=True, text=True, encoding="utf-8")
         assert out.returncode == 0 and set(out.stdout.split()) == set(names), out.stderr
         ran.append("bsdtar -tf")
     if shutil.which("ditto"):
         dest = tmp_path / "ditto"
-        out = subprocess.run(["ditto", "-x", "-k", str(path), str(dest)], capture_output=True, text=True)
+        out = subprocess.run(["ditto", "-x", "-k", str(path), str(dest)], capture_output=True, text=True, encoding="utf-8")
         assert out.returncode == 0, out.stderr
         with zipfile.ZipFile(path) as z:
             for n in names:
@@ -457,8 +457,8 @@ def test_other_zip_tools_read_the_container(make_serve, tmp_path):
             "  try (ZipInputStream z = new ZipInputStream(new FileInputStream(a[0]))) {\n"
             "    ZipEntry e; while ((e = z.getNextEntry()) != null) {\n"
             "      byte[] b = z.readAllBytes(); System.out.println(e.getName() + \" \" + b.length); } } } }\n"
-        )
-        out = subprocess.run([java, str(src), str(path)], capture_output=True, text=True, cwd=tmp_path)
+        , encoding="utf-8")
+        out = subprocess.run([java, str(src), str(path)], capture_output=True, text=True, encoding="utf-8", cwd=tmp_path)
         assert out.returncode == 0, out.stderr
         with zipfile.ZipFile(path) as z:
             sizes = {line.rsplit(" ", 1)[0]: int(line.rsplit(" ", 1)[1]) for line in out.stdout.splitlines()}

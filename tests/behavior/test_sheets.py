@@ -183,7 +183,7 @@ def test_export_svg_and_png_per_sheet(garden, tmp_path):
     cad.result("viewport.create", {"sheet": "Planting plan"})
     svg, png = tmp_path / "s.svg", tmp_path / "s.png"
     cad.result("export.file", {"format": "sheet_svg", "path": str(svg), "options": {"sheet": "Planting plan"}})
-    assert svg.read_text().startswith("<svg") and 'width="420mm"' in svg.read_text()
+    assert svg.read_text(encoding="utf-8").startswith("<svg") and 'width="420mm"' in svg.read_text(encoding="utf-8")
     r = cad.result("export.file", {"format": "sheet_png", "path": str(png), "options": {"sheet": "Planting plan", "dpi": 50.8}})
     assert (r["width"], r["height"]) == (840, 594)
     assert png.read_bytes()[1:4] == b"PNG"
@@ -257,17 +257,14 @@ def test_mcp_tools_make_a_sheet_and_export_it(mcp, tmp_path):
 
 
 def test_estonian_text_survives_in_the_pdf(garden, tmp_path):
-    import shutil
-    import subprocess
+    from helpers import pdftotext
 
     cad = garden["cad"]
     second = cad.result("sheet.create", {"name": "Eesti", "number": "E-1", "title": "Šõõr Žürii äöü"})["layer"]
     cad.execute({"op": "add_object", "layer": second, "shape": {"kind": "text", "at": [20, 20], "text": "Šõõr Žürii äöü \u2013 \u201cšž\u201d", "height": 6}})
     path = tmp_path / "ee.pdf"
     cad.result("export.file", {"format": "pdf", "path": str(path), "options": {"sheets": [second]}})
-    if shutil.which("pdftotext") is None:
-        pytest.skip("pdftotext is not installed")
-    text = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True, check=True).stdout
+    text = pdftotext(path)
     assert "Šõõr Žürii äöü" in text
     assert "\u201cšž\u201d" in text and "\u2013" in text
 
@@ -287,10 +284,10 @@ def test_plants_and_exports_leave_paper_space_alone(garden, tmp_path):
     cad.result("viewport.create", {"sheet": "Planting plan"})
     dxf = tmp_path / "model.dxf"
     cad.result("export.file", {"format": "dxf", "path": str(dxf), "options": {"sheets": False}})
-    text = dxf.read_text()
+    text = dxf.read_text(encoding="utf-8")
     assert "PAPER-ONLY" not in text and "Planting plan" not in text
     # By default the sheet is a layout of paper space (IOP-16).
     with_sheets = tmp_path / "with_sheets.dxf"
     cad.result("export.file", {"format": "dxf", "path": str(with_sheets)})
-    text = with_sheets.read_text()
+    text = with_sheets.read_text(encoding="utf-8")
     assert "PAPER-ONLY" in text and "Planting plan" in text

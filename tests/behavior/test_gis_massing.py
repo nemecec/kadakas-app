@@ -256,7 +256,7 @@ def test_reproject_needs_a_crs(cad):
 
 def test_geoimage_with_a_world_file(cad, tmp_path):
     (tmp_path / "plan.png").write_bytes(png_bytes(10, 10, (200, 30, 30, 255)))
-    (tmp_path / "plan.pgw").write_text("2\n0\n0\n-2\n385001\n6672009\n")
+    (tmp_path / "plan.pgw").write_text("2\n0\n0\n-2\n385001\n6672009\n", encoding="utf-8")
     r = cad.result("gis.geoimage.import", {"path": str(tmp_path / "plan.png"), "crs": "EPSG:3067", "name": "Plan"})
     assert r["georeference"]["crs"] == "EPSG:3067"
     under = cad.result("objects.get", {"id": r["id"]})["shape"]

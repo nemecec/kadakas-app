@@ -374,7 +374,7 @@ def test_export_csv_and_xlsx(cad, planted, tmp_path):
 
     csv_path = tmp_path / "plants.csv"
     cad.result("worksheet.export", {"id": sid, "format": "csv", "path": str(csv_path)})
-    assert csv_path.read_text().startswith("Style,")
+    assert csv_path.read_text(encoding="utf-8").startswith("Style,")
     assert "exists" in cad.error("worksheet.export", {"id": sid, "format": "csv", "path": str(csv_path)})["message"]
     cad.result("worksheet.export", {"id": sid, "format": "csv", "path": str(csv_path), "overwrite": True})
     assert cad.error("worksheet.export", {"id": sid, "format": "xlsx", "path": str(tmp_path / "wrong.csv")})["code"] == 4
@@ -551,7 +551,7 @@ def test_a_worksheet_table_on_a_sheet_prints_in_pdf_and_svg(cad, planted, tmp_pa
     assert "(Field maple)" in text and "(Silver birch)" in text
     svg_file = tmp_path / "t.svg"
     cad.result("export.file", {"format": "sheet_svg", "path": str(svg_file), "options": {"sheet": "L-1"}})
-    assert "Silver birch" in svg_file.read_text()
+    assert "Silver birch" in svg_file.read_text(encoding="utf-8")
     # The table follows the document, and fit resizes the frame from the top left corner.
     before = cad.result("objects.get", {"id": tid})["shape"]
     cad.result("plant_style.create", {"name": "A very long plant style name for the table", "spread": 3000, "height": 4000})

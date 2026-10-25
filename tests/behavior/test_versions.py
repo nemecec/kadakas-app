@@ -185,7 +185,7 @@ def test_a_history_that_cannot_be_read_stays_as_it_is_and_is_read_only(make_serv
     ]
     original = json.loads(json.dumps(saved["history"]))
     broken = tmp_path / "broken.kad"
-    broken.write_text(json.dumps(saved))
+    broken.write_text(json.dumps(saved), encoding="utf-8")
 
     reader = make_serve()
     opened = reader.result("file.open", {"path": str(broken)})

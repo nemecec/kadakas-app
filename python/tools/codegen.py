@@ -145,6 +145,7 @@ def describe_from_binary(binary: str | None) -> dict:
         input=json.dumps(request) + "\n",
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     ).stdout
     return json.loads(out)["result"]
@@ -197,7 +198,9 @@ def main() -> None:
             sys.exit(f"{TARGET} is out of date. Run python/tools/codegen.py")
         print("up to date")
         return
-    TARGET.write_text(text, encoding="utf-8")
+    # LF on every system, so the file in a checkout is the same everywhere.
+    with TARGET.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
     print(f"wrote {TARGET} ({len(describe['methods'])} methods)")
 
 

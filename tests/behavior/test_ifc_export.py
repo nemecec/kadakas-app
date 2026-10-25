@@ -23,7 +23,7 @@ def read_ifc(path):
         pytest.skip("uv is not installed")
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "ifcopenshell", "python", "-I", str(CHECK), str(path)],
-        capture_output=True, text=True, timeout=600, env=isolated_env(uv=True),
+        capture_output=True, text=True, encoding="utf-8", timeout=600, env=isolated_env(uv=True),
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip("IfcOpenShell is not available")
@@ -60,8 +60,8 @@ def test_export_is_valid_ifc4_with_tree_data_and_georeference(cad, tmp_path):
     skipped = {s["entity"] for s in r["report"]["skipped"]}
     assert skipped == {"text", "line"}
     assert len(r["project_guid"]) == 22 and r["project_guid"] == cad.result("project.get")["guid"]
-    assert out.read_text().startswith("ISO-10303-21;")
-    assert "FILE_SCHEMA(('IFC4'))" in out.read_text()
+    assert out.read_text(encoding="utf-8").startswith("ISO-10303-21;")
+    assert "FILE_SCHEMA(('IFC4'))" in out.read_text(encoding="utf-8")
 
     facts = read_ifc(out)
     assert facts["schema"] == "IFC4"
@@ -126,7 +126,7 @@ def test_options_storeys_2d_and_layers(cad, tmp_path):
     assert facts["counts"]["IfcBuilding"] == 1 and facts["counts"]["IfcBuildingStorey"] == 1
     assert facts["counts"]["IfcAnnotation"] == 2
     cad.result("export.file", {"path": str(out), "options": {"classes_as_layers": False}, "overwrite": True})
-    assert "IFCPRESENTATIONLAYERASSIGNMENT" not in out.read_text()
+    assert "IFCPRESENTATIONLAYERASSIGNMENT" not in out.read_text(encoding="utf-8")
 
 
 def test_bad_options_and_path_policy(cad, tmp_path):
@@ -171,11 +171,11 @@ def test_a_loaded_file_without_a_guid_gets_one_in_memory(cad, tmp_path):
     # A copy of a template gets a fresh GUID, and so fresh GlobalIds.
     a = tmp_path / "t.ifc"
     cad.result("export.file", {"path": str(a), "format": "ifc"})
-    first = a.read_text()
+    first = a.read_text(encoding="utf-8")
     fresh = cad.result("project.new_guid")["guid"]
     assert fresh != guid and cad.result("project.get")["guid"] == fresh
     cad.result("export.file", {"path": str(a), "format": "ifc", "overwrite": True})
-    assert a.read_text() != first
+    assert a.read_text(encoding="utf-8") != first
     cad.result("undo")
     assert cad.result("project.get")["guid"] == guid
 
@@ -186,21 +186,21 @@ def test_cli_export_leaves_the_input_file_alone(cad, tmp_path):
     cad.result("file.save", {"path": str(src)})
     doc = read_doc(src)
     del doc["drawing"]["project"]["guid"]
-    src.write_text(json.dumps(doc))
+    src.write_text(json.dumps(doc), encoding="utf-8")
     src.chmod(stat.S_IRUSR)
     before = src.read_bytes()
     out = tmp_path / "cli.ifc"
     run = subprocess.run([str(BIN), "export", str(src), "-o", str(out)],
-                         capture_output=True, text=True, env=isolated_env())
+                         capture_output=True, text=True, encoding="utf-8", env=isolated_env())
     assert run.returncode == 0, run.stderr
     assert src.read_bytes() == before
-    assert out.read_text().startswith("ISO-10303-21;")
+    assert out.read_text(encoding="utf-8").startswith("ISO-10303-21;")
     assert "stored a project GUID" not in run.stderr
     # The same file gives the same bytes again.
     again = tmp_path / "cli.ifc"
     first = out.read_bytes()
     run = subprocess.run([str(BIN), "export", str(src), "-o", str(again)],
-                         capture_output=True, text=True, env=isolated_env())
+                         capture_output=True, text=True, encoding="utf-8", env=isolated_env())
     assert run.returncode == 0 and again.read_bytes() == first
 
 

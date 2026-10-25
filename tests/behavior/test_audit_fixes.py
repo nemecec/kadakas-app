@@ -37,7 +37,7 @@ def test_mcp_saves_and_opens_kad(tmp_path):
 
 def test_a_newer_file_gets_a_clear_message(cad, tmp_path):
     f = tmp_path / "future.kad"
-    f.write_text(json.dumps({"format_version": 99, "layers": "???"}))
+    f.write_text(json.dumps({"format_version": 99, "layers": "???"}), encoding="utf-8")
     err = cad.error("file.open", {"path": str(f)})
     assert "file was made by a newer Kadakas (format 99)" in err["message"]
     assert "not a Kadakas file" not in err["message"]
@@ -52,7 +52,7 @@ def test_future_shapes_and_fields_survive_open_and_save(cad, make_serve, tmp_pat
     doc["layers"][0]["future_layer"] = True
     doc["new_top"] = [1, 2]
     src = tmp_path / "future.kad"
-    src.write_text(json.dumps(doc))
+    src.write_text(json.dumps(doc), encoding="utf-8")
     cad.result("file.open", {"path": str(src)})
     summary = cad.result("document.summary")
     assert summary["objects_by_kind"] == {"unknown": 1}
@@ -85,7 +85,7 @@ def test_cli_render_is_the_same_svg_as_the_api(cad, tmp_path):
     out = tmp_path / "r.svg"
     p = run_cli("render", str(f), "-o", str(out), "--width", "700")
     assert p.returncode == 0, p.stderr
-    assert out.read_text() == cad.result("render.svg", {"width": 700})["svg"]
+    assert out.read_text(encoding="utf-8") == cad.result("render.svg", {"width": 700})["svg"]
 
 
 def test_exports_keep_a_bak(cad, tmp_path):

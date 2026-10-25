@@ -207,7 +207,7 @@ def test_undo_group_refuses_plugin_place(doc):
 
 def test_shipped_scripts_run_in_plain_python_too():
     """`kadakas.plugin.test_reset` runs a script without the app, for quick development."""
-    bench = (EXAMPLES / "bench.py").read_text()
+    bench = (EXAMPLES / "bench.py").read_text(encoding="utf-8")
     shapes = test_reset(bench, {"length": 1000, "depth": 400, "slats": 3, "back": False, "color": "#000000"},
                         {"at": [0, 0], "rotation": 0})
     assert len(shapes) == 3

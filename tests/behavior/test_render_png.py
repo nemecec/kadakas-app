@@ -273,7 +273,7 @@ def test_render_png_and_view_set_are_forwarded_to_the_app_with_connect():
         [str(BIN), "serve", "--connect", f"127.0.0.1:{app.port}", "--token", "s3cret"],
         input="".join(json.dumps(r) + "\n" for r in reqs),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=20,
         env=os.environ,
     )

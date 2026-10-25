@@ -90,7 +90,7 @@ def main():
         key = rel.split("/")[0] + ":" + "/".join(rel.split("/")[2:])
         facts["patterns"][key] = {"insunits": doc.header.get("$INSUNITS", 0), "inserts": sum(1 for e in doc.modelspace() if e.dxftype() == "INSERT"), "hatches": pattern_hatches(doc)}
     facts["xclip"] = xclip_facts(ezdxf.readfile(str(ROOT / XCLIP_FILE)))
-    OUT.write_text(json.dumps(facts, indent=1, sort_keys=True) + "\n")
+    OUT.write_text(json.dumps(facts, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
 main()

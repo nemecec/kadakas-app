@@ -209,11 +209,11 @@ def test_import_follows_the_path_policy(cad, tmp_path):
     assert cad.error("resource.import_from_file", {"library": "../x", "all": True})["code"] == -32602
     # A file that is not a Kadakas document is refused with a clear message.
     bad = tmp_path / "bad.kad"
-    bad.write_text("{}")
+    bad.write_text("{}", encoding="utf-8")
     assert "not a Kadakas file" in cad.error("resource.import_from_file", {"path": str(bad), "all": True})["message"]
     # An extension other than kad is refused in a restricted session.
     txt = tmp_path / "lib.txt"
-    txt.write_text("x")
+    txt.write_text("x", encoding="utf-8")
     assert ".kad" in cad.error("resource.import_from_file", {"path": str(txt), "all": True})["message"]
 
 

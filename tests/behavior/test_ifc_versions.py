@@ -10,7 +10,7 @@ def test_ifc2x3_export_validates_and_keeps_the_garden(cad, tmp_path):
     out = tmp_path / "garden2x3.ifc"
     r = cad.result("export.file", {"path": str(out), "format": "ifc", "options": {"version": "IFC2X3"}})
     assert r["exported"] == 7
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "FILE_SCHEMA(('IFC2X3'));" in text and "IFCOWNERHISTORY" in text
     assert "IFCGEOGRAPHICELEMENT" not in text and "IFCTRIANGULATEDFACESET" not in text
     assert "IFCMAPCONVERSION" not in text
@@ -38,7 +38,7 @@ def test_ifc4x3_export_validates_and_has_vegetation_and_terrain(cad, tmp_path):
     garden(cad)
     out = tmp_path / "garden4x3.ifc"
     cad.result("export.file", {"path": str(out), "format": "ifc", "options": {"version": "IFC4X3", "include_2d": True}})
-    assert "FILE_SCHEMA(('IFC4X3_ADD2'));" in out.read_text()
+    assert "FILE_SCHEMA(('IFC4X3_ADD2'));" in out.read_text(encoding="utf-8")
     facts = read_ifc(out)
     assert facts["schema"] in ("IFC4X3", "IFC4X3_ADD2")
     assert facts["validation"] == [], facts["validation"]
@@ -55,6 +55,6 @@ def test_ifc4_stays_the_default_and_other_versions_are_refused(cad, tmp_path):
     garden(cad)
     out = tmp_path / "default.ifc"
     cad.result("export.file", {"path": str(out), "format": "ifc"})
-    assert "FILE_SCHEMA(('IFC4'));" in out.read_text()
+    assert "FILE_SCHEMA(('IFC4'));" in out.read_text(encoding="utf-8")
     err = cad.error("export.file", {"path": str(tmp_path / "x.ifc"), "format": "ifc", "options": {"version": "IFC5"}})
     assert err["code"] == -32602

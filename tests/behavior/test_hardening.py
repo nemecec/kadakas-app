@@ -88,7 +88,7 @@ def test_a_loaded_document_never_gets_an_id_twice(make_serve, tmp_path):
     assert "next_id" not in doc, "the file has no counter: new IDs are UUIDs"
     doc["objects"] = [{"id": uid(2), "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
     old = tmp_path / "old.kad"
-    old.write_text(json.dumps(doc))
+    old.write_text(json.dumps(doc), encoding="utf-8")
     cad = make_serve(old)
     (new,) = cad.execute(rect_cmd(0, 0, 1, 1))
     assert new != uid(2)
@@ -116,7 +116,7 @@ def test_ids_of_any_value_survive_a_round_trip(make_serve, tmp_path):
     big = "0190f1c2-7a3b-7c1d-8e2f-123456789abc"
     doc["objects"] = [{"id": big, "layer": uid(1), "class": uid(0), "shape": {"kind": "circle", "center": [0, 0], "radius": 1}}]
     p = tmp_path / "big-id.kad"
-    p.write_text(json.dumps(doc))
+    p.write_text(json.dumps(doc), encoding="utf-8")
     cad = make_serve(p)
     (lid,) = cad.execute({"op": "add_layer", "name": "L"})
     assert lid != big

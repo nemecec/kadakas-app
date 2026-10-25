@@ -25,7 +25,7 @@ def validate_bcf(path):
         pytest.skip("uv is not installed")
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "lxml", "python", "-I", str(CHECK), str(path), str(SCHEMAS)],
-        capture_output=True, text=True, timeout=600, env=isolated_env(uv=True),
+        capture_output=True, text=True, encoding="utf-8", timeout=600, env=isolated_env(uv=True),
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip("lxml is not available")

@@ -258,7 +258,7 @@ def test_the_linked_original_is_read_checked_and_replaced_by_the_old_file_when_g
     # Gone: the same.
     v1.unlink()
     err = cad.error("import.update", {"path": str(v2)})
-    assert "gone" in err["message"] or "No such file" in err["message"]
+    assert "the file is gone" in err["message"]
     assert "old file" in err["message"] or "`old`" in err["message"]
     # The old file given by the caller.
     r = update(cad, v2, old=str(copy))

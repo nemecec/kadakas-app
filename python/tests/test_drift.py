@@ -43,7 +43,7 @@ def test_every_method_has_a_python_method_with_its_text(describe):
 
 def test_the_codegen_check_mode_agrees(describe, kadakas_bin):
     out = subprocess.run([sys.executable, str(PYTHON_DIR / "tools" / "codegen.py"), "--check", "--binary", str(kadakas_bin)],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding="utf-8")
     assert out.returncode == 0, out.stdout + out.stderr
 
 
@@ -79,7 +79,7 @@ def test_command_ops_used_by_the_wrappers_are_known(describe, kadakas_bin):
         ops |= set(re.findall(r'"op":\s*"([a-z_]+)"', (PYTHON_DIR / "kadakas" / file).read_text(encoding="utf-8")))
     assert {"add_object", "move_objects", "delete_objects", "batch", "add_layer", "add_class", "modify_layer",
             "modify_class", "modify_object", "set_data", "set_active"} <= ops
-    proc = subprocess.Popen([str(kadakas_bin), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([str(kadakas_bin), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     try:
         for i, op in enumerate(sorted(ops), start=1):
             proc.stdin.write(json.dumps({"id": i, "method": "execute", "params": {"command": {"op": op}}}) + "\n")
@@ -98,5 +98,5 @@ def test_the_embedded_runner_is_the_package_file():
     runner = PYTHON_DIR / "kadakas" / "plugin_runner.py"
     request = {"script": "def reset(p, g):\n    return [line([0, 0], [1, 1])]\n", "params": {}, "geometry": {}}
     out = subprocess.run([sys.executable, "-I", "-c", runner.read_text(encoding="utf-8")],
-                         input=json.dumps(request), capture_output=True, text=True, check=True)
+                         input=json.dumps(request), capture_output=True, text=True, encoding="utf-8", check=True)
     assert json.loads(out.stdout)["shapes"][0]["kind"] == "line"

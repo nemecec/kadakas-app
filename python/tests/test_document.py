@@ -176,7 +176,7 @@ def test_worksheets(doc):
 def test_import_export_and_files(doc, tmp_path: Path):
     geo = tmp_path / "in.geojson"
     geo.write_text(json.dumps({"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[0, 0], [10, 10]]}}]}))
+        {"type": "Feature", "properties": {}, "geometry": {"type": "LineString", "coordinates": [[0, 0], [10, 10]]}}]}), encoding="utf-8")
     res = doc.import_file(geo)
     assert res["imported"] >= 1
     out = tmp_path / "out.dxf"
@@ -229,7 +229,7 @@ def test_regions_zones_courses_and_the_check(doc, tmp_path):
     assert chk["objects"][0]["counts"]["overlap"] == 0 and chk["totals"]["complete"] is True
     out = tmp_path / "lot.dxf"
     doc.export_file(out, patterns="blocks")
-    assert "KADAKAS_200X100" in out.read_text()
+    assert "KADAKAS_200X100" in out.read_text(encoding="utf-8")
 
 
 def test_open_a_document_file_and_describe(tmp_path: Path):
@@ -265,7 +265,7 @@ def test_paving_helpers(doc, tmp_path):
     assert lay["units_total"] == row["order_units"] and len(lay["units"]) == 3
     out = tmp_path / "p.dxf"
     doc.export_file(out, patterns="units")
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "0-UNITS-WHOLE" in text
     group = doc.pattern_to_objects(id=hid, name="Units")
     assert group["units"] == row["order_units"]
@@ -284,6 +284,6 @@ def test_paving_helpers(doc, tmp_path):
     dxf.write_text(
         "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nM\n70\n0\n10\n0\n20\n0\n"
         "0\nLWPOLYLINE\n8\nONE\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n100\n10\n0\n20\n100\n"
-        "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n")
+        "0\nENDBLK\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n", encoding="utf-8")
     blk = doc.pattern_module_from_block(dxf, "M")
     assert blk["pattern"]["units"][0]["name"] == "ONE"

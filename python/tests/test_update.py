@@ -63,4 +63,4 @@ def test_compare_passes_the_options_and_writes_the_picture(tmp_path):
     assert out.read_bytes() == b"PNG"
     svg = tmp_path / "c.svg"
     Document.save_compare_image({"image": {"svg": "<svg/>"}}, svg)
-    assert svg.read_text() == "<svg/>"
+    assert svg.read_text(encoding="utf-8") == "<svg/>"

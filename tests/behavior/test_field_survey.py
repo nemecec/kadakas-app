@@ -14,7 +14,7 @@ SURVEY = """P,N,E,Z,Code
 
 def test_survey_points_become_loci_with_codes_and_a_georeference(cad, tmp_path):
     path = tmp_path / "points.csv"
-    path.write_text(SURVEY)
+    path.write_text(SURVEY, encoding="utf-8")
     r = cad.result("survey.import_points", {"path": str(path), "crs": "EPSG:3067"})
     assert r["imported"] == 5 and r["skipped_count"] == 0
     assert r["georeference"]["crs"] == "EPSG:3067"

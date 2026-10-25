@@ -20,7 +20,7 @@ def test_the_client_knows_the_new_calls(doc):
 
 def test_import_a_mesh_convert_it_and_soften(doc, tmp_path):
     obj = tmp_path / "cube.obj"
-    obj.write_text(CUBE_OBJ)
+    obj.write_text(CUBE_OBJ, encoding="utf-8")
     r = doc.api.import_file(path=str(obj), options={"unit": "mm", "up_axis": "z"})
     assert r["imported"] == 1 and r["softened_edges"] == 0
     mesh = r["report"]["objects"][0]
@@ -38,12 +38,12 @@ def test_import_a_mesh_convert_it_and_soften(doc, tmp_path):
 
 def test_export_stl_and_refuse_a_broken_file(doc, tmp_path):
     obj = tmp_path / "cube.obj"
-    obj.write_text(CUBE_OBJ)
+    obj.write_text(CUBE_OBJ, encoding="utf-8")
     doc.api.import_file(path=str(obj), options={"to_surface": True})
     out = tmp_path / "cube.stl"
     r = doc.api.export_file(path=str(out), format="stl", options={"encoding": "ascii"})
     assert r["report"]["triangles"] == 12 and r["report"]["open_models"] == 0
-    assert out.read_text().startswith("solid cube")
+    assert out.read_text(encoding="utf-8").startswith("solid cube")
     broken = tmp_path / "cut.stl"
     broken.write_bytes(out.read_bytes()[:50])
     with pytest.raises(KadakasError) as e:

@@ -20,7 +20,7 @@ def read_3d(path):
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "pygltflib", "--with", "trimesh", "--with", "numpy",
          "python", "-I", str(CHECK), str(path)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, encoding="utf-8", timeout=600,
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip("pygltflib or trimesh is not available")
@@ -176,8 +176,8 @@ def test_the_khronos_validator_accepts_the_files(cad, tmp_path):
     tool = tmp_path / "validator"
     tool.mkdir()
     shutil.copy(Path(__file__).with_name("gltf_validate.js"), tool / "validate.js")
-    (tool / "package.json").write_text("{}")
-    install = subprocess.run(["npm", "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, timeout=300)
+    (tool / "package.json").write_text("{}", encoding="utf-8")
+    install = subprocess.run([shutil.which("npm"), "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     if install.returncode != 0:
         pytest.skip("gltf-validator could not be installed")
     garden_with_materials(cad)
@@ -186,7 +186,7 @@ def test_the_khronos_validator_accepts_the_files(cad, tmp_path):
     for name, options in [("a.glb", {}), ("b.gltf", {"grouping": "class"}), ("c.glb", {"y_up": False, "units": "mm", "instancing": False})]:
         cad.result("export.file", {"path": str(tmp_path / name), "options": options})
         files.append(str(tmp_path / name))
-    run = subprocess.run(["node", "validate.js", *files], cwd=tool, capture_output=True, text=True, timeout=300)
+    run = subprocess.run([shutil.which("node"), "validate.js", *files], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     assert run.returncode == 0, run.stderr
     for line in run.stdout.splitlines():
         r = json.loads(line)
@@ -233,8 +233,8 @@ def test_every_plant_form_and_level_passes_the_khronos_validator(cad, tmp_path):
     tool = tmp_path / "validator"
     tool.mkdir()
     shutil.copy(Path(__file__).with_name("gltf_validate.js"), tool / "validate.js")
-    (tool / "package.json").write_text("{}")
-    install = subprocess.run(["npm", "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, timeout=300)
+    (tool / "package.json").write_text("{}", encoding="utf-8")
+    install = subprocess.run([shutil.which("npm"), "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     if install.returncode != 0:
         pytest.skip("gltf-validator could not be installed")
     for i, form in enumerate(FORMS):
@@ -246,7 +246,7 @@ def test_every_plant_form_and_level_passes_the_khronos_validator(cad, tmp_path):
         path = tmp_path / f"{detail}.glb"
         cad.result("export.file", {"path": str(path), "options": {"plant_detail": detail}})
         files.append(str(path))
-    run = subprocess.run(["node", "validate.js", *files], cwd=tool, capture_output=True, text=True, timeout=300)
+    run = subprocess.run([shutil.which("node"), "validate.js", *files], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     assert run.returncode == 0, run.stderr
     for line in run.stdout.splitlines():
         r = json.loads(line)
@@ -270,5 +270,5 @@ def test_obj_with_spaces_in_the_name_refers_to_its_mtl(cad, tmp_path):
     cad.execute({"op": "add_object", "shape": {"kind": "hardscape", "boundary": SQUARE, "material": "Stone", "thickness": 100}})
     out = tmp_path / "my model.obj"
     cad.result("export.file", {"path": str(out)})
-    mtllib = [l.split(" ", 1)[1] for l in out.read_text().splitlines() if l.startswith("mtllib ")][0]
+    mtllib = [l.split(" ", 1)[1] for l in out.read_text(encoding="utf-8").splitlines() if l.startswith("mtllib ")][0]
     assert " " not in mtllib and (tmp_path / mtllib).exists()

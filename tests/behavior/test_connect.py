@@ -44,7 +44,7 @@ class FakeApp:
 def run_serve(args, requests, env_extra=None):
     env = {**os.environ, **(env_extra or {})}
     p = subprocess.run([str(BIN), "serve", *args], input="".join(json.dumps(r) + "\n" for r in requests),
-                       capture_output=True, text=True, timeout=20, env=env)
+                       capture_output=True, text=True, encoding="utf-8", timeout=20, env=env)
     return p
 
 
@@ -74,7 +74,7 @@ def test_connect_without_address_reads_the_runtime_file(tmp_path):
     app = FakeApp(token="from-file")
     folder = tmp_path / "kadakas"
     folder.mkdir()
-    (folder / "agent.json").write_text(json.dumps({"port": app.port, "token": "from-file"}))
+    (folder / "agent.json").write_text(json.dumps({"port": app.port, "token": "from-file"}), encoding="utf-8")
     env = {"XDG_RUNTIME_DIR": str(tmp_path), "HOME": str(tmp_path), "LOCALAPPDATA": str(tmp_path)}
     p = run_serve(["--connect"], [{"jsonrpc": "2.0", "id": 1, "method": "undo"}], env)
     assert p.returncode == 0, p.stderr
@@ -96,7 +96,7 @@ def test_mcp_file_tools_are_forwarded_to_the_app():
     ]
     env = os.environ
     p = subprocess.run([str(BIN), "mcp", "--connect", f"127.0.0.1:{app.port}", "--token", "s3cret"],
-                       input="".join(json.dumps(r) + "\n" for r in reqs), capture_output=True, text=True, timeout=20, env=env)
+                       input="".join(json.dumps(r) + "\n" for r in reqs), capture_output=True, text=True, encoding="utf-8", timeout=20, env=env)
     out = [json.loads(l) for l in p.stdout.splitlines()]
     assert out[0]["result"]["protocolVersion"] == "2025-03-26"
     assert any(l["method"] == "file.save" and l["params"] == {"path": "/x"} for l in app.lines)

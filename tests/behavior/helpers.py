@@ -42,7 +42,7 @@ def isolated_env(uv: bool = False) -> dict:
     one, and every test would download its packages again."""
     env = dict(os.environ)
     if uv and not _UV_CACHE:
-        found = subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True, check=False)
+        found = subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True, encoding="utf-8", check=False)
         _UV_CACHE.append(env.get("UV_CACHE_DIR") or found.stdout.strip())
     env.update(
         HOME=str(TEST_HOME),
@@ -273,10 +273,31 @@ def run_cli(*args, timeout=60):
         [str(BIN), *args],
         stdin=subprocess.DEVNULL,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8",
         timeout=timeout,
         env=isolated_env(),
     )
+
+
+def pdftotext(path, *options) -> str:
+    """The text of a PDF from poppler's ``pdftotext``, as UTF-8 on every system. The output goes to a
+    file, not to the pipe (the Windows build does not write ``-bbox`` to standard output).
+    Skips the test if the tool is not installed, and says so."""
+    import shutil
+    import tempfile
+
+    import pytest
+
+    tool = shutil.which("pdftotext")
+    if tool is None:
+        pytest.skip("pdftotext (poppler) is not installed")
+    out = Path(tempfile.mkdtemp(prefix="kadakas-pdftotext-")) / "out.txt"
+    run = subprocess.run(
+        [tool, "-enc", "UTF-8", *options, str(path), str(out)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert run.returncode == 0, f"pdftotext exit {run.returncode}: {run.stdout}{run.stderr}"
+    return out.read_text(encoding="utf-8")
 
 
 def read_doc(path) -> dict:
@@ -291,7 +312,7 @@ def read_doc(path) -> dict:
     out = Path(tempfile.mkdtemp(prefix="kadakas-read-doc-")) / "doc.json"
     p = run_cli("convert", str(path), str(out), "--format", "json")
     assert p.returncode == 0, p.stderr
-    return json.loads(out.read_text())
+    return json.loads(out.read_text(encoding="utf-8"))
 
 
 def svg_object_ids(svg_text: str) -> list[str]:

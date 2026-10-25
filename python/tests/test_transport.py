@@ -27,7 +27,7 @@ class Bridge:
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(5)
         self.port = self.server.getsockname()[1]
-        self.proc = subprocess.Popen([str(binary), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.proc = subprocess.Popen([str(binary), "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
         self.refused = 0
         self.answers = 0  # answers written to a client, delayed ones too
         threading.Thread(target=self._accept, daemon=True).start()
@@ -112,12 +112,14 @@ def test_nothing_listens(monkeypatch):
 def test_endpoint_rules(tmp_path, monkeypatch):
     for k in ("KADAKAS_ADDR", "KADAKAS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    # The runtime folder is named by XDG_RUNTIME_DIR on Unix and by LOCALAPPDATA on Windows.
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     (tmp_path / "kadakas").mkdir()
     # No runtime file: say what to do.
     with pytest.raises(ConnectionFailed, match="--agent-port"):
         _rpc.resolve_endpoint(None, None)
-    (tmp_path / "kadakas" / "agent.json").write_text(json.dumps({"port": 7001, "token": "filetoken"}))
+    (tmp_path / "kadakas" / "agent.json").write_text(json.dumps({"port": 7001, "token": "filetoken"}), encoding="utf-8")
     assert _rpc.resolve_endpoint(None, None) == ("127.0.0.1", 7001, "filetoken")
     # The token of the file is only for the app that the file describes.
     assert _rpc.resolve_endpoint("127.0.0.1:7001", None) == ("127.0.0.1", 7001, "filetoken")
@@ -126,7 +128,7 @@ def test_endpoint_rules(tmp_path, monkeypatch):
     assert _rpc.resolve_endpoint("10.0.0.5:7001", "mine") == ("10.0.0.5", 7001, "mine")
     with pytest.raises(ConnectionFailed, match="HOST:PORT"):
         _rpc.resolve_endpoint("nonsense", "t")
-    (tmp_path / "kadakas" / "agent.json").write_text("not json")
+    (tmp_path / "kadakas" / "agent.json").write_text("not json", encoding="utf-8")
     with pytest.raises(ConnectionFailed):
         _rpc.resolve_endpoint(None, None)
     assert _rpc.agent_info_path() == tmp_path / "kadakas" / "agent.json"

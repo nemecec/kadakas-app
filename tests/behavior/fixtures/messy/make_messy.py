@@ -695,7 +695,7 @@ def main():
         f()
     for e in EXPECTED.values():
         e["zones"] = ZONES if e["stalls"] else None
-    (HERE / "expected.json").write_text(json.dumps(EXPECTED, indent=1, ensure_ascii=False, sort_keys=True))
+    (HERE / "expected.json").write_text(json.dumps(EXPECTED, indent=1, ensure_ascii=False, sort_keys=True), encoding="utf-8")
     print(len(EXPECTED), "files")
 
 

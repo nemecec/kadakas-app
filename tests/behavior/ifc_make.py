@@ -148,7 +148,7 @@ def mapped_with_origin(out):
     item = e("IfcMappedItem", MappingSource=rmap, MappingTarget=op)
     el = product(f, "IfcFurnishingElement", "Bench", body, storey, sp, [item], rep_type="MappedRepresentation")
     f.write(str(out / "mapped_origin.ifc"))
-    (out / "mapped_origin.json").write_text(json.dumps(world_bounds_mm(f, el)))
+    (out / "mapped_origin.json").write_text(json.dumps(world_bounds_mm(f, el)), encoding="utf-8")
 
 
 if __name__ == "__main__":

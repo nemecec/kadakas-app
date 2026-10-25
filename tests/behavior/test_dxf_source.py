@@ -191,7 +191,7 @@ def test_files_without_a_header_with_the_same_name_are_two_drawings(cad, tmp_pat
     one, two = tmp_path / "a" / "old.dxf", tmp_path / "b" / "old.dxf"
     for p, y in ((one, 5), (two, 9)):
         p.parent.mkdir()
-        p.write_text(f"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n{y}\n0\nENDSEC\n0\nEOF\n")
+        p.write_text(f"0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n{y}\n0\nENDSEC\n0\nEOF\n", encoding="utf-8")
     r1 = cad.result("import.file", {"path": str(one)})["report"]
     r2 = cad.result("import.file", {"path": str(two)})["report"]
     assert r1["drawing"] != r2["drawing"]
@@ -287,7 +287,7 @@ def test_a_tag_that_is_not_valid_is_refused(cad, tmp_path):
     text = json.dumps(read_doc(saved), indent=2)
     edited = text.replace('"kind": "CIRCLE"', '"kind": ""')
     assert edited != text
-    saved.write_text(edited)
+    saved.write_text(edited, encoding="utf-8")
     cad.result("file.open", {"path": str(saved)})
     assert len(tags(cad)) == 5
 

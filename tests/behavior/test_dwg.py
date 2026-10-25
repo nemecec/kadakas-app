@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the stub conver
 
 def script(folder: Path, name: str, body: str):
     p = folder / name
-    p.write_text("#!/bin/sh\n" + body + "\n")
+    p.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -76,7 +76,7 @@ def test_export_writes_dxf_and_converts_it(make_serve, libredwg, tmp_path):
     out = tmp_path / "out.dwg"
     r = cad.result("export.file", {"path": str(out), "format": "dwg"})
     assert r["exported"] == 1
-    assert out.read_text().strip() == "FAKEDWG"
+    assert out.read_text(encoding="utf-8").strip() == "FAKEDWG"
     # A second export needs overwrite in a restricted session.
     err = cad.error("export.file", {"path": str(out), "format": "dwg"})
     assert "overwrite" in err["message"]

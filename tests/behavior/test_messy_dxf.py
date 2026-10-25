@@ -21,7 +21,7 @@ import pytest
 from helpers import REPO
 
 MESSY = REPO / "tests" / "behavior" / "fixtures" / "messy"
-CORPUS = json.loads((MESSY / "expected.json").read_text())
+CORPUS = json.loads((MESSY / "expected.json").read_text(encoding="utf-8"))
 # Units are 400 x 200 with a 4 mm joint, so that a lot of 580 m2 has about 7,000 units.
 UL, UW, GAP = 400, 200, 4
 GEOMETRY = {"line", "arc", "circle", "polyline", "ellipse", "spline", "polyline3d", "rect", "bezier", "path"}

@@ -33,7 +33,7 @@ def uv_run(script, path, *packages):
         args += ["--with", p]
     run = subprocess.run(
         [*args, "python", "-I", str(script), str(path)],
-        capture_output=True, text=True, timeout=600, env=isolated_env(uv=True),
+        capture_output=True, text=True, encoding="utf-8", timeout=600, env=isolated_env(uv=True),
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip(f"{packages} is not available")
@@ -157,7 +157,7 @@ def write_stl(path, triangles):
 
 def test_obj_stl_and_glb_import_with_units_axes_and_a_soften_report(cad, tmp_path):
     obj = tmp_path / "cube.obj"
-    obj.write_text(CUBE_OBJ)
+    obj.write_text(CUBE_OBJ, encoding="utf-8")
     r = cad.result("import.file", {"path": str(obj)})
     assert r["imported"] == 1 and r["softened_edges"] == 0
     assert r["report"]["bounds_mm"]["size"] == [1000.0, 1000.0, 1000.0]
@@ -205,7 +205,7 @@ def test_stl_export_reports_open_models_and_writes_binary_or_ascii(cad, tmp_path
     assert len(data) == 84 + 50 * n == 84 + 50 * r["report"]["triangles"]
     ascii_ = tmp_path / "a.stl"
     cad.result("export.file", {"path": str(ascii_), "options": {"encoding": "ascii"}})
-    assert ascii_.read_text().startswith("solid a")
+    assert ascii_.read_text(encoding="utf-8").startswith("solid a")
     again = cad.result("export.file", {"path": str(ascii_), "options": {"encoding": "ascii"}, "overwrite": True})
     assert again["report"]["encoding"] == "ascii"
 
@@ -216,19 +216,19 @@ def test_the_khronos_validator_accepts_a_surface_model_export(cad, tmp_path):
     tool = tmp_path / "validator"
     tool.mkdir()
     shutil.copy(Path(__file__).with_name("gltf_validate.js"), tool / "validate.js")
-    (tool / "package.json").write_text("{}")
-    install = subprocess.run(["npm", "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, timeout=300)
+    (tool / "package.json").write_text("{}", encoding="utf-8")
+    install = subprocess.run([shutil.which("npm"), "install", "gltf-validator"], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     if install.returncode != 0:
         pytest.skip("gltf-validator could not be installed")
     slab_with_hole(cad)
     obj = tmp_path / "cube.obj"
-    obj.write_text(CUBE_OBJ)
+    obj.write_text(CUBE_OBJ, encoding="utf-8")
     cad.result("import.file", {"path": str(obj), "options": {"to_surface": True}})
     files = []
     for name in ("a.glb", "b.gltf"):
         cad.result("export.file", {"path": str(tmp_path / name)})
         files.append(str(tmp_path / name))
-    run = subprocess.run(["node", "validate.js", *files], cwd=tool, capture_output=True, text=True, timeout=300)
+    run = subprocess.run([shutil.which("node"), "validate.js", *files], cwd=tool, capture_output=True, text=True, encoding="utf-8", timeout=300)
     assert run.returncode == 0, run.stderr
     for line in run.stdout.splitlines():
         r = json.loads(line)
@@ -254,11 +254,11 @@ def test_a_gltf_file_from_another_program_imports(cad, tmp_path):
         "  buffers=[pygltflib.Buffer(byteLength=pts.nbytes + idx.nbytes)])\n"
         "g.set_binary_blob(pts.tobytes() + idx.tobytes())\n"
         "g.save_binary(sys.argv[1])\n"
-    )
+    , encoding="utf-8")
     out = tmp_path / "two.glb"
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "pygltflib", "--with", "numpy", "python", "-I", str(script), str(out)],
-        capture_output=True, text=True, timeout=600, env=isolated_env(uv=True),
+        capture_output=True, text=True, encoding="utf-8", timeout=600, env=isolated_env(uv=True),
     )
     if run.returncode != 0:
         pytest.skip("pygltflib is not available")
@@ -288,16 +288,16 @@ def test_broken_and_hostile_files_are_refused_with_counts_and_change_nothing(cad
     nan.write_bytes(good[:96] + struct.pack("<f", float("nan")) + good[100:])
     cases.append((nan, "mesh_not_finite"))
     bad = tmp_path / "bad.obj"
-    bad.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 9\n")
+    bad.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 9\n", encoding="utf-8")
     cases.append((bad, "mesh_bad_index"))
     nanobj = tmp_path / "nan.obj"
-    nanobj.write_text("v 0 0 nan\n")
+    nanobj.write_text("v 0 0 nan\n", encoding="utf-8")
     cases.append((nanobj, "mesh_not_finite"))
     junk = tmp_path / "junk.glb"
     junk.write_bytes(b"glTF\x02\x00\x00\x00" + b"\xff" * 40)
     cases.append((junk, "mesh_truncated"))
     notjson = tmp_path / "text.gltf"
-    notjson.write_text("this is not json")
+    notjson.write_text("this is not json", encoding="utf-8")
     cases.append((notjson, "mesh_malformed"))
     for path, reason in cases:
         e = cad.error("import.file", {"path": str(path)})
@@ -323,7 +323,7 @@ def test_a_mesh_over_the_surface_limits_is_refused_with_counts(cad, tmp_path):
             lines.append(f"f {a} {b} {c}")
             lines.append(f"f {a} {c} {d}")
     p = tmp_path / "terrain.obj"
-    p.write_text("\n".join(lines) + "\n")
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     r = cad.result("import.file", {"path": str(p), "options": {"unit": "mm", "up_axis": "z", "soften_below_angle": 20}})
     assert r["softened_edges"] == 0
     assert r["report"]["objects"][0]["kind"] == "mesh3d"

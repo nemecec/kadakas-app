@@ -89,7 +89,7 @@ def test_compare_renders_pass_the_option(tmp_path):
     png = doc.versions.render_png(1, path=tmp_path / "c.png", view="top", width=100)
     assert png.startswith(b"\x89PNG") and (tmp_path / "c.png").read_bytes() == png
     assert doc.versions.render_svg(1, 2, tmp_path / "c.svg", width=500, hide_unchanged=True) == "<svg/>"
-    assert (tmp_path / "c.svg").read_text() == "<svg/>"
+    assert (tmp_path / "c.svg").read_text(encoding="utf-8") == "<svg/>"
     doc.render_svg(compare={"from": 1, "to": "current"})
     doc.render_svg()
     assert fake.calls == [

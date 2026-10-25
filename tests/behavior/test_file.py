@@ -59,7 +59,7 @@ def test_document_with_newer_format_version_is_refused_and_session_is_kept(make_
     future = tmp_path / "future.kad"
     doc = make_serve().doc()
     doc["format_version"] = 999
-    future.write_text(json.dumps(doc))
+    future.write_text(json.dumps(doc), encoding="utf-8")
 
     cad = make_serve()
     cad.execute(rect_cmd(0, 0, 1, 1))
@@ -85,7 +85,7 @@ def test_opening_a_missing_file_is_an_application_error(cad, tmp_path):
 
 def test_opening_a_file_that_is_not_a_document_is_an_application_error(cad, tmp_path):
     junk = tmp_path / "junk.kad"
-    junk.write_text("[1, 2, 3]")
+    junk.write_text("[1, 2, 3]", encoding="utf-8")
     error = cad.error("file.open", {"path": str(junk)})
     assert error["code"] == 3
 

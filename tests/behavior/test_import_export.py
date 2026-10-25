@@ -66,7 +66,7 @@ def test_import_dxf_layers_as_design_layers(cad):
 
 def test_import_dxf_unit_option(cad, tmp_path):
     path = tmp_path / "feet.dxf"
-    path.write_text("0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n10\n21\n0\n0\nENDSEC\n0\nEOF\n")
+    path.write_text("0\nSECTION\n2\nENTITIES\n0\nLINE\n10\n0\n20\n0\n11\n10\n21\n0\n0\nENDSEC\n0\nEOF\n", encoding="utf-8")
     cad.result("import.file", {"path": str(path), "options": {"unit": "foot", "layer": "Survey"}})
     (line,) = objects(cad, kind="line")
     assert line["shape"]["b"] == approx([3048, 0])
@@ -112,7 +112,7 @@ def test_import_projected_geojson_keeps_metric_distances(cad, tmp_path):
             {"type": "Feature", "geometry": {"type": "Point", "coordinates": [385000, 6672000]}, "properties": {"id": 1}},
             {"type": "Feature", "geometry": {"type": "Point", "coordinates": [385010, 6672020, 5]}, "properties": {"id": 2}},
         ],
-    }))
+    }), encoding="utf-8")
     r = cad.result("import.file", {"path": str(path), "options": {"class_field": "id"}})
     assert r["georeference"]["crs"] == "EPSG:3067"
     assert r["georeference"]["origin"] == [385005.0, 6672010.0]
@@ -125,7 +125,7 @@ def test_import_projected_geojson_keeps_metric_distances(cad, tmp_path):
 def test_second_import_uses_the_document_georeference(cad, tmp_path):
     cad.result("execute", {"command": {"op": "set_georeference", "georef": {"crs": "EPSG:3067", "origin": [385000, 6672000]}}})
     path = tmp_path / "p.geojson"
-    path.write_text(json.dumps({"type": "Point", "coordinates": [385010, 6672020]}))
+    path.write_text(json.dumps({"type": "Point", "coordinates": [385010, 6672020]}), encoding="utf-8")
     cad.result("import.file", {"path": str(path), "options": {"source_crs": "EPSG:3067"}})
     (p,) = objects(cad, kind="locus3d")
     assert p["shape"]["p"] == approx([10000, 20000, 0])
@@ -171,7 +171,7 @@ def test_import_shapefile_with_attributes_and_crs(cad, tmp_path):
            'PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],PARAMETER["central_meridian",27],'
            'PARAMETER["scale_factor",0.9996],PARAMETER["false_easting",500000],PARAMETER["false_northing",0],'
            'UNIT["metre",1],AUTHORITY["EPSG","3067"]]')
-    (tmp_path / "plots.prj").write_text(prj)
+    (tmp_path / "plots.prj").write_text(prj, encoding="utf-8")
     r = cad.result("import.file", {"path": str(tmp_path / "plots.shp")})
     assert r["imported"] == 1
     assert r["georeference"]["crs"] == "EPSG:3067"
@@ -192,7 +192,7 @@ def test_export_dxf_and_import_again(cad, make_serve, tmp_path):
     out = tmp_path / "out.dxf"
     r = cad.result("export.file", {"path": str(out)})
     assert r["exported"] == 4
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "LWPOLYLINE" in text and "\n42\n" in text  # a bulge
     assert text.rstrip().endswith("EOF")
     other = make_serve()
@@ -213,7 +213,7 @@ def test_export_geojson_with_georeference(cad, tmp_path):
     cad.result("execute", {"command": {"op": "set_data", "id": oid, "set": {"species": "Oak"}}})
     out = tmp_path / "out.geojson"
     cad.result("export.file", {"path": str(out)})
-    fc = json.loads(out.read_text())
+    fc = json.loads(out.read_text(encoding="utf-8"))
     (feature,) = fc["features"]
     lon, lat, z = feature["geometry"]["coordinates"]
     assert (lon, lat) == approx((24.92, 60.2), abs=0.1)
@@ -230,7 +230,7 @@ def test_errors(cad, tmp_path):
     err = cad.error("import.file", {"path": str(bad)})
     assert "not a DXF" in err["message"]
     garbage = tmp_path / "garbage.geojson"
-    garbage.write_text("{" * 10)
+    garbage.write_text("{" * 10, encoding="utf-8")
     assert cad.error("import.file", {"path": str(garbage)})["code"] == 3
     assert cad.error("export.file", {"path": str(tmp_path / "x.shp")})["code"] == 3
     assert cad.result("document.summary")["object_count"] == 0
@@ -245,7 +245,7 @@ def test_real_world_dxf_in_meters_is_centered_with_the_shift_recorded(cad, tmp_p
     path = tmp_path / "survey.dxf"
     path.write_text(dxf_text(
         "0\nLINE\n8\nA\n10\n6589000\n20\n540000\n11\n6589100\n21\n540050\n"
-        "0\nCIRCLE\n8\nA\n10\n6589050\n20\n540025\n40\n2\n", header="9\n$INSUNITS\n70\n6\n"))
+        "0\nCIRCLE\n8\nA\n10\n6589050\n20\n540025\n40\n2\n", header="9\n$INSUNITS\n70\n6\n"), encoding="utf-8")
     r = cad.result("import.file", {"path": str(path)})
     assert r["imported"] == 2 and r["skipped"] == 0
     assert r["georeference"]["crs"] == ""
@@ -280,14 +280,14 @@ FEET_GEOJSON = {
 
 def test_feet_crs_lands_in_the_right_place(cad, tmp_path):
     path = tmp_path / "ny.geojson"
-    path.write_text(json.dumps(FEET_GEOJSON))
+    path.write_text(json.dumps(FEET_GEOJSON), encoding="utf-8")
     r = cad.result("import.file", {"path": str(path)})
     # 986000 ft is about 300 km. The origin is stored in meters.
     assert r["georeference"]["crs"] == "EPSG:2263"
     assert r["georeference"]["origin"] == approx([300533, 64617], abs=2)
     out = tmp_path / "back.geojson"
     cad.result("export.file", {"path": str(out)})
-    lon, lat, _ = json.loads(out.read_text())["features"][0]["geometry"]["coordinates"]
+    lon, lat, _ = json.loads(out.read_text(encoding="utf-8"))["features"][0]["geometry"]["coordinates"]
     assert (lon, lat) == approx((-73.9972, 40.7421), abs=0.02)
 
 
@@ -297,7 +297,7 @@ def test_projected_prj_does_not_take_the_authority_of_its_base_geographic_crs(ca
            'PROJECTION["Transverse_Mercator"],PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",0.0],'
            'PARAMETER["Central_Meridian",25.0],PARAMETER["Scale_Factor",1.0],PARAMETER["Latitude_Of_Origin",0.0],UNIT["Meter",1.0]]')
     (tmp_path / "plots.shp").write_bytes(shapefile_bytes(500000.0, 6670000.0))
-    (tmp_path / "plots.prj").write_text(prj)
+    (tmp_path / "plots.prj").write_text(prj, encoding="utf-8")
     r = cad.result("import.file", {"path": str(tmp_path / "plots.shp")})
     assert r["imported"] == 1
     assert r["georeference"]["crs"].startswith("PROJCS")
@@ -308,20 +308,20 @@ def test_geojson_holes_stay_holes_on_export(cad, tmp_path):
     path = tmp_path / "plot.geojson"
     path.write_text(json.dumps({"type": "Feature", "properties": {"name": "Plot"}, "geometry": {"type": "Polygon", "coordinates": [
         [[24.93, 60.16], [24.94, 60.16], [24.94, 60.17], [24.93, 60.17], [24.93, 60.16]],
-        [[24.932, 60.162], [24.932, 60.166], [24.936, 60.166], [24.936, 60.162], [24.932, 60.162]]]}}))
+        [[24.932, 60.162], [24.932, 60.166], [24.936, 60.166], [24.936, 60.162], [24.932, 60.162]]]}}), encoding="utf-8")
     assert cad.result("import.file", {"path": str(path)})["imported"] == 2
     holes = [o for o in objects(cad, kind="polyline") if o["data"].get("_ring") == "hole"]
     assert len(holes) == 1 and holes[0]["data"]["_hole_of"] in [o["id"] for o in objects(cad)]
     out = tmp_path / "out.geojson"
     r = cad.result("export.file", {"path": str(out)})
-    (feature,) = json.loads(out.read_text())["features"]
+    (feature,) = json.loads(out.read_text(encoding="utf-8"))["features"]
     assert feature["geometry"]["type"] == "Polygon" and len(feature["geometry"]["coordinates"]) == 2
     assert feature["properties"]["name"] == "Plot" and "_hole_of" not in feature["properties"]
 
 
 def test_line_over_the_antimeridian_picks_the_zone_of_its_middle(cad, tmp_path):
     path = tmp_path / "line.geojson"
-    path.write_text(json.dumps({"type": "LineString", "coordinates": [[179.9, 10.0], [-179.9, 10.0]]}))
+    path.write_text(json.dumps({"type": "LineString", "coordinates": [[179.9, 10.0], [-179.9, 10.0]]}), encoding="utf-8")
     r = cad.result("import.file", {"path": str(path)})
     assert r["georeference"]["crs"] in ("EPSG:32660", "EPSG:32601")
     assert r["imported"] == 1
@@ -331,7 +331,7 @@ def test_code_pages_are_decoded(cad, tmp_path):
     # "\u0160\u00f5\u00f5" in CP1257.
     (tmp_path / "plots.shp").write_bytes(shapefile_bytes())
     (tmp_path / "plots.dbf").write_bytes(dbf_bytes("\u0160\u00f5\u00f5".encode("cp1257")))
-    (tmp_path / "plots.cpg").write_text("1257")
+    (tmp_path / "plots.cpg").write_text("1257", encoding="utf-8")
     cad.result("import.file", {"path": str(tmp_path / "plots.shp")})
     (poly,) = objects(cad, kind="polyline")
     assert poly["data"]["NAME"] == "\u0160\u00f5\u00f5"
@@ -351,7 +351,7 @@ def test_nested_array_inserts_fail_with_a_clear_error_and_no_memory_blowup(cad, 
     blocks = ("0\nBLOCK\n2\nB\n10\n0\n20\n0\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n"
               "0\nBLOCK\n2\nA\n10\n0\n20\n0\n0\nINSERT\n2\nB\n70\n100\n71\n100\n44\n2\n45\n2\n0\nENDBLK\n")
     path = tmp_path / "bomb.dxf"
-    path.write_text(dxf_text("0\nINSERT\n2\nA\n70\n100\n71\n100\n44\n300\n45\n300\n", blocks=blocks))
+    path.write_text(dxf_text("0\nINSERT\n2\nA\n70\n100\n71\n100\n44\n300\n45\n300\n", blocks=blocks), encoding="utf-8")
     assert path.stat().st_size < 600
     err = cad.error("import.file", {"path": str(path)})
     assert "max_exploded" in err["message"]
@@ -363,7 +363,7 @@ def test_nested_array_inserts_fail_with_a_clear_error_and_no_memory_blowup(cad, 
 
 def test_text_rotation_survives_a_dxf_round_trip(cad, make_serve, tmp_path):
     path = tmp_path / "t.dxf"
-    path.write_text(dxf_text("0\nTEXT\n8\nA\n10\n0\n20\n0\n40\n100\n50\n30\n1\nHello\n"))
+    path.write_text(dxf_text("0\nTEXT\n8\nA\n10\n0\n20\n0\n40\n100\n50\n30\n1\nHello\n"), encoding="utf-8")
     cad.result("import.file", {"path": str(path)})
     (text,) = objects(cad, kind="text")
     assert text["data"]["rotation_deg"] == approx(30)
@@ -379,8 +379,8 @@ def test_agents_can_only_use_allowed_folders(tmp_path):
     inside, outside = tmp_path / "inside", tmp_path / "outside"
     inside.mkdir()
     outside.mkdir()
-    (outside / "secret.dxf").write_text(dxf_text("0\nLINE\n8\nA\n10\n0\n20\n0\n11\n1\n21\n1\n"))
-    (inside / "ok.dxf").write_text(dxf_text("0\nLINE\n8\nA\n10\n0\n20\n0\n11\n1\n21\n1\n"))
+    (outside / "secret.dxf").write_text(dxf_text("0\nLINE\n8\nA\n10\n0\n20\n0\n11\n1\n21\n1\n"), encoding="utf-8")
+    (inside / "ok.dxf").write_text(dxf_text("0\nLINE\n8\nA\n10\n0\n20\n0\n11\n1\n21\n1\n"), encoding="utf-8")
     srv = JsonRpc(["serve", "--allow-dir", str(inside)])
     try:
         assert srv.result("import.file", {"path": str(inside / "ok.dxf")})["imported"] == 1
@@ -395,8 +395,12 @@ def test_agents_can_only_use_allowed_folders(tmp_path):
         srv.result("export.file", {"path": str(inside / "out.dxf"), "overwrite": True})
         assert (inside / "out.dxf.bak").exists()
         # A link that leaves the folder is outside too.
-        (inside / "link.dxf").symlink_to(outside / "secret.dxf")
-        assert srv.error("import.file", {"path": str(inside / "link.dxf")})
+        try:
+            (inside / "link.dxf").symlink_to(outside / "secret.dxf")
+        except OSError:  # Windows without the right to make links
+            print("symlinks cannot be made here: the link part of this test is not run")
+        else:
+            assert srv.error("import.file", {"path": str(inside / "link.dxf")})
         # file.save and file.open follow the same folders.
         srv.result("file.save", {"path": str(inside / "doc.kad")})
         assert srv.error("file.save", {"path": str(outside / "doc.kad")})
@@ -406,7 +410,7 @@ def test_agents_can_only_use_allowed_folders(tmp_path):
     finally:
         srv.close()
     # The folder of the document is allowed too.
-    (outside / "doc.kad").write_text(json.dumps(REPO and read_doc(inside / "doc.kad")))
+    (outside / "doc.kad").write_text(json.dumps(REPO and read_doc(inside / "doc.kad")), encoding="utf-8")
     other = JsonRpc(["serve", str(outside / "doc.kad"), "--allow-dir", str(inside)])
     try:
         assert other.result("import.file", {"path": str(outside / "secret.dxf")})["imported"] == 1
@@ -455,13 +459,13 @@ def test_site_contours_plants_and_trees_are_exported(cad, tmp_path):
     dxf = tmp_path / "site.dxf"
     r = cad.result("export.file", {"path": str(dxf)})
     assert r["report"]["skipped"] == []
-    text = dxf.read_text()
+    text = dxf.read_text(encoding="utf-8")
     # Contours at 200, 400 and 600 mm are 3D polylines at their height.
     assert text.count("AcDb3dPolyline\n") >= 3
     assert "PLANT_Acer_platanoides" in text and "PLANT_Quercus_robur" in text
     geo = tmp_path / "site.geojson"
     cad.result("export.file", {"path": str(geo), "options": {"origin": "document"}})
-    feats = json.loads(geo.read_text())["features"]
+    feats = json.loads(geo.read_text(encoding="utf-8"))["features"]
     contours = [f for f in feats if f["properties"].get("kind") == "contour"]
     assert len(contours) >= 3 and all(f["geometry"]["type"] == "LineString" for f in contours)
     assert {round(f["properties"]["level_m"], 3) for f in contours} >= {0.2, 0.4, 0.6}

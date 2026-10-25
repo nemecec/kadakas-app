@@ -39,7 +39,10 @@ jobs:
       - run: cargo test --workspace --no-fail-fast
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
       - run: cargo build -p kadakas-cli
+      # UTF-8 mode: files and pipes are UTF-8 on Windows too, not the code page of the system.
       - run: uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
+        env:
+          PYTHONUTF8: "1"
   # Timing tests (`#[ignore]`, see docs/dev-guide.md). They need a release build, so they do not run in `test`.
   perf:
     runs-on: ubuntu-latest

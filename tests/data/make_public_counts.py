@@ -76,8 +76,8 @@ def main():
             repo = path.relative_to(ROOT).parts[0]
             rel = "/".join(path.relative_to(ROOT).parts[2:])
             sums[f"{repo}:{rel}"] = hashlib.sha256(path.read_bytes()).hexdigest()
-    SUMS.write_text(json.dumps(sums, indent=1, sort_keys=True) + "\n")
-    OUT.write_text(json.dumps(counts, indent=1, sort_keys=True) + "\n")
+    SUMS.write_text(json.dumps(sums, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    OUT.write_text(json.dumps(counts, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print(f"{len(counts)} files, {sum(1 for v in counts.values() if v is None)} unreadable", file=sys.stderr)
 
 

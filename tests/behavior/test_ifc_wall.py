@@ -46,7 +46,7 @@ def validation_statements(path):
         "m = ifcopenshell.open(sys.argv[1]); log = v.json_logger(); v.validate(m, log)\n"
         "print(json.dumps(log.statements))\n"
     )
-    run = subprocess.run([sys.executable, "-I", "-c", script, str(path)], capture_output=True, text=True, check=True)
+    run = subprocess.run([sys.executable, "-I", "-c", script, str(path)], capture_output=True, text=True, encoding="utf-8", check=True)
     return json.loads(run.stdout.splitlines()[-1])
 
 

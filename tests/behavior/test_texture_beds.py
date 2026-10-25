@@ -62,8 +62,8 @@ def test_a_bed_textures_part_of_the_terrain_and_leaves_the_grade(cad, tmp_path):
     assert cad.result("export.file", {"path": str(glb), "format": "glb"})["report"]["textures"] == 1
     obj_file = tmp_path / "bed.obj"
     cad.result("export.file", {"path": str(obj_file)})
-    assert "map_Kd Gravel_0.png" in (tmp_path / "bed.mtl").read_text()
-    assert any(line.startswith("vt ") for line in obj_file.read_text().splitlines())
+    assert "map_Kd Gravel_0.png" in (tmp_path / "bed.mtl").read_text(encoding="utf-8")
+    assert any(line.startswith("vt ") for line in obj_file.read_text(encoding="utf-8").splitlines())
 
 
 def test_the_front_bed_wins_and_arrange_changes_it(cad, tmp_path):

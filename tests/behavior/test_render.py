@@ -64,7 +64,7 @@ def test_render_cli_writes_valid_svg_matching_visible_objects(make_serve, tmp_pa
 
     proc = run_cli("render", str(doc_path), "-o", str(svg_path))
     assert proc.returncode == 0, proc.stderr
-    text = svg_path.read_text()
+    text = svg_path.read_text(encoding="utf-8")
     assert len(svg_object_ids(text)) == visible
     assert parse_svg(text).get("width") == "1200", "the CLI default width is 1200 px"
 
@@ -77,7 +77,7 @@ def test_render_cli_width_flag_is_honored(make_serve, tmp_path):
     cad.result("file.save", {"path": str(doc_path)})
     proc = run_cli("render", str(doc_path), "-o", str(svg_path), "--width", "640")
     assert proc.returncode == 0, proc.stderr
-    assert parse_svg(svg_path.read_text()).get("width") == "640"
+    assert parse_svg(svg_path.read_text(encoding="utf-8")).get("width") == "640"
 
 
 def test_render_cli_fails_cleanly_for_missing_input(tmp_path):
@@ -89,7 +89,7 @@ def test_render_cli_fails_cleanly_for_missing_input(tmp_path):
 
 def test_render_cli_fails_cleanly_for_invalid_document(tmp_path):
     bad = tmp_path / "bad.kad"
-    bad.write_text("{not a document")
+    bad.write_text("{not a document", encoding="utf-8")
     proc = run_cli("render", str(bad), "-o", str(tmp_path / "out.svg"))
     assert proc.returncode != 0
     assert "bad.kad" in proc.stderr

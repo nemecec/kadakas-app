@@ -26,7 +26,7 @@ def generated(tmp_path_factory):
     out = tmp_path_factory.mktemp("ifcopenshell")
     run = subprocess.run(
         ["uv", "run", "--no-project", "--with", "ifcopenshell", "python", "-I", str(MAKE), str(out)],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True, text=True, encoding="utf-8", timeout=600,
     )
     if run.returncode != 0 and "No solution found" in run.stderr + run.stdout:
         pytest.skip("IfcOpenShell is not available")
@@ -162,12 +162,12 @@ def test_errors_and_paths(cad, tmp_path):
     error = cad.error("import.file", {"path": str(tmp_path / "missing.ifc")})
     assert "cannot read" in error["message"]
     bad = tmp_path / "bad.ifc"
-    bad.write_text("this is not a STEP file")
+    bad.write_text("this is not a STEP file", encoding="utf-8")
     assert "not a STEP file" in cad.error("import.file", {"path": str(bad)})["message"]
     assert "unknown option" in cad.error("import.file", {"path": str(FIXTURES / "units_feet.ifc"), "options": {"nope": 1}})["message"]
     # The extension must match in a restricted session.
     wrong = tmp_path / "model.txt"
-    wrong.write_text((FIXTURES / "units_feet.ifc").read_text())
+    wrong.write_text((FIXTURES / "units_feet.ifc").read_text(encoding="utf-8"))
     assert cad.error("import.file", {"path": str(wrong), "format": "ifc"}) is not None
 
 
@@ -193,7 +193,7 @@ def test_imported_meshes_export_as_valid_ifc(cad, generated, tmp_path):
 
 def test_mapped_items_land_where_ifcopenshell_puts_them(cad, generated):
     """A map origin that is not at zero: the positions must be the same as the ones of IfcOpenShell."""
-    expected = json.loads((generated / "mapped_origin.json").read_text())
+    expected = json.loads((generated / "mapped_origin.json").read_text(encoding="utf-8"))
     cad.result("import.file", {"path": str(generated / "mapped_origin.ifc"), "options": {"instances": False}})
     shape = objects(cad)[0]["shape"]
     for axis, (lo, hi) in enumerate(expected):

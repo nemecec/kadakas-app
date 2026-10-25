@@ -101,7 +101,7 @@ def test_the_model_exports_to_gltf_ifc_and_dxf(cad, tmp_path):
     assert sorted(n["extras"]["kind"] for n in j["nodes"]) == ["extrude", "sweep"]
     ifc = tmp_path / "m.ifc"
     cad.result("export.file", {"path": str(ifc), "format": "ifc"})
-    text = ifc.read_text()
+    text = ifc.read_text(encoding="utf-8")
     assert "IFCEXTRUDEDAREASOLID" in text and "IFCARBITRARYPROFILEDEFWITHVOIDS" in text and "IFCTRIANGULATEDFACESET" in text
     dxf = tmp_path / "m.dxf"
     cad.result("export.file", {"path": str(dxf), "format": "dxf"})

@@ -1,11 +1,10 @@
 """Scenario: a designer dimensions, tags and labels a plan, then prints it."""
 
 import shutil
-import subprocess
 
 import pytest
 
-from helpers import rect_cmd, uid
+from helpers import pdftotext, rect_cmd, uid
 
 
 def line_cmd(a, b):
@@ -154,7 +153,7 @@ def test_pdf_has_dimension_tag_and_scale_bar_text(cad, tmp_path):
     cad.result("annotation.text", {"at": [20, 60], "text": "Planting notes", "layer": sheet})
     path = tmp_path / "a.pdf"
     cad.result("export.file", {"format": "pdf", "path": str(path)})
-    text = subprocess.run(["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, check=True).stdout
+    text = pdftotext(path, "-layout")
     assert "4000" in text, text  # 40 paper mm at 1:100
     assert "10 m" in text and "Planting notes" in text
 
@@ -171,7 +170,7 @@ def test_pdf_tags_do_not_overlap_when_the_viewport_scale_differs_from_the_layer_
     cad.result("viewport.create", {"sheet": sheet, "scale": 500, "view": "plan"})
     path = tmp_path / "t.pdf"
     cad.result("export.file", {"format": "pdf", "path": str(path)})
-    boxes = subprocess.run(["pdftotext", "-bbox", str(path), "-"], capture_output=True, text=True, check=True).stdout
+    boxes = pdftotext(path, "-bbox")
     words = {m[4]: tuple(float(x) for x in m[:4]) for m in re.findall(r'xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(\w+)<', boxes)}
     a, b = words["Alpha"], words["Beta"]
     assert a[2] <= b[0] or b[2] <= a[0], f"labels overlap: {a} {b}"
