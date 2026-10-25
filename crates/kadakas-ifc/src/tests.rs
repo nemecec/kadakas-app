@@ -1884,3 +1884,55 @@ fn a_hardscape_with_holes_is_a_slab_with_voids_and_the_net_area() {
     assert!(f.dangling().is_empty());
     assert!(!named(&f, "IFCTRIANGULATEDFACESET").is_empty());
 }
+
+#[test]
+fn the_site_surface_option_gives_the_ifcsite_a_face_set() {
+    let doc = sample();
+    let off = export(&doc, &IfcOptions::default()).0;
+    let site_line = |t: &str| {
+        t.lines()
+            .find(|l| l.contains("=IFCSITE("))
+            .unwrap()
+            .to_string()
+    };
+    assert!(site_line(&off).contains(",#"), "{}", site_line(&off));
+    // Without the option the representation of the site is not set: IFCSITE(..., placement, $, $, ...).
+    assert!(
+        site_line(&off).contains(",$,$,.ELEMENT."),
+        "{}",
+        site_line(&off)
+    );
+    let (on, report) = export(
+        &doc,
+        &IfcOptions {
+            site_surface: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        !site_line(&on).contains(",$,$,.ELEMENT."),
+        "{}",
+        site_line(&on)
+    );
+    assert!(on.contains("IFCPRODUCTDEFINITIONSHAPE"));
+    assert!(
+        report.notes.iter().any(|n| n.starts_with("site_surface:")),
+        "{:?}",
+        report.notes
+    );
+    // A document without a site model says so.
+    let empty = kadakas_core::model::Document::with_sequential_ids();
+    let (text, report) = export(
+        &empty,
+        &IfcOptions {
+            site_surface: true,
+            ..Default::default()
+        },
+    );
+    assert!(site_line(&text).contains(",$,$,.ELEMENT."));
+    assert!(
+        report.notes.iter().any(|n| n.contains("no site model")),
+        "{:?}",
+        report.notes
+    );
+}

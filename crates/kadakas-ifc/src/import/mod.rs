@@ -46,6 +46,7 @@ use std::rc::Rc;
 use glam::{DAffine3, DVec2, DVec3};
 use kadakas_core::command::Command;
 use kadakas_core::curve::{self, Vertex};
+use kadakas_core::georef::Georeference;
 use kadakas_core::graphics::{GraphicResource, Solid3d, SymbolDef, SymbolItem};
 use kadakas_core::model::{Attributes, ClassId, Color, Document, LayerId, ObjectId, Shape};
 use kadakas_core::resource::{ResourceBody, ResourceId};
@@ -184,6 +185,10 @@ impl From<StepError> for IfcImportError {
     fn from(e: StepError) -> Self {
         match e {
             StepError::Io(m) => IfcImportError::Io(m),
+            StepError::TooLarge(n) => IfcImportError::Format(format!(
+                "the file is larger than the limit of {} MB (option max_file_mb, at most 4096): it needs more memory than this session allows",
+                n >> 20
+            )),
             e => IfcImportError::Format(e.to_string()),
         }
     }
@@ -266,34 +271,79 @@ fn import_index(
     if index.ids_of("IFCPROJECT").is_empty() && index.is_empty() {
         return Err(IfcImportError::Format("the file has no IFC data".into()));
     }
-    let cx = Ctx::new(&index);
     let ctx = Context::of(doc);
-    let mut imp = Importer {
-        b: Builder::new(&ctx, "ifc", opts.max_objects),
-        model: Model::load(&cx),
-        cx,
-        opts,
-        doc,
-        schema: schemas.first().cloned().unwrap_or_default(),
-        frame: Frame::default(),
-        layer_cache: HashMap::new(),
-        class_cache: HashMap::new(),
-        symbols: HashMap::new(),
-        symbol_names: HashSet::new(),
-        sym_src: RefCell::new(HashMap::new()),
-        rows: Vec::new(),
-        triangles: 0,
-        geometry_notes: BTreeMap::new(),
-        z_dropped: 0,
-        cut: HashSet::new(),
-        uncut: HashSet::new(),
-        bodyless: HashSet::new(),
+    let schema = schemas.first().cloned().unwrap_or_default();
+    let make = |probe: bool| {
+        let cx = Ctx::new(&index);
+        let multi_site = cx.x.ids_of("IFCSITE").len() > 1;
+        let mut imp = Importer {
+            b: Builder::new(&ctx, "ifc", opts.max_objects),
+            model: Model::load(&cx),
+            cx,
+            opts,
+            doc,
+            schema: schema.clone(),
+            frame: Frame::default(),
+            shift: DVec2::ZERO,
+            multi_site,
+            layer_cache: HashMap::new(),
+            class_cache: HashMap::new(),
+            symbols: HashMap::new(),
+            symbol_names: HashSet::new(),
+            sym_src: RefCell::new(HashMap::new()),
+            rows: Vec::new(),
+            triangles: 0,
+            geometry_notes: BTreeMap::new(),
+            z_dropped: 0,
+            cut: HashSet::new(),
+            uncut: HashSet::new(),
+            bodyless: HashSet::new(),
+        };
+        if probe {
+            imp.b.set_probe();
+        }
+        imp
     };
+    let mut imp = make(false);
+    // Geometry far from the origin (projected coordinates used as model coordinates) is moved to the
+    // origin. A first pass finds where it is; the shift goes into the georeference of the document.
+    if opts.georef && doc.georef.is_none() && far_from_origin(&imp.cx) {
+        let mut probe = make(true);
+        probe.run();
+        if let Some((lo, hi)) = probe.b.bounds() {
+            let c = (lo + hi) / 2.0;
+            if c.is_finite() && c.abs().max_element() < 1.0e12 {
+                imp.shift = (c / 1000.0).round() * 1000.0;
+            }
+        }
+    }
     for n in notes.iter().chain(&imp.cx.x.notes) {
         imp.b.report.note(n);
     }
     imp.run();
     Ok(imp.b.finish())
+}
+
+/// True if sampled points of the file are more than 100 km from the origin.
+fn far_from_origin(cx: &Ctx) -> bool {
+    const FAR_MM: f64 = 1.0e8;
+    let mm = cx.units.length_mm;
+    let mut far = false;
+    for id in cx.x.ids_of("IFCCARTESIANPOINTLIST3D").into_iter().take(8) {
+        if let Some(e) = cx.ent(id) {
+            for row in items(attr(&e, 0)).iter().take(4) {
+                far |= ctx::numbers(row).iter().any(|v| v.abs() * mm > FAR_MM);
+            }
+        }
+    }
+    for id in cx.x.ids_of("IFCCARTESIANPOINT").into_iter().take(200) {
+        if let Some(e) = cx.ent(id) {
+            far |= ctx::numbers(attr(&e, 0))
+                .iter()
+                .any(|v| v.abs() * mm > FAR_MM);
+        }
+    }
+    far
 }
 
 /// A rigid motion in the plane (millimeters), for placing the file into the georeference of the document.
@@ -330,6 +380,10 @@ struct Importer<'a> {
     doc: &'a Document,
     schema: String,
     frame: Frame,
+    /// Shift (mm) that moves far geometry to the origin; it is part of the georeference.
+    shift: DVec2,
+    /// The file has more than one `IfcSite` (a complex site with partial sites): each gets a layer.
+    multi_site: bool,
     layer_cache: HashMap<Option<u64>, (LayerId, f64)>,
     class_cache: HashMap<String, ClassId>,
     symbols: HashMap<(u64, i64), ResourceId>,
@@ -440,6 +494,12 @@ impl<'a> Importer<'a> {
                 self.cx.bad_placements.get()
             ));
         }
+        if self.cx.other_placements.get() > 0 {
+            self.b.report.note(&format!(
+                "{} placements (IfcLinearPlacement, or an IfcGridPlacement that cannot be read) are not supported: the product keeps the place of its parent",
+                self.cx.other_placements.get()
+            ));
+        }
         if self.z_dropped > 0 {
             self.b.report.note(&format!(
                 "{} landscape areas or plants keep the elevation of their layer: their own height is not stored",
@@ -459,7 +519,25 @@ impl<'a> Importer<'a> {
         if !self.opts.georef {
             return;
         }
+        if self.shift != DVec2::ZERO {
+            self.b.set_offset(self.shift);
+            self.b.report.note(&format!(
+                "the geometry is far from the origin: it was moved by ({}, {}) m, and the shift is in the georeference",
+                self.shift.x / 1000.0,
+                self.shift.y / 1000.0
+            ));
+        }
         let Some(g) = model::file_georef(&self.cx) else {
+            if self.shift != DVec2::ZERO {
+                self.b.set_georef(Georeference {
+                    crs: String::new(),
+                    origin: self.shift / 1000.0,
+                    rotation: 0.0,
+                    user_origin: DVec2::ZERO,
+                });
+                self.b.report.georeferenced = false;
+                return;
+            }
             if self.schema.to_ascii_uppercase().starts_with("IFC2X3") {
                 self.b.report.note(
                     "the file has no georeference (IFC2x3 has no IfcMapConversion, and the property set ePSet_MapConversion is missing): the geometry keeps its local coordinates",
@@ -473,6 +551,12 @@ impl<'a> Importer<'a> {
                 g.meters_per_mm
             ));
         }
+        if (g.factors - DVec3::ONE).abs().max_element() > 1e-9 {
+            self.b.report.note(&format!(
+                "the map conversion has grid factors ({}, {}, {}) (IfcMapConversionScaled): the factors are not applied",
+                g.factors.x, g.factors.y, g.factors.z
+            ));
+        }
         if g.height.abs() > 1e-9 {
             self.b.report.note(&format!(
                 "the map conversion has an orthogonal height of {}: the height is not applied",
@@ -483,6 +567,7 @@ impl<'a> Importer<'a> {
         match &self.doc.georef {
             None => {
                 let mut geo = model::to_georef(&g);
+                geo.origin += DVec2::from_angle(g.rotation).rotate(self.shift) / 1000.0;
                 if !crs_ok {
                     self.b.report.note(&format!(
                         "the CRS '{}' of the file is not known: the georeference holds the shift of the origin only",
@@ -521,10 +606,24 @@ impl<'a> Importer<'a> {
             return (id, z);
         }
         let storey = self.model.storey_of(&self.cx, product);
-        if let Some(hit) = self.layer_cache.get(&storey) {
+        // Without a storey, a file with partial sites puts each site on a layer of its own.
+        let site = if storey.is_none() && self.multi_site {
+            self.model.site_of(&self.cx, product)
+        } else {
+            None
+        };
+        let key = storey.or(site);
+        if let Some(hit) = self.layer_cache.get(&key) {
             return *hit;
         }
-        let (name, elevation) = match storey.and_then(|s| self.cx.ent(s)) {
+        let (name, elevation) = match key.and_then(|s| self.cx.ent(s)) {
+            Some(s) if s.name == "IFCSITE" => {
+                let name = text(attr(&s, 2))
+                    .map(|n| clean_text(n.trim(), 100))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| format!("Site {}", s.id));
+                (name, 0.0)
+            }
             Some(s) => {
                 let name = text(attr(&s, 2))
                     .map(|n| clean_text(n.trim(), 100))
@@ -557,7 +656,7 @@ impl<'a> Importer<'a> {
         } else {
             (id, self.doc.layer(id).map_or(0.0, |l| l.elevation))
         };
-        self.layer_cache.insert(storey, result);
+        self.layer_cache.insert(key, result);
         result
     }
 
@@ -728,6 +827,7 @@ impl<'a> Importer<'a> {
                 &class,
                 color,
                 &name,
+                out.voids,
             );
             return;
         }
@@ -1001,6 +1101,7 @@ impl<'a> Importer<'a> {
             pieces: ev.pieces,
             issues: ev.issues,
             approximate: ev.approximate,
+            voids: ev.voids,
             tris: ev.tris,
         }
     }
@@ -1257,6 +1358,7 @@ impl<'a> Importer<'a> {
         class_name: &str,
         color: Option<Color>,
         name: &str,
+        voids: usize,
     ) {
         let m = self.world_mesh(pieces);
         if m.t.is_empty() {
@@ -1266,7 +1368,12 @@ impl<'a> Importer<'a> {
             return;
         }
         const MAX_POINTS: usize = 250_000;
-        if self.opts.terrain == TerrainMode::SiteModel && m.v.len() <= MAX_POINTS {
+        // A site model is made again from its points, so it would close the holes of the network.
+        if self.opts.terrain == TerrainMode::SiteModel && voids > 0 {
+            self.b.report.note(&format!(
+                "a terrain has {voids} triangles that are holes or voids: it was imported as a 3D mesh so that they stay open"
+            ));
+        } else if self.opts.terrain == TerrainMode::SiteModel && m.v.len() <= MAX_POINTS {
             let points: Vec<DVec3> =
                 m.v.iter()
                     .map(|p| DVec3::new(p.x, p.y, p.z - layer.1))
@@ -1288,7 +1395,7 @@ impl<'a> Importer<'a> {
             }
             return;
         }
-        if self.opts.terrain == TerrainMode::SiteModel {
+        if self.opts.terrain == TerrainMode::SiteModel && voids == 0 {
             self.b.report.note(&format!(
                 "the terrain has {} points, more than {MAX_POINTS}: it was imported as a 3D mesh",
                 m.v.len()
@@ -1581,6 +1688,8 @@ struct EvalOut {
     pieces: Vec<Piece>,
     issues: Vec<String>,
     approximate: bool,
+    /// Triangles of an irregular network that were left out as holes or voids.
+    voids: usize,
     #[allow(dead_code)]
     tris: usize,
 }

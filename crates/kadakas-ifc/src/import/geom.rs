@@ -357,6 +357,8 @@ pub struct Eval<'a> {
     pub issues: Vec<String>,
     /// True when a bounding box stands in for geometry that is not supported.
     pub approximate: bool,
+    /// Triangles of irregular networks that are holes or voids (flag below zero) and were left out.
+    pub voids: usize,
     pub tris: usize,
     pub max_tris: usize,
     /// Tells if a mapped item may become a symbol instance.
@@ -380,6 +382,7 @@ impl<'a> Eval<'a> {
             pieces: Vec::new(),
             issues: Vec::new(),
             approximate: false,
+            voids: 0,
             tris: 0,
             max_tris,
             instancing: None,
@@ -1255,7 +1258,20 @@ impl<'a> Eval<'a> {
             return;
         };
         let coords = point_list(&list);
-        let pn: Vec<i64> = items(attr(e, 4)).iter().filter_map(int).collect();
+        // IfcTriangulatedIrregularNetwork adds the flags of the triangles: the sixth attribute in
+        // IFC4X3, the fifth in the release candidates of IFC4X3, which have no PnIndex.
+        let network = e.name == "IFCTRIANGULATEDIRREGULARNETWORK";
+        let (pn_at, flags_at) = if network && e.attrs.len() < 6 {
+            (None, Some(4))
+        } else {
+            (Some(4), network.then_some(5))
+        };
+        let pn: Vec<i64> = pn_at
+            .map(|i| items(attr(e, i)).iter().filter_map(int).collect())
+            .unwrap_or_default();
+        let flags: Vec<i64> = flags_at
+            .map(|i| items(attr(e, i)).iter().filter_map(int).collect())
+            .unwrap_or_default();
         let idx = |v: &Value| -> Option<u32> {
             let mut i = int(v)?;
             if !pn.is_empty() {
@@ -1269,14 +1285,39 @@ impl<'a> Eval<'a> {
             t: Vec::new(),
             exact: None,
         };
-        for t in items(attr(e, 3)) {
+        let (mut holes, mut voids, mut breaklines) = (0usize, 0usize, 0usize);
+        for (n, t) in items(attr(e, 3)).iter().enumerate() {
             let l = items(t);
             if l.len() != 3 {
                 continue;
             }
+            // -2 is a void, -1 a hole: neither is part of the surface. Positive flags mark breaklines.
+            match flags.get(n).copied().unwrap_or(0) {
+                -1 => {
+                    holes += 1;
+                    continue;
+                }
+                f if f < -1 => {
+                    voids += 1;
+                    continue;
+                }
+                f if f > 0 => breaklines += 1,
+                _ => {}
+            }
             if let (Some(a), Some(b), Some(c)) = (idx(&l[0]), idx(&l[1]), idx(&l[2])) {
                 m.t.push([a, b, c]);
             }
+        }
+        if holes + voids > 0 {
+            self.voids += holes + voids;
+            self.issue(format!(
+                "{holes} holes and {voids} voids of an irregular network (flags -1 and -2) stay open"
+            ));
+        }
+        if breaklines > 0 {
+            self.issue(format!(
+                "{breaklines} triangles of an irregular network have breakline flags: the breaklines are not kept as lines"
+            ));
         }
         if xf.matrix3.determinant() < 0.0 {
             m.flip();

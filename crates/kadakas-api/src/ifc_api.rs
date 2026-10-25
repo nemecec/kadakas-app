@@ -30,6 +30,7 @@ pub(crate) fn describe() -> Value {
             "layers_as_storeys": "false (default): all elements belong to the IfcSite. true adds an IfcBuilding with one IfcBuildingStorey per design layer",
             "massing_as_building": "false (default): a massing model is an IfcBuildingElementProxy. true: an IfcBuilding in the IfcSite",
             "visible_only": "false (default)",
+            "site_surface": "false (default). true also writes the proposed surface of the first site model as the shape of the IfcSite, because Allplan reads an IfcSite with a face set as a terrain (the surface is then in the file twice, a note says so)",
             "data_map": "name of a data map (Data Manager) for IFC classes and property sets. Default: the first data map of the document, else the built-in landscape mapping",
             "area_thickness": "mm, thickness of the solid of a landscape area. Default 100",
             "time_stamp": "YYYY-MM-DDThh:mm:ss for the file header. Default: the project date, so the same document gives the same bytes"

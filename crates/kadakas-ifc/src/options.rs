@@ -29,6 +29,10 @@ pub struct IfcOptions {
     /// Time stamp for the file header (`YYYY-MM-DDThh:mm:ss`). Default: the project date, else a fixed
     /// date, so the same document always gives the same bytes.
     pub time_stamp: Option<String>,
+    /// Also write the surface of the first site model as the shape of the `IfcSite`. Programs such as
+    /// Allplan read an `IfcSite` with a face set as a terrain model. The surface is then in the file
+    /// twice (the `IfcSite` and the `IfcGeographicElement` of the site model). Default: off.
+    pub site_surface: bool,
     /// File name for the header. Set by `export_file`.
     pub file_name: Option<String>,
 }
@@ -45,6 +49,7 @@ impl Default for IfcOptions {
             data_map: None,
             area_thickness: 100.0,
             time_stamp: None,
+            site_surface: false,
             file_name: None,
         }
     }

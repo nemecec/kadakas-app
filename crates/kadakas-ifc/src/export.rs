@@ -554,6 +554,11 @@ impl<'a, W: Write> Exporter<'a, W> {
             None => (Value::Null, Value::Null),
         };
         let site_name = self.site_name();
+        let site_shape = if self.opts.site_surface {
+            self.site_surface_shape()?
+        } else {
+            None
+        };
         self.site = self.ent(
             "IFCSITE",
             vec![
@@ -563,7 +568,7 @@ impl<'a, W: Write> Exporter<'a, W> {
                 Value::Null,
                 Value::Null,
                 Value::Ref(self.site_placement),
-                Value::Null,
+                site_shape.map_or(Value::Null, Value::Ref),
                 Value::Null,
                 Value::e("ELEMENT"),
                 lat,
@@ -588,6 +593,46 @@ impl<'a, W: Write> Exporter<'a, W> {
             self.site_georeference_psets(g)?;
         }
         Ok(())
+    }
+
+    /// The shape of the `IfcSite` for the option `site_surface`: the proposed surface of the first site
+    /// model, as a face set. `None` (with a note) when the document has none.
+    fn site_surface_shape(&mut self) -> R<Option<u64>> {
+        let doc = self.doc;
+        let first = doc.objects.values().find(|o| {
+            matches!(o.shape, Shape::SiteModel { .. })
+                && !(self.opts.visible_only && !doc.is_visible(o))
+        });
+        let Some(obj) = first else {
+            self.note(
+                "site_surface: the document has no site model, so the IfcSite has no shape".into(),
+            );
+            return Ok(None);
+        };
+        let tin = match SiteResult::compute(doc, obj.id) {
+            Ok(s) => s.surface(Surface::Proposed).clone(),
+            Err(e) => {
+                self.note(format!(
+                    "site_surface: the site model has no surface ({e}), so the IfcSite has no shape"
+                ));
+                return Ok(None);
+            }
+        };
+        let idx: Vec<u32> = tin.triangles.iter().flatten().copied().collect();
+        if idx.is_empty() {
+            self.note(
+                "site_surface: the surface has no triangles, so the IfcSite has no shape".into(),
+            );
+            return Ok(None);
+        }
+        let item = self.tessellation(&tin.vertices, &idx)?;
+        let rep = self.body_rep("Tessellation", &[item])?;
+        let shape = self.ent(
+            "IFCPRODUCTDEFINITIONSHAPE",
+            vec![Value::Null, Value::Null, Value::refs([rep])],
+        )?;
+        self.note("site_surface: the proposed surface of the first site model is also the shape of the IfcSite (read as a terrain by programs such as Allplan)".into());
+        Ok(Some(shape))
     }
 
     /// The map conversion and the CRS as property sets of the site, as IFC2x3 georeferencing
