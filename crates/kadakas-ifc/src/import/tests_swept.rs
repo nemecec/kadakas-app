@@ -180,3 +180,36 @@ fn a_brep_with_a_face_that_cannot_be_cut_is_kept_with_a_note() {
         r.report
     );
 }
+
+#[test]
+fn an_advanced_brep_used_by_many_products_is_read_once() {
+    // The box is shared by 40 products (one item, 40 placements).
+    let text = String::from_utf8(fixture("advanced_brep_box.ifc")).unwrap();
+    let mut extra = String::new();
+    for i in 0..40u64 {
+        let n = 1000 + i * 10;
+        extra.push_str(&format!(
+            "#{a}=IFCCARTESIANPOINT(({x}.,0.,0.));\n#{b}=IFCAXIS2PLACEMENT3D(#{a},$,$);\n#{c}=IFCLOCALPLACEMENT(#31,#{b});\n#{d}=IFCBUILDINGELEMENTPROXY('g{i}',$,'Copy {i}',$,$,#{c},#901,$,$);\n",
+            a = n,
+            b = n + 1,
+            c = n + 2,
+            d = n + 3,
+            x = 1000 * (i + 1),
+        ));
+    }
+    let text = text.replace("ENDSEC;\nEND-ISO", &format!("{extra}ENDSEC;\nEND-ISO"));
+    super::geom::solids::BREP_READS.with(|c| c.set(0));
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    assert_eq!(objs(&ed).len(), 41);
+    for o in objs(&ed) {
+        assert!(close(volume_of(o), 400.0 * 300.0 * 200.0, 1e-9));
+    }
+    assert_eq!(
+        super::geom::solids::BREP_READS.with(|c| c.get()),
+        1,
+        "41 products, one reading of the solid"
+    );
+}

@@ -331,6 +331,7 @@ fn import_index(
             geometry_notes: BTreeMap::new(),
             z_dropped: 0,
             fuel: csg::Fuel::new(opts.boolean_work),
+            brep_cache: Default::default(),
             opening_failures: BTreeMap::new(),
             cut: HashSet::new(),
             uncut: HashSet::new(),
@@ -442,6 +443,8 @@ struct Importer<'a> {
     /// Openings that were cut from their host, and openings whose cut failed.
     /// The work budget for the booleans of the whole import.
     fuel: csg::Fuel,
+    /// Advanced breps that were read already.
+    brep_cache: geom::BrepCache,
     /// Hosts whose openings could not all be cut, by reason and whether the cut was partial.
     opening_failures: BTreeMap<(String, bool), OpeningTally>,
     cut: HashSet<u64>,
@@ -1205,6 +1208,7 @@ impl<'a> Importer<'a> {
             self.opts.max_triangles.saturating_sub(self.triangles),
         );
         ev.fuel = Some(&self.fuel);
+        ev.brep_cache = Some(&self.brep_cache);
         if instancing && self.opts.instances {
             ev.instancing = Some(&ok);
         }

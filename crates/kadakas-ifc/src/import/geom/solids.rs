@@ -424,6 +424,12 @@ pub fn pyramid(x: f64, y: f64, h: f64) -> MeshData {
     finish(MeshData { v, t, exact: None }, 1e-12)
 }
 
+/// How many times a solid was read by the STEP reader (tests count it).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BREP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Eval<'_> {
     fn placement_of(&self, v: &crate::step::Value) -> DAffine3 {
         self.cx
@@ -527,13 +533,42 @@ impl Eval<'_> {
         }
     }
 
-    /// `IfcAdvancedBrep` and `IfcAdvancedBrepWithVoids` through the STEP reader (see `advanced`).
+    /// `IfcAdvancedBrep` and `IfcAdvancedBrepWithVoids` through the STEP reader (see `advanced`). A
+    /// solid that many products use (a mapped type, a repeated item) is read once: the mesh comes
+    /// from the cache of the import, and every copy is placed and counted by `add_mesh`.
     pub(super) fn advanced_brep(&mut self, e: &Entity, xf: &DAffine3) {
+        let cached = self.brep_cache.and_then(|c| c.borrow().get(&e.id).cloned());
+        let read = match cached {
+            Some(r) => r,
+            None => {
+                let r = std::rc::Rc::new(self.read_brep(e));
+                if let Some(c) = self.brep_cache {
+                    c.borrow_mut().insert(e.id, r.clone());
+                }
+                r
+            }
+        };
+        for why in &read.1 {
+            self.issue(why.clone());
+        }
+        if let Some(m) = &read.0 {
+            let mut m = m.clone();
+            m.transform(xf);
+            self.add_mesh(m);
+        }
+    }
+
+    /// Reads the solid in its own frame (file units). The sentences go with the mesh, so a copy of
+    /// the solid reports the same.
+    fn read_brep(&self, e: &Entity) -> (Option<MeshData>, Vec<String>) {
+        #[cfg(test)]
+        BREP_READS.with(|c| c.set(c.get() + 1));
+        let mut issues: Vec<String> = Vec::new();
         let bytes = match crate::import::advanced::to_step(self.cx, e) {
             Ok(b) => b,
             Err(why) => {
-                self.issue(format!("unsupported geometry {} ({why})", e.name));
-                return;
+                issues.push(format!("unsupported geometry {} ({why})", e.name));
+                return (None, issues);
             }
         };
         let opts = kadakas_step::StepOptions {
@@ -542,64 +577,65 @@ impl Eval<'_> {
             keep_exact: true,
             ..Default::default()
         };
-        match kadakas_step::read(&bytes, &opts) {
-            Ok(imp) => {
-                let mut m = MeshData::default();
-                for part in &imp.set.parts {
-                    let base = m.v.len() as u32;
-                    m.v.extend(part.positions.iter().map(|p| DVec3::from(*p)));
-                    m.t.extend(
-                        part.triangles
-                            .iter()
-                            .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
-                    );
-                }
-                let left_out: u64 = imp
-                    .report
-                    .skipped
-                    .iter()
-                    .filter(|(name, _, _)| name == "ADVANCED_FACE" || name == "FACE")
-                    .map(|(_, _, n)| *n)
-                    .sum();
-                if left_out > 0 {
-                    let why = imp
-                        .report
-                        .skipped
-                        .iter()
-                        .find(|(name, _, _)| name == "ADVANCED_FACE" || name == "FACE")
-                        .map(|(n, r, _)| format!("{n}: {r}"))
-                        .unwrap_or_default();
-                    self.issue(format!(
-                        "{left_out} faces of an advanced brep were left out ({why})"
-                    ));
-                }
-                if m.t.is_empty() {
-                    let why = imp
-                        .report
-                        .skipped
-                        .first()
-                        .map(|(n, r, _)| format!(": {n}: {r}"))
-                        .unwrap_or_default();
-                    self.issue(format!("unsupported geometry {}{why}", e.name));
-                    return;
-                }
-                // The exact surfaces of all parts, when every part has them.
-                let mut exact: Option<kadakas_core::exact::ExactSolid> = None;
-                let all = !imp.exact.is_empty() && imp.exact.iter().all(Option::is_some);
-                if all {
-                    for x in imp.exact.iter().flatten() {
-                        match &mut exact {
-                            Some(have) => have.merge(x),
-                            None => exact = Some(x.clone()),
-                        }
-                    }
-                }
-                m.exact = exact.map(Box::new);
-                m.transform(xf);
-                self.add_mesh(m);
+        let imp = match kadakas_step::read(&bytes, &opts) {
+            Ok(imp) => imp,
+            Err(err) => {
+                issues.push(format!("unsupported geometry {} ({err})", e.name));
+                return (None, issues);
             }
-            Err(err) => self.issue(format!("unsupported geometry {} ({err})", e.name)),
+        };
+        let mut m = MeshData::default();
+        for part in &imp.set.parts {
+            let base = m.v.len() as u32;
+            m.v.extend(part.positions.iter().map(|p| DVec3::from(*p)));
+            m.t.extend(
+                part.triangles
+                    .iter()
+                    .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+            );
         }
+        let faces = |name: &str| name == "ADVANCED_FACE" || name == "FACE";
+        let left_out: u64 = imp
+            .report
+            .skipped
+            .iter()
+            .filter(|(name, _, _)| faces(name))
+            .map(|(_, _, n)| *n)
+            .sum();
+        if left_out > 0 {
+            let why = imp
+                .report
+                .skipped
+                .iter()
+                .find(|(name, _, _)| faces(name))
+                .map(|(n, r, _)| format!("{n}: {r}"))
+                .unwrap_or_default();
+            issues.push(format!(
+                "{left_out} faces of an advanced brep were left out ({why})"
+            ));
+        }
+        if m.t.is_empty() {
+            let why = imp
+                .report
+                .skipped
+                .first()
+                .map(|(n, r, _)| format!(": {n}: {r}"))
+                .unwrap_or_default();
+            issues.push(format!("unsupported geometry {}{why}", e.name));
+            return (None, issues);
+        }
+        // The exact surfaces of all parts, when every part has them.
+        let mut exact: Option<kadakas_core::exact::ExactSolid> = None;
+        if !imp.exact.is_empty() && imp.exact.iter().all(Option::is_some) {
+            for x in imp.exact.iter().flatten() {
+                match &mut exact {
+                    Some(have) => have.merge(x),
+                    None => exact = Some(x.clone()),
+                }
+            }
+        }
+        m.exact = exact.map(Box::new);
+        (Some(m), issues)
     }
 
     /// True if a shell, a brep or a surface model has an advanced face or a face with an edge loop

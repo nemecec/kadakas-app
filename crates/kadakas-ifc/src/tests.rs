@@ -1936,3 +1936,79 @@ fn the_site_surface_option_gives_the_ifcsite_a_face_set() {
         report.notes
     );
 }
+
+#[test]
+fn a_georeference_without_a_crs_survives_a_round_trip_within_a_millimeter() {
+    use crate::{IfcImportOptions, import_bytes};
+    use kadakas_core::command::Editor;
+    for version in ["IFC4", "IFC2X3", "IFC4X3"] {
+        let mut doc = sample();
+        doc.georef = Some(kadakas_core::georef::Georeference {
+            crs: String::new(),
+            origin: glam::DVec2::new(650_000.5, 6_500_000.25),
+            rotation: 0.0,
+            user_origin: glam::DVec2::ZERO,
+        });
+        let world = |d: &Document| -> Vec<glam::DVec3> {
+            let o = d
+                .georef
+                .as_ref()
+                .map_or(glam::DVec2::ZERO, |g| g.origin * 1000.0);
+            let mut v = Vec::new();
+            for obj in d.objects.values() {
+                if let kadakas_core::model::Shape::Mesh3d(m) = &obj.shape {
+                    v.extend(m.vertices.iter().map(|p| *p + o.extend(0.0)));
+                }
+            }
+            v.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap());
+            v
+        };
+        let opts = IfcOptions {
+            version: version.into(),
+            ..Default::default()
+        };
+        let (bytes, report) = export_bytes(&doc, &opts).unwrap();
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("the shift is the place of the IfcSite")),
+            "{version}"
+        );
+        // The first import: the sample itself as meshes, with the shift in the georeference.
+        let first = import_bytes(
+            bytes.clone(),
+            &Document::with_sequential_ids(),
+            &IfcImportOptions::default(),
+        )
+        .unwrap();
+        let mut a = Editor::new(Document::with_sequential_ids());
+        a.execute(&first.command).unwrap();
+        let g = a
+            .doc()
+            .georef
+            .as_ref()
+            .unwrap_or_else(|| panic!("{version}: the georeference was lost"));
+        assert!(
+            g.origin.x > 600_000.0 && g.origin.y > 6_000_000.0,
+            "{version}: {:?}",
+            g.origin
+        );
+        // Export that again and import again: the world coordinates do not move.
+        let (bytes2, _) = export_bytes(a.doc(), &opts).unwrap();
+        let second = import_bytes(
+            bytes2,
+            &Document::with_sequential_ids(),
+            &IfcImportOptions::default(),
+        )
+        .unwrap();
+        let mut b = Editor::new(Document::with_sequential_ids());
+        b.execute(&second.command).unwrap();
+        let (wa, wb) = (world(a.doc()), world(b.doc()));
+        assert!(!wa.is_empty() && wa.len() == wb.len(), "{version}");
+        for (p, q) in wa.iter().zip(&wb) {
+            assert!((*p - *q).length() < 1.0, "{version}: {p} {q}");
+        }
+        let _ = world(&doc);
+    }
+}
