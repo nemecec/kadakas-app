@@ -145,6 +145,7 @@ A vertex that another edge meets and that lies on a chord between two vertices o
 
 The offset of a circle by a distance `d` has the radius `r - d / cos(pi / n)`, because the sides of the polygon move by `d`.
 An arc offset has no field, because its ends move at right angles to the end edges and leave the circle.
+An arc of one edge loses its field when it moves. A description of a kind from a newer program is read only and is dropped, with a note, by any change of its chain.
 Heal and join keep the field of the curve that keeps its chain. Two curves are never joined into one.
 The notes of an edit are told in the language of the window and show in the status line.
 
@@ -152,7 +153,9 @@ The notes of an edit are told in the language of the window and show in the stat
 The Vectorworks-like app offers it in its snap list too (`snap_geometry` of the plan).
 
 **File.** The model field `curve_geometry` is a list of `[curve id, {description}]`. A file without it loads as before.
-An older program keeps the field it does not know. A row whose curve is gone, or whose points are off the circle, is left out on load.
+An older program keeps the field it does not know.
+A program from before MOD-15 cannot read a log entry of a set of segments, so it cannot open a file that has one among its last 64 edits.
+From this version on, a log entry that the program does not know is kept as it is and written back. It is never replayed. A row whose curve is gone, or whose points are off the circle, is left out on load.
 The API is `mesh.curve_info` and `mesh.set_segments` (`docs/mesh-api.md`).
 
 **Export.** DXF export keeps the mesh of a surface model. A true CIRCLE or ARC entity is a later step, as are STEP and IFC circles.

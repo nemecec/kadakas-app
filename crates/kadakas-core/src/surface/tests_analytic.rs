@@ -1838,3 +1838,25 @@ fn an_absorb_that_bends_a_circle_says_so_in_the_notes_of_the_absorber() {
         .unwrap();
     assert!(notes.is_empty());
 }
+
+#[test]
+fn an_arc_of_one_edge_loses_the_field_when_it_moves_and_says_so() {
+    let mut m = SurfaceModel::new();
+    let pt = |t: f64| [100.0 * t.cos(), 100.0 * t.sin(), 0.0];
+    m.apply(&Edit::AddCurve {
+        points: vec![pt(0.0), pt(4.0)],
+        closed: false,
+        faceted: false,
+        analytic: Some(Analytic::arc(
+            DVec3::ZERO,
+            DVec3::Z,
+            DVec3::X,
+            100.0,
+            0.0,
+            4.0,
+        )),
+    })
+    .unwrap();
+    let notes = transform(&mut m, DAffine3::from_translation(DVec3::X * 500.0));
+    assert!(dropped(&notes), "{notes:?}");
+}
