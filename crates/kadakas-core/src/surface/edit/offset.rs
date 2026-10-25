@@ -373,6 +373,11 @@ fn draw(
             }
             let id = super::super::CurveId(w.m.alloc());
             w.m.curves.insert(id, chain);
+            // The offset of a circle is a circle with another radius (the circle of the
+            // corners of the new chain), when its points lie on one.
+            if let Some(a) = w.m.analytic.get(&cid).cloned() {
+                super::super::analytic::derive(w.m, id, &a);
+            }
         }
     }
     w.check_limits()

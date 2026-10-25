@@ -53,6 +53,19 @@ pub enum Edit {
         closed: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         faceted: bool,
+        /// The exact circle of the curve (MOD-15): centre, normal, radius and angles (see
+        /// `Analytic`). It is stored when all points lie on it, else dropped with a note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        analytic: Option<super::Analytic>,
+    },
+    /// Rebuilds the chain of a curve that has an exact circle (MOD-15) with `segments` edges (3 to
+    /// 1,000) on the same circle. The ends of an arc and the first vertex of a circle stay. The
+    /// faces that use the chain keep their loops with the new vertices. Refused with a typed
+    /// reason when another edge meets the chain, or a face that uses it is not in the plane of
+    /// the circle (a curve under a Push/Pull wall). See the module `segments`.
+    SetCurveSegments {
+        curve: super::CurveId,
+        segments: u32,
     },
     /// Pushes or pulls a face along its normal by `distance` mm (positive is toward the front,
     /// negative toward the back). See the module `pushpull` for the cases. The face keeps its id
@@ -194,6 +207,8 @@ pub enum IntersectScope {
     Selection,
 }
 
+use super::analytic;
+
 mod followme;
 mod hide;
 mod intersect;
@@ -201,6 +216,7 @@ mod near;
 pub(super) mod offset;
 mod pushpull;
 pub(super) mod reference;
+mod segments;
 pub(super) mod style;
 mod transform;
 
@@ -215,6 +231,7 @@ pub(super) fn run(
 ) -> Result<Vec<String>, SurfaceError> {
     let mut notes = Vec::new();
     run_noted(m, edit, before, &mut notes)?;
+    analytic::reconcile(m, before, &mut notes);
     Ok(notes)
 }
 
@@ -231,7 +248,11 @@ fn run_noted(
             points,
             closed,
             faceted,
-        } => add_curve(m, points, *closed, *faceted),
+            analytic,
+        } => add_curve(m, points, *closed, *faceted, analytic.as_ref(), notes),
+        Edit::SetCurveSegments { curve, segments } => {
+            segments::set_curve_segments(m, before, *curve, *segments)
+        }
         Edit::PushPull { face, distance } => {
             pushpull::push_pull(m, before, *face, *distance, notes)
         }
@@ -1554,7 +1575,10 @@ fn add_curve(
     points: &[[f64; 3]],
     closed: bool,
     faceted: bool,
+    given: Option<&super::Analytic>,
+    notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
+    let given = given.map(analytic::sanitize).transpose()?;
     let n = points.len();
     let count = if closed { n } else { n.saturating_sub(1) };
     if n < 2 || count < 1 {
@@ -1604,6 +1628,11 @@ fn add_curve(
         }
         let id = super::CurveId(w.m.alloc());
         w.m.curves.insert(id, chain);
+        if let Some(a) = given {
+            w.m.analytic.insert(id, a);
+        }
+    } else if given.is_some() {
+        notes.push("no curve was made (an edge is in a curve already), so the circle description is left out".into());
     }
     w.check_limits()
 }
@@ -1868,6 +1897,7 @@ pub(super) fn rechain(m: &mut SurfaceModel, ids: &BTreeSet<super::CurveId>) {
         for p in pieces {
             let c = super::CurveId(m.alloc());
             m.curves.insert(c, p);
+            analytic::copy_to(m, *id, c);
         }
     }
 }

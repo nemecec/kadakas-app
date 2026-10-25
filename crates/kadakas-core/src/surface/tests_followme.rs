@@ -137,6 +137,7 @@ fn a_profile_around_a_closed_circle_makes_a_ring_without_caps() {
         points: pts.clone(),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;
@@ -180,6 +181,7 @@ fn a_lathe_about_an_axis_turns_a_rectangle_into_a_cylinder() {
         points: pts,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;
@@ -224,6 +226,7 @@ fn a_round_profile_along_a_path_shades_round_and_keeps_its_curves() {
         points: ring,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let profile = m.faces().next().unwrap().0;
@@ -338,6 +341,7 @@ fn too_many_faces_are_refused_with_the_count() {
         points: ring,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let profile = m.faces().next().unwrap().0;
@@ -387,6 +391,7 @@ fn follow_me_timing() {
         points: ring,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let profile = m.faces().next().unwrap().0;

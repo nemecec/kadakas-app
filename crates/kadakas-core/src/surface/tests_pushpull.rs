@@ -274,6 +274,7 @@ fn a_circle_is_one_curve_and_a_face() {
         points: circle_points(24, 500.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     assert_eq!(
@@ -294,6 +295,7 @@ fn erasing_edges_of_a_curve_cuts_it_into_chains() {
             points: circle_points(12, 500.0),
             closed: true,
             faceted: false,
+            analytic: None,
         })
         .unwrap();
         let ring = m.curves().next().unwrap().1.clone();
@@ -334,6 +336,7 @@ fn erasing_edges_of_a_curve_cuts_it_into_chains() {
         points: circle_points(12, 500.0)[..7].to_vec(),
         closed: false,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let arc = m.curves().next().unwrap().1.clone();
@@ -358,6 +361,7 @@ fn an_open_curve_is_a_chain_and_a_cut_keeps_it_one_curve() {
         points: pts,
         closed: false,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     assert_eq!(m.edge_count(), 8);
@@ -389,6 +393,7 @@ fn a_curve_across_an_edge_stays_one_curve_in_order() {
         points: circle_points(16, 500.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     assert_eq!(m.curves().count(), 1);
@@ -404,6 +409,7 @@ fn a_cylinder_keeps_its_curves_and_smooth_edges() {
         points: circle_points(12, 300.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let f = only_face(&m);
@@ -436,6 +442,7 @@ fn a_second_circle_over_the_same_edges_makes_no_second_curve() {
             points: circle_points(12, 300.0),
             closed: true,
             faceted: false,
+            analytic: None,
         })
         .unwrap();
     }
@@ -451,6 +458,7 @@ fn a_degenerate_curve_is_refused() {
             points: vec![[0.0; 3]],
             closed: false,
             faceted: false,
+            analytic: None,
         })
         .is_err()
     );
@@ -459,6 +467,7 @@ fn a_degenerate_curve_is_refused() {
             points: vec![[0.0; 3], [f64::NAN, 0.0, 0.0]],
             closed: false,
             faceted: false,
+            analytic: None,
         })
         .is_err()
     );
@@ -1531,6 +1540,7 @@ fn a_cylinder_on_a_slanted_face_pulls_with_smooth_walls() {
         points: circle,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().find(|(_, f)| f.outer.len() == 96).unwrap().0;

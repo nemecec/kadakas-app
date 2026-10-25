@@ -1045,6 +1045,7 @@ fn a_round_post_through_a_box_is_subtracted_and_united() {
         points: ngon(3500.0, 500.0, -300.0, 200.0, n),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let post = m
@@ -1654,6 +1655,7 @@ fn box_with_marks(b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
         points: ngon(250.0, 650.0, K, 100.0, 24),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     draw(&mut m, b);
@@ -1721,6 +1723,7 @@ fn a_curve_cut_in_part_stays_as_chains() {
         points: ngon(500.0, 500.0, 0.0, 300.0, 24),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;

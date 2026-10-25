@@ -175,6 +175,7 @@ fn cylinder(ed: &mut Editor) -> ObjectId {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         },
     );
     let face = model(ed, id).faces().next().unwrap().0;

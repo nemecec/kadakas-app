@@ -10,6 +10,8 @@
 //!
 //! A vertex is `[id, x, y, z]`, an edge `[id, first vertex, second vertex]` or, with attributes,
 //! `[id, a, b, {attrs}]`. A face may have `attrs`. `curves` is a list of `[id, edge, edge, ...]`.
+//! `curve_geometry` (MOD-15, optional) is a list of `[curve id, {kind, center, normal, axis,
+//! radius, start?, end?}]`: the exact circle of a curve (see `analytic`).
 //! `rev` counts the edits and `log` holds the recent ones (see `sync`). `transform` is the three
 //! columns of the matrix and then the move (left out for the identity). Everything is in id order
 //! and each loop starts at its smallest vertex id, so the same model gives the same text.
@@ -27,7 +29,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use super::sync::Entry;
-use super::{Attrs, CurveId, Edge, EdgeId, FORMAT, Face, FaceId, Plane, SurfaceModel, VertexId};
+use super::{
+    Analytic, Attrs, CurveId, Edge, EdgeId, FORMAT, Face, FaceId, Plane, SurfaceModel, VertexId,
+};
 
 #[derive(Serialize, Deserialize)]
 struct Raw {
@@ -45,6 +49,10 @@ struct Raw {
     faces: Vec<RawFace>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     curves: Vec<Vec<u32>>,
+    /// The exact circles of some curves (MOD-15): `[curve id, {description}]`. A row that this
+    /// version cannot read is left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    curve_geometry: Vec<(u32, Value)>,
     #[serde(default, skip_serializing_if = "is_zero")]
     rev: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -128,6 +136,11 @@ impl Serialize for SurfaceModel {
                         .chain(es.iter().map(|e| e.0))
                         .collect()
                 })
+                .collect(),
+            curve_geometry: self
+                .analytic
+                .iter()
+                .filter_map(|(id, a)| Some((id.0, serde_json::to_value(a).ok()?)))
                 .collect(),
             rev: self.rev,
             log: self.log.clone(),
@@ -215,6 +228,13 @@ impl<'de> Deserialize<'de> for SurfaceModel {
         let mut m = SurfaceModel::from_parts(vertices, edges, faces, raw.next_id);
         m.edge_attrs = edge_attrs;
         m.curves = curves;
+        for (id, v) in raw.curve_geometry {
+            // A description that this version cannot read is left out: the chain stays.
+            if let Ok(a) = serde_json::from_value::<Analytic>(v) {
+                m.analytic.insert(CurveId(id), a);
+            }
+        }
+        super::analytic::validate_loaded(&mut m);
         m.rev = raw.rev;
         m.log = raw.log;
         m.extra = raw.extra;

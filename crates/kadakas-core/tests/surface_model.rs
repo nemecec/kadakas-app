@@ -356,6 +356,7 @@ fn push_pull_and_add_curve_are_one_undo_step_each() {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         },
     )
     .unwrap();
@@ -381,6 +382,7 @@ fn smooth_edges_are_not_lines_and_the_faces_of_a_model_are_two_sided() {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         },
     )
     .unwrap();
@@ -436,4 +438,75 @@ fn a_refused_surface_edit_keeps_the_reason_typed() {
     );
     // The text is the one the Invalid variant had.
     assert_eq!(err.to_string(), "invalid value: face 999 does not exist");
+}
+
+#[test]
+fn analytic_curves_follow_each_command_and_undo_restores_them_exactly() {
+    use kadakas_core::surface::Analytic;
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    let ring = |r: f64, n: usize| -> Vec<[f64; 3]> {
+        (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                [r * a.cos(), r * a.sin(), 0.0]
+            })
+            .collect()
+    };
+    let mut states = vec![model(&ed, id).clone()];
+    edit(
+        &mut ed,
+        id,
+        Edit::AddCurve {
+            points: ring(300.0, 12),
+            closed: true,
+            faceted: false,
+            analytic: Some(Analytic::circle(DVec3::ZERO, DVec3::Z, DVec3::X, 300.0)),
+        },
+    )
+    .unwrap();
+    states.push(model(&ed, id).clone());
+    let curve = model(&ed, id).curves().next().unwrap().0;
+    assert!(model(&ed, id).curve_geometry(curve).is_some());
+    // A new number of segments is one step.
+    edit(
+        &mut ed,
+        id,
+        Edit::SetCurveSegments {
+            curve,
+            segments: 40,
+        },
+    )
+    .unwrap();
+    assert_eq!(model(&ed, id).curve_segments(curve), Some(40));
+    states.push(model(&ed, id).clone());
+    // A non-uniform scale drops the field and says so in the result.
+    let all: Vec<_> = model(&ed, id).vertices().map(|(v, _)| v).collect();
+    let out = ed
+        .execute(&Command::EditSurface {
+            id,
+            edit: Edit::TransformVertices {
+                vertices: all,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                matrix: glam::DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)).to_cols_array(),
+            },
+        })
+        .unwrap();
+    assert!(
+        out.notes
+            .iter()
+            .any(|n| n.contains("lost its circle description"))
+    );
+    assert!(model(&ed, id).curve_geometry(curve).is_none());
+    states.push(model(&ed, id).clone());
+    // Undo goes back through every state, redo forward again.
+    for want in states.iter().rev().skip(1) {
+        assert!(ed.undo());
+        assert_eq!(model(&ed, id), want);
+    }
+    for want in states.iter().skip(1) {
+        assert!(ed.redo());
+        assert_eq!(model(&ed, id), want);
+    }
 }
