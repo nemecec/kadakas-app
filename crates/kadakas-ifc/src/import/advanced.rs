@@ -191,7 +191,7 @@ pub fn to_step(cx: &Ctx, root: &Entity) -> Result<Vec<u8>, String> {
         let angle = (e.name == "IFCTRIMMEDCURVE"
             && (cx.units.angle_rad - 1.0).abs() > 1e-12
             && cx
-                .get(&e.attrs[0])
+                .get(super::ctx::attr(&e, 0))
                 .is_some_and(|b| matches!(b.name.as_str(), "IFCCIRCLE" | "IFCELLIPSE")))
         .then_some(cx.units.angle_rad);
         if !emit(&mut out, &e, angle) && e.name != COMPLEX {

@@ -359,6 +359,8 @@ pub struct Eval<'a> {
     pub approximate: bool,
     /// Triangles of irregular networks that are holes or voids (flag below zero) and were left out.
     pub voids: usize,
+    /// The work budget of the whole import for booleans. Without one an evaluation has its own.
+    pub fuel: Option<&'a csg::Fuel>,
     pub tris: usize,
     pub max_tris: usize,
     /// Tells if a mapped item may become a symbol instance.
@@ -383,6 +385,7 @@ impl<'a> Eval<'a> {
             issues: Vec::new(),
             approximate: false,
             voids: 0,
+            fuel: None,
             tris: 0,
             max_tris,
             instancing: None,
@@ -679,7 +682,11 @@ impl<'a> Eval<'a> {
     /// Applies a boolean operation to two meshes. When it is refused, the `fallback` pieces are kept
     /// and an issue says why.
     fn combine(&mut self, op: csg::Op, a: MeshData, b: MeshData, fallback: Vec<Piece>) {
-        match csg::boolean(&a, &b, op) {
+        let result = match self.fuel {
+            Some(f) => f.scoped(csg::PER_CALL_FUEL, |own| csg::boolean(&a, &b, op, own)),
+            None => csg::boolean(&a, &b, op, &csg::Fuel::new(csg::PER_CALL_FUEL)),
+        };
+        match result {
             Ok(m) => {
                 if !m.t.is_empty() {
                     self.add_mesh(m);

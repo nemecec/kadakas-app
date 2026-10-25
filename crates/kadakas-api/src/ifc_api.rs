@@ -67,6 +67,7 @@ fn import_describe() -> Value {
             "georef": "true (default): IfcMapConversion sets the georeference of an empty document, or moves the geometry into the georeference of a document that has the same CRS",
             "max_objects": "Default 500000",
             "max_triangles": "Default 20000000",
+            "boolean_work": "Default 1500000000. The work (split tests, counted, not timed) that all cuts of openings and booleans of one import may use. When it is used up the remaining openings stay as objects and the report counts them",
             "max_file_mb": "Default 1024",
             "to_surface": "false (default). true: the meshes of the import (mesh3d) that fit the limits of a surface model become surface models, with vertices welded and coplanar triangles merged into faces. A mesh over a limit stays a mesh and is listed in report.to_surface.refused with the counts (MOD-12)",
             "soften_below_angle": "degrees, 0 to 180, default off. Edges between faces at an angle below it become soft and smooth in the surface models. It asks for to_surface. The result always has softened_edges",

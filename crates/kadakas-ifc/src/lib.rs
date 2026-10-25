@@ -65,7 +65,10 @@ use kadakas_core::model::Document;
 use kadakas_io::Report;
 use kadakas_site::SiteCache;
 
-pub use import::{IfcImportError, IfcImportOptions, import_bytes, import_file};
+pub use import::{
+    IfcImportError, IfcImportOptions, import_bytes, import_bytes_unguarded, import_file,
+    import_file_unguarded,
+};
 pub use options::IfcOptions;
 
 /// Why an export failed.
