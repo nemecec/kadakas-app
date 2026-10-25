@@ -266,12 +266,12 @@ mod tests {
 
     #[test]
     fn an_unreachable_server_is_not_counted() {
-        let free = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
+        // Port 1 has no listener on a test machine. A port that this test frees first can be
+        // taken by another test or program before the connect, and Windows may then answer with
+        // a reset (10054) instead of a refusal (10061).
         let r = HttpSender::default()
             .allow_loopback_http()
-            .send(&format!("http://127.0.0.1:{port}/v1/feedback"), "{}");
+            .send("http://127.0.0.1:1/v1/feedback", "{}");
         assert!(matches!(r, Err(SendError::Unreachable(_))), "{r:?}");
     }
 
