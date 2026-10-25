@@ -320,6 +320,7 @@ fn import_index(
             schema: schema.clone(),
             frame: Frame::default(),
             shift: DVec2::ZERO,
+            site_turn: None,
             multi_site,
             layer_cache: HashMap::new(),
             class_cache: HashMap::new(),
@@ -345,7 +346,11 @@ fn import_index(
     // georeference. The place is found from the placements and a bounded sample of points, with no
     // geometry made, so a file that is not far costs nothing more.
     if opts.georef && doc.georef.is_none() {
-        imp.shift = imp.far_shift().unwrap_or(DVec2::ZERO);
+        if let Some((shift, turn)) = imp.far_shift() {
+            // A turned site is undone by the frame instead of a shift.
+            imp.shift = if turn.is_some() { DVec2::ZERO } else { shift };
+            imp.site_turn = turn;
+        }
         // The sample read placements; the counts of the import start again.
         imp.cx.bad_placements.set(0);
         imp.cx.other_placements.set(0);
@@ -356,13 +361,22 @@ fn import_index(
     imp.run();
     // Last resort: the coordinates were far, but the samples did not show it (products out of range
     // were skipped). The geometry itself says where the file is: a pass that only measures.
-    let out_of_range = imp
+    // Only when most of the file is out of range: one object far away from the rest is skipped, with
+    // a line in the report, and the rest stays where it is.
+    let out_of_range: usize = imp
         .b
         .report
         .skipped
         .iter()
-        .any(|s| s.reason.contains("out of range"));
-    if out_of_range && opts.georef && doc.georef.is_none() && imp.shift == DVec2::ZERO {
+        .filter(|s| s.reason.contains("out of range"))
+        .map(|s| s.count)
+        .sum();
+    if out_of_range > 0
+        && out_of_range >= imp.b.report.total()
+        && opts.georef
+        && doc.georef.is_none()
+        && imp.shift == DVec2::ZERO
+    {
         let mut probe = make();
         probe.b.set_probe();
         probe.run();
@@ -428,6 +442,9 @@ struct Importer<'a> {
     frame: Frame,
     /// Shift (mm) that moves far geometry to the origin; it is part of the georeference.
     shift: DVec2,
+    /// A far site that is turned: its place (mm) and angle. The geometry is turned back about it and
+    /// the angle is the rotation of the georeference.
+    site_turn: Option<(DVec2, f64)>,
     /// The file has more than one `IfcSite` (a complex site with partial sites): each gets a layer.
     multi_site: bool,
     layer_cache: HashMap<Option<u64>, (LayerId, f64)>,
@@ -463,13 +480,13 @@ impl<'a> Importer<'a> {
     /// The shift (mm, whole meters) that brings the file to the origin, if it is more than 100 km
     /// away. Samples: the placements of the sites, buildings and the first products, the first
     /// points of the first point lists, and the first points of the file.
-    fn far_shift(&self) -> Option<DVec2> {
+    fn far_shift(&self) -> Option<(DVec2, Option<(DVec2, f64)>)> {
         const FAR_MM: f64 = 1.0e8;
         const MAX_PRODUCTS: usize = 3000;
         let mm = self.cx.units.length_mm;
-        // Two kinds of sample: where the products are placed, and the coordinates of point lists.
-        // They are in different frames (a point list is in the frame of its product), so the
-        // place comes from the placements when they are far, else from the points.
+        // The place comes from the placements of the sites and the products. Coordinates inside
+        // the representations are in the frames of their products, so they say nothing here: a file
+        // whose products are placed at the origin is found by a second pass (see `import_index`).
         struct Spread {
             lo: DVec2,
             hi: DVec2,
@@ -491,7 +508,7 @@ impl<'a> Importer<'a> {
                 }
             }
         }
-        let (mut placed, mut points) = (Spread::new(), Spread::new());
+        let mut placed = Spread::new();
         let products: HashSet<String> = model::product_names().collect();
         let mut seen = 0usize;
         for (id, n) in self.cx.x.iter() {
@@ -510,47 +527,30 @@ impl<'a> Importer<'a> {
                 placed.add(DVec2::new(t.x, t.y) * mm);
             }
         }
-        // Points: a stride sample of up to 100,000 of the cartesian points and of the first points
-        // of the point lists. Only the far ones count for the place, because a point near the origin
-        // is a point of a profile or of a local frame.
-        const MAX_POINTS: usize = 100_000;
-        for (name, per_entity) in [
-            ("IFCCARTESIANPOINT", 1),
-            ("IFCCARTESIANPOINTLIST3D", 4),
-            ("IFCCARTESIANPOINTLIST2D", 4),
-        ] {
-            let ids = self.cx.x.ids_of(name);
-            let stride = ids.len().div_ceil(MAX_POINTS).max(1);
-            for id in ids.into_iter().step_by(stride) {
-                let Some(e) = self.cx.ent(id) else { continue };
-                let rows: Vec<Vec<f64>> = if name == "IFCCARTESIANPOINT" {
-                    vec![ctx::numbers(attr(&e, 0))]
-                } else {
-                    items(attr(&e, 0))
-                        .iter()
-                        .take(per_entity)
-                        .map(ctx::numbers)
-                        .collect()
-                };
-                for v in rows {
-                    if v.len() >= 2 {
-                        let p = DVec2::new(v[0], v[1]) * mm;
-                        if p.is_finite() && p.abs().max_element() > FAR_MM {
-                            points.add(p);
-                        }
-                    }
-                }
-            }
-        }
+        let from_placements = placed.far;
         let s = if placed.far {
             placed
-        } else if points.far {
-            points
         } else {
             return None;
         };
         let c = (s.lo + s.hi) / 2.0;
-        (c.is_finite() && c.abs().max_element() < 1.0e12).then(|| (c / 1000.0).round() * 1000.0)
+        if !(c.is_finite() && c.abs().max_element() < 1.0e12) {
+            return None;
+        }
+        // A site that is far and turned (a georeference without a CRS, written by Kadakas, turns
+        // the site): the turn is the rotation of the georeference and the geometry is turned back.
+        let turn = if from_placements && model::file_georef(&self.cx).is_none() {
+            self.cx.x.ids_of("IFCSITE").first().and_then(|id| {
+                let site = self.cx.ent(*id)?;
+                let m = self.cx.placement(attr(&site, 5).as_ref_id()?);
+                let at = DVec2::new(m.translation.x, m.translation.y) * mm;
+                let angle = m.matrix3.x_axis.y.atan2(m.matrix3.x_axis.x);
+                (at.abs().max_element() > FAR_MM && angle.abs() > 1e-9).then_some((at, angle))
+            })
+        } else {
+            None
+        };
+        Some(((c / 1000.0).round() * 1000.0, turn))
     }
 
     fn run(&mut self) {
@@ -671,6 +671,24 @@ impl<'a> Importer<'a> {
 
     fn place_file(&mut self) {
         if !self.opts.georef {
+            return;
+        }
+        if let Some((at, angle)) = self.site_turn {
+            self.frame = Frame {
+                rotation: -angle,
+                shift: -DVec2::from_angle(-angle).rotate(at),
+            };
+            self.b.set_georef(Georeference {
+                crs: String::new(),
+                origin: at / 1000.0,
+                rotation: angle,
+                user_origin: DVec2::ZERO,
+            });
+            self.b.report.georeferenced = false;
+            self.b.report.note(&format!(
+                "the site is far from the origin and turned by {:.4} radians: the geometry was moved and turned back, and both are in the georeference",
+                angle
+            ));
             return;
         }
         if self.shift != DVec2::ZERO {

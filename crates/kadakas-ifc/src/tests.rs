@@ -1946,21 +1946,30 @@ fn a_georeference_without_a_crs_survives_a_round_trip_within_a_millimeter() {
         doc.georef = Some(kadakas_core::georef::Georeference {
             crs: String::new(),
             origin: glam::DVec2::new(650_000.5, 6_500_000.25),
-            rotation: 0.0,
+            rotation: 0.3,
             user_origin: glam::DVec2::ZERO,
         });
         let world = |d: &Document| -> Vec<glam::DVec3> {
-            let o = d
-                .georef
-                .as_ref()
-                .map_or(glam::DVec2::ZERO, |g| g.origin * 1000.0);
+            let (o, rot) = d.georef.as_ref().map_or((glam::DVec2::ZERO, 0.0), |g| {
+                (g.origin * 1000.0, g.rotation)
+            });
             let mut v = Vec::new();
             for obj in d.objects.values() {
                 if let kadakas_core::model::Shape::Mesh3d(m) = &obj.shape {
-                    v.extend(m.vertices.iter().map(|p| *p + o.extend(0.0)));
+                    v.extend(m.vertices.iter().map(|p| {
+                        (glam::DVec2::from_angle(rot).rotate(p.truncate()) + o).extend(p.z)
+                    }));
                 }
             }
-            v.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap());
+            // Rounded for the order: two copies of one corner differ in the last digits.
+            let key = |p: &glam::DVec3| {
+                (
+                    (p.x * 100.0).round() as i64,
+                    (p.y * 100.0).round() as i64,
+                    (p.z * 100.0).round() as i64,
+                )
+            };
+            v.sort_by_key(key);
             v
         };
         let opts = IfcOptions {
@@ -1972,7 +1981,7 @@ fn a_georeference_without_a_crs_survives_a_round_trip_within_a_millimeter() {
             report
                 .notes
                 .iter()
-                .any(|n| n.contains("the shift is the place of the IfcSite")),
+                .any(|n| n.contains("are the place of the IfcSite")),
             "{version}"
         );
         // The first import: the sample itself as meshes, with the shift in the georeference.
