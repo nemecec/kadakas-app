@@ -9,11 +9,14 @@ use std::rc::Rc;
 use glam::{DAffine2, DAffine3, DVec2, DVec3};
 use kadakas_core::curve::{self, Vertex, VertexKind};
 
-mod solids;
+pub(crate) mod solids;
 
 use super::csg;
 use super::ctx::{Ctx, attr, enum_of, flag, int, items, num, numbers};
 use crate::step::Value;
+
+/// The meshes of advanced breps that were read, with the sentences of the report, by item.
+pub type BrepCache = std::cell::RefCell<HashMap<u64, Rc<(Option<MeshData>, Vec<String>)>>>;
 
 /// An indexed triangle mesh.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -361,6 +364,8 @@ pub struct Eval<'a> {
     pub voids: usize,
     /// The work budget of the whole import for booleans. Without one an evaluation has its own.
     pub fuel: Option<&'a csg::Fuel>,
+    /// Advanced breps that were read already, by the number of the item (see `advanced_brep`).
+    pub brep_cache: Option<&'a BrepCache>,
     pub tris: usize,
     pub max_tris: usize,
     /// Tells if a mapped item may become a symbol instance.
@@ -386,6 +391,7 @@ impl<'a> Eval<'a> {
             approximate: false,
             voids: 0,
             fuel: None,
+            brep_cache: None,
             tris: 0,
             max_tris,
             instancing: None,

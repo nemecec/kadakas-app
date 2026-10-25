@@ -171,7 +171,11 @@ fn a_big_file_imports_in_time_and_a_file_over_the_cap_is_refused_with_the_option
     let r = import_bytes(bytes.clone(), &doc, &IfcImportOptions::default()).unwrap();
     assert_eq!(r.report.entities_read, 4000);
     assert_eq!(r.report.total(), 4000);
-    assert!(started.elapsed().as_secs() < 600, "hang guard: {:?}", started.elapsed());
+    assert!(
+        started.elapsed().as_secs() < 600,
+        "hang guard: {:?}",
+        started.elapsed()
+    );
     // The cap: a clear message that names the option.
     let mut o = IfcImportOptions::default();
     o.limits.max_bytes = 1 << 20;

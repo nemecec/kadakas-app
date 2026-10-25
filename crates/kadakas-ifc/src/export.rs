@@ -468,6 +468,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             ],
         )?;
 
+        let mut site_shift = [0.0f64; 3];
         if let (Some(g), Schema::Ifc2x3) = (&geo, self.schema) {
             // IFC2x3 has no map conversion. The values go to property sets of the site, below.
             self.report.georeferenced = true;
@@ -521,7 +522,14 @@ impl<'a, W: Write> Exporter<'a, W> {
                 ));
             }
         } else if let Some(g) = &doc.georef {
-            self.note(format!("the georeference has no CRS (origin shift {}, {}), so no map conversion is written", g.origin.x, g.origin.y));
+            // No CRS, so no map conversion (it needs a CRS). The shift is the place of the site, and
+            // everything in the file is placed relative to the site, so the objects keep their
+            // world coordinates. An import moves them back to the origin with the same shift.
+            site_shift = [g.origin.x * 1000.0, g.origin.y * 1000.0, 0.0];
+            self.note(format!(
+                "the georeference has no CRS (origin shift {}, {} m), so no map conversion is written: the shift is the place of the IfcSite",
+                g.origin.x, g.origin.y
+            ));
         }
 
         let p = &doc.drawing.project;
@@ -545,7 +553,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             ],
         )?;
 
-        self.site_placement = self.placement(None, [0.0; 3])?;
+        self.site_placement = self.placement(None, site_shift)?;
         let (lat, lon) = match geo.as_ref().and_then(|g| g.lat_lon) {
             Some((lat, lon)) => (
                 Value::List(geo::compound_angle(lat).map(Value::Int).to_vec()),
