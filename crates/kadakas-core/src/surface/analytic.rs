@@ -367,8 +367,7 @@ pub(super) fn holds(a: &Analytic, pts: &[DVec3], shared: &[bool]) -> bool {
             Some(i) => pts[*i],
             None => pts[order[0]],
         };
-        for k in p..q {
-            let i = order[k];
+        for &i in &order[p..q] {
             if !shared.get(i).copied().unwrap_or(false)
                 || geom::point_segment(pts[i], prev, next).0 > tol
             {
@@ -670,13 +669,12 @@ impl SurfaceModel {
                 reconcile(&mut work, &before, &mut notes);
                 note = notes.into_iter().next();
             }
-            Some(Shape::Like(a)) => {
-                if !derive(&mut work, id, a) {
-                    note = Some(format!(
-                        "curve {id} lost its circle description: its points are not on one circle after the change"
-                    ));
-                }
+            Some(Shape::Like(a)) if !derive(&mut work, id, a) => {
+                note = Some(format!(
+                    "curve {id} lost its circle description: its points are not on one circle after the change"
+                ));
             }
+            Some(Shape::Like(_)) => {}
             None => {}
         }
         super::sync::record(&mut work, self, super::sync::Intent::Unlogged);
