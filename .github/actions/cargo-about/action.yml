@@ -1,0 +1,33 @@
+name: cargo-about
+description: >
+  Installs cargo-about (THIRD_PARTY_NOTICES.txt, scripts/notices.sh). taiki-e/install-action has
+  no prebuilt program for some systems (x86_64 macOS) and then builds one without the feature
+  `cli`, which has no `cargo about` command. This action checks for the command and, if it is
+  missing, installs it with `cargo install --locked --features cli` into its own folder, which it
+  caches.
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      with:
+        tool: cargo-about
+    - name: Folder of the fallback build
+      shell: bash
+      run: |
+        home="$HOME"
+        if command -v cygpath >/dev/null 2>&1; then home="$(cygpath -m "$HOME")"; fi
+        echo "CARGO_ABOUT_ROOT=$home/.cargo-about-fallback" >> "$GITHUB_ENV"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cargo-about-fallback
+        key: cargo-about-fallback-${{ runner.os }}-${{ runner.arch }}-1
+    - name: Check that `cargo about` exists
+      shell: bash
+      run: |
+        if cargo about --version; then exit 0; fi
+        echo "::warning::no working cargo-about from install-action, building it with --features cli"
+        if ! ls "$CARGO_ABOUT_ROOT"/bin/cargo-about* >/dev/null 2>&1; then
+          cargo install cargo-about --locked --features cli --root "$CARGO_ABOUT_ROOT"
+        fi
+        echo "$CARGO_ABOUT_ROOT/bin" >> "$GITHUB_PATH"
+        PATH="$CARGO_ABOUT_ROOT/bin:$PATH" cargo about --version

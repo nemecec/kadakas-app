@@ -1,0 +1,124 @@
+name: Nightly
+# The slow checks that left ci.yml: line coverage (4 shards), timing tests in release mode (perf)
+# and the fuzzer of the container reader. They run
+#   - every night at 02:15 UTC, if main has a commit from the last 25 hours,
+#   - when a version tag v* is pushed,
+#   - by hand: `gh workflow run nightly.yml` (always runs everything).
+# release.yml does not wait for this workflow. Look at the nightly result before you tag.
+# Actions are pinned to commit SHAs, as in ci.yml.
+#
+#   job       what it checks                                                  timeout
+#   guard     skips the other jobs on a night without a new commit            15 min
+#   coverage  95% of lines per library crate, 90% for the CLI (4 shards)      40 min
+#   perf      #[ignore] timing tests in a release build                       40 min
+#   fuzz      changed containers are errors, never panics (300 s)             15 min
+#
+# Caches: Swatinem/rust-cache, written by runs on main only (a scheduled run is on main). The
+# coverage shards share one cache key and only shard 1 saves it, to stay far below the 10 GB
+# limit of the repository. Expected sizes (compressed): coverage 1 GB, perf 0.7 GB.
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: short
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: check
+        shell: bash
+        run: |
+          run=true
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # A scheduled run has the newest commit of the default branch.
+            last="$(git log -1 --format=%ct)"
+            age=$(( $(date +%s) - last ))
+            echo "newest commit is $age seconds old"
+            # 25 hours: a little more than a day, because a scheduled run can start late.
+            if [ "$age" -gt 90000 ]; then
+              run=false
+              echo "No new commit since the last night. Skipping the heavy jobs."
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  coverage:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 }}
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
+      - uses: ./.github/actions/wasi-sdk
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-llvm-cov
+      # The shards and the bars are in scripts/coverage.sh. The same rule holds in every shard.
+      - run: scripts/coverage.sh shard ${{ matrix.shard }}/4
+
+  # Timing tests (`#[ignore]`, see docs/dev-guide.md). They need a release build.
+  perf:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: perf-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
+      - uses: ./.github/actions/wasi-sdk
+      - run: PERF_SIZES=10000 cargo test --release -p kadakas-core -p kadakas-container -p kadakas-site -p kadakas-api -p kadakas-io -- --ignored
+
+  # A run of the fuzzer of the container reader (crates/kadakas-container/tests/fuzz_open.rs):
+  # changed containers must be errors, never panics. The seed is printed; KADAKAS_FUZZ_SEED repeats a run.
+  # It builds one small crate, so it has no cache.
+  fuzz:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - run: KADAKAS_FUZZ_SECS=300 cargo test --release -p kadakas-container --test fuzz_open -- --nocapture

@@ -1,0 +1,11 @@
+# Settings of cargo-nextest (CI runs `cargo nextest run --workspace --no-fail-fast`).
+# `cargo test` does not read this file and works as before. Doctests are not run by nextest:
+# CI runs `cargo test --workspace --doc` as a second step.
+[profile.default]
+# No hidden flakiness: a failing test is a failure, it is never run again.
+retries = 0
+# Show every failure at the end, and do not stop at the first one.
+fail-fast = false
+failure-output = "immediate-final"
+# A test that runs longer than 60 s is marked slow. After 10 slow periods (10 minutes) it is killed.
+slow-timeout = { period = "60s", terminate-after = 10 }
