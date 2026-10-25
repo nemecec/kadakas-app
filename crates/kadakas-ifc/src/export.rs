@@ -404,6 +404,27 @@ impl<'a, W: Write> Exporter<'a, W> {
         )
     }
 
+    /// A placement whose X axis is turned by `angle` radians about Z.
+    fn placement_turned(&mut self, rel: Option<u64>, loc: [f64; 3], angle: f64) -> R<u64> {
+        if angle == 0.0 || !angle.is_finite() {
+            return self.placement(rel, loc);
+        }
+        let p = self.pt3(loc)?;
+        let up = self.up()?;
+        let x = self.ent(
+            "IFCDIRECTION",
+            vec![Value::reals(&[angle.cos(), angle.sin(), 0.0])],
+        )?;
+        let a = self.ent(
+            "IFCAXIS2PLACEMENT3D",
+            vec![Value::Ref(p), Value::Ref(up), Value::Ref(x)],
+        )?;
+        self.ent(
+            "IFCLOCALPLACEMENT",
+            vec![rel.map_or(Value::Null, Value::Ref), Value::Ref(a)],
+        )
+    }
+
     fn placement(&mut self, rel: Option<u64>, loc: [f64; 3]) -> R<u64> {
         let a = self.axis3(loc)?;
         self.ent(
@@ -469,6 +490,7 @@ impl<'a, W: Write> Exporter<'a, W> {
         )?;
 
         let mut site_shift = [0.0f64; 3];
+        let mut site_turn = 0.0f64;
         if let (Some(g), Schema::Ifc2x3) = (&geo, self.schema) {
             // IFC2x3 has no map conversion. The values go to property sets of the site, below.
             self.report.georeferenced = true;
@@ -526,8 +548,9 @@ impl<'a, W: Write> Exporter<'a, W> {
             // everything in the file is placed relative to the site, so the objects keep their
             // world coordinates. An import moves them back to the origin with the same shift.
             site_shift = [g.origin.x * 1000.0, g.origin.y * 1000.0, 0.0];
+            site_turn = g.rotation;
             self.note(format!(
-                "the georeference has no CRS (origin shift {}, {} m), so no map conversion is written: the shift is the place of the IfcSite",
+                "the georeference has no CRS (origin shift {}, {} m), so no map conversion is written: the shift and the rotation are the place of the IfcSite",
                 g.origin.x, g.origin.y
             ));
         }
@@ -553,7 +576,7 @@ impl<'a, W: Write> Exporter<'a, W> {
             ],
         )?;
 
-        self.site_placement = self.placement(None, site_shift)?;
+        self.site_placement = self.placement_turned(None, site_shift, site_turn)?;
         let (lat, lon) = match geo.as_ref().and_then(|g| g.lat_lon) {
             Some((lat, lon)) => (
                 Value::List(geo::compound_angle(lat).map(Value::Int).to_vec()),
