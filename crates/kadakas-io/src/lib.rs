@@ -371,27 +371,14 @@ pub(crate) fn absolute_path_text(path: &Path) -> Result<String, IoError> {
                 path.display()
             ))
         })?;
-    abs.to_str().map(strip_verbatim).ok_or_else(|| {
-        IoError::Option(format!(
-            "cannot keep a link to {}: the path is not text",
-            path.display()
-        ))
-    })
-}
-
-/// The canonical path on Windows has the prefix `\\?\` (`\\?\C:\x`, `\\?\UNC\server\share`). The
-/// link keeps the usual form (`C:\x`, `\\server\share`), which a person can read and which the
-/// checks of a link know.
-pub(crate) fn strip_verbatim(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
-        format!("\\\\{rest}")
-    } else if let Some(rest) = path.strip_prefix("\\\\?\\")
-        && rest.as_bytes().get(1) == Some(&b':')
-    {
-        rest.to_string()
-    } else {
-        path.to_string()
-    }
+    abs.to_str()
+        .map(kadakas_sys::paths::strip_verbatim_str)
+        .ok_or_else(|| {
+            IoError::Option(format!(
+                "cannot keep a link to {}: the path is not text",
+                path.display()
+            ))
+        })
 }
 
 /// Exports `doc` to a file. `format` defaults to the file extension.
@@ -416,22 +403,6 @@ pub fn export_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_verbatim_prefix_of_a_windows_path_is_taken_off() {
-        for (given, want) in [
-            ("\\\\?\\C:\\data\\a.dxf", "C:\\data\\a.dxf"),
-            (
-                "\\\\?\\UNC\\server\\share\\a.dxf",
-                "\\\\server\\share\\a.dxf",
-            ),
-            ("\\\\?\\Volume{1}\\a.dxf", "\\\\?\\Volume{1}\\a.dxf"),
-            ("C:\\data\\a.dxf", "C:\\data\\a.dxf"),
-            ("/data/a.dxf", "/data/a.dxf"),
-        ] {
-            assert_eq!(strip_verbatim(given), want, "{given}");
-        }
-    }
 
     #[test]
     fn a_link_to_a_file_is_made_from_its_bytes_and_a_bad_path_is_refused() {

@@ -1,6 +1,7 @@
 //! Platform helpers for Kadakas, in one place.
 //!
 //! - [`fsio`]: atomic file writes with a `.bak` copy and a flush to disk.
+//! - [`paths`]: the form of a path that people and agents see (no `\\?\` prefix).
 //! - [`process`]: process groups, kill of a whole process tree, process liveness.
 //! - [`dirs`]: the per-user config, data, state, runtime and cache folders.
 //! - [`sysinfo`]: the physical memory of the computer.
@@ -13,6 +14,7 @@
 pub mod agent;
 pub mod dirs;
 pub mod fsio;
+pub mod paths;
 pub mod process;
 pub mod sysinfo;
 pub mod tmp;

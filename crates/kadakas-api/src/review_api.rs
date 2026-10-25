@@ -323,6 +323,10 @@ pub(crate) fn resolve(s: &mut Session) {
             || why.contains("not in the file")
             || why.contains("cannot be read now")
             || why.contains("No such file")
+            // The same error on Windows.
+            || why.contains("cannot find the file specified")
+            || why.contains("cannot find the path specified")
+            || why.contains("the file is gone")
             || why.contains("not in the container");
         let note = if away {
             format!(

@@ -838,7 +838,7 @@ mod tests {
         let canonical = fs::canonicalize(&dwg).unwrap();
         assert_eq!(
             link.path,
-            crate::strip_verbatim(canonical.to_str().unwrap())
+            kadakas_sys::paths::strip_verbatim_str(canonical.to_str().unwrap())
         );
         assert_eq!(link, FileLink::of_bytes(&link.path, b"FAKEDWG\n"));
         let no_resources = ed

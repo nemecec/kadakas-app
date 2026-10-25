@@ -1380,7 +1380,9 @@ impl Session {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn check_dir(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
         if !self.paths.is_restricted() {
-            return std::fs::canonicalize(path).map_err(|e| e.to_string());
+            return std::fs::canonicalize(path)
+                .map(|p| kadakas_sys::paths::strip_verbatim(&p))
+                .map_err(|e| e.to_string());
         }
         self.paths.resolve(path, self.doc_dir.as_deref(), false)
     }

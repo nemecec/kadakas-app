@@ -80,11 +80,22 @@ impl PathPolicy {
         let canonical = if write {
             canonical_for_write(path)?
         } else {
-            std::fs::canonicalize(path)
-                .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+            std::fs::canonicalize(path).map_err(|e| {
+                // The text of an OS error differs by system: a missing file gets one text everywhere.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    format!(
+                        "cannot read {}: the file is gone or does not exist",
+                        path.display()
+                    )
+                } else {
+                    format!("cannot read {}: {e}", path.display())
+                }
+            })?
         };
+        // People and agents see the usual form of the path (no `\\?\` prefix on Windows). The
+        // checks below use the canonical form.
         let Some(roots) = &self.roots else {
-            return Ok(canonical);
+            return Ok(kadakas_sys::paths::strip_verbatim(&canonical));
         };
         // The folders of Kadakas hold the outbox of feedback (the proof that a person approved a
         // report), the settings and the trust lists. An agent never writes there, even if an
@@ -101,12 +112,12 @@ impl PathPolicy {
             .chain(doc_dir.iter())
             .any(|r| canonical.starts_with(r))
         {
-            return Ok(canonical);
+            return Ok(kadakas_sys::paths::strip_verbatim(&canonical));
         }
         let list: Vec<String> = roots
             .iter()
             .chain(doc_dir.iter())
-            .map(|r| r.display().to_string())
+            .map(|r| kadakas_sys::paths::strip_verbatim(r).display().to_string())
             .collect();
         Err(format!(
             "{} is outside the folders that agents may use ({}). The owner can allow a folder with --allow-dir",
