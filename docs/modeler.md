@@ -513,6 +513,7 @@ The edit changes nothing and gives a reason. The core text is English with ids, 
 - an input is stuck to other geometry (shares an edge or a vertex): make a group of it first
 - the result would be empty (no common volume for intersect, or the second solid holds the first for subtract)
 - the cut is too small, or a piece is cut only in part
+- a vertex of one solid lies off a face plane of the other by more than the plane tolerance (0.0025 mm) but not more than the length tolerance (0.01 mm). The piece is too short to draw and the vertex is too far off to count as on the face. The text names the distance. Move one solid by at least 0.01 mm along the face normal, or set the vertex exactly on the face
 - the result is not a closed solid (for example two solids that touch at an edge, which would leave an edge with four faces), its volumes do not fit the volumes of the inputs and `I`, or it would give the model a problem that it did not have
 - a limit would be passed: a cut makes at most `MAX_EDIT_EDGES` (10,000) new edges, and the result must fit the limits of the model
 

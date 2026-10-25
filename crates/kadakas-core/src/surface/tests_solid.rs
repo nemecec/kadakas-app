@@ -861,62 +861,139 @@ proptest! {
     /// volumes hold: union + intersection = sum, and subtract + intersection = the first.
     #[test]
     fn volumes_of_a_turned_box(angle in 0.05f64..3.0, tilt in 0.0f64..0.4, dx in 200.0f64..900.0, dy in 200.0f64..900.0, dz in 200.0f64..900.0) {
-        let a = ([0.0; 3], [K; 3]);
-        let (sin, cos) = angle.sin_cos();
-        let (st, ct) = tilt.sin_cos();
-        let corners: [P; 8] = std::array::from_fn(|i| {
-            let p = DVec3::new(
-                if i & 1 == 0 { -400.0 } else { 400.0 },
-                if i & 2 == 0 { -400.0 } else { 400.0 },
-                if i & 4 == 0 { -400.0 } else { 400.0 },
-            );
-            let z = DVec3::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos, p.z);
-            let t = DVec3::new(z.x, z.y * ct - z.z * st, z.y * st + z.z * ct);
-            [t.x + dx, t.y + dy, t.z + dz]
-        });
-        let mut m = SurfaceModel::new();
-        draw(&mut m, a);
-        draw_corners(&mut m, &corners);
-        let inward: Vec<FaceId> = m
-            .solid_report()
-            .shells
-            .iter()
-            .filter(|s| s.state == ShellState::Inverted)
-            .flat_map(|s| s.faces.clone())
-            .collect();
-        m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
-        let r = m.solid_report();
-        let solids: Vec<Shell> = r.solids().cloned().collect();
-        prop_assume!(solids.len() == 2);
-        let (fa, fb) = (solids[0].faces.clone(), solids[1].faces.clone());
-        let (va, vb) = (solids[0].volume, solids[1].volume);
-        let mut got = Vec::new();
-        for (o, x, y) in [
-            (SolidOp::Union, &fa, &fb),
-            (SolidOp::Intersect, &fa, &fb),
-            (SolidOp::Subtract, &fa, &fb),
-        ] {
-            let mut w = m.clone();
-            match op(&mut w, o, x, y) {
-                Ok(()) => {
-                    prop_assert!(w.check().is_valid(), "{o}: {:?}", w.check().problems);
-                    got.push(Some(total(&w)));
-                }
-                Err(e) => {
-                    prop_assert_eq!(&w, &m, "{}: {}", o, e);
-                    got.push(None);
-                }
+        let (corners, got, errors) = turned_box(angle, tilt, dx, dy, dz)?;
+        // Boxes that cross like this can be cut, unless a vertex of one box lies between the
+        // plane tolerance and ten length tolerances from a plane of the other (a near touching).
+        if got.iter().any(Option::is_none) {
+            prop_assert!(near_touching(&corners), "{got:?} {errors:?}");
+            for e in &errors {
+                prop_assert!(e.contains("too close to cut"), "{e}");
             }
         }
-        if let (Some(u), Some(i)) = (got[0], got[1]) {
-            prop_assert!(close(u + i, va + vb), "{u} {i} {va} {vb}");
-        }
-        if let (Some(s), Some(i)) = (got[2], got[1]) {
-            prop_assert!(close(s + i, va), "{s} {i} {va}");
-        }
-        // Boxes that cross like this always can be cut.
-        prop_assert!(got.iter().all(Option::is_some), "{got:?}");
     }
+}
+
+/// True if a vertex of one box lies within ten length tolerances of a face plane of the other
+/// box (and so can be a near touching that the solid tools refuse).
+fn near_touching(corners: &[P; 8]) -> bool {
+    let b: Vec<DVec3> = corners.iter().map(|c| DVec3::from_array(*c)).collect();
+    let a: Vec<DVec3> = (0..8)
+        .map(|i| {
+            DVec3::new(
+                if i & 1 == 0 { 0.0 } else { K },
+                if i & 2 == 0 { 0.0 } else { K },
+                if i & 4 == 0 { 0.0 } else { K },
+            )
+        })
+        .collect();
+    let limit = 10.0 * 0.01;
+    // The planes of a box: through the corner `0` or `7` with the normal along an edge.
+    let planes = |c: &[DVec3]| -> Vec<(DVec3, DVec3)> {
+        [1usize, 2, 4]
+            .iter()
+            .flat_map(|bit| {
+                let n = (c[*bit] - c[0]).normalize();
+                [(c[0], n), (c[7], n)]
+            })
+            .collect()
+    };
+    let near = |points: &[DVec3], planes: &[(DVec3, DVec3)]| {
+        points
+            .iter()
+            .any(|p| planes.iter().any(|(o, n)| n.dot(*p - *o).abs() <= limit))
+    };
+    near(&b, &planes(&a)) || near(&a, &planes(&b))
+}
+
+/// A turned and tilted box whose vertex lies 0.006 mm above the plane `y = K` of the first box
+/// (found on a CI runner with other trig results): between the plane tolerance (0.0025 mm) and
+/// the length tolerance (0.01 mm). The crossing piece is too short to draw and the vertex is too
+/// far off the face to count as on it, so all three operations are refused with a text that says
+/// so, and nothing changes.
+#[test]
+fn a_vertex_just_off_a_face_plane_is_refused_with_a_reason() {
+    let (corners, got, errors) = turned_box(
+        1.5396231483638576,
+        0.3945730627897836,
+        200.0,
+        796.1958056970052,
+        200.0,
+    )
+    .unwrap();
+    assert!(near_touching(&corners));
+    assert_eq!(got, [None, None, None]);
+    for e in &errors {
+        assert!(e.contains("lies 0.0058 mm from the plane of face"), "{e}");
+        assert!(e.contains("too close to cut"), "{e}");
+    }
+}
+
+/// The corners, the total volumes (`None` for a refusal) and the refusal texts.
+type Turned = ([P; 8], Vec<Option<f64>>, Vec<String>);
+
+/// The eight corners of the box of 800 mm turned about the vertical axis by `angle`, tilted by
+/// `tilt` and moved by `(dx, dy, dz)`, drawn next to the box `[0, K]^3`; the three operations on
+/// the two solids. Gives the corners, the total volumes of the results (`None` for a refusal,
+/// which changes nothing) and the texts of the refusals. The volume identities are asserted.
+fn turned_box(angle: f64, tilt: f64, dx: f64, dy: f64, dz: f64) -> Result<Turned, TestCaseError> {
+    let a = ([0.0; 3], [K; 3]);
+    let (sin, cos) = angle.sin_cos();
+    let (st, ct) = tilt.sin_cos();
+    let corners: [P; 8] = std::array::from_fn(|i| {
+        let p = DVec3::new(
+            if i & 1 == 0 { -400.0 } else { 400.0 },
+            if i & 2 == 0 { -400.0 } else { 400.0 },
+            if i & 4 == 0 { -400.0 } else { 400.0 },
+        );
+        let z = DVec3::new(p.x * cos - p.y * sin, p.x * sin + p.y * cos, p.z);
+        let t = DVec3::new(z.x, z.y * ct - z.z * st, z.y * st + z.z * ct);
+        [t.x + dx, t.y + dy, t.z + dz]
+    });
+    let mut m = SurfaceModel::new();
+    draw(&mut m, a);
+    draw_corners(&mut m, &corners);
+    let inward: Vec<FaceId> = m
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+    let r = m.solid_report();
+    let solids: Vec<Shell> = r.solids().cloned().collect();
+    if solids.len() != 2 {
+        return Err(TestCaseError::reject("not two solids"));
+    }
+    let (fa, fb) = (solids[0].faces.clone(), solids[1].faces.clone());
+    let (va, vb) = (solids[0].volume, solids[1].volume);
+    let mut got = Vec::new();
+    let mut errors = Vec::new();
+    for (o, x, y) in [
+        (SolidOp::Union, &fa, &fb),
+        (SolidOp::Intersect, &fa, &fb),
+        (SolidOp::Subtract, &fa, &fb),
+    ] {
+        let mut w = m.clone();
+        match op(&mut w, o, x, y) {
+            Ok(()) => {
+                prop_assert!(w.check().is_valid(), "{o}: {:?}", w.check().problems);
+                got.push(Some(total(&w)));
+            }
+            Err(e) => {
+                prop_assert_eq!(&w, &m, "{}: {}", o, e);
+                errors.push(e.to_string());
+                got.push(None);
+            }
+        }
+    }
+    if let (Some(u), Some(i)) = (got[0], got[1]) {
+        prop_assert!(close(u + i, va + vb), "{u} {i} {va} {vb}");
+    }
+    if let (Some(s), Some(i)) = (got[2], got[1]) {
+        prop_assert!(close(s + i, va), "{s} {i} {va}");
+    }
+    Ok((corners, got, errors))
 }
 
 // ---- curved and holed solids -----------------------------------------------------------------

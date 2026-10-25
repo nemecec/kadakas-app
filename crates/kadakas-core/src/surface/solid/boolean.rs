@@ -441,6 +441,35 @@ fn tidy(
     Ok(())
 }
 
+/// Why the crossing of the edge `e` through the face `f` could not be cut. When an end of the
+/// edge is a vertex that lies off the plane of the face by more than the plane tolerance but not
+/// by more than the length tolerance, the crossing piece is too short to draw and the vertex is
+/// too far off to count as on the face: the text says so and how to move the solid.
+fn not_cut_reason(sub: &SurfaceModel, e: EdgeId, f: FaceId, at: &str) -> String {
+    let (Some(edge), Some(face)) = (sub.edges.get(&e), sub.faces.get(&f)) else {
+        return format!(
+            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+        );
+    };
+    let near = edge
+        .v
+        .iter()
+        .map(|v| (*v, face.plane.distance(sub.vertices[v]).abs()))
+        .filter(|(v, d)| *d <= geom::tolerance_at(geom::size(sub.vertices[v])))
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    match near {
+        Some((v, d)) => {
+            let tol = geom::tolerance_at(geom::size(sub.vertices[&v]));
+            format!(
+                "vertex {v} lies {d:.4} mm from the plane of face {f} at {at}: that is too far to count as on the face and too close to cut it. Move one solid by at least {tol} mm along the normal of the face, or set the vertex exactly on the face"
+            )
+        }
+        None => format!(
+            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+        ),
+    }
+}
+
 /// Runs an operation on `m` (see the module documentation).
 pub(super) fn run(
     m: &mut SurfaceModel,
@@ -484,9 +513,7 @@ pub(super) fn run(
         .iter()
         .find(|p| matches!(p, Problem::NotIntersected(..)))
     {
-        return Err(cut(format!(
-            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
-        )));
+        return Err(cut(not_cut_reason(&sub, *e, *f, &at.to_string())));
     }
 
     // 3. Locate. A face that both solids use lies on the surface of both, looking the same way.
