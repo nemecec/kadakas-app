@@ -870,6 +870,14 @@ pub struct Outcome {
     /// `mesh3d_to_surface`). Left out when empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<serde_json::Value>,
+    /// How many objects lost their exact data (see `exact`) to the caps on its size. The notes
+    /// say it in words; the count lets a program say it in the language of the person.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub exact_capped: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Snapshot of the document parts that are not objects.
@@ -1301,6 +1309,9 @@ struct Tx<'a> {
     /// once, at its end, so a command that changes only data (`SetData`) does not scan all objects
     /// each time.
     batch_depth: usize,
+    /// What the caps on exact data took away in this command (`cap_exact`).
+    exact_notes: Vec<String>,
+    exact_capped: usize,
 }
 
 impl<'a> Tx<'a> {
@@ -1312,6 +1323,8 @@ impl<'a> Tx<'a> {
             added_set: HashSet::new(),
             removed: Vec::new(),
             batch_depth: 0,
+            exact_notes: Vec::new(),
+            exact_capped: 0,
         }
     }
 
@@ -2295,6 +2308,79 @@ impl<'a> Tx<'a> {
         }
     }
 
+    /// The caps on exact data (`exact::MAX_OBJECT_BYTES` for one object and
+    /// `exact::MAX_DOCUMENT_BYTES` for the document), for every way that a command can bring
+    /// payload bytes into the document: a new object, a copy, a changed shape. An object that
+    /// would pass a cap keeps its triangles and loses its payload, usable or not, and the
+    /// command says so in a note. An object that did not grow keeps what it has.
+    fn cap_exact(&mut self) {
+        use crate::exact::{MAX_DOCUMENT_BYTES, MAX_OBJECT_BYTES};
+        let bytes_of = |o: &Object| match &o.shape {
+            Shape::Mesh3d(m) => m.exact_bytes(),
+            _ => 0,
+        };
+        let mut cands: Vec<ObjectId> = Vec::new();
+        for id in &self.added {
+            if self.doc.object(*id).is_some_and(|o| bytes_of(o) > 0) {
+                cands.push(*id);
+            }
+        }
+        for (id, before) in &self.before {
+            if self
+                .doc
+                .object(*id)
+                .is_some_and(|a| bytes_of(a) > bytes_of(before))
+            {
+                cands.push(*id);
+            }
+        }
+        if cands.is_empty() {
+            return;
+        }
+        let mut base: usize = self.doc.objects.values().map(bytes_of).sum();
+        for id in &cands {
+            base -= self.doc.object(*id).map_or(0, bytes_of);
+        }
+        let (mut over_object, mut over_document) = (0usize, 0usize);
+        for id in cands {
+            let bytes = self.doc.object(id).map_or(0, bytes_of);
+            let reason = if bytes > MAX_OBJECT_BYTES {
+                over_object += 1;
+                true
+            } else if base + bytes > MAX_DOCUMENT_BYTES {
+                over_document += 1;
+                true
+            } else {
+                base += bytes;
+                false
+            };
+            if reason && let Some(Shape::Mesh3d(m)) = self.doc.object_mut(id).map(|o| &mut o.shape)
+            {
+                m.drop_exact();
+            }
+        }
+        self.exact_capped += over_object + over_document;
+        let who = |n: usize| {
+            if n == 1 {
+                "1 object keeps its triangles only".to_string()
+            } else {
+                format!("{n} objects keep their triangles only")
+            }
+        };
+        if over_object > 0 {
+            self.exact_notes.push(format!(
+                "{}: its exact data is over the limit of {MAX_OBJECT_BYTES} bytes for one object",
+                who(over_object)
+            ));
+        }
+        if over_document > 0 {
+            self.exact_notes.push(format!(
+                "{}: the exact data of the document would pass the limit of {MAX_DOCUMENT_BYTES} bytes",
+                who(over_document)
+            ));
+        }
+    }
+
     fn finish(
         self,
         meta_before: Meta,
@@ -2675,7 +2761,12 @@ impl Editor {
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            body(&mut tx, &mut out).and_then(|()| tx.check_result())
+            body(&mut tx, &mut out).and_then(|()| {
+                tx.cap_exact();
+                out.notes.append(&mut tx.exact_notes);
+                out.exact_capped += tx.exact_capped;
+                tx.check_result()
+            })
         }));
         let result = match ran {
             Ok(r) => r,

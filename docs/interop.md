@@ -11,6 +11,7 @@ The SketchUp file format is not read and not written. No program of that kind wa
 | OBJ | `import.file`, colors from the MTL file | `export.file` format `obj`, with an MTL file |
 | STL | binary and ASCII | binary (default) and ASCII |
 | glTF and GLB | `.gltf` with embedded or loaded buffers, and `.glb` | `gltf` and `glb` |
+| STEP | `.step` and `.stp` (IOP-11), AP203, AP214 and AP242 | not done |
 | IFC | the IFC import of IOP-03 | surface models as faceted solids |
 | DXF | 3DFACE, POLYFACE and polygon meshes (IOP-09) | 3DFACE, POLYFACE and MESH |
 
@@ -66,11 +67,13 @@ Every limit is checked before the work it protects. A refusal changes nothing an
 
 | Limit | Default | Reason |
 |---|---|---|
-| File size, checked before the file is read | 512 MiB, and never above `import_text_bytes` of the session | `mesh_file_too_large` |
+| File size, checked before the file is read | 512 MiB (STEP: 128 MiB), and never above `import_text_bytes` of the session | `mesh_file_too_large` |
 | Triangles in all parts | 8,000,000 (`max_triangles`) | `mesh_too_many_triangles` |
 | Vertices in all parts | 4,000,000 (`max_vertices`) | `mesh_too_many_vertices` |
 | Memory estimated from the counts | 2 GiB | `mesh_too_much_memory` |
 | Parts | 5,000 | `mesh_too_many_parts` |
+
+STEP files have limits of their own, each with its own reason: `mesh_too_many_entities` (the entities of the file), `mesh_too_many_instances` (the uses of products in an assembly), `mesh_too_many_copies` (the bodies that mapped items and repeated products would copy), `mesh_too_much_work` and `mesh_too_much_time` (see Guards of STEP). All are `limit` errors.
 
 Other refusals: `mesh_truncated` (the file ends too soon, with `have` and `need`), `mesh_not_finite` (NaN or infinity), `mesh_out_of_range` (a coordinate over 1,000 km), `mesh_bad_index` (a face names a vertex that does not exist), `mesh_malformed`, `mesh_unsupported` (Draco, Meshopt, quantized or sparse glTF data, a glTF version other than 2) and `mesh_empty`. The size limits are `limit` errors. The others are validation errors. A reader never panics. A test feeds it random bytes and damaged files.
 
@@ -109,6 +112,134 @@ For an agent:
 - The IFC import takes the same options (`to_surface`, `soften_below_angle` and `surface_tolerance`) and converts the meshes it made.
 
 For a person, the import window of the app and of the modeler (File > Import) asks "Soften edges under an angle?" for a mesh file. It is off by default. The angle is 20 degrees. When it is on, the window shows how many edges would be softened. The count reads and converts the file in the window, so it runs only while the question is on, and only for files up to 32 MB. A bigger file is imported with the same softening and not counted before. The answer is kept when the person imports, not when the window is cancelled. It is kept in the prefs of the program (`import_soften` in `prefs.json` of the app and in `modeler.json` of the modeler) and comes back at the next import.
+
+## STEP files (IOP-11)
+
+A STEP file (ISO 10303-21 text) holds the exact geometry of a product from a manufacturer. `import.file` cuts it into triangles on load. Each result is a `mesh3d` object that also keeps the exact surfaces (see `docs/exact-solids.md`). Exports are not done.
+
+```json
+{"method": "import.file", "params": {"path": "/data/bench.step", "options": {"tolerance": 0.05}}}
+```
+
+The reader is the crate `kadakas-step`. It uses the public knowledge of the format and no CAD program. No third-party crate was added. `truck-stepio` and `ruststep` were not chosen. They add a large dependency tree. Our own reader is small and keeps to our limits.
+
+### What is read
+
+| Part of the file | Result |
+|---|---|
+| Schemas AUTOMOTIVE_DESIGN (AP214), CONFIG_CONTROL_DESIGN (AP203), AP242 | read. Another schema name gives a note and the file is read the same way |
+| MANIFOLD_SOLID_BREP, BREP_WITH_VOIDS, FACETED_BREP | solids. A closed shell with inward normals is turned |
+| SHELL_BASED_SURFACE_MODEL, FACE_BASED_SURFACE_MODEL | open surfaces |
+| TRIANGULATED_FACE, TRIANGULATED_FACE_SET, TRIANGULATED_SURFACE_SET, COMPLEX_TRIANGULATED_FACE and SURFACE_SET, TESSELLATED_SOLID, TESSELLATED_SHELL | the given triangles are taken. These meshes have no exact data |
+| GEOMETRIC_CURVE_SET, GEOMETRIC_SET | 3D polylines (`polyline3d`) |
+| PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE | exact |
+| SURFACE_OF_REVOLUTION, SURFACE_OF_LINEAR_EXTRUSION | the profile curve is a line, circle, ellipse, spline, polyline, trimmed or composite curve |
+| B_SPLINE_SURFACE_WITH_KNOTS, BEZIER, QUASI_UNIFORM and UNIFORM surfaces, also rational (complex entity with RATIONAL_B_SPLINE_SURFACE) | degree up to 25 |
+| RECTANGULAR_TRIMMED_SURFACE | the basis surface. The bounds of the faces cut it |
+| LINE, CIRCLE, ELLIPSE, B_SPLINE_CURVE_WITH_KNOTS (also rational), BEZIER, QUASI_UNIFORM and UNIFORM curves, POLYLINE, TRIMMED_CURVE, COMPOSITE_CURVE, SURFACE_CURVE, SEAM_CURVE | edge curves |
+| FACE_BOUND, FACE_OUTER_BOUND, ORIENTED_EDGE, ORIENTED_FACE, ORIENTED_CLOSED_SHELL, POLY_LOOP | holes and orientation flags are used |
+| PRODUCT, PRODUCT_DEFINITION, SHAPE_DEFINITION_REPRESENTATION | the product name is the name of the mesh |
+| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances. A usage with no placement sits at the origin and a note counts it. A product that only mapped items use shows where they place it, not at the origin. A usage whose parent maps the product is that mapped item, unless the usage has a transformation that no mapped item has: then it is one more use |
+| MAPPED_ITEM with REPRESENTATION_MAP | an instance of a representation |
+| LENGTH_UNIT as SI_UNIT or CONVERSION_BASED_UNIT, PLANE_ANGLE_UNIT | millimeters, meters, inches and so on, for each representation |
+| STYLED_ITEM with COLOUR_RGB or a predefined colour, SURFACE_STYLE_TRANSPARENT | colour of a solid, a shell or a face. A part gets one mesh for each colour |
+
+### Not read
+
+- Hyperbolas, parabolas, offset curves and surfaces, and degenerate tori. The edge becomes a straight line or the face is skipped. The report says so.
+- Pcurves. Faces are cut from the 3D edges and the surface, not from the curves in the parameter space.
+- Wireframe edges without faces, points, vertex loops, product structure of kinematics, PMI, GD&T, layers and visibility.
+- Anchor and reference sections of AP242 edition 2. Only the data section is read.
+- A sphere or cone face with a loop around the axis is closed through the pole on its side.
+- A face with a loop around a torus in the v direction is skipped.
+
+### How faces are cut
+
+- The boundary of each face is cut first. An edge is cut once and both faces use the same points, so a closed solid has no cracks. Equal points are joined at the end (0.1 percent of the tolerance in millimeters, at least 1 micrometer).
+- A plane is cut by ear clipping with the holes joined by bridges. Other surfaces are cut in the parameters (u, v) of the surface. The angle of a periodic surface is made continuous along each loop. A pole of a sphere or cone is a line in (u, v). It is cut into many points at one place.
+- A triangle is split where the surface leaves it by more than the tolerance. It is also split where the normal turns by more than the angle.
+- The points of the boundary never move.
+- Edges are flipped to keep the triangles round (Delaunay in a chart scaled to the size of the surface).
+- A B-spline face is cut the same way. The boundary is placed on the surface by a search with Newton steps. The limits are the degree (25), the control points (262,144 for a surface), and 200,000 triangles for a face. A face over its limit is cut as far as the limit allows, and a note says so.
+- The default tolerance is 1/2000 of the diagonal of the points of the file, between 0.01 and 0.5 mm. The default angle is 15 degrees. A larger tolerance gives fewer triangles.
+
+### Options
+
+| Option | Meaning |
+|---|---|
+| `unit` | The unit of the numbers. It replaces the unit of the file. Default: the file |
+| `tolerance` | mm, 0.001 to 1000. The largest distance of a triangle from its surface |
+| `angle` | degrees, 1 to 90, default 15 |
+| `per_product` | true (default): one mesh for each product and colour. false: one for each body and colour |
+| `join` | one mesh for the whole file |
+| `keep_exact` | true (default): the mesh keeps its exact surfaces |
+| `to_surface`, `soften_below_angle`, `preview`, `center`, `layer`, `name`, `max_*` | as for the other mesh formats. A part that becomes a surface model loses its exact data, and a note says so |
+
+### The report
+
+- `report.step.entities_read` equals `entities_used` plus `entities_skipped`. Every entity is in one of them.
+- `report.step.used` lists the entity types that were read.
+- `skipped` lists the others, each with a reason and a count.
+- `tessellated` lists the faces and triangles by kind of surface.
+- `products`, `instances`, `length_unit_mm`, `unit_from_file`, `tolerance_mm`, `angle_deg` and `welded_vertices` say what was done.
+- `length_unit_mm` has one value for each unit in the file.
+- A color of a surface wins over the color of a curve. An overriding style wins over the style it overrides, in any order of the file. A style for one instance of an item is not applied to all instances, and the report counts it as skipped.
+- `report.exact` says how many meshes keep their exact data and why some do not. `report.curves` counts the 3D polylines.
+- A file with nothing to read is refused with `mesh_unsupported` or `mesh_empty` and the reasons. Damaged files give `mesh_truncated` or `mesh_malformed`.
+
+### Guards
+
+A STEP file is not trusted. These limits hold:
+
+- values nest to 48 levels, and the file has at most 5 million entities
+- the parser stops at the entity limit and at an estimate of its memory (3 GiB), before the file is parsed in full
+- a STEP file has at most 128 MiB (64 MiB in the browser build). The reader takes 9 to 14 times the size of the file in memory, measured with `/usr/bin/time -l` on a release build: a file of 5.1 MB took 47 MB, one of 19.5 MB with 475,000 triangles took 233 MB, and one of 30.6 MB with 390,000 triangles took 427 MB. The other formats allow 512 MiB
+- vertices, triangles and memory have the limits of the other mesh formats
+- the degree and the control points are limited as above
+- a curve has at most 200,000 points, and an assembly has at most 32 levels
+- an assembly has at most 20,000 instances. Every use of a product counts, also in a product that has no shape
+- the copies of mapped items are counted before they are made
+- a counter of work stops files that ask for much time and make little output. A step is about 50 ns on a current computer. A surface evaluation takes a few steps and a triangle of a curved face about 50. A file gets 60 million steps, and 100 more for each triangle that the reader cut from surfaces (`max_work` and `work_per_triangle`). A copy of a triangle, or a triangle that the file gives, earns nothing. A file with 8 million triangles gets 860 million. Faces that give no triangles count too, and so does the scan for the size of the file (once). The error is `mesh_too_much_work`
+- a clock is a guard next to the counter: 60 seconds (`max_millis`), `mesh_too_much_time`. It is for slow computers and for builds without optimisation. The browser build has no clock and uses the counter only.
+- the measured numbers are in the table below
+
+Measured on a release build (`tests/release_probes.rs` and the `probe` example, memory with `/usr/bin/time -l`):
+
+| File | Time | Result |
+|---|---|---|
+| 5 MB with 20,000 mapped items of an empty representation and 100,000 points | 35 ms (was 39.8 s) | no triangles |
+| 19.5 MB with 2,500 plates with a hole, 475,000 triangles | 1.4 s (was 8.8 s) | read, 26.6 million steps |
+| the same at a tolerance of 0.005 mm, 1.2 million triangles | 4.7 s | read, 92 million steps (it was refused after 3.8 s) |
+| the same at 0.002 mm, 1.9 million triangles | 8.8 s | read, 182 million steps |
+| 360 KB with 200 faces of 4,800 points on one loop | 0.8 s | read, 33 million steps |
+| a face with 100 x 100 square holes (2.8 MB) | 0.14 s (was 4.0 s) | read, 60,000 triangles |
+| a face with 140 x 140 square holes (5.6 MB) | 0.27 s (was 15.7 s) | read, 117,600 triangles |
+| a face with 30,000 triangular holes (7 MB) | 0.4 s (was 30 s) | read, 150,000 triangles |
+| a face with 100,000 triangular holes (24 MB) | 1.9 s, 487 MB (was 530 s, 1.2 GB) | read, 500,000 triangles |
+| small holes on the diagonal of a face, 1,000 / 10,000 / 90,000 holes (34 MB) | 0.02 s / 0.2 s / 2.0 s (was 0.13 s / 4.0 s / 157 s) | read, 540,000 triangles for 90,000 |
+| 10,000 holes in one row of a plate of 1 m (the price was too low) | 0.2 s (was refused) | read, 60,002 triangles |
+| 30,000 holes in one cell of the first grid, in a face of 1,000 km | 0.4 s | read |
+| a comb of 192,000 points / a circle and a star of 390,000 points | 0.5 s (was 2.9 s) / 1.0 s | read |
+| 32 MB with 6 mapped copies of a mesh of a million triangles, then 60,000 faces that give nothing | 4.6 s (was 54 s) | `mesh_too_much_work` |
+| 1.4 MB with 30,000 faces on a revolution of a line, none cut | 0.5 s | `mesh_too_much_work` |
+| 3,000 faces on a revolution of a spline with 2,000 control points | 4.4 s | `mesh_too_much_work` |
+| the same, with no counter | 60 s | `mesh_too_much_time` |
+
+The holes of a face are joined to its outline, and the polygon is cut by ear clipping, with quadtrees: one of all the segments (the outline, the holes and the bridges) and one of the corners that bend inward. A hole costs the boxes around its bridge, not the size of the polygon, also when the holes are packed in a band. The bridge goes to the nearest corner that the hole can see. A hole that touches the polygon at a corner, or with a corner on an edge, is joined at that point with no bridge. Holes that touch the outline or each other in several places are cut correctly or refused. The fuzz tests with 10,000 cases of every kind found no wrong result. Before the cut, repeated points and holes that are the same are removed, and the report counts them in a note. The result is checked against the outline less the holes. If the areas differ or a triangle faces the wrong way, the face is left out with a reason.
+
+Every step of the cutting is counted. The price of a polygon is 1,200 steps for each hole and 260 for each point, as measured on holes in rows, on diagonals and in grids, and on circles, stars, combs and zigzags (2 to 8 ns for a step). The cutting stops at one million steps and twice the price. A face that needs more is left out, with a note and the reason, and the steps count against the work of the whole job, which stops when that is over its limit. Ten steps are one unit of work.
+
+One step is about 50 ns on curved faces (10 to 19 thousand steps for each millisecond on a sphere, a torus, a revolved solid and a B-spline patch, at three tolerances) and 20 to 40 thousand steps for each millisecond on planes and on the plates. So 60 million steps are about 4 seconds of work with no output. The 100 steps for each triangle are about 5 microseconds, which is about what a triangle takes (3 to 7 microseconds on a curved face, under 1 on a plane).
+
+References that point to themselves end. Numbers that are not finite or larger than 1e12 are not used. A number that the file defines twice uses the first definition, and a note counts these. The tests cut files in many places, damage bytes, make cycles and use huge counts.
+
+### Tests
+
+- `tests/data/step/make_step_files.py` writes the test files. They hold a box, a cylinder, a sphere, a torus and a cone. They also hold a revolved solid, an extruded solid, a plate with a hole and B-spline patches. More files hold a faceted solid, an AP242 tessellated solid, curves, colours, units and an assembly with two placements.
+- The Rust tests compare volumes and areas with the analytic values and check that the solids are closed.
+- A property test uses random boxes and cylinders in random places.
+- A public file of CadQuery (Apache-2.0) is fetched at run time and is not in the repository. The test skips without a network.
+- `tests/behavior/test_step.py` compares with OpenCascade when `OCP` is installed and skips when it is not.
 
 ## Export
 
@@ -313,21 +444,27 @@ The names `2000`, `2004`, `2013`, `2018` and `R12` work too. The export window h
 | `mesh.to_surface` | `crates/kadakas-api/src/mesh_api/convert.rs` |
 | IFC export of surface models | `crates/kadakas-ifc/src/export/faceted.rs` |
 | DXF export of surface models | `crates/kadakas-io/src/dxf/export.rs` and `export/native.rs` |
+| STEP reader (Part 21, products, faces, tessellation) | `crates/kadakas-step` (`part21`, `read_brep`, `tess`, `mesh2d`, `assembly`) |
+| Exact surfaces and curves, the payload of a mesh | `crates/kadakas-core/src/exact` |
+| `mesh3d.exact_info`, `mesh3d.retessellate` | `crates/kadakas-api/src/mesh_api/exact.rs` |
 | The form of the windows | `crates/kadakas-ui-core/src/mesh_import.rs` |
 | The windows | `crates/kadakas-app/src/io_dialog.rs` and `crates/kadakas-modeler/src/interop.rs` |
 
-The parsers are written for Kadakas. No new third-party crate was added, so the notices and the About list have nothing new.
+The parsers are written for Kadakas. No new third-party crate was added, so the About list has nothing new. The notices only list the new workspace crate.
 
 ## Tests
 
 - `kadakas-meshio`: unit tests for every reader and the STL writer, damaged and hostile files, and a property test with random bytes.
 - `kadakas-core`: tests of the conversion with cubes, spheres, grids with holes, welds, slivers, limits and soften counts, a property test on random terrain and spheres, and the command tests (`tests/mesh_to_surface.rs`).
 - `kadakas-api/tests/meshio.rs`: a U shaped prism whose outline has corners on a line (watertight through every format), the place of the model after a round trip, hostile glTF files, round trips of a closed slab with a hole through OBJ, STL, ASCII STL, glTF and GLB (the same volume, area and face count), a property test on random prisms and terrain, options, guards, refusals and the path policy.
+- `kadakas-step`: the Part 21 reader, the test files, the hostile files and a property test (see STEP files).
+- `kadakas-api/tests/step.rs`: the import through the API, the report, the exact data, the two new methods, a move and a turn, stale data, the size caps and a save and load.
 - `kadakas-ifc` and `kadakas-io`: the entities of the surface export.
 - `tests/behavior/test_meshio.py`: the checks of IfcOpenShell (the IFC of surface models), ezdxf (the DXF) and glTF validation. They skip when the tool is missing.
 
 ## Not done
 
+- STEP export, PMI, GD&T and kinematics. Textures of STEP files. See the list in the STEP section.
 - Textures and materials of OBJ and glTF are not read. Only the base color is kept.
 - Colors of single triangles of an STL file, vertex colors and normals are not read.
 - glTF with Draco, Meshopt or quantized data, and sparse accessors, are refused.

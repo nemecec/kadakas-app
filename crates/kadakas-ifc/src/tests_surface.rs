@@ -51,6 +51,8 @@ fn cube(z0: f64) -> Mesh3d {
             .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
             .collect(),
         color: None,
+        exact: None,
+        exact_unusable: None,
     }
 }
 
@@ -79,6 +81,8 @@ fn plate_with_hole() -> Mesh3d {
         vertices,
         triangles,
         color: Some(Color([10, 120, 200, 255])),
+        exact: None,
+        exact_unusable: None,
     }
 }
 

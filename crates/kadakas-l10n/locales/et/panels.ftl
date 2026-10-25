@@ -1,6 +1,9 @@
 ## panels: panels.rs
 
 panels-error = Viga: { $e }
+panels-exact-capped = Täpseid andmeid ei säilitatud { $count } objekti jaoks, sest need ületavad suuruse piiri. Kolmnurgad jäid alles.
+panels-command-notes = Tehtud. { $notes }
+panels-command-notes-count = Tehtud, märkusi: { $count }.
 panels-file = Fail
 panels-new = Uus
 panels-open = Ava...

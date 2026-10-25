@@ -33,6 +33,8 @@ fn cube_mesh() -> Mesh3d {
             .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
             .collect(),
         color: Some(Color([200, 10, 10, 255])),
+        exact: None,
+        exact_unusable: None,
     }
 }
 
@@ -145,6 +147,8 @@ fn a_refusal_changes_nothing() {
             vertices: v,
             triangles: t,
             color: None,
+            exact: None,
+            exact_unusable: None,
         })),
     );
     let before = ed.doc().clone();

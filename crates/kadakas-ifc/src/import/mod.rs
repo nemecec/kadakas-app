@@ -1112,6 +1112,8 @@ impl<'a> Importer<'a> {
             vertices: m.v,
             triangles: m.t,
             color,
+            exact: None,
+            exact_unusable: None,
         }));
         if self
             .b

@@ -1,7 +1,8 @@
 //! The import of mesh files in the windows (MOD-12), without egui.
 //!
-//! The app and the modeler show the same form for an OBJ, STL or glTF file: the unit and the up
-//! axis of the file, and the question "Soften edges under an angle?" (off by default, the angle
+//! The app and the modeler show the same form for an OBJ, STL, glTF or STEP file: the unit and the
+//! up axis of the file (a STEP file: the unit, the tolerance of the tessellation, one mesh for
+//! each product, and whether the exact surfaces are kept), and the question "Soften edges under an angle?" (off by default, the angle
 //! 20 degrees). The form builds the parameters of `import.file`, so the window and an agent use
 //! one code path. The preview asks `import.file` with `preview: true`, which reads the file,
 //! converts the mesh and answers with the number of edges that the angle would soften, and
@@ -61,6 +62,8 @@ pub enum MeshKind {
     Stl,
     /// glTF and GLB: always meters, Y up.
     Gltf,
+    /// STEP (IOP-11): Z up in millimeters. The unit comes from the file.
+    Step,
 }
 
 /// The mesh format of a file, by its extension.
@@ -74,6 +77,7 @@ pub fn kind_of(path: &Path) -> Option<MeshKind> {
         Some("obj") => Some(MeshKind::Obj),
         Some("stl") => Some(MeshKind::Stl),
         Some("gltf" | "glb") => Some(MeshKind::Gltf),
+        Some("step" | "stp") => Some(MeshKind::Step),
         _ => None,
     }
 }
@@ -81,7 +85,12 @@ pub fn kind_of(path: &Path) -> Option<MeshKind> {
 impl MeshKind {
     /// True for the formats whose unit and up axis the person may set.
     pub fn takes_frame(self) -> bool {
-        self != MeshKind::Gltf
+        matches!(self, MeshKind::Obj | MeshKind::Stl)
+    }
+
+    /// True for a STEP file, whose unit is the unit of the file unless the person chooses.
+    pub fn is_step(self) -> bool {
+        self == MeshKind::Step
     }
 
     /// The unit of the format when the person chooses none.
@@ -117,7 +126,16 @@ pub struct MeshImportForm {
     /// Move the model to the origin.
     pub center: bool,
     pub soften: SoftenPref,
+    /// STEP: the largest distance of a triangle from the surface in mm. `None`: from the size.
+    pub tolerance: Option<f64>,
+    /// STEP: one mesh for each product (default) or for each body.
+    pub per_product: bool,
+    /// STEP: keep the exact surfaces next to the triangles (default).
+    pub keep_exact: bool,
 }
+
+/// The smallest and largest tolerance of the form in mm, as `import.file` takes them.
+pub const TOLERANCE_RANGE: (f64, f64) = (0.001, 1000.0);
 
 impl MeshImportForm {
     /// The form for a file, or `None` when the file is not a mesh file. The soften answer comes
@@ -131,6 +149,9 @@ impl MeshImportForm {
             y_up: None,
             center: false,
             soften: soften.valid(),
+            tolerance: None,
+            per_product: true,
+            keep_exact: true,
         })
     }
 
@@ -144,6 +165,24 @@ impl MeshImportForm {
             }
             if let Some(up) = self.y_up {
                 o.insert("up_axis".into(), json!(if up { "y" } else { "z" }));
+            }
+        }
+        if self.kind.is_step() {
+            if let Some(u) = self.unit {
+                o.insert("unit".into(), json!(UNITS[u.min(UNITS.len() - 1)]));
+            }
+            if let Some(t) = self.tolerance {
+                let t = if t.is_finite() { t } else { TOLERANCE_RANGE.0 };
+                o.insert(
+                    "tolerance".into(),
+                    json!(t.clamp(TOLERANCE_RANGE.0, TOLERANCE_RANGE.1)),
+                );
+            }
+            if !self.per_product {
+                o.insert("per_product".into(), json!(false));
+            }
+            if !self.keep_exact {
+                o.insert("keep_exact".into(), json!(false));
             }
         }
         if self.center {
@@ -164,15 +203,76 @@ impl MeshImportForm {
     }
 
     /// The numbers that decide whether the preview must run again.
-    pub fn preview_key(&self) -> (Option<usize>, Option<bool>, bool, bool, u64) {
+    pub fn preview_key(&self) -> PreviewKey {
         (
             self.unit,
             self.y_up,
             self.center,
             self.soften.on,
             self.soften.angle.to_bits(),
+            self.tolerance.map(f64::to_bits),
+            self.per_product,
         )
     }
+}
+
+/// The choices that change what the preview counts.
+pub type PreviewKey = (
+    Option<usize>,
+    Option<bool>,
+    bool,
+    bool,
+    u64,
+    Option<u64>,
+    bool,
+);
+
+/// The name of a kind of surface in the language of the window.
+fn kind_name(kind: &str) -> String {
+    match kind {
+        "plane" => tr!("meshio-ui-kind-plane"),
+        "cylinder" => tr!("meshio-ui-kind-cylinder"),
+        "cone" => tr!("meshio-ui-kind-cone"),
+        "sphere" => tr!("meshio-ui-kind-sphere"),
+        "torus" => tr!("meshio-ui-kind-torus"),
+        "revolution" => tr!("meshio-ui-kind-revolution"),
+        "extrusion" => tr!("meshio-ui-kind-extrusion"),
+        _ => tr!("meshio-ui-kind-spline"),
+    }
+}
+
+/// The sentence of Object Info about the exact data of a mesh, or `None` for a mesh without.
+/// A payload that is out of step with the triangles says so instead of listing its faces.
+pub fn exact_line(m: &kadakas_core::mesh3d::Mesh3d) -> Option<String> {
+    exact_line_with(m, m.exact_state())
+}
+
+/// Like [`exact_line`], with the state of the payload known already. Finding it takes a pass
+/// over the mesh, so a caller that draws every frame keeps it for each revision.
+pub fn exact_line_with(
+    m: &kadakas_core::mesh3d::Mesh3d,
+    state: Option<kadakas_core::exact::State>,
+) -> Option<String> {
+    use kadakas_core::exact::State;
+    let Some(e) = m.exact.as_ref() else {
+        return m
+            .exact_unusable
+            .as_ref()
+            .map(|u| tr!("meshio-ui-exact-unusable", reason = u.reason.clone()));
+    };
+    if state == Some(State::Stale) {
+        return Some(tr!("meshio-ui-exact-stale"));
+    }
+    let kinds: Vec<String> = e
+        .counts()
+        .iter()
+        .map(|(k, n)| format!("{} \u{d7} {n}", kind_name(k)))
+        .collect();
+    Some(tr!(
+        "meshio-ui-exact-kept",
+        faces = e.faces.len(),
+        kinds = kinds.join(", ")
+    ))
 }
 
 /// What the preview found, from the answer of `import.file`.
@@ -524,5 +624,139 @@ mod tests {
         assert_eq!(unit_name("furlong"), "furlong");
         assert_eq!(stl_export_options(true), json!({"encoding": "ascii"}));
         assert_eq!(stl_export_options(false), json!({}));
+    }
+
+    #[test]
+    fn a_step_file_has_unit_tolerance_product_and_exact_choices() {
+        let mut f = form("part.STEP");
+        assert_eq!(f.kind, MeshKind::Step);
+        assert!(f.kind.is_step() && !f.kind.takes_frame());
+        assert_eq!(kind_of(Path::new("a.stp")), Some(MeshKind::Step));
+        // The defaults write nothing: the file decides.
+        assert_eq!(f.params(false)["options"], json!({}));
+        f.unit = Some(4);
+        f.tolerance = Some(0.2);
+        f.per_product = false;
+        f.keep_exact = false;
+        f.center = true;
+        let o = f.params(false)["options"].clone();
+        assert_eq!(o["unit"], "inch");
+        assert_eq!(o["tolerance"], 0.2);
+        assert_eq!(o["per_product"], false);
+        assert_eq!(o["keep_exact"], false);
+        assert_eq!(o["center"], true);
+        assert!(o.get("up_axis").is_none());
+        // A number outside the range is brought into it.
+        f.tolerance = Some(5000.0);
+        assert_eq!(f.params(false)["options"]["tolerance"], 1000.0);
+        f.tolerance = Some(f64::NAN);
+        assert_eq!(f.params(false)["options"]["tolerance"], 0.001);
+        // The preview changes with the choices that change the count.
+        let a = f.preview_key();
+        f.per_product = true;
+        assert_ne!(a, f.preview_key());
+        // The other formats do not write the STEP options.
+        let mut m = form("a.obj");
+        m.tolerance = Some(1.0);
+        m.keep_exact = false;
+        assert!(m.params(false)["options"].get("tolerance").is_none());
+        assert!(m.params(false)["options"].get("keep_exact").is_none());
+    }
+
+    #[test]
+    fn object_info_says_what_exact_data_is_kept() {
+        use kadakas_core::exact::{ExactFace, ExactShell, ExactSolid, Surface};
+        let mut m = kadakas_core::mesh3d::Mesh3d {
+            vertices: vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::Y],
+            triangles: vec![[0, 1, 2]],
+            ..Default::default()
+        };
+        assert!(exact_line(&m).is_none());
+        let face = |surface| ExactFace {
+            shell: 0,
+            surface,
+            same_sense: true,
+            flip: false,
+            loops: Vec::new(),
+            color: None,
+            source: 0,
+        };
+        let solid = ExactSolid {
+            version: 1,
+            product: String::new(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: Vec::new(),
+            edges: Vec::new(),
+            shells: vec![ExactShell {
+                closed: true,
+                outward: None,
+            }],
+            faces: vec![
+                face(Some(Surface::Plane {
+                    f: glam::DAffine3::IDENTITY,
+                })),
+                face(Some(Surface::Cylinder {
+                    f: glam::DAffine3::IDENTITY,
+                    r: 2.0,
+                })),
+                face(Some(Surface::Cone {
+                    f: glam::DAffine3::IDENTITY,
+                    r: 2.0,
+                    angle: 0.2,
+                })),
+                face(Some(Surface::Sphere {
+                    f: glam::DAffine3::IDENTITY,
+                    r: 2.0,
+                })),
+                face(Some(Surface::Torus {
+                    f: glam::DAffine3::IDENTITY,
+                    big: 5.0,
+                    small: 1.0,
+                })),
+                face(None),
+            ],
+            mesh_hash: 0,
+            extra: Default::default(),
+        };
+        m.set_exact(solid);
+        let en = exact_line(&m).unwrap();
+        assert!(en.starts_with("Exact data kept: 6 faces ("), "{en}");
+        assert!(
+            en.contains("cylinder \u{d7} 1") && en.contains("plane \u{d7} 2"),
+            "{en}"
+        );
+        let et = kadakas_l10n::with_language("et", || exact_line(&m).unwrap());
+        assert!(et != en && et.contains("silinder"), "{et}");
+        // Edited triangles: the line says that the data no longer fits.
+        m.vertices[0].z = 1.0;
+        let stale = exact_line(&m).unwrap();
+        assert!(stale.contains("edited"), "{stale}");
+        // One face is "1 face" and "1 tahk".
+        let mut one = m.clone();
+        one.exact.as_mut().unwrap().faces.truncate(1);
+        let line = exact_line_with(&one, Some(kadakas_core::exact::State::Fresh)).unwrap();
+        assert!(
+            line.contains("1 face (") && !line.contains("faces"),
+            "{line}"
+        );
+        let et = kadakas_l10n::with_language("et", || {
+            exact_line_with(&one, Some(kadakas_core::exact::State::Fresh)).unwrap()
+        });
+        assert!(et.contains("1 tahk ("), "{et}");
+        // A payload that this program cannot use is named as such.
+        let mut raw = serde_json::to_value(&one).unwrap();
+        raw["exact"]["version"] = serde_json::json!(9);
+        let later: kadakas_core::mesh3d::Mesh3d = serde_json::from_value(raw).unwrap();
+        let line = exact_line(&later).unwrap();
+        assert!(
+            line.contains("cannot use") && line.contains("version 9"),
+            "{line}"
+        );
+        // The other kinds have names too.
+        for k in ["revolution", "extrusion", "spline"] {
+            assert!(!kind_name(k).is_empty());
+        }
     }
 }

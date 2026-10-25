@@ -20,3 +20,6 @@
 
 # DXF files in the binary form (text DXF stays text).
 *_binary.dxf binary
+
+# STEP files are compared and cut by their text: they always end lines with LF.
+tests/data/step/*.step text eol=lf

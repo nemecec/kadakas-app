@@ -19,6 +19,7 @@ param_enum! {
         Stl = "stl",
         Gltf = "gltf",
         Glb = "glb",
+        Step = "step" | "stp",
     }
 }
 

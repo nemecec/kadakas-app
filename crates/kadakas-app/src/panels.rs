@@ -141,6 +141,17 @@ pub fn run_command(session: &mut Session, cmd: &Command, status: &mut String) ->
         Ok(out) => {
             let doc = &session.editor.doc();
             session.selection.retain(|id| doc.object(*id).is_some());
+            // What the command did that the person did not ask for.
+            if out.exact_capped > 0 {
+                *status = tr!("panels-exact-capped", count = out.exact_capped);
+            } else if !out.notes.is_empty() {
+                // The notes of the core are English. Another language gets the count.
+                *status = if kadakas_l10n::language().starts_with("en") {
+                    tr!("panels-command-notes", notes = out.notes.join(" "))
+                } else {
+                    tr!("panels-command-notes-count", count = out.notes.len())
+                };
+            }
             Some(out)
         }
         Err(e) => {
@@ -1271,6 +1282,7 @@ fn edit_shape(
     effective_tile: Option<f64>,
     site_mapping: kadakas_core::texture_bed::BedMapping,
     component: Option<&kadakas_core::component::InstanceInfo>,
+    exact_state: Option<kadakas_core::exact::State>,
 ) -> bool {
     let mut f = Fields { commit: false };
     egui::Grid::new("shape_fields")
@@ -1534,7 +1546,13 @@ fn edit_shape(
                 f.commit |= crate::gis_ui::massing_fields(ui, m);
                 f.count(ui, m.footprint.len());
             }
-            Shape::Mesh3d(m) => f.count(ui, m.vertices.len()),
+            Shape::Mesh3d(m) => {
+                f.count(ui, m.vertices.len());
+                // What a STEP import kept of the surfaces, or that it no longer fits.
+                if let Some(line) = kadakas_ui_core::mesh_import::exact_line_with(m, exact_state) {
+                    ui.label(line);
+                }
+            }
             // The counts and the rest are in the block of `surface_ui`.
             Shape::SurfaceModel(_) => {}
             Shape::Extrude(e) => crate::solid_ui::extrude_fields(ui, &mut f, e),
@@ -1661,6 +1679,22 @@ pub fn object_info(
     };
     let site_mapping = kadakas_core::texture_bed::site_mapping(session.editor.doc(), obj.layer);
     let component = kadakas_core::component::instance_info(session.editor.doc(), edited);
+    // Whether the exact data fits the triangles is a hash of the mesh: it is made once for each
+    // revision of the document, not for each frame.
+    let exact_state = match edited {
+        Shape::Mesh3d(m) if m.exact.is_some() => {
+            let key = egui::Id::new(("exact_state", id, session.editor.revision()));
+            match ui.data(|d| d.get_temp::<Option<kadakas_core::exact::State>>(key)) {
+                Some(s) => s,
+                None => {
+                    let s = m.exact_state();
+                    ui.data_mut(|d| d.insert_temp(key, s));
+                    s
+                }
+            }
+        }
+        _ => None,
+    };
     let commit = edit_shape(
         ui,
         edited,
@@ -1668,6 +1702,7 @@ pub fn object_info(
         effective_tile,
         site_mapping,
         component.as_ref(),
+        exact_state,
     );
     // Vertex edits are sent as `set_vertex` commands, one per changed vertex.
     if edited.vertices().is_some() {
@@ -2030,6 +2065,47 @@ mod tests {
             attrs: Attributes::default(),
         };
         ObjectId(session.editor.execute(&cmd).unwrap().created[0])
+    }
+
+    #[test]
+    fn a_command_that_takes_exact_data_away_says_so_in_the_status_line() {
+        use kadakas_core::exact::{self, ExactSolid};
+        let mut session = Session::with_sequential_ids();
+        let mut mesh = kadakas_core::mesh3d::Mesh3d {
+            vertices: vec![glam::DVec3::ZERO, glam::DVec3::X, glam::DVec3::Y],
+            triangles: vec![[0, 1, 2]],
+            ..Default::default()
+        };
+        mesh.set_exact(ExactSolid {
+            version: exact::VERSION,
+            product: "p".into(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: vec![glam::DVec3::ZERO; exact::MAX_OBJECT_BYTES / 56 + 10],
+            edges: vec![],
+            shells: vec![],
+            faces: vec![],
+            mesh_hash: 0,
+            extra: Default::default(),
+        });
+        let mut status = String::new();
+        let cmd = Command::AddObject {
+            shape: Shape::Mesh3d(Box::new(mesh)),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        };
+        assert!(run_command(&mut session, &cmd, &mut status).is_some());
+        assert!(status.contains("1 object is not kept"), "{status}");
+        let et = kadakas_l10n::with_language("et", || tr!("panels-exact-capped", count = 2));
+        assert!(et.contains("2 objekti"), "{et}");
+        // A note of another kind is shown too: in words in English, as a count in the other
+        // languages, whose people cannot read the English notes of the core.
+        let note = tr!("panels-command-notes", notes = "x moved");
+        assert!(note.contains("x moved"));
+        let et = kadakas_l10n::with_language("et", || tr!("panels-command-notes-count", count = 2));
+        assert!(et.contains('2') && !et.contains("Done"), "{et}");
     }
 
     #[test]

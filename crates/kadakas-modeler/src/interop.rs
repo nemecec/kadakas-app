@@ -81,7 +81,7 @@ pub enum Outcome {
     Imported,
 }
 
-type PreviewKey = (PathBuf, (Option<usize>, Option<bool>, bool, bool, u64));
+type PreviewKey = (PathBuf, mesh_import::PreviewKey);
 
 /// The open windows of File > Import and File > Export.
 #[derive(Default)]
@@ -96,9 +96,10 @@ pub fn pick_import() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter(
             tr!("meshio-ui-all-filter"),
-            &["obj", "stl", "gltf", "glb", "ifc"],
+            &["obj", "stl", "gltf", "glb", "step", "stp", "ifc"],
         )
         .add_filter(tr!("meshio-ui-file-filter"), &["obj", "stl", "gltf", "glb"])
+        .add_filter(tr!("meshio-ui-step-filter"), &["step", "stp"])
         .add_filter("IFC", &["ifc"])
         .pick_file()
 }

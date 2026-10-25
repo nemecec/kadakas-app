@@ -276,3 +276,19 @@ pub fn describe() -> Value {
         "codes": CODES.iter().map(|(c, k, m)| json!({"code": c, "kind": k, "meaning": m})).collect::<Vec<_>>(),
     })
 }
+
+/// An error of a mesh read as an API error: the limits are `limit` errors, the rest are
+/// validation errors, all with a stable reason and the counts.
+pub(crate) fn mesh_rpc(e: &kadakas_meshio::MeshError) -> crate::RpcError {
+    let err = if e.is_limit() {
+        crate::RpcError::limit(e)
+    } else {
+        crate::RpcError::validation(e)
+    };
+    let mut d = match e.details() {
+        Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    d.insert("error_id".into(), json!(e.kind()));
+    err.with_reason(e.kind()).with_details(Value::Object(d))
+}

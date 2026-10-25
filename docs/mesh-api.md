@@ -49,6 +49,8 @@ Edits. Each one is one undo step.
 | `mesh.soften` | Set the soft and smooth flags of edges. |
 | `mesh.soften_edges` | Soften every edge under an angle. It counts the edges that changed. |
 | `mesh.to_surface` | Turn a mesh object (from `import.file`) into a surface model. It can soften the edges under an angle. See `docs/interop.md`. |
+| `mesh3d.exact_info` | The true radii, axes and normals that a mesh from a STEP import keeps. See `docs/exact-solids.md`. |
+| `mesh3d.retessellate` | Cut the triangles of such a mesh again at another tolerance. One undo step. |
 | `mesh.solid` | Union, subtract, intersect, trim or split two solids. |
 | `mesh.make_group` | Make a group. |
 | `mesh.make_component` | Make a component. |
@@ -220,6 +222,8 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `not_a_mesh` | `mesh.to_surface` was called on an object that is not a mesh (`mesh3d`). | `object`, `kind` |
 | `mesh_too_large_for_surface` | The mesh is over a limit of a surface model. Nothing changes. | `over` (each count with its limit), `counts` |
 | `mesh_not_convertible` | The mesh gives no valid surface model (no triangle with an area, or a point out of range). | |
+| `no_exact_data` | `mesh3d.exact_info` or `mesh3d.retessellate` was called on a mesh that keeps no exact data (only a STEP import with `keep_exact` does). | `object` |
+| `exact_stale` | `mesh3d.retessellate`: the triangles were edited after the import, so the exact data no longer fits. | `object` |
 
 `operand` is `first` or `second`. `open_kind` is `border`, `non_manifold` or `reversed`. In a batch the data also has `step`.
 

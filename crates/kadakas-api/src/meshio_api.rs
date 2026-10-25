@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use kadakas_core::command::{Command, CommandError};
+use kadakas_core::exact::{self, ExactSolid};
 use kadakas_core::mesh3d::{self, Mesh3d};
 use kadakas_core::model::{Attributes, Color, Document, LayerKind, ObjectId, Shape};
 use kadakas_core::surface::{ConvertError, ConvertOptions, Converted, surface_from_triangles};
@@ -44,6 +45,7 @@ pub(crate) fn extensions(f: Format) -> &'static [&'static str] {
         Format::Stl => &["stl"],
         Format::Gltf => &["gltf"],
         Format::Glb => &["glb"],
+        Format::Step => &["step", "stp"],
     }
 }
 
@@ -65,6 +67,12 @@ struct ImportOptions {
     max_bytes: Option<u64>,
     max_triangles: Option<u64>,
     max_vertices: Option<u64>,
+    /// STEP: one mesh for each product and color (default) or for each body and color.
+    per_product: Option<bool>,
+    /// STEP: keep the exact surfaces next to the triangles (default true).
+    keep_exact: Option<bool>,
+    /// STEP: the largest turn of the normal between neighbouring points, degrees.
+    angle: Option<f64>,
 }
 
 /// The options of the surface conversion that a request holds, if it asks for one.
@@ -110,21 +118,7 @@ impl SurfaceAsk {
     }
 }
 
-/// An error of a mesh read as an API error: the limits are `limit` errors, the rest are
-/// validation errors, all with a stable reason and the counts.
-pub(crate) fn mesh_rpc(e: &MeshError) -> RpcError {
-    let err = if e.is_limit() {
-        RpcError::limit(e)
-    } else {
-        RpcError::validation(e)
-    };
-    let mut d = match e.details() {
-        Value::Object(m) => m,
-        _ => serde_json::Map::new(),
-    };
-    d.insert("error_id".into(), json!(e.kind()));
-    err.with_reason(e.kind()).with_details(Value::Object(d))
-}
+pub(crate) use crate::errors::mesh_rpc;
 
 /// The counts of the conversions of one import, for `report.to_surface`.
 pub(crate) struct Tally {
@@ -298,11 +292,12 @@ pub(crate) fn describe() -> Value {
                 "obj": "Wavefront OBJ (v, f with any number of corners, negative indices, o, g, usemtl, mtllib). Colors come from the Kd and d of the MTL file next to it. Normals and texture coordinates are ignored. Default unit m, Y up.",
                 "stl": "STL, binary or ASCII (found by the size). Equal corners are joined. A binary header with COLOR=rgba sets the color. Default unit mm, Z up.",
                 "gltf": "glTF 2.0 with the buffers inside or in files next to it. The nodes of the default scene with their transforms. Base color factors become colors. Always meters and Y up. Draco, Meshopt, quantized and sparse data are refused.",
-                "glb": "glTF 2.0 in one binary file"
+                "glb": "glTF 2.0 in one binary file",
+                "step": "STEP (ISO 10303-21 text, .step and .stp) with the schemas AUTOMOTIVE_DESIGN (AP214), CONFIG_CONTROL_DESIGN (AP203) and AP242. Solids (MANIFOLD_SOLID_BREP, BREP_WITH_VOIDS, FACETED_BREP), surface models and tessellated items are cut into triangles on load. Faces on planes, cylinders, cones, spheres, tori, surfaces of revolution and extrusion and B-spline surfaces (also rational) are read. Edges are lines, circles, ellipses, B-spline curves, trimmed and composite curves. Units come from the file (mm, m, inch and so on). Assemblies keep product names and placements. Colors are kept. Lines and polylines become 3D polylines. The report lists every entity type that was read, skipped (with count and reason) and cut. Each mesh keeps the exact surfaces next to its triangles (option keep_exact). Always Z up in mm."
             },
             "call": "import.file with a path (the extension or format picks the reader). One undo step. Normals in the file are not used. The sides of a mesh follow the winding of its triangles. The SketchUp file format is not read.",
             "options": {
-                "unit": "OBJ and STL: mm | cm | m | km | inch | foot | yard | mile. Default m for OBJ and mm for STL. glTF is always m",
+                "unit": "OBJ and STL: mm | cm | m | km | inch | foot | yard | mile. Default m for OBJ and mm for STL. glTF is always m. STEP: the unit of the numbers, which replaces the unit that the file names. Default: the file",
                 "up_axis": "OBJ and STL: y | z. Default y for OBJ, z for STL. Y up files turn so that Z is up in the model (x, y, z becomes x, -z, y)",
                 "layer": "name of the design layer that receives the objects (created if needed). Default the active layer",
                 "name": "name of the objects. Default the names in the file, else the file name",
@@ -311,18 +306,25 @@ pub(crate) fn describe() -> Value {
                 "center": "false (default: the coordinates of the file) | true (the middle of the box around the file goes to x = 0 and y = 0, and the lowest point to z = 0)",
                 "to_surface": "false (default: mesh3d objects). true: parts that fit a surface model (55,000 vertices, 150,000 edges, 100,000 faces) become surface models, with vertices welded and coplanar triangles merged into faces. A part over a limit stays a mesh3d and is listed in report.to_surface.refused with the counts",
                 "soften_below_angle": "degrees, 0 to 180, default off. Edges between faces at an angle below it become soft and smooth. It asks for to_surface",
-                "tolerance": "mm, 0.001 to 1000. The weld distance of to_surface. Default 0.01",
+                "tolerance": "mm, 0.001 to 1000. STEP: the largest distance of a triangle from its surface, default from the size of the file (1/2000 of the diagonal, between 0.01 and 0.5). The other formats: the weld distance of to_surface, default 0.01",
+                "angle": "STEP only. Degrees, 1 to 90, default 15. The largest turn of the normal between neighbouring points",
+                "per_product": "STEP only. true (default): one mesh for each product and color. false: one mesh for each body and color. join true makes one mesh for the whole file",
+                "keep_exact": "STEP only. true (default): each mesh keeps the exact surfaces (radii, normals, curves) next to its triangles, up to 8 MiB for one object and 64 MiB for the document. false keeps the triangles only. Over a cap the mesh keeps its triangles and the report names the part",
                 "merge": "to_surface: true (default) merges coplanar triangles into faces, false keeps every triangle a face",
                 "preview": "true reads the file and answers with the report, including the number of edges that soften_below_angle would soften, and changes nothing",
-                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session",
+                "max_bytes": "the largest file in bytes, checked before the file is read. Default 536870912 and never above the limit import_text_bytes of the session. A STEP file is limited to 134217728 (128 MiB) (64 MiB in the browser build) because it takes 9 to 14 times its size in memory",
                 "max_triangles": "Default and most 8000000, in all parts together",
                 "max_vertices": "Default and most 4000000, in all parts together"
             },
+            "step_result": "A STEP import adds report.step: {schemas, entities_read, entities_used, entities_skipped (read equals used plus skipped), used: [{entity, count}], skipped: [{entity, reason, count}], tessellated: [{surface, faces, triangles}], products, instances, length_unit_mm, unit_from_file, tolerance_mm, angle_deg, welded_vertices, work_units}. It adds report.exact: {enabled, kept_objects, approx_bytes, lost_to_surface, without: [{part, reason}]} and report.curves (3D polylines made). A file with no readable geometry is refused with error_id mesh_unsupported and the reasons.",
             "result": "{imported, skipped, softened_edges (always, 0 when nothing was softened), report: {format, bytes, unit, up_axis, parts, vertices, triangles, degenerate_triangles, bounds_mm: {min, max, size}, objects: [{id, name, kind, vertices, triangles, color}], notes, to_surface?: {converted, refused: [{part, object?, reason, data}], faces, edges, softened_edges, welded_vertices, degenerate_triangles, duplicate_triangles, reversed_triangles, joined_slivers, unmerged_regions, notes}, preview?}, georeference}. A file that is too large, has too many triangles, ends too soon, has a number that is not finite or an index that does not exist is refused with an error whose reason names the problem (mesh_file_too_large, mesh_too_many_triangles, mesh_truncated, mesh_not_finite, mesh_bad_index and so on) and whose data has the counts. Nothing changes",
             "examples": [
                 {"method": "import.file", "params": {"path": "/data/model.obj", "options": {"unit": "mm", "up_axis": "z"}}},
                 {"method": "import.file", "params": {"path": "/data/part.stl", "options": {"to_surface": true, "soften_below_angle": 20}}},
-                {"method": "import.file", "params": {"path": "/data/scene.glb", "options": {"preview": true, "soften_below_angle": 20}}}
+                {"method": "import.file", "params": {"path": "/data/scene.glb", "options": {"preview": true, "soften_below_angle": 20}}},
+                {"method": "import.file", "params": {"path": "/data/bench.step", "options": {"tolerance": 0.05, "per_product": true}}},
+                {"method": "mesh3d.exact_info", "params": {"id": "00000000-0000-0000-0000-000000000002"}},
+                {"method": "mesh3d.retessellate", "params": {"id": "00000000-0000-0000-0000-000000000002", "tolerance": 0.01}}
             ]
         },
         "export": {
@@ -410,19 +412,51 @@ impl Session {
             v => serde_json::from_value(v.clone()).map_err(|e| bad(format!("options: {e}")))?,
         };
         let gltf = matches!(format, Format::Gltf | Format::Glb);
+        let step = format == Format::Step;
         if gltf && (o.unit.is_some() || o.up_axis.is_some()) {
             return Err(bad(
                 "unit and up_axis: glTF is always in meters with Y up, leave them out",
             ));
         }
+        if step && o.up_axis.is_some() {
+            return Err(bad("up_axis: a STEP file has Z up, leave it out"));
+        }
+        if !step && (o.per_product.is_some() || o.keep_exact.is_some() || o.angle.is_some()) {
+            return Err(bad(
+                "per_product, keep_exact and angle are options of STEP files only",
+            ));
+        }
         let mut frame: Frame = format.default_frame();
-        if let Some(u) = &o.unit {
+        // The unit of a STEP file is a choice that replaces the unit that the file names.
+        let step_unit = match (&o.unit, step) {
+            (Some(u), true) => Some(unit_of(u)?),
+            _ => None,
+        };
+        if !step && let Some(u) = &o.unit {
             frame.unit = unit_of(u)?;
         }
         if let Some(u) = &o.up_axis {
             frame.up = up_of(u)?;
         }
-        let ask = SurfaceAsk::of(o.to_surface, o.soften_below_angle, o.tolerance, o.merge)?;
+        if step
+            && let Some(t) = o.tolerance
+            && !(t.is_finite() && (0.001..=1000.0).contains(&t))
+        {
+            return Err(bad("tolerance: mm, 0.001 to 1000"));
+        }
+        if step
+            && let Some(a) = o.angle
+            && !(a.is_finite() && (1.0..=90.0).contains(&a))
+        {
+            return Err(bad("angle: degrees, 1 to 90"));
+        }
+        // For STEP the tolerance is that of the tessellation, not the weld distance.
+        let ask = SurfaceAsk::of(
+            o.to_surface,
+            o.soften_below_angle,
+            if step { None } else { o.tolerance },
+            o.merge,
+        )?;
         let path = if checked {
             self.check_path(&path, false, extensions(format))
                 .map_err(RpcError::policy)?
@@ -444,6 +478,15 @@ impl Session {
                 .min(mesh3d::MAX_VERTICES as u64),
             ..Limits::default()
         };
+        // A STEP file takes 9 to 14 times its size in memory: its limit is lower.
+        let limits = if step {
+            Limits {
+                max_bytes: limits.max_bytes.min(kadakas_step::DEFAULT_MAX_BYTES),
+                ..limits
+            }
+        } else {
+            limits
+        };
         let size = std::fs::metadata(&path)
             .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?
             .len();
@@ -457,7 +500,27 @@ impl Session {
         let bytes = std::fs::read(&path)
             .map_err(|e| RpcError::invalid_params(format!("{}: {e}", path.display())))?;
         let side_max = limits.max_bytes;
+        let mut step_report: Option<Value> = None;
+        let mut exacts: Vec<Option<ExactSolid>> = Vec::new();
+        let mut curves: Vec<kadakas_step::CurvePart> = Vec::new();
         let mut set: MeshSet = match format {
+            Format::Step => {
+                let sopts = kadakas_step::StepOptions {
+                    unit: step_unit,
+                    tolerance_mm: o.tolerance,
+                    angle_deg: o.angle.unwrap_or(15.0),
+                    per_product: o.per_product.unwrap_or(true),
+                    keep_exact: o.keep_exact.unwrap_or(true),
+                    limits,
+                    step: kadakas_step::StepLimits::default(),
+                };
+                kadakas_step::read(&bytes, &sopts).map(|imp| {
+                    step_report = Some(imp.report.to_json());
+                    exacts = imp.exact;
+                    curves = imp.curves;
+                    imp.set
+                })
+            }
             Format::Obj => {
                 let loader = |name: &str| self.sibling(&path, name, &["mtl"], checked, 16 << 20);
                 kadakas_meshio::obj::read(
@@ -498,7 +561,45 @@ impl Session {
             .and_then(|s| s.to_str())
             .unwrap_or("mesh")
             .to_string();
-        let mut parts = if o.join {
+        // The exact data of each part (STEP). A joined mesh joins the exact data too.
+        let mut part_exact: Vec<Option<ExactSolid>> = if exacts.len() == set.parts.len() {
+            exacts
+        } else {
+            vec![None; set.parts.len()]
+        };
+        let mut join_note = None;
+        let mut join_without: Vec<Value> = Vec::new();
+        let mut parts = if o.join && !set.parts.is_empty() {
+            let total: usize = part_exact.iter().flatten().map(|e| e.approx_bytes()).sum();
+            let merged = if total > exact::MAX_OBJECT_BYTES {
+                // One mesh cannot hold more exact data than one object may: the triangles stay.
+                join_without.push(json!({
+                    "part": stem,
+                    "reason": format!(
+                        "the exact data of the joined parts is about {total} bytes, over the limit of {} bytes for one object: only the triangles are kept",
+                        exact::MAX_OBJECT_BYTES
+                    ),
+                    "approx_bytes": total,
+                }));
+                None
+            } else if part_exact.iter().all(Option::is_some) {
+                let mut it = part_exact.drain(..).flatten();
+                it.next().map(|mut first| {
+                    for e in it {
+                        first.merge(&e);
+                    }
+                    first
+                })
+            } else {
+                if part_exact.iter().any(Option::is_some) {
+                    join_note = Some(
+                        "the exact data was dropped: some parts that were joined have none"
+                            .to_string(),
+                    );
+                }
+                None
+            };
+            part_exact = vec![merged];
             vec![set.joined()]
         } else {
             std::mem::take(&mut set.parts)
@@ -507,6 +608,12 @@ impl Session {
             let mut lo = [f64::INFINITY; 3];
             let mut hi = [f64::NEG_INFINITY; 3];
             for p in parts.iter().flat_map(|p| p.positions.iter()) {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            for p in curves.iter().flat_map(|c| c.points.iter()) {
                 for k in 0..3 {
                     lo[k] = lo[k].min(p[k]);
                     hi[k] = hi[k].max(p[k]);
@@ -521,7 +628,19 @@ impl Session {
         };
         let single = parts.len() == 1;
         let mut prepared: Vec<Prepared> = Vec::with_capacity(parts.len());
-        for p in parts.drain(..) {
+        // The exact data that the document holds already counts against the cap.
+        let mut exact_total: usize = self
+            .editor
+            .doc()
+            .objects
+            .values()
+            .filter_map(|o| match &o.shape {
+                Shape::Mesh3d(m) => Some(m.exact_bytes()),
+                _ => None,
+            })
+            .sum();
+        let mut exact_over_cap: Vec<Value> = Vec::new();
+        for (index, p) in parts.drain(..).enumerate() {
             let name = match (&o.name, single) {
                 (Some(n), true) => n.clone(),
                 (Some(n), false) => format!("{n} {}", p.name),
@@ -537,7 +656,37 @@ impl Session {
                     .collect(),
                 triangles: p.triangles,
                 color: p.color.map(Color),
+                exact: None,
+                exact_unusable: None,
             };
+            let mut mesh = mesh;
+            if let Some(Some(x)) = part_exact.get_mut(index).map(Option::take) {
+                let bytes = x.approx_bytes();
+                if exact_total + bytes > exact::MAX_DOCUMENT_BYTES {
+                    exact_over_cap.push(json!({
+                        "part": name,
+                        "reason": format!(
+                            "the exact data of the document would pass the limit of {} bytes: only the triangles of this part are kept",
+                            exact::MAX_DOCUMENT_BYTES
+                        ),
+                        "approx_bytes": bytes,
+                    }));
+                } else {
+                    match x.transformed(&glam::DAffine3::from_translation(shift)) {
+                        Ok(moved) => {
+                            exact_total += bytes;
+                            mesh.set_exact(moved);
+                        }
+                        Err(e) => exact_over_cap.push(json!({
+                            "part": name,
+                            "reason": format!(
+                                "the exact data could not follow the move to the origin ({e}): only the triangles are kept"
+                            ),
+                            "approx_bytes": bytes,
+                        })),
+                    }
+                }
+            }
             if let Some(why) = mesh.problem() {
                 return Err(RpcError::validation(format!("part '{name}': {why}"))
                     .with_reason("mesh_malformed"));
@@ -575,6 +724,17 @@ impl Session {
         }
         let mut notes = set.notes.clone();
         notes.extend(origin_note);
+        notes.extend(join_note);
+        // A part that became a surface model has no triangles to match the exact data.
+        let lost_to_surface = prepared
+            .iter()
+            .filter(|p| p.surface.is_some() && p.mesh.exact.is_some())
+            .count();
+        if lost_to_surface > 0 {
+            notes.push(format!(
+                "{lost_to_surface} parts became surface models: their exact data is not kept (a surface model has faces of its own)"
+            ));
+        }
         if let Some(ask) = &ask
             && prepared.iter().any(|p| p.refused)
         {
@@ -619,6 +779,34 @@ impl Session {
         if let Some(t) = &to_surface {
             report["to_surface"] = t.clone();
         }
+        if let Some(mut sr) = step_report {
+            // The exact data: what the file gave, what the document cap took away.
+            let kept = prepared
+                .iter()
+                .filter(|p| p.surface.is_none() && p.mesh.exact.is_some())
+                .count();
+            let bytes: usize = prepared
+                .iter()
+                .filter(|p| p.surface.is_none())
+                .filter_map(|p| p.mesh.exact.as_ref().map(|e| e.approx_bytes()))
+                .sum();
+            let mut without = sr["exact"]["without"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            without.extend(exact_over_cap);
+            without.extend(join_without);
+            report["exact"] = json!({
+                "enabled": o.keep_exact.unwrap_or(true),
+                "kept_objects": kept,
+                "approx_bytes": bytes,
+                "lost_to_surface": lost_to_surface,
+                "without": without,
+            });
+            sr.as_object_mut().map(|m| m.remove("exact"));
+            report["step"] = sr;
+            report["curves"] = json!(curves.len());
+        }
         if o.preview {
             report["preview"] = json!(true);
             report["objects"] = Value::Array(
@@ -640,6 +828,7 @@ impl Session {
         // The change: the layer, then one object for each part, in one undo step.
         let layer_name = o.layer.clone();
         let mut listed: Vec<(usize, ObjectId)> = Vec::new();
+        let mut curves_added = 0usize;
         let outcome = self.editor.execute_stepwise(|step| {
             let lid = match layer_name
                 .as_deref()
@@ -717,6 +906,26 @@ impl Session {
                     listed.push((i, ObjectId(*id)));
                 }
             }
+            // The lines and polylines of a STEP file are 3D polylines.
+            for c in &curves {
+                let points: Vec<DVec3> = c.points.iter().map(|p| DVec3::from(*p) + shift).collect();
+                if points.len() < 2 {
+                    continue;
+                }
+                step.run(&Command::AddObject {
+                    shape: Shape::Polyline3d {
+                        points,
+                        closed: c.closed,
+                    },
+                    layer: Some(lid),
+                    class: None,
+                    attrs: Attributes {
+                        pen: c.color.map(Color),
+                        ..Default::default()
+                    },
+                })?;
+                curves_added += 1;
+            }
             Ok(())
         });
         let outcome = outcome.map_err(RpcError::from)?;
@@ -734,7 +943,7 @@ impl Session {
         }
         report["created"] = json!(outcome.created.len());
         Ok(json!({
-            "imported": listed.len(),
+            "imported": listed.len() + curves_added,
             "skipped": 0,
             "softened_edges": softened_total,
             "report": report,

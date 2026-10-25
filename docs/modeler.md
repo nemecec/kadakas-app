@@ -606,7 +606,7 @@ The edits of an agent are marked as agent changes and show in the Activity panel
 
 ## Import and export (MOD-12)
 
-File > Import reads OBJ, STL, glTF, GLB and IFC. File > Export writes STL, OBJ, glTF, GLB, IFC and DXF. The windows build the calls of `import.file` and `export.file`, so the modeler and an agent use one code path. A mesh file becomes `mesh3d` objects. The window asks for the unit and the up axis of OBJ and STL files and for the move to the origin. It also asks "Soften edges under an angle?". The answer is off at first, with 20 degrees. When it is on, the window counts the edges that the angle would soften, and the import makes surface models that fit the limits. The answer is kept in `modeler.json`. The guide is `docs/interop.md`.
+File > Import reads OBJ, STL, glTF, GLB, STEP and IFC. File > Export writes STL, OBJ, glTF, GLB, IFC and DXF. The windows build the calls of `import.file` and `export.file`, so the modeler and an agent use one code path. A mesh file becomes `mesh3d` objects. The window asks for the unit and the up axis of OBJ and STL files and for the move to the origin. It also asks "Soften edges under an angle?". The answer is off at first, with 20 degrees. When it is on, the window counts the edges that the angle would soften, and the import makes surface models that fit the limits. The answer is kept in `modeler.json`. For a STEP file the window asks for the unit (default: the file), the tolerance (default: from the size of the part), one mesh for each product and whether the exact surfaces are kept. Object Info of such a mesh says what it keeps. The guides are `docs/interop.md` and `docs/exact-solids.md`.
 
 ## Surface models in the Vectorworks-like app (MOD-13)
 

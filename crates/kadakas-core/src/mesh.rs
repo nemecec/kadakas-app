@@ -3248,6 +3248,8 @@ mod tests {
                     [3, 4, 7],
                 ],
                 color: None,
+                exact: None,
+                exact_unusable: None,
             }
         };
         let mut ed = Editor::default();

@@ -688,6 +688,8 @@ fn polyface_mesh(e: &Entity, xf: &Xf) -> Result<Mesh3d, Skip> {
         vertices,
         triangles,
         color: None,
+        exact: None,
+        exact_unusable: None,
     })
 }
 
@@ -734,6 +736,8 @@ fn grid_mesh(e: &Entity, xf: &Xf) -> Result<Mesh3d, Skip> {
         vertices: verts,
         triangles,
         color: None,
+        exact: None,
+        exact_unusable: None,
     })
 }
 
@@ -1042,6 +1046,8 @@ impl Walker<'_> {
                 vertices: m.vertices,
                 triangles: m.triangles,
                 color: None,
+                exact: None,
+                exact_unusable: None,
             };
             let attrs = Attributes {
                 pen: defaults.pen,

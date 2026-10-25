@@ -15,6 +15,7 @@ pub mod csv;
 pub mod curve;
 pub mod datamap;
 pub mod edit2d;
+pub mod exact;
 #[cfg(feature = "fault-injection")]
 pub mod fault;
 pub mod geom;

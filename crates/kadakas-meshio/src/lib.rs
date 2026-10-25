@@ -34,6 +34,8 @@ pub enum Format {
     Stl,
     Gltf,
     Glb,
+    /// STEP (read by `kadakas-step`).
+    Step,
 }
 
 impl Format {
@@ -49,6 +51,7 @@ impl Format {
             "stl" => Some(Format::Stl),
             "gltf" => Some(Format::Gltf),
             "glb" => Some(Format::Glb),
+            "step" | "stp" => Some(Format::Step),
             _ => None,
         }
     }
@@ -59,6 +62,7 @@ impl Format {
             Format::Stl => "stl",
             Format::Gltf => "gltf",
             Format::Glb => "glb",
+            Format::Step => "step",
         }
     }
 
@@ -70,7 +74,7 @@ impl Format {
                 unit: Unit::Metre,
                 up: Up::Y,
             },
-            Format::Stl => Frame {
+            Format::Stl | Format::Step => Frame {
                 unit: Unit::Millimetre,
                 up: Up::Z,
             },

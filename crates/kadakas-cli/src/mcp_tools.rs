@@ -116,7 +116,7 @@ pub const DOMAINS: &[Domain] = &[
     Domain {
         name: "mesh",
         summary: "Surface models, the edge-and-face geometry of the 3D modeler: read vertices, edges and faces (with paging), the closed-solid report, bounds, faces near a point and a ray pick, and edit them in single undo steps: draw edges and curves, erase, Push/Pull, Follow Me, Offset, Intersect Faces, move, rotate, scale, copy, paint, hide, soften (also every edge under an angle, with the count of edges it changed), the solid tools (union, subtract, intersect, trim, split), groups and components. mesh.batch runs up to 50 edits as one undo step, all or nothing. mesh.render gives a picture of the result. A refusal has a stable error_id. describe.mesh has the model, the limits and examples.",
-        prefixes: &["mesh"],
+        prefixes: &["mesh", "mesh3d"],
         read_only: false,
         open_world: false,
     },

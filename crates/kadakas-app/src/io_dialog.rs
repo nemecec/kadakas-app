@@ -396,7 +396,7 @@ pub struct IoUi {
 }
 
 /// The choices that a preview was made for: the file and the choices of the form.
-type PreviewKey = (PathBuf, (Option<usize>, Option<bool>, bool, bool, u64));
+type PreviewKey = (PathBuf, mesh_import::PreviewKey);
 
 /// What a dialog did.
 #[derive(Debug, PartialEq, Eq)]
@@ -415,6 +415,7 @@ impl IoUi {
                 &["dxf", "dwg", "ifc", "shp", "geojson", "json"],
             )
             .add_filter(tr!("meshio-ui-file-filter"), &["obj", "stl", "gltf", "glb"])
+            .add_filter(tr!("meshio-ui-step-filter"), &["step", "stp"])
             .add_filter("DXF", &["dxf"])
             .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
             .add_filter("IFC", &["ifc"])
@@ -1200,5 +1201,56 @@ mod tests {
             });
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_step_file_opens_the_mesh_window_with_its_own_choices() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/step/cylinder.step");
+        let mut f = ImportForm::new(path.clone());
+        assert_eq!(kind_of(&f.path), Kind::Mesh);
+        assert!(f.mesh.as_ref().unwrap().kind.is_step());
+        assert_eq!(f.params()["options"], json!({}));
+        {
+            let m = f.mesh.as_mut().unwrap();
+            m.tolerance = Some(0.5);
+            m.per_product = false;
+            m.keep_exact = false;
+        }
+        assert_eq!(
+            f.params()["options"],
+            json!({"tolerance": 0.5, "per_product": false, "keep_exact": false})
+        );
+        // The window draws the STEP choices (tolerance on and off) and imports with them.
+        let mut ui = IoUi::default();
+        ui.open_import(path, SoftenPref::default());
+        let mut session = Session::default();
+        let mut status = String::new();
+        let mut soften = SoftenPref::default();
+        let ctx = egui::Context::default();
+        for tolerance in [None, Some(0.3)] {
+            ui.import.as_mut().unwrap().mesh.as_mut().unwrap().tolerance = tolerance;
+            for _ in 0..2 {
+                let _ = ctx.run_ui(Default::default(), |u| {
+                    ui.show(u.ctx(), &mut session, &mut status, &mut soften);
+                });
+            }
+        }
+        let form = ui.import.clone().unwrap();
+        assert_eq!(
+            ui.run_import(&mut session, form, &mut status),
+            IoEvent::Imported
+        );
+        assert_eq!(session.editor.doc().objects.len(), 1);
+        let exact = session
+            .editor
+            .doc()
+            .objects
+            .values()
+            .find_map(|o| match &o.shape {
+                kadakas_core::model::Shape::Mesh3d(m) => m.exact.is_some().then_some(()),
+                _ => None,
+            });
+        assert!(exact.is_some());
     }
 }

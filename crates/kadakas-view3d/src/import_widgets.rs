@@ -8,13 +8,17 @@ use kadakas_ui_core::mesh_import::{self, MeshImportForm, SoftenPref};
 /// The unit and the up axis of the file, and moving the model to the origin. `salt` makes the ids
 /// of the combo boxes different for two windows.
 pub fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm, salt: &str) {
-    if m.kind.takes_frame() {
+    if m.kind.takes_frame() || m.kind.is_step() {
         ui.horizontal(|ui| {
             ui.label(tr!("meshio-ui-unit"));
-            let default = tr!(
-                "meshio-ui-unit-default",
-                unit = mesh_import::unit_name(m.kind.default_unit())
-            );
+            let default = if m.kind.is_step() {
+                tr!("meshio-ui-unit-from-file")
+            } else {
+                tr!(
+                    "meshio-ui-unit-default",
+                    unit = mesh_import::unit_name(m.kind.default_unit())
+                )
+            };
             let label = match m.unit {
                 None => default.clone(),
                 Some(i) => mesh_import::unit_name(mesh_import::UNITS[i]),
@@ -28,6 +32,8 @@ pub fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm, salt: &str) {
                     }
                 });
         });
+    }
+    if m.kind.takes_frame() {
         ui.horizontal(|ui| {
             ui.label(tr!("meshio-ui-up-axis"));
             let default = if m.kind.default_y_up() {
@@ -48,6 +54,28 @@ pub fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm, salt: &str) {
                     ui.selectable_value(&mut m.y_up, Some(false), tr!("meshio-ui-up-z"));
                 });
         });
+    } else if m.kind.is_step() {
+        ui.label(egui::RichText::new(tr!("meshio-ui-step-hint")).weak());
+        // The tolerance: automatic, or a number.
+        let mut auto = m.tolerance.is_none();
+        if ui
+            .checkbox(&mut auto, tr!("meshio-ui-step-tolerance-auto"))
+            .changed()
+        {
+            m.tolerance = if auto { None } else { Some(0.1) };
+        }
+        if let Some(t) = m.tolerance.as_mut() {
+            ui.horizontal(|ui| {
+                ui.label(tr!("meshio-ui-step-tolerance"));
+                ui.add(
+                    egui::DragValue::new(t)
+                        .range(mesh_import::TOLERANCE_RANGE.0..=mesh_import::TOLERANCE_RANGE.1)
+                        .speed(0.01),
+                );
+            });
+        }
+        ui.checkbox(&mut m.per_product, tr!("meshio-ui-step-per-product"));
+        ui.checkbox(&mut m.keep_exact, tr!("meshio-ui-step-keep-exact"));
     } else {
         ui.label(tr!("meshio-ui-gltf-fixed"));
     }
