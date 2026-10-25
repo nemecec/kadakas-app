@@ -94,6 +94,11 @@ pub enum StepError {
     Format(String),
 }
 
+/// True when `s` starts with `pat` (upper case), whatever the case of `s`.
+fn starts_ci(s: &[u8], pat: &[u8]) -> bool {
+    s.len() >= pat.len() && s[..pat.len()].eq_ignore_ascii_case(pat)
+}
+
 fn is_space(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\r' | b'\n' | 0x0c)
 }
@@ -349,7 +354,7 @@ impl StepIndex {
             .prefix
             .strip_prefix(&[0xEF, 0xBB, 0xBF][..])
             .unwrap_or(&first.prefix);
-        if !p.starts_with(b"ISO-10303-21") {
+        if !starts_ci(p, b"ISO-10303-21") {
             return Err(StepError::Format(
                 "the file does not start with ISO-10303-21".into(),
             ));
@@ -366,7 +371,7 @@ impl StepIndex {
                     return Err(StepError::Format("no DATA section".into()));
                 }
             };
-            if s.prefix.starts_with(b"DATA") && s.prefix[4..].iter().all(|c| is_space(*c)) {
+            if starts_ci(&s.prefix, b"DATA") && s.prefix[4..].iter().all(|c| is_space(*c)) {
                 break;
             }
             header.push_str(&String::from_utf8_lossy(&s.prefix));
@@ -389,7 +394,7 @@ impl StepIndex {
                     break;
                 }
             };
-            if s.prefix.starts_with(b"ENDSEC") {
+            if starts_ci(&s.prefix, b"ENDSEC") {
                 cut = false;
                 break;
             }
@@ -849,6 +854,19 @@ mod tests {
         )
         .unwrap();
         assert!(long.entity(1).is_none());
+    }
+
+    #[test]
+    fn lower_case_files_are_indexed() {
+        let x = idx(
+            "iso-10303-21;\nheader;\nfile_schema(('IFC4X3'));\nendsec;\ndata;\n#1= ifcactorrole(.architect.,$,$);\n#2 =IfcLabel('a\\X\\27b');\nendsec;\n",
+        );
+        assert_eq!(x.len(), 2);
+        assert_eq!(x.name_of(1), Some("IFCACTORROLE"));
+        assert_eq!(x.ids_of("IFCLABEL"), vec![2]);
+        let e = x.entity(1).unwrap();
+        assert_eq!(e.attrs[0], Value::Enum("ARCHITECT".into()));
+        assert_eq!(x.entity(2).unwrap().attrs[0], Value::Str("a'b".into()));
     }
 
     #[test]
