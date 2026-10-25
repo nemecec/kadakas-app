@@ -171,8 +171,10 @@ pub fn need(repo: &str, path: &str) -> Option<PathBuf> {
                 std::process::id(),
                 std::thread::current().id()
             ));
-            if std::fs::write(&tmp, &bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, &file);
+            if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &file).is_err() {
+                // Windows does not replace a file that exists (another test was first): the same
+                // bytes are there, and the temporary file must not stay.
+                let _ = std::fs::remove_file(&tmp);
             }
             Some(file)
         }

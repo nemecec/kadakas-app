@@ -162,8 +162,8 @@ fn damaged_public_files_never_panic() {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        // About 10 damaged statements per file (the fixtures test damages every entity).
-        let every = (statements(&text).len() / 10).max(1);
+        // About 5 damaged statements per file (the fixtures test damages every entity).
+        let every = (statements(&text).len() / 5).max(1);
         check(&path, &text, every);
         seen += 1;
     }

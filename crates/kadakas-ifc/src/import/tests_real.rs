@@ -325,3 +325,28 @@ fn a_lower_case_header_keeps_its_schema() {
         r.report.notes
     );
 }
+
+#[test]
+fn a_far_site_placement_deep_in_the_file_is_found() {
+    // 400 points with small numbers come before the point of the site placement (the sample of the
+    // first points would not see it); the placements of the products are what finds the file.
+    let junk: String = (0..400u64)
+        .map(|i| format!("#{}=IFCCARTESIANPOINT((1.,2.,3.));\n", 20_000 + i))
+        .collect();
+    let data = far_file().replace("#72", "#900072");
+    let bytes = super::tests_more::file("IFC4", &format!("{junk}{data}"));
+    let text = String::from_utf8(bytes)
+        .unwrap()
+        .replace(".LENGTHUNIT.,.MILLI.,.METRE.", ".LENGTHUNIT.,$,.METRE.");
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    let g = ed.doc().georef.as_ref().expect("a georeference");
+    assert!(
+        g.origin.x > 600_000.0 && g.origin.y > 6_000_000.0,
+        "{:?}",
+        g.origin
+    );
+    assert!(ed.doc().objects.len() >= 7);
+}
