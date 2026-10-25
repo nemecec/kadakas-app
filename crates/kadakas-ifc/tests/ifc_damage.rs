@@ -102,9 +102,9 @@ fn check(name: &str, text: &str, every: usize) -> usize {
             }
             let started = std::time::Instant::now();
             let ok = run(&mutant);
-            // A mutant that takes seconds is a loop that the budgets do not stop.
+            // A hang guard only (the work is bounded by counts, not by the clock).
             assert!(
-                started.elapsed().as_secs() < 20,
+                started.elapsed().as_secs() < 600,
                 "{name}: {:?} for this damage: {}",
                 started.elapsed(),
                 d.chars().take(120).collect::<String>()

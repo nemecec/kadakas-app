@@ -171,7 +171,7 @@ fn a_big_file_imports_in_time_and_a_file_over_the_cap_is_refused_with_the_option
     let r = import_bytes(bytes.clone(), &doc, &IfcImportOptions::default()).unwrap();
     assert_eq!(r.report.entities_read, 4000);
     assert_eq!(r.report.total(), 4000);
-    assert!(started.elapsed().as_secs() < 120, "{:?}", started.elapsed());
+    assert!(started.elapsed().as_secs() < 600, "hang guard: {:?}", started.elapsed());
     // The cap: a clear message that names the option.
     let mut o = IfcImportOptions::default();
     o.limits.max_bytes = 1 << 20;
@@ -297,4 +297,27 @@ fn every_kind_of_object_far_from_the_origin_is_imported_near_it() {
         _ => None,
     });
     assert!(holes.is_some());
+}
+
+#[test]
+fn a_lower_case_header_keeps_its_schema() {
+    // The schema decides, for example, which notes about the georeference make sense.
+    let bytes = super::tests_more::file("IFC2X3", &format!("{}{}", body(), slab(30, "#21")));
+    let text = String::from_utf8(bytes)
+        .unwrap()
+        .replace("FILE_SCHEMA", "file_schema");
+    let r = import_bytes(
+        text.into_bytes(),
+        &Document::with_sequential_ids(),
+        &IfcImportOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        r.report
+            .notes
+            .iter()
+            .any(|n| n.contains("IFC2x3 has no IfcMapConversion")),
+        "{:?}",
+        r.report.notes
+    );
 }

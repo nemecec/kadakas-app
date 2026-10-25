@@ -10,7 +10,7 @@
 //!   ([`MAX_RATIO`]). The size is counted while reading, not taken from the header.
 //! - It reads exactly one IFC entry. Other entries (a readme, a picture) are ignored and counted.
 
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
@@ -91,7 +91,16 @@ fn unsafe_name(name: &str) -> bool {
 }
 
 /// Reads the one IFC file of an ifcZIP. `max_bytes` caps the expanded size.
-pub fn unpack<R: Read + Seek>(r: R, max_bytes: usize) -> Result<Unpacked, IfcImportError> {
+///
+/// The expanded size is counted while the data comes out, never trusted from a header. The bound
+/// is the larger of [`RATIO_FROM`] and [`MAX_RATIO`] times the real length of the archive (the
+/// compressed data cannot be longer than the archive, whatever the headers say), and `max_bytes`.
+/// The reading stops as soon as the bound is passed, so a bomb never fills the memory.
+pub fn unpack<R: Read + Seek>(mut r: R, max_bytes: usize) -> Result<Unpacked, IfcImportError> {
+    let archive_len = r
+        .seek(SeekFrom::End(0))
+        .and_then(|n| r.seek(SeekFrom::Start(0)).map(|_| n))
+        .map_err(|e| bad(format!("the zip file cannot be read: {e}")))?;
     let mut zip = zip::ZipArchive::new(r).map_err(|e| bad(format!("not a valid zip file: {e}")))?;
     if zip.len() > MAX_ENTRIES {
         return Err(bad(format!(
@@ -150,25 +159,25 @@ pub fn unpack<R: Read + Seek>(r: R, max_bytes: usize) -> Result<Unpacked, IfcImp
     let f = zip
         .by_index(index)
         .map_err(|e| bad(format!("the IFC file in the zip cannot be read: {e}")))?;
-    let (declared, packed) = (f.size(), f.compressed_size());
-    let too_big = |what: &str| bad(format!("the IFC file in the zip is too big ({what})"));
-    if declared > max_bytes as u64 {
-        return Err(too_big(&format!("more than {max_bytes} bytes")));
-    }
-    // The header may lie: count the bytes that come out.
-    let mut data = Vec::with_capacity(declared.min(64 << 20) as usize);
-    let mut reader = f.take(max_bytes as u64 + 1);
-    reader
+    let ratio_bound = RATIO_FROM.max(MAX_RATIO.saturating_mul(archive_len));
+    let (bound, by_ratio) = if (max_bytes as u64) <= ratio_bound {
+        (max_bytes as u64, false)
+    } else {
+        (ratio_bound, true)
+    };
+    // Nothing is reserved from a header: the buffer grows with the data that really comes out.
+    let mut data = Vec::new();
+    f.take(bound + 1)
         .read_to_end(&mut data)
         .map_err(|e| bad(format!("the IFC file in the zip cannot be unpacked: {e}")))?;
-    if data.len() > max_bytes {
-        return Err(too_big(&format!("more than {max_bytes} bytes")));
-    }
-    let len = data.len() as u64;
-    if len > RATIO_FROM && len / packed.max(1) > MAX_RATIO {
-        return Err(too_big(&format!(
-            "it grows by more than {MAX_RATIO} times when unpacked"
-        )));
+    if data.len() as u64 > bound {
+        return Err(bad(if by_ratio {
+            format!(
+                "the IFC file in the zip is too big (it grows by more than {MAX_RATIO} times when unpacked)"
+            )
+        } else {
+            format!("the IFC file in the zip is too big (more than {max_bytes} bytes)")
+        }));
     }
     let mut notes = Vec::new();
     if others > 0 {
@@ -306,6 +315,28 @@ mod tests {
         let z = make(&[("a.ifc", &huge)]);
         assert!(z.len() < (1 << 20));
         assert!(err(unpack(Cursor::new(z), 1 << 30)).contains("grows by more than"));
+    }
+
+    #[test]
+    fn a_header_that_lies_does_not_open_the_gate() {
+        // 80 MiB of zeros in a zip of about 80 KiB; the sizes in the headers are changed to 100.
+        let mut z = make(&[("a.ifc", &vec![0u8; 80 << 20])]);
+        let small = 100u32.to_le_bytes();
+        let n = z.len();
+        for at in 0..n - 4 {
+            // The local header (PK 03 04) and the central directory (PK 01 02) hold the sizes.
+            if z[at..at + 4] == *b"PK\x03\x04" {
+                z[at + 22..at + 26].copy_from_slice(&small);
+            }
+            if z[at..at + 4] == *b"PK\x01\x02" {
+                z[at + 24..at + 28].copy_from_slice(&small);
+            }
+        }
+        let started = std::time::Instant::now();
+        let e = err(unpack(Cursor::new(z), 1 << 30));
+        assert!(started.elapsed().as_secs() < 600, "hang guard");
+        // Either the reading stops at the bound, or the zip library finds the sizes wrong.
+        assert!(e.contains("too big") || e.contains("cannot be"), "{e}");
     }
 
     #[test]
