@@ -1,0 +1,20 @@
+# CodeQL settings (used by .github/workflows/codeql.yml).
+# The first run found 257 alerts. A person read all of them: every one was a false positive.
+# - rust/cleartext-logging: the query treats an object id (`uid`) as private data. The alerts sat in
+#   `assert!` messages of tests and in a benchmark that prints counts.
+# - rust/hard-coded-cryptographic-value: the query treats the name of a UI widget id
+#   (`ComboBox::from_id_salt("group_by")`) as a cryptographic salt. Public keys that the updater
+#   trusts are hard-coded on purpose (they are not secrets).
+# - Tests that crash on purpose (crates/kadakas-crash/tests) trigger rust/access-invalid-pointer.
+# Tests, benchmarks and examples are left out. The two noisy rules are off for production code too.
+# A real problem in production code will still show up under the other rules.
+paths-ignore:
+  - "**/tests/**"
+  - "tests/**"
+  - "**/examples/**"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests_*.rs"
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
