@@ -201,11 +201,21 @@ cargo run -p kadakas-sign-manifest -- verify --signed manifest-stable.json --pub
 
 ### Set up the key (before the first release)
 
-`trusted-keys.txt` has a placeholder key. Its private half was thrown away, so every update is refused until you replace it.
+Done on 2026-10-25:
 
-1. Run `sign-manifest keygen --out signing.key`. Copy the public key it prints.
-2. Put the content of `signing.key` into the repository secret `KADAKAS_UPDATE_SIGNING_KEY`. Store a backup in a password manager. Delete the file.
-3. Replace the key line in `crates/kadakas-launcher/trusted-keys.txt` with the public key.
+- The key pair was made with `sign-manifest keygen`. The private key is in `~/.config/kadakas-release/update-signing.key` on the maintainer's computer (mode 600, outside the repository). Back it up in a password manager.
+- `crates/kadakas-launcher/trusted-keys.txt` holds the public key.
+- The GitHub Environment `update-signing` exists. It needs a required reviewer (the maintainer) and it allows deployments only from the branch `main` and the tags `v*`.
+
+To do by hand (the private key must never pass through a chat or a log):
+
+1. Put the key into the Environment secret. This reads the file and sends it to GitHub, and it prints nothing:
+   `gh secret set KADAKAS_UPDATE_SIGNING_KEY --env update-signing -R nemecec/kadakas-app < ~/.config/kadakas-release/update-signing.key`
+2. Check that the secret is there: `gh secret list --env update-signing -R nemecec/kadakas-app`.
+3. Copy the key file to a password manager. Keep the file on disk or delete it, as you prefer. GitHub never shows a secret again.
+4. To test the whole path, run the workflow Update manifest by hand with a published release tag. A required reviewer must approve the `sign` job.
+
+If the key file is lost and the secret is still in GitHub, signing still works. If both are lost, make a new key and see Key rotation: launchers that trust only the old key need a new installer.
 
 ### Key rotation
 

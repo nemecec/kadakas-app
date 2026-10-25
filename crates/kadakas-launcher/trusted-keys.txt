@@ -2,7 +2,6 @@
 # One or two keys, one per line. Two keys allow a key rotation (see docs/release.md).
 # These are PUBLIC keys. The private keys are in the CI secrets and never in this repository.
 #
-# PLACEHOLDER: the private half of this key was thrown away on purpose. No manifest can be
-# signed for it, so a launcher built from this file refuses every update. Before the first
-# release, make the real key with `sign-manifest keygen` and replace the line below.
-f1517ae94a0eefd20144191f1583a8d648e3f91c059b0e4bba59c975d9871b7c
+# The private half of the key below is in the GitHub Environment "update-signing" (secret
+# KADAKAS_UPDATE_SIGNING_KEY) and in a backup of the maintainer. Key made on 2026-10-25.
+0dd88b26ec58bef0da3508dfdea106799f6275890885f375985af90c4d08fb66
