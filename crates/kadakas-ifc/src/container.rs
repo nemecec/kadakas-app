@@ -109,6 +109,7 @@ pub fn unpack<R: Read + Seek>(mut r: R, max_bytes: usize) -> Result<Unpacked, If
         )));
     }
     let mut ifc: Option<usize> = None;
+    let mut method: Option<CompressionMethod> = None;
     let mut others = 0usize;
     let mut other_kinds = Vec::new();
     for i in 0..zip.len() {
@@ -139,6 +140,7 @@ pub fn unpack<R: Read + Seek>(mut r: R, max_bytes: usize) -> Result<Unpacked, If
                 ));
             }
             ifc = Some(i);
+            method = Some(f.compression());
         } else {
             others += 1;
             if has_ext(&name, "ifcxml") || has_ext(&name, "xml") {
@@ -156,6 +158,19 @@ pub fn unpack<R: Read + Seek>(mut r: R, max_bytes: usize) -> Result<Unpacked, If
             None => bad("the zip file has no .ifc file"),
         });
     };
+    match method {
+        Some(CompressionMethod::Stored | CompressionMethod::Deflated) | None => {}
+        Some(m) if m == CompressionMethod::BZIP2 => {
+            return Err(bad(
+                "the IFC file in the zip is packed with bzip2: bzip2 is not supported, use deflate",
+            ));
+        }
+        Some(other) => {
+            return Err(bad(format!(
+                "the IFC file in the zip is packed with {other:?}: that method is not supported, use deflate"
+            )));
+        }
+    }
     let f = zip
         .by_index(index)
         .map_err(|e| bad(format!("the IFC file in the zip cannot be read: {e}")))?;
@@ -193,7 +208,10 @@ pub fn unpack<R: Read + Seek>(mut r: R, max_bytes: usize) -> Result<Unpacked, If
 /// document gives the same bytes.
 pub fn start<W: Write + Seek>(out: W, name: &str) -> Result<zip::ZipWriter<W>, std::io::Error> {
     let mut z = zip::ZipWriter::new(out);
-    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    // `large_file`: the entry can be over 4 GB (zip64 headers); without it the writer fails there.
+    let opts = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .large_file(true);
     z.start_file(name, opts).map_err(std::io::Error::other)?;
     Ok(z)
 }

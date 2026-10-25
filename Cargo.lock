@@ -2960,6 +2960,7 @@ dependencies = [
  "glam",
  "i_overlay",
  "kadakas-core",
+ "kadakas-crash",
  "kadakas-crs",
  "kadakas-io",
  "kadakas-meshio",

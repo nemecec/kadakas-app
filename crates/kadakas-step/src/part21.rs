@@ -290,6 +290,10 @@ pub fn decode_string(s: &str) -> String {
             }
         }
     }
+    // A NUL (`\X\00`, `\X2\0000\X0\`) is no text: it is replaced by U+FFFD.
+    if out.contains('\0') {
+        out = out.replace('\0', "\u{FFFD}");
+    }
     out
 }
 
@@ -428,7 +432,8 @@ pub fn header_schemas(header: &str) -> Vec<String> {
     out
 }
 
-/// The place of a header keyword (upper case) in any case, outside of strings and on a word start.
+/// The place of a header keyword (upper case) in any case, outside of strings and comments
+/// (`/* ... */`) and on a word start.
 pub fn find_keyword(header: &str, keyword: &str) -> Option<usize> {
     let (b, k) = (header.as_bytes(), keyword.as_bytes());
     let mut quote = false;
@@ -436,6 +441,12 @@ pub fn find_keyword(header: &str, keyword: &str) -> Option<usize> {
     while i < b.len() {
         if b[i] == b'\'' {
             quote = !quote;
+        } else if !quote && b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            // A comment: skip to its end (an unfinished comment hides the rest).
+            match header[i + 2..].find("*/") {
+                Some(end) => i += end + 3,
+                None => return None,
+            }
         } else if !quote
             && b[i..].len() >= k.len()
             && b[i..i + k.len()].eq_ignore_ascii_case(k)
@@ -971,6 +982,25 @@ mod tests {
         ] {
             assert_eq!(decode_string(&encode_string(s)), s, "{s:?}");
         }
+    }
+
+    #[test]
+    fn a_nul_escape_is_replaced_not_put_into_the_text() {
+        assert_eq!(decode_string("a\\X\\00b"), "a\u{FFFD}b");
+        assert_eq!(decode_string("a\\X2\\0000\\X0\\b"), "a\u{FFFD}b");
+        assert_eq!(decode_string("a\\X4\\00000000\\X0\\b"), "a\u{FFFD}b");
+    }
+
+    #[test]
+    fn keywords_inside_comments_are_not_found() {
+        let h = "/* FILE_SCHEMA(('WRONG')); */ FILE_SCHEMA(('IFC4'));";
+        assert_eq!(
+            find_keyword(h, "FILE_SCHEMA"),
+            Some(h.rfind("FILE_SCHEMA").unwrap())
+        );
+        assert_eq!(header_schemas(h), vec!["IFC4".to_string()]);
+        assert_eq!(find_keyword("/* FILE_SCHEMA", "FILE_SCHEMA"), None);
+        assert_eq!(find_keyword("'/*' FILE_SCHEMA", "FILE_SCHEMA"), Some(5));
     }
 
     #[test]

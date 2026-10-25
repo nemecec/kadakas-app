@@ -278,7 +278,7 @@ Corrections found when the corpus ran. The scene `Infra-Landscaping.ifc` (IFC4) 
 
 | Gap | Status |
 |---|---|
-| 1 escapes | done: `\S\`, `\P<A-I>\`, code page of `\X\`, partial units dropped |
+| 1 escapes | done: `\S\`, `\P<A-I>\`, `\X\` is always Latin-1 (the code of a page is not used for it), partial units dropped |
 | 2 ifcZIP, XML, JSON | ifcZIP done (read, write, caps); XML and JSON refused by name, backlog in `docs/interop.md` |
 | 3 corpus | done (`ifc_corpus.rs`, 16 tests, pinned commits, hashes) |
 | 4 nested sites | done: a layer per site when the file has several; assemblies follow their site |

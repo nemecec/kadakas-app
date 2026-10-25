@@ -1927,7 +1927,9 @@ impl<'a> Importer<'a> {
             .unwrap_or_default();
         let data = self.data_of(e, class_name, &name, "", "", &[]);
         let mm = self.cx.units.length_mm;
-        let mut any = false;
+        // `tried`: a shape went to the builder. If the builder refused it, it has said why (a
+        // line in `skipped`): the product gets no second line.
+        let (mut any, mut tried) = (false, false);
         for p in &out.pieces {
             let shape = match p {
                 Piece::Curve(c) => match &c.exact {
@@ -1961,6 +1963,7 @@ impl<'a> Importer<'a> {
                 }
                 _ => continue,
             };
+            tried = true;
             any |= self.b.add(
                 class_name,
                 shape,
@@ -1970,7 +1973,7 @@ impl<'a> Importer<'a> {
                 data.clone(),
             );
         }
-        if !any {
+        if !any && !tried {
             let why = out
                 .issues
                 .first()
