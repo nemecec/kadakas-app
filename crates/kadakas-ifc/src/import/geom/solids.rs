@@ -424,7 +424,7 @@ pub fn pyramid(x: f64, y: f64, h: f64) -> MeshData {
     finish(MeshData { v, t, exact: None }, 1e-12)
 }
 
-/// How many times a solid was read by the STEP reader (tests count it).
+// How many times a solid was read by the STEP reader (tests count it).
 #[cfg(test)]
 thread_local! {
     pub(crate) static BREP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

@@ -222,6 +222,7 @@ fn far_file() -> String {
 #154=IFCCARTESIANPOINT((5.,5.,0.));\n#155=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#154,$,$);\n#156=IFCMAPPEDITEM(#153,#155);\n#157=IFCCARTESIANPOINT((9.,9.,0.));\n#158=IFCCARTESIANTRANSFORMATIONOPERATOR3D($,$,#157,$,$);\n#159=IFCMAPPEDITEM(#153,#158);\n";
     let line = "#170=IFCCARTESIANPOINT((0.,0.));#171=IFCCARTESIANPOINT((30.,20.));#172=IFCPOLYLINE((#170,#171));\n#173=IFCSHAPEREPRESENTATION($,'Annotation','Curve2D',(#172));\n#174=IFCPRODUCTDEFINITIONSHAPE($,$,(#173));\n#175=IFCANNOTATION('ga',$,'Line',$,$,#7,#174);\n";
     let point = "#180=IFCCARTESIANPOINT((12.,13.,2.));\n#181=IFCSHAPEREPRESENTATION($,'Annotation','Point',(#180));\n#182=IFCPRODUCTDEFINITIONSHAPE($,$,(#181));\n#183=IFCANNOTATION('gb',$,'Point',$,$,#7,#182);\n";
+    let lines_and_points = format!("{line}{point}");
     let products = format!(
         "{}{}{}{}{}{}{}{}{}{}{}",
         area,
@@ -246,7 +247,7 @@ fn far_file() -> String {
         product(160, "IFCBUILDINGELEMENTPROXY", "#156", "$,@,$,$")
             .replace("'SweptSolid'", "'MappedRepresentation'")
             + &product(164, "IFCBUILDINGELEMENTPROXY", "#159", "$,@,$,$"),
-        format!("{line}{point}"),
+        lines_and_points,
     );
     // The place of every product: the site at (650000, 6500000).
     let products = products.replace("#7,#", "#70,#").replace("(#7,", "(#70,");
