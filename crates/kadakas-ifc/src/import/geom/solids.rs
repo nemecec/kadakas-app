@@ -12,6 +12,9 @@ use super::{Eval, MeshData, Piece, Region, clean};
 use crate::import::ctx::{attr, num};
 use crate::step::Entity;
 
+/// The most triangles of one solid that the import makes (a sphere of 256 sides has 65,000).
+pub const MAX_SOLID_TRIANGLES: usize = 400_000;
+
 /// The fewest and most corners of a circle.
 const MIN_SIDES: usize = 12;
 const MAX_SIDES: usize = 256;
@@ -335,6 +338,43 @@ pub fn pipe(path: &[DVec3], r: f64, inner: Option<f64>, tol: f64) -> Option<Mesh
     Some(finish(m, 1e-9 * (1.0 + r)))
 }
 
+/// The triangles that [`sphere`] makes, counted before it is made.
+pub fn sphere_triangles(r: f64, tol: f64) -> usize {
+    let n = sides_for(r, TAU, tol).max(MIN_SIDES);
+    n * (n / 2).max(6) * 2
+}
+
+/// The triangles that [`cone_frustum`] makes.
+pub fn frustum_triangles(bottom: f64, top: f64, tol: f64) -> usize {
+    sides_for(bottom.max(top), TAU, tol).max(MIN_SIDES) * 4
+}
+
+/// The triangles that [`revolve`] makes: for each edge of the rings, two for each step of the turn.
+pub fn revolve_triangles(regions: &[Region], axis_o: DVec3, angle: f64, tol: f64) -> usize {
+    let theta = angle.clamp(0.0, TAU);
+    let mut total = 0usize;
+    for region in regions {
+        let Some((outer, holes)) = rings(region, tol) else {
+            continue;
+        };
+        let rmax = outer
+            .iter()
+            .map(|p| (p.extend(0.0) - axis_o).length())
+            .fold(0.0, f64::max);
+        let n = sides_for(rmax, theta, tol);
+        let edges: usize = outer.len() + holes.iter().map(Vec::len).sum::<usize>();
+        total = total.saturating_add(edges.saturating_mul(n).saturating_mul(2));
+        total = total.saturating_add(edges * 2);
+    }
+    total
+}
+
+/// The triangles that [`pipe`] makes.
+pub fn pipe_triangles(points: usize, r: f64, hollow: bool, tol: f64) -> usize {
+    let k = sides_for(r, TAU, tol / 4.0).max(MIN_SIDES);
+    points.saturating_sub(1).max(1) * k * 2 * if hollow { 2 } else { 1 } + k * 4
+}
+
 /// A box with a corner at the origin that reaches `d` (the `IfcBlock`).
 pub fn block(d: DVec3) -> MeshData {
     MeshData::cuboid(DVec3::ZERO, d)
@@ -431,6 +471,23 @@ thread_local! {
 }
 
 impl Eval<'_> {
+    /// True if a solid of about `triangles` triangles may be made: it must fit what is left of the
+    /// triangle limit of the import and the limit for one solid ([`MAX_SOLID_TRIANGLES`]). The work is
+    /// counted before the solid is made, so a small file cannot ask for gigabytes.
+    fn allow(&mut self, what: &str, triangles: usize) -> bool {
+        let left = self
+            .max_tris
+            .saturating_sub(self.tris)
+            .min(MAX_SOLID_TRIANGLES);
+        if triangles > left {
+            self.issue(format!(
+                "{what} would need about {triangles} triangles, more than the {left} that are allowed: it is not made (the sizes may be in the wrong unit)"
+            ));
+            return false;
+        }
+        true
+    }
+
     fn placement_of(&self, v: &crate::step::Value) -> DAffine3 {
         self.cx
             .get(v)
@@ -452,6 +509,10 @@ impl Eval<'_> {
         let o = self.cx.point(attr(&ax, 0)).unwrap_or(DVec3::ZERO);
         let d = self.cx.direction(attr(&ax, 1)).unwrap_or(DVec3::X);
         let angle = num(attr(e, 3)).unwrap_or(0.0) * self.cx.units.angle_rad;
+        let est = revolve_triangles(&regions, DVec3::new(o.x, o.y, 0.0), angle, self.tol);
+        if !self.allow("a revolved solid", est) {
+            return;
+        }
         match revolve(&regions, DVec3::new(o.x, o.y, 0.0), d, angle, self.tol) {
             Some(mut m) => {
                 m.transform(&(*xf * pos));
@@ -487,6 +548,12 @@ impl Eval<'_> {
         } else if let (Some(s), Some(t)) = (num(attr(e, 3)), num(attr(e, 4))) {
             pts = trim_polyline(&pts, s, t);
         }
+        if !self.allow(
+            "a swept disk",
+            pipe_triangles(pts.len(), r, inner.is_some(), self.tol),
+        ) {
+            return;
+        }
         match pipe(&pts, r, inner, self.tol) {
             Some(mut m) => {
                 m.transform(xf);
@@ -506,6 +573,15 @@ impl Eval<'_> {
     pub(super) fn primitive(&mut self, e: &Entity, xf: &DAffine3) {
         let pos = self.placement_of(attr(e, 0));
         let n = |i: usize| num(attr(e, i)).filter(|v| v.is_finite() && *v > 0.0);
+        let est = match e.name.as_str() {
+            "IFCSPHERE" => n(1).map_or(0, |r| sphere_triangles(r, self.tol)),
+            "IFCRIGHTCIRCULARCYLINDER" => n(2).map_or(0, |r| frustum_triangles(r, r, self.tol)),
+            "IFCRIGHTCIRCULARCONE" => n(2).map_or(0, |r| frustum_triangles(r, 0.0, self.tol)),
+            _ => 0,
+        };
+        if !self.allow(&e.name, est) {
+            return;
+        }
         let mesh = match e.name.as_str() {
             "IFCBLOCK" => n(1)
                 .zip(n(2))

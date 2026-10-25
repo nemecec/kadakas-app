@@ -737,6 +737,16 @@ impl<'a> Eval<'a> {
     /// Applies a boolean operation to two meshes. When it is refused, the `fallback` pieces are kept
     /// and an issue says why.
     fn combine(&mut self, op: csg::Op, a: MeshData, b: MeshData, fallback: Vec<Piece>) {
+        // Counted before the work: the operands must fit in the memory of the boolean.
+        if a.t.len() + b.t.len() > csg::MAX_POLYGONS / 2 {
+            self.issue(format!(
+                "a boolean is not applied: the operands have {} triangles, more than {}: the operands are kept as they are",
+                a.t.len() + b.t.len(),
+                csg::MAX_POLYGONS / 2
+            ));
+            self.pieces.extend(fallback);
+            return;
+        }
         let result = match self.fuel {
             Some(f) => f.scoped(csg::PER_CALL_FUEL, |own| csg::boolean(&a, &b, op, own)),
             None => csg::boolean(&a, &b, op, &csg::Fuel::new(csg::PER_CALL_FUEL)),

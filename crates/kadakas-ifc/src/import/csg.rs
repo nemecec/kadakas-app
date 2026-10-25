@@ -21,7 +21,7 @@ use super::geom::MeshData;
 /// Distance (file units) under which a point is on a plane.
 pub const EPS: f64 = 1e-7;
 /// The most polygons that one operation may hold at any time.
-pub const MAX_POLYGONS: usize = 400_000;
+pub const MAX_POLYGONS: usize = 150_000;
 /// The most work (split tests) that one boolean operation may use. The import has a budget of its own.
 pub const PER_CALL_FUEL: u64 = 60_000_000;
 /// The work of all booleans of one import.
@@ -286,6 +286,10 @@ impl Node {
         }
         front.append(&mut cf);
         back.append(&mut cb);
+        // The polygons that are alive at once are the memory of the work.
+        if front.len() + back.len() > MAX_POLYGONS {
+            return Err(CsgError::TooBig);
+        }
         let mut front = match &self.front {
             Some(f) => f.clip_polygons(front, fuel)?,
             None => front,
