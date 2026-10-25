@@ -271,7 +271,10 @@ impl CsvPictures {
             return Err(refused());
         }
         let canon = std::fs::canonicalize(dir.join(rel)).map_err(|_| refused())?;
-        if !canon.starts_with(dir) {
+        // `dir` has no `\\?\` prefix (the path policy removes it), the canonical path may have one.
+        if !kadakas_sys::paths::strip_verbatim(&canon)
+            .starts_with(kadakas_sys::paths::strip_verbatim(dir))
+        {
             return Err(refused());
         }
         if let Some(done) = self.by_path.get(&canon) {

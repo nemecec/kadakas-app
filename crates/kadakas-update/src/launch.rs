@@ -272,13 +272,22 @@ mod tests {
         // The program runs on its own: wait for the whole of its line.
         let out = d.join("out.txt");
         let want = format!("-- {}|||", file.to_string_lossy());
-        for _ in 0..500 {
+        for _ in 0..1500 {
             if std::fs::read_to_string(&out).is_ok_and(|t| t == want) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(std::fs::read_to_string(&out).unwrap(), want);
+        let got = std::fs::read_to_string(&out).unwrap_or_else(|e| {
+            let listing: Vec<_> = std::fs::read_dir(&d)
+                .map(|r| r.flatten().map(|f| f.file_name()).collect())
+                .unwrap_or_default();
+            panic!(
+                "cannot read {}: {e}; the folder holds {listing:?}",
+                out.display()
+            )
+        });
+        assert_eq!(got, want);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

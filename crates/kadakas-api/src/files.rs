@@ -622,7 +622,10 @@ mod tests {
             "{r}"
         );
         assert_eq!(s.editor.doc().objects.len(), 2);
-        assert_eq!(s.take_blocked(), Some(crate::Blocked::Open(f.clone())));
+        assert_eq!(
+            s.take_blocked(),
+            Some(crate::Blocked::Open(kadakas_sys::paths::strip_verbatim(&f)))
+        );
         assert_eq!(s.take_blocked(), None);
         let e = s
             .handle(
