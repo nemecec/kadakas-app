@@ -212,6 +212,7 @@ impl Session {
     /// Records a panic that a library caught on its own (the IFC import turns a panic into an
     /// error): the message and the place go to the log and the failure of the session, which is
     /// marked `tainted`, as for a panic that `guarded` catches.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn note_handled_panic(&mut self, method: &str, detail: &str) {
         let detail = scrub::harsh(detail);
         self.tainted = true;
