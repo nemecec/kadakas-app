@@ -231,6 +231,19 @@ impl Model {
         None
     }
 
+    /// The nearest `IfcSite` above an element (through assemblies and partial sites).
+    pub fn site_of(&self, cx: &Ctx, id: u64) -> Option<u64> {
+        let mut cur = id;
+        for _ in 0..32 {
+            let p = *self.parent.get(&cur)?;
+            if cx.x.name_of(p) == Some("IFCSITE") {
+                return Some(p);
+            }
+            cur = p;
+        }
+        None
+    }
+
     /// The property sets and quantity sets of an element.
     pub fn property_sets(&self, cx: &Ctx, id: u64) -> Vec<PropSet> {
         let mut out: Vec<PropSet> = Vec::new();
@@ -460,6 +473,8 @@ pub struct FileGeo {
     /// Meters per millimeter of the model, as the file says.
     pub meters_per_mm: f64,
     pub height: f64,
+    /// `FactorX`, `FactorY` and `FactorZ` of an `IfcMapConversionScaled` (grid factors).
+    pub factors: glam::DVec3,
 }
 
 /// Reads `IfcMapConversion` and `IfcProjectedCRS`.
@@ -516,12 +531,19 @@ pub fn file_georef(cx: &Ctx) -> Option<FileGeo> {
     };
     // The scale is map units per project unit; one project unit is `length_mm` millimeters.
     let meters_per_mm = scale * to_m / cx.units.length_mm;
+    let factor = |i: usize| num(attr(&e, i)).filter(|f| *f > 0.0).unwrap_or(1.0);
+    let factors = if e.name == "IFCMAPCONVERSIONSCALED" {
+        glam::DVec3::new(factor(8), factor(9), factor(10))
+    } else {
+        glam::DVec3::ONE
+    };
     Some(FileGeo {
         crs: name,
         origin,
         rotation,
         meters_per_mm,
         height,
+        factors,
     })
 }
 
@@ -580,5 +602,6 @@ fn legacy_georef(cx: &Ctx) -> Option<FileGeo> {
         },
         meters_per_mm: scale / cx.units.length_mm,
         height: n("orthogonalheight").unwrap_or(0.0),
+        factors: glam::DVec3::ONE,
     })
 }

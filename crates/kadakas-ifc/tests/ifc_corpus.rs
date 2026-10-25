@@ -419,3 +419,125 @@ fn nurbs_samples_of_bentley_match_their_facet_twins_or_say_what_is_missing() {
         );
     }
 }
+
+#[test]
+fn tin_scenarios_of_12d_keep_their_holes_and_land_in_their_crs() {
+    // UT_Tin_1: a network whose triangles carry the flags 7 (breaklines), -2 (void) and -1 (hole).
+    if let Some(file) = corpus::rc("Tin_1 (RC1)/UT_Tin_1.ifc") {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let at = text.find("IFCTRIANGULATEDIRREGULARNETWORK").unwrap();
+        let statement = &text[at..at + text[at..].find(");").unwrap()];
+        // The flags are the last list of the statement.
+        let flags = &statement[statement.rfind('(').unwrap()..];
+        let list: Vec<i64> = flags
+            .split(|c: char| !(c.is_ascii_digit() || c == '-'))
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let hidden = list.iter().filter(|f| **f < 0).count();
+        assert!(
+            hidden > 0 && hidden < list.len(),
+            "{hidden} of {}",
+            list.len()
+        );
+        let (ed, rep) = load(&file);
+        let o = objects(&ed);
+        assert_eq!(o.len(), 1, "{rep:?}");
+        // Holes would be filled by a site model, so the network is a mesh with the visible triangles.
+        let Shape::Mesh3d(m) = &o[0].shape else {
+            panic!("{}", o[0].shape.kind())
+        };
+        assert_eq!(m.triangles.len(), list.len() - hidden);
+        assert!(
+            rep.notes
+                .iter()
+                .any(|n| n.contains("27 holes and 172 voids")),
+            "{:?}",
+            rep.notes
+        );
+    }
+    // UT_Tin_in_MGA_56: the coordinates are map coordinates (northing 7 million meters) with an
+    // identity map conversion. They are moved to the origin and the shift goes into the georeference.
+    if let Some(file) = corpus::rc("Georeferencing_Tin_1 (RC1)/UT_Tin_in_MGA_56.ifc") {
+        let (ed, rep) = load(&file);
+        assert_eq!(objects(&ed).len(), 1, "{rep:?}");
+        let g = ed.doc().georef.as_ref().expect("a georeference");
+        assert_eq!(g.crs, "EPSG:28356");
+        assert!(
+            g.origin.x > 200_000.0 && g.origin.y > 7_000_000.0,
+            "{:?}",
+            g.origin
+        );
+        let Shape::Mesh3d(m) = &objects(&ed)[0].shape else {
+            panic!()
+        };
+        let (lo, hi) = m.bounds3();
+        assert!(hi.x.abs() < 1.0e6 && lo.y.abs() < 1.0e6, "{lo} {hi}");
+        assert!(rep.notes.iter().any(|n| n.contains("far from the origin")));
+    }
+}
+
+#[test]
+fn partial_sites_of_the_scene_are_layers_and_assembly_parts_follow_their_site() {
+    let Some(file) = corpus::scene("4", "Infra-Landscaping") else {
+        return;
+    };
+    let (ed, rep) = load(&file);
+    let layer_name = |o: &Object| ed.doc().layer(o.layer).unwrap().name.clone();
+    let mut used: std::collections::BTreeMap<String, usize> = Default::default();
+    for o in objects(&ed) {
+        *used.entry(layer_name(o)).or_default() += 1;
+    }
+    // 1 complex site (it holds one element, the underground) and 7 partial sites.
+    assert!(used.contains_key("park - site"), "{used:?}");
+    assert!(used.contains_key("meadow - site"), "{used:?}");
+    assert!(
+        !used.contains_key("Site"),
+        "every element is in a partial site: {used:?}"
+    );
+    assert_eq!(used.values().sum::<usize>(), 101);
+    assert_eq!(used.len(), 8, "{used:?}");
+    assert_eq!(used["park - site"], 57, "{used:?}");
+    assert_eq!(rep.layers_created.len(), 8);
+    // The posts of a signal assembly are on the layer of the site of the assembly.
+    let posts: Vec<&Object> = objects(&ed)
+        .into_iter()
+        .filter(|o| o.data["ifc_class"] == "IfcMember")
+        .collect();
+    assert_eq!(posts.len(), 10);
+    assert!(posts.iter().all(|o| layer_name(o) != "Site"));
+}
+
+#[test]
+fn columns_placed_on_a_grid_land_at_the_crossings() {
+    let Some(file) = corpus::iso("grid-placement.ifc") else {
+        return;
+    };
+    let (ed, rep) = load(&file);
+    let columns: Vec<&Object> = objects(&ed)
+        .into_iter()
+        .filter(|o| o.data["ifc_class"] == "IfcColumn")
+        .collect();
+    assert!(columns.len() >= 20, "{rep:?}");
+    // Each column stands at a crossing of two axes: no two are in one place unless the grid says so.
+    let mut at: Vec<(i64, i64)> = columns
+        .iter()
+        .map(|o| {
+            let Shape::Mesh3d(m) = &o.shape else { panic!() };
+            let (lo, hi) = m.bounds3();
+            let c = (lo + hi) / 2.0;
+            ((c.x / 10.0).round() as i64, (c.y / 10.0).round() as i64)
+        })
+        .collect();
+    at.sort();
+    at.dedup();
+    assert_eq!(
+        at.len(),
+        columns.len(),
+        "columns on top of each other: {at:?}"
+    );
+    assert!(
+        !rep.notes.iter().any(|n| n.contains("placements")),
+        "{:?}",
+        rep.notes
+    );
+}

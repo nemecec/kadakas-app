@@ -120,6 +120,9 @@ pub struct Ctx<'a> {
     pub units: Units,
     /// Placement chains that loop or are longer than 256 (they stop there).
     pub bad_placements: std::cell::Cell<usize>,
+    /// Placements of other kinds (`IfcLinearPlacement`, a grid placement that cannot be read): the
+    /// chain stops there, at the parent.
+    pub other_placements: std::cell::Cell<usize>,
 }
 
 impl<'a> Ctx<'a> {
@@ -128,6 +131,7 @@ impl<'a> Ctx<'a> {
             x,
             units: Units::default(),
             bad_placements: std::cell::Cell::new(0),
+            other_placements: std::cell::Cell::new(0),
         };
         c.units = c.read_units();
         c
@@ -292,7 +296,18 @@ impl<'a> Ctx<'a> {
             }
             seen.push(i);
             let Some(e) = self.ent(i) else { break };
+            if e.name == "IFCGRIDPLACEMENT" {
+                // An absolute place: the root of the chain.
+                match self.grid_placement(&e) {
+                    Some(a) => chain.push(a),
+                    None => self.other_placements.set(self.other_placements.get() + 1),
+                }
+                break;
+            }
             if e.name != "IFCLOCALPLACEMENT" {
+                if e.name == "IFCLINEARPLACEMENT" {
+                    self.other_placements.set(self.other_placements.get() + 1);
+                }
                 break;
             }
             if let Some(rel) = self.get(attr(&e, 1))
@@ -306,6 +321,93 @@ impl<'a> Ctx<'a> {
             .iter()
             .rev()
             .fold(DAffine3::IDENTITY, |acc, a| acc * *a)
+    }
+
+    /// An `IfcGridPlacement`: the place is the crossing of two grid axes (plus the offsets), in the
+    /// frame of the grid. The direction is the one of the grid, or the one given.
+    pub fn grid_placement(&self, e: &Entity) -> Option<DAffine3> {
+        // IFC4X3 adds PlacementRelTo in front of the two attributes of IFC4.
+        let o = e.attrs.len().saturating_sub(2);
+        let (at, grid) = self.virtual_intersection(self.get(attr(e, o))?.as_ref())?;
+        let mut rot = DAffine3::IDENTITY.matrix3;
+        if let Some(r) = self.get(attr(e, o + 1)) {
+            let dir = if r.name == "IFCDIRECTION" {
+                self.direction(attr(e, o + 1))
+            } else {
+                self.virtual_intersection(&r).map(|(p, _)| p - at)
+            };
+            if let Some(x) = dir.and_then(|d| DVec3::new(d.x, d.y, 0.0).try_normalize()) {
+                rot = DMat3::from_cols(x, DVec3::Z.cross(x), DVec3::Z);
+            }
+        }
+        let place = |p: DVec3| {
+            grid * DAffine3 {
+                matrix3: rot,
+                translation: p,
+            }
+        };
+        Some(place(at))
+    }
+
+    /// The crossing of an `IfcVirtualGridIntersection` in the frame of the grid, and the placement of
+    /// the grid. The crossing of the two axis lines, moved by the offsets.
+    fn virtual_intersection(&self, v: &Entity) -> Option<(DVec3, DAffine3)> {
+        if v.name != "IFCVIRTUALGRIDINTERSECTION" {
+            return None;
+        }
+        let axes = self.get_all(attr(v, 0));
+        let [a, b] = axes.as_slice() else { return None };
+        let line = |axis: &Entity| -> Option<(DVec2, DVec2)> {
+            let c = self.get(attr(axis, 1))?;
+            match c.name.as_str() {
+                "IFCPOLYLINE" => {
+                    let pts: Vec<DVec3> = items(attr(&c, 0))
+                        .iter()
+                        .filter_map(|p| self.point(p))
+                        .collect();
+                    Some((
+                        pts.first()?.truncate(),
+                        (*pts.get(1)? - *pts.first()?).truncate(),
+                    ))
+                }
+                "IFCLINE" => {
+                    let p = self.point(attr(&c, 0))?.truncate();
+                    let v = self.get(attr(&c, 1))?;
+                    let d = self.direction(attr(&v, 0))?;
+                    Some((p, d.truncate()))
+                }
+                _ => None,
+            }
+        };
+        let ((p, d), (q, f)) = (line(a)?, line(b)?);
+        let cross = d.perp_dot(f);
+        if cross.abs() < 1e-12 {
+            return None;
+        }
+        let s = (q - p).perp_dot(f) / cross;
+        let hit = p + d * s;
+        let off = numbers(attr(v, 1));
+        let at = DVec3::new(
+            hit.x + off.first().copied().unwrap_or(0.0),
+            hit.y + off.get(1).copied().unwrap_or(0.0),
+            off.get(2).copied().unwrap_or(0.0),
+        );
+        // The grid that owns the axis: its U, V or W axes list it.
+        let grid = self.x.ids_of("IFCGRID").into_iter().find_map(|g| {
+            let g = self.ent(g)?;
+            [7, 8, 9]
+                .iter()
+                .any(|i| {
+                    items(attr(&g, *i))
+                        .iter()
+                        .any(|r| r.as_ref_id() == Some(a.id))
+                })
+                .then_some(g)
+        })?;
+        let place = attr(&grid, 5)
+            .as_ref_id()
+            .map_or(DAffine3::IDENTITY, |p| self.placement(p));
+        Some((at, place))
     }
 
     /// An `IfcCartesianTransformationOperator` (2D or 3D, uniform or not) as a transform.
