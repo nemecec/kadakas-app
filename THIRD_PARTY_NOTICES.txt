@@ -3061,7 +3061,7 @@ The `cfg_aliases!` macro uses a lot of the code from [`tectonic_cfg_support::tar
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - schemars 1.2.2 (https://github.com/GREsau/schemars)
+  - schemars 1.2.3 (https://github.com/GREsau/schemars)
 
 #![allow(clippy::all)]
 use crate::_alloc_prelude::*;
@@ -6256,7 +6256,7 @@ SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - libc 0.2.190 (https://github.com/rust-lang/libc)
+  - libc 0.2.191 (https://github.com/rust-lang/libc)
 
 Copyright (c) The Rust Project Developers
 
@@ -6629,7 +6629,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - ureq-proto 0.6.4 (https://github.com/algesten/ureq-proto)
+  - ureq-proto 0.6.5 (https://github.com/algesten/ureq-proto)
 
 Copyright 2022 Martin Algesten
 
@@ -6945,8 +6945,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - schemars 1.2.2 (https://github.com/GREsau/schemars)
-  - schemars_derive 1.2.2 (https://github.com/GREsau/schemars)
+  - schemars 1.2.3 (https://github.com/GREsau/schemars)
+  - schemars_derive 1.2.3 (https://github.com/GREsau/schemars)
 
 MIT License
 
@@ -7039,7 +7039,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - ureq 3.4.2 (https://github.com/algesten/ureq)
+  - ureq 3.5.0 (https://github.com/algesten/ureq)
 
 MIT License
 
@@ -7375,7 +7375,7 @@ SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - i_tree 0.19.0 (https://github.com/iShape-Rust/iTree)
+  - i_tree 0.20.0 (https://github.com/iShape-Rust/iTree)
 
 MIT License
 
@@ -7495,8 +7495,8 @@ Used by:
   - gpu-descriptor-types 0.2.0 (https://github.com/zakarumych/gpu-descriptor)
   - gpu-descriptor 0.3.2 (https://github.com/zakarumych/gpu-descriptor)
   - harfrust 0.7.0 (https://github.com/harfbuzz/harfrust)
-  - i_key_sort 0.11.0 (https://github.com/iShape-Rust/iKeySort)
-  - i_overlay 9.0.1 (https://github.com/iShape-Rust/iOverlay)
+  - i_key_sort 0.12.0 (https://github.com/iShape-Rust/iKeySort)
+  - i_overlay 9.1.0 (https://github.com/iShape-Rust/iOverlay)
   - intl_pluralrules 7.0.2 (https://github.com/zbraniecki/pluralrules)
   - libm 0.2.16 (https://github.com/rust-lang/compiler-builtins)
   - objc-sys 0.3.5 (https://github.com/madsmtm/objc2)
@@ -7887,7 +7887,7 @@ Used by:
   - serde_core 1.0.229 (https://github.com/serde-rs/serde)
   - serde_derive 1.0.229 (https://github.com/serde-rs/serde)
   - serde_derive_internals 0.30.0 (https://github.com/serde-rs/serde)
-  - serde_json 1.0.151 (https://github.com/serde-rs/json)
+  - serde_json 1.0.154 (https://github.com/serde-rs/json)
   - serde_path_to_error 0.1.20 (https://github.com/dtolnay/path-to-error)
   - serde_repr 0.1.21 (https://github.com/dtolnay/serde-repr)
   - smol_str 0.2.2 (https://github.com/rust-analyzer/smol_str)
@@ -8053,7 +8053,7 @@ MIT License
 --------------------------------------------------------------------------------
 Used by:
   - tracing-core 0.1.36 (https://github.com/tokio-rs/tracing)
-  - zip 9.0.4 (https://github.com/zip-rs/zip2)
+  - zip 9.0.5 (https://github.com/zip-rs/zip2)
 
 The MIT License (MIT)
 
