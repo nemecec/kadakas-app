@@ -7,7 +7,8 @@
 set -euo pipefail
 version="${1:?usage: extract-changelog-section.sh VERSION}"
 changelog="${CHANGELOG:-CHANGELOG.md}"
-out="$(awk -v head="## [${version}]" '
+out="$(HEAD_TEXT="## [${version}]" awk '
+  BEGIN { head = ENVIRON["HEAD_TEXT"] }
   index($0, head) == 1 { on = 1; next }
   /^## \[/ || /^\[[^]]+\]: / { on = 0 }
   on { print }

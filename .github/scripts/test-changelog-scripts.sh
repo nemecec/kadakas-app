@@ -46,6 +46,20 @@ expect "extract stops at the next section" "[ \"\$('$here/extract-changelog-sect
 expect "extract of a missing version fails" "! '$here/extract-changelog-section.sh' 9.9.9 2>/dev/null"
 expect "bad version refused" "! '$here/prepare-changelog-release.sh' 1.0 2>/dev/null"
 
+# Only headings under Unreleased is empty. Windows line ends are refused.
+export CHANGELOG="$tmp/headings.md"
+printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n### Fixed\n\n[Unreleased]: https://example.org/r/commits/main\n' > "$CHANGELOG"
+expect "headings only count as empty" "! '$here/prepare-changelog-release.sh' 0.2.0 2>/dev/null"
+expect "allow-empty promotes it" "CHANGELOG_ALLOW_EMPTY=true '$here/prepare-changelog-release.sh' 0.2.0 >/dev/null"
+export CHANGELOG="$tmp/crlf.md"
+printf '# Changelog\r\n\r\n## [Unreleased]\r\n\r\n- A thing.\r\n\r\n[Unreleased]: https://example.org/r/commits/main\r\n' > "$CHANGELOG"
+expect "CRLF refused with a message" "out=\$('$here/prepare-changelog-release.sh' 0.2.0 2>&1 || true); [[ \$out == *CRLF* ]]"
+# Backslashes in a link reach the file unchanged.
+export CHANGELOG="$tmp/back.md"
+printf '# Changelog\n\n## [Unreleased]\n\n- A thing.\n\n[Unreleased]: https://example.org/r\\x/compare/v0.1.0...HEAD\n' > "$CHANGELOG"
+"$here/prepare-changelog-release.sh" 0.1.1 >/dev/null
+expect "backslash kept" "grep -qF 'https://example.org/r\\x/compare/v0.1.0...v0.1.1' '$CHANGELOG'"
+
 # The real file: it parses, and its Unreleased link is in a form the script reads.
 export CHANGELOG="$here/../../CHANGELOG.md"
 expect "CHANGELOG.md has an [Unreleased] link" "grep -qE '^\[Unreleased\]: https://' '$CHANGELOG'"

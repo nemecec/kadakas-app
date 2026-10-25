@@ -6,25 +6,31 @@
 # VERSION is the workspace version, for example 0.1.0 or 0.1.0-beta.2 (a dash starts the pre-release part).
 # FORMAT is one of:
 #   semver  the version as it is (the app, the manifest, NSIS, AppImage, the macOS bundles, the tag)
-#   pep440  the Python form: 0.1.0-beta.2 -> 0.1.0b2 (alpha -> a, beta -> b, rc -> rc), 0.1.1-dev -> 0.1.1.dev0
-#   wix     the MSI form. WiX takes only numbers: major.minor.patch[.build], and the build is at most 65535.
-#           The pre-release becomes the build number: alpha.N -> N, beta.N -> 10000+N, dev -> 15000,
-#           rc.N -> 20000+N (N below 10000), so 0.1.0-beta.2 -> 0.1.0.10002. This is the order of
-#           the versions: alpha < beta < dev < rc < the release (which has no fourth number). Windows Installer ignores the fourth number when it
-#           compares versions: 0.1.0-beta.2 and 0.1.0 look the same to it.
-#   deb     the Debian form: 0.1.0-beta.2 -> 0.1.0~beta.2, 0.1.1-dev -> 0.1.1~dev. A tilde sorts before the empty text, so the beta is
-#           older than 0.1.0. A dash would start the Debian revision, and 0.1.0-beta.2 would sort after 0.1.0.
+#   pep440  the Python form: 0.1.0-beta.2 -> 0.1.0b2 (alpha -> a, beta -> b, rc -> rc).
+#           0.1.1-dev -> 0.1.1rc0.dev0. That sorts above every beta and alpha of 0.1.1 and below 0.1.1rc1
+#           and 0.1.1, like the semver order. (0.1.1.dev0 would sort below the alphas.)
+#   wix     the MSI form. WiX takes only numbers: major.minor.patch[.build], the build at most 65535.
+#           cargo-packager 0.11.8 (wix/mod.rs convert_version) parses the version as semver first, then
+#           turns a NUMERIC pre-release into the fourth number: 0.1.0-10001 becomes 0.1.0.10001.
+#           So this script prints the semver form with a numeric pre-release:
+#           alpha.N -> -N, beta.N -> -(10000+N), dev -> -15000, rc.N -> -(20000+N) (N below 10000),
+#           for example 0.1.0-beta.2 -> 0.1.0-10002. This is the order of the versions
+#           (alpha < beta < dev < rc). The release has no pre-release part. Windows Installer ignores
+#           the fourth number when it compares versions: 0.1.0-beta.2 and 0.1.0 look the same to it.
+#   deb     the Debian form: 0.1.0-beta.2 -> 0.1.0~beta.2, 0.1.1-dev -> 0.1.1~dev. A tilde sorts before
+#           the empty text, so the beta is older than 0.1.0. A dash would start the Debian revision,
+#           and 0.1.0-beta.2 would sort after 0.1.0.
 # A pre-release part that is not alpha.N, beta.N, rc.N or dev is an error for pep440 and wix.
 set -euo pipefail
 
 fmt="${1:?usage: packager-version.sh FORMAT VERSION}"
 ver="${2:?usage: packager-version.sh FORMAT VERSION}"
 
+here="$(cd "$(dirname "$0")" && pwd)"
+python3 -I "$here/version_cmp.py" valid "$ver" || exit 1
 core="${ver%%-*}"
 pre=""
 if [ "$core" != "$ver" ]; then pre="${ver#*-}"; fi
-re_core='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-[[ "$core" =~ $re_core ]] || { echo "bad version: $ver" >&2; exit 1; }
 
 label="" num=""
 if [ -n "$pre" ]; then
@@ -43,17 +49,17 @@ case "$fmt" in
       "") echo "$core" ;;
       alpha) echo "${core}a$num" ;;
       beta) echo "${core}b$num" ;;
-      dev) echo "$core.dev0" ;;
+      dev) echo "${core}rc0.dev0" ;;
       rc) echo "${core}rc$num" ;;
     esac ;;
   wix)
     need_label
     case "$label" in
       "") echo "$core" ;;
-      alpha) echo "$core.$num" ;;
-      beta) echo "$core.$((10000 + num))" ;;
-      dev) echo "$core.15000" ;;
-      rc) echo "$core.$((20000 + num))" ;;
+      alpha) echo "$core-$num" ;;
+      beta) echo "$core-$((10000 + num))" ;;
+      dev) echo "$core-15000" ;;
+      rc) echo "$core-$((20000 + num))" ;;
     esac ;;
   *) echo "unknown format: $fmt" >&2; exit 1 ;;
 esac

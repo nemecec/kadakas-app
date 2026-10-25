@@ -8,6 +8,7 @@
 # OUT_DIR/Kadakas Engine.app is made there. VERSION defaults to the version of the workspace.
 #
 #   Kadakas Engine.app/Contents/Info.plist            packaging/macos/App-Info.plist
+#   Info.plist (for the outer bundle)                packaging/macos/Info.plist
 #   Kadakas Engine.app/Contents/MacOS/kadakas-app     the main executable
 #   Kadakas Engine.app/Contents/MacOS/kadakas-modeler the 3D modeler (a UI flavor of the launcher)
 #   Kadakas Engine.app/Contents/MacOS/kadakas         the command line tool (MCP server, renderer)
@@ -37,8 +38,12 @@ cp packaging/icons/icon.icns "$app/Contents/Resources/icon.icns"
 for f in THIRD_PARTY_NOTICES.txt docs/attribution.md LICENSE-APACHE LICENSE-MIT; do
   if [ -f "$f" ]; then cp "$f" "$app/Contents/Resources/"; fi
 done
-# CFBundleVersion must be numeric (dots and digits): the version without the pre-release part.
-sed -e "s/@VERSION@/$version/g" -e "s/@BUILD@/${version%%-*}/g" packaging/macos/App-Info.plist > "$app/Contents/Info.plist"
+# CFBundleVersion and CFBundleShortVersionString are digits and dots only (Apple): the version
+# without the pre-release part. The full version is in the key KadakasVersion.
+sed_version=(-e "s/@VERSION@/$version/g" -e "s/@BUILD@/${version%%-*}/g")
+sed "${sed_version[@]}" packaging/macos/App-Info.plist > "$app/Contents/Info.plist"
+# The Info.plist for the outer bundle (packager-macos.toml: info-plist-path).
+sed "${sed_version[@]}" packaging/macos/Info.plist > "$out/Info.plist"
 # Check that the plist is valid (plutil is part of macOS).
-if command -v plutil >/dev/null 2>&1; then plutil -lint "$app/Contents/Info.plist" >/dev/null; fi
+if command -v plutil >/dev/null 2>&1; then plutil -lint "$app/Contents/Info.plist" "$out/Info.plist" >/dev/null; fi
 echo "$app (version $version)"

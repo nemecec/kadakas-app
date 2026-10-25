@@ -70,7 +70,8 @@ role = "editor"
 
 [macos]
 minimum-system-version = "11.0"
-info-plist-path = "packaging/macos/Info.plist"
+# Made by scripts/macos-app.sh from packaging/macos/Info.plist (the version keys). Run the script first.
+info-plist-path = "dist-app/Info.plist"
 background-app = true
 embedded-apps = ["dist-app/Kadakas Engine.app"]
 

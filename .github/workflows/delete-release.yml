@@ -2,7 +2,10 @@ name: Delete release
 # Deletes a bad (rehearsal) release: the GitHub release (draft or published), its tag, and the
 # signed manifest in the release "update-manifests" when that manifest names this version.
 # Start it from the Actions tab. The environment "release" can ask a reviewer first.
-# It does not touch main: the commit "Release <version>" stays. Change it with a new commit.
+# It does not touch main: the commit "Release <version>" stays, and main has the next -dev version
+# by then. It never removes highest-published.json (the record of the highest published version in
+# the release update-manifests). A published version number is never reused or lowered: after
+# deleting a bad release, release a HIGHER version.
 # It refuses the latest stable release unless `force` is true.
 # Actions are pinned to commit SHAs, as in ci.yml.
 on:
@@ -67,3 +70,8 @@ jobs:
           else
             echo "::error::No release and no tag $TAG."; exit 1
           fi
+          {
+            echo "## Deleted $TAG"
+            echo
+            echo "The record highest-published.json of the release update-manifests was kept. A published version number is never reused or lowered: release a HIGHER version than $version."
+          } >> "$GITHUB_STEP_SUMMARY"

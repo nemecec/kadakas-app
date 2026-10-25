@@ -55,6 +55,12 @@ impl Version {
             ));
         }
         if let Some(p) = pre
+            && p.split('.').any(|id| id.split('-').any(str::is_empty))
+        {
+            // The same rule as the version pattern of the scripts: no empty part around a hyphen.
+            return Err(bad("bad pre-release part (an empty part around a hyphen)"));
+        }
+        if let Some(p) = pre
             && p.split('.').any(|id| {
                 id.len() > 1 && id.starts_with('0') && id.bytes().all(|b| b.is_ascii_digit())
             })
@@ -181,11 +187,17 @@ mod tests {
             "1.02.3",
             "1.2.3-a.01",
             "1.2.3-00",
+            "0.0.0--x",
+            "1.2.3-a-",
+            "1.2.3-a.-b",
+            "1.2.3-a--b",
             "1234567890.0.0",
         ] {
             assert!(Version::parse(t).is_err(), "{t}");
         }
         assert!(Version::parse(&format!("1.2.3-{}", "a".repeat(40))).is_err());
+        // Inner hyphens are fine, as in the version pattern of the scripts.
+        assert!(Version::parse("1.2.3-a-b.c-1").is_ok());
     }
 
     #[test]

@@ -22,9 +22,7 @@ ws=$(value_of Cargo.toml "[workspace.package]" version)
 echo "workspace version: $ws"
 
 # The version must be a tag the release workflows accept, and one that kadakas_update::Version reads.
-re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
-[[ "$ws" =~ $re ]] || fail "$ws is not a version that the release workflows accept (lower-case, major.minor.patch[-pre])"
-[ "${#ws}" -le 40 ] || fail "$ws is longer than 40 characters (the limit of kadakas_update::Version)"
+python3 -I scripts/version_cmp.py valid "$ws" || fail "$ws is not a version that the release workflows accept"
 
 # Package forms. An error here means the pre-release label cannot be mapped.
 pep=$(scripts/packager-version.sh pep440 "$ws") || { fail "no PEP 440 form of $ws"; pep=""; }
@@ -67,9 +65,11 @@ if grep -Eq '^  - kadakas[a-z0-9-]* [0-9]' THIRD_PARTY_NOTICES.txt; then
 fi
 
 # The macOS bundle: Info.plist templates take the version from macos-app.sh, never a fixed one.
-if grep -Eq '<string>[0-9]+\.[0-9]+\.[0-9]+[^<]*</string>' packaging/macos/App-Info.plist; then
-  fail "packaging/macos/App-Info.plist has a fixed version (use @VERSION@ and @BUILD@)"
-fi
+for plist in packaging/macos/App-Info.plist packaging/macos/Info.plist; do
+  if grep -Eq '<string>[0-9]+\.[0-9]+\.[0-9]+[^<]*</string>' "$plist"; then
+    fail "$plist has a fixed version (use @VERSION@ and @BUILD@)"
+  fi
+done
 
 if [ "$bad" = 0 ]; then echo "version: all places agree ($ws; python $pep; msi $(scripts/packager-version.sh wix "$ws"); deb $(scripts/packager-version.sh deb "$ws"))"; fi
 exit "$bad"
