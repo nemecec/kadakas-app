@@ -2,6 +2,7 @@
 name = "kadakas-cli"
 default-run = "kadakas"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,18 +14,18 @@ default = ["script-js"]
 script-js = ["kadakas-api/script-js"]
 
 [dependencies]
-kadakas-api = { version = "0.1.0", path = "../kadakas-api", default-features = false }
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
-kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-api = { path = "../kadakas-api", default-features = false }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-feedback = { path = "../kadakas-feedback" }
+kadakas-file = { path = "../kadakas-file" }
+kadakas-sys = { path = "../kadakas-sys" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
-kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
+kadakas-collab-ws = { path = "../kadakas-collab-ws" }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
 [dev-dependencies]
-kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
-kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
+kadakas-collab-ws = { path = "../kadakas-collab-ws", features = ["test-server"] }
+kadakas-collab = { path = "../kadakas-collab", features = ["testkit"] }
 
 [[bin]]
 name = "kadakas"

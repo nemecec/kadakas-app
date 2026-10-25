@@ -7,7 +7,7 @@ named for it. This file is made by scripts/notices.sh (cargo-about). Do not edit
 ================================================================================
 SUMMARY
 ================================================================================
-463 crates: MIT License
+425 crates: MIT License
 43 crates: Apache License 2.0
 19 crates: ISC License
 19 crates: Unicode License v3
@@ -7441,43 +7441,6 @@ SOFTWARE.
 MIT License
 --------------------------------------------------------------------------------
 Used by:
-  - kadakas-annot 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-api 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-app 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-cli 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-collab 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-collab-ws 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-container 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-core 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-crash 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-crs 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-feedback 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-file 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-gis 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-ifc 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-io 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-irrigation 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-l10n 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-launcher 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-meshio 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-modeler 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-plants 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-plugin 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-plugin-abi 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-print 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-props 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-render 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-review 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-script 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-sheet 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-site 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-step 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-sys 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-ui-core 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-units 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-update 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-view3d 0.1.0 (https://github.com/nemecec/kadakas-app)
-  - kadakas-x3d 0.1.0 (https://github.com/nemecec/kadakas-app)
   - accesskit 0.24.1 (https://github.com/AccessKit/accesskit)
   - block2 0.5.1 (https://github.com/madsmtm/objc2)
   - block2 0.6.2 (https://github.com/madsmtm/objc2)
@@ -8615,38 +8578,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-
-
---------------------------------------------------------------------------------
-MIT License
---------------------------------------------------------------------------------
-Used by:
-  - kadakas-script-js 0.1.0 (https://github.com/nemecec/kadakas-app)
-
-The MIT License (MIT)
- 
-Copyright (c) 2017-2026 Fabrice Bellard
-Copyright (c) 2017-2024 Charlie Gordon
-Copyright (c) 2023-2026 Ben Noordhuis
-Copyright (c) 2023-2026 Saúl Ibarra Corretgé
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
 
 
 --------------------------------------------------------------------------------

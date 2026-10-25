@@ -7,7 +7,9 @@ edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/nemecec/kadakas-app"
-version = "0.1.0"
+version = "0.1.0-beta.1"
+# Nothing is published to crates.io. cargo-deny then allows path dependencies without a version.
+publish = false
 
 # Keep build folders small: line tables for our code, no debug info for dependencies.
 [profile.dev]

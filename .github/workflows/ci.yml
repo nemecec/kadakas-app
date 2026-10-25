@@ -12,6 +12,7 @@ name: CI
 #   deny         licenses, advisories, sources of dependencies              every run
 #   attribution  every asset and dependency has an attribution row          every run
 #   notices      THIRD_PARTY_NOTICES.txt is up to date                      every run
+#   version      every place that carries the version agrees                every run
 #
 # Moved to .github/workflows/nightly.yml (daily when main has a new commit, on tags v*, and by
 # hand with `gh workflow run nightly.yml`): coverage (4 shards), perf (release timing tests), fuzz.
@@ -162,6 +163,15 @@ jobs:
       - run: cargo fetch --locked
       - run: scripts/check-attribution.sh
       - run: scripts/tests/test_check_attribution.sh
+  # The version is in many files (docs/release.md). This check needs only bash and awk.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/check-version.sh
+      - run: .github/scripts/test-changelog-scripts.sh
+      - run: scripts/tests/test_versions.sh
   # THIRD_PARTY_NOTICES.txt must match the dependencies. The installers ship it (packager.toml).
   notices:
     runs-on: ubuntu-latest

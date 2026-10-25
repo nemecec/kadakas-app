@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-script"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,8 +9,8 @@ repository.workspace = true
 description = "Scripting for Kadakas: Python discovery, safe process runs, plug-in object definitions and the reset protocol, and the script host for the Scripts palette. Native only."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-sys = { path = "../kadakas-sys" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.11.0"

@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-sheet"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,9 +9,9 @@ repository.workspace = true
 description = "Worksheets: a spreadsheet grid with formulas and database rows over document objects. Pure and wasm-compatible."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
-kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-plants = { path = "../kadakas-plants" }
+kadakas-units = { path = "../kadakas-units" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 

@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-review"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,8 +16,8 @@ default = ["bcf"]
 bcf = ["dep:roxmltree", "dep:zip"]
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-props = { version = "0.1.0", path = "../kadakas-props" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-props = { path = "../kadakas-props" }
 glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"

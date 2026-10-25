@@ -58,6 +58,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Every place has the workspace version, and a tag run has the tag of that version.
+      - name: Check the version
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/check-version.sh
+          if [ "$REF_TYPE" = "tag" ]; then
+            case "$REF_NAME" in *-dev|*-dev.*) echo "::error::a development version is never released"; exit 1 ;; esac
+            ws=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
+            [ "v$ws" = "$REF_NAME" ] || { echo "::error::tag $REF_NAME does not match the workspace version $ws"; exit 1; }
+          fi
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -104,8 +118,30 @@ jobs:
       - name: Make the app bundle (macOS)
         if: runner.os == 'macOS'
         run: scripts/macos-app.sh target/release dist-app
+      # WiX (MSI) takes only numbers and Debian sorts 0.1.0-beta.1 after 0.1.0, so these two formats get
+      # their own form of the version (scripts/packager-version.sh): 0.1.0.10001 and 0.1.0~beta.1.
+      # The app, the manifest, the other installers and the tag keep 0.1.0-beta.1. A copy of the
+      # packager config with the mapped version is used for that one format.
       - name: Package
-        run: cargo packager --release --config ${{ matrix.config }} --formats ${{ matrix.formats }}
+        shell: bash
+        env:
+          CONFIG: ${{ matrix.config }}
+          FORMATS: ${{ matrix.formats }}
+        run: |
+          set -euo pipefail
+          ver=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
+          special=""
+          case "$RUNNER_OS" in Windows) special=wix ;; Linux) special=deb ;; esac
+          plain="$FORMATS"
+          if [ -n "$special" ]; then plain="${FORMATS//,$special/}"; fi
+          cargo packager --release --config "$CONFIG" --formats "$plain"
+          if [ -n "$special" ]; then
+            mapped=$(scripts/packager-version.sh "$special" "$ver")
+            echo "$special package version: $mapped (workspace version $ver)"
+            sed "s/^version = .*/version = \"$mapped\"/" "$CONFIG" > "packager-$special.toml"
+            grep -q "^version = \"$mapped\"" "packager-$special.toml"
+            cargo packager --release --config "packager-$special.toml" --formats "$special"
+          fi
       # TODO (PLAT-19): this archive is the bundle before signing. A release must sign it inside-out
       # (the programs, then the bundle) with the hardened runtime, notarize it and staple the
       # ticket, then pack it. The launcher does not set com.apple.quarantine on a download: the
@@ -170,6 +206,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The notes of the release are the section of this version in CHANGELOG.md. A pre-release
+      # without a section gets generated notes. A stable release without a section is an error.
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if .github/scripts/extract-changelog-section.sh "$version" > "$RUNNER_TEMP/notes.md"; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+            echo "path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+          elif [[ "$version" == *-* ]]; then
+            echo "::warning::CHANGELOG.md has no section for $version. The notes are generated."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::CHANGELOG.md has no section for $version."
+            exit 1
+          fi
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
@@ -177,4 +233,8 @@ jobs:
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.has != 'true' }}
+          # A version with a dash (0.1.0-beta.1) is a pre-release: update-manifest.yml finds the beta by this flag.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: artifacts/*

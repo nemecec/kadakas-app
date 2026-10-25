@@ -13,7 +13,7 @@ name = "sign-manifest"
 path = "src/main.rs"
 
 [dependencies]
-kadakas-sys = { version = "0.1.0", path = "../../crates/kadakas-sys" }
-kadakas-update = { version = "0.1.0", path = "../../crates/kadakas-update", features = ["sign"] }
+kadakas-sys = { path = "../../crates/kadakas-sys" }
+kadakas-update = { path = "../../crates/kadakas-update", features = ["sign"] }
 getrandom = "0.4.3"
 serde_json = "1.0.151"

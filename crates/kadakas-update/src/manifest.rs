@@ -123,6 +123,11 @@ impl Manifest {
                 "expires must be after published".into(),
             ));
         }
+        if self.version.is_dev() {
+            return Err(UpdateError::Manifest(
+                "a development version (-dev) is never released".into(),
+            ));
+        }
         if self.channel == Channel::Stable && self.version.pre.is_some() {
             return Err(UpdateError::Manifest(
                 "a pre-release version cannot be on the stable channel".into(),
@@ -436,6 +441,11 @@ pub(crate) mod tests {
             m.validate().unwrap_err()
         };
         edit(&|m| m.platforms.clear());
+        edit(&|m| m.version = Version::parse("0.1.1-dev").unwrap());
+        edit(&|m| {
+            m.channel = Channel::Stable;
+            m.version = Version::parse("0.1.1-dev").unwrap();
+        });
         edit(&|m| m.expires = m.published);
         edit(&|m| {
             m.channel = Channel::Stable;

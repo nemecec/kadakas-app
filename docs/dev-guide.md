@@ -208,3 +208,9 @@ Workflows are in `.github/workflows/`. Actions are pinned to commit SHAs.
 - Point the behavior tests at your binary: `KADAKAS_BIN=$CARGO_TARGET_DIR/debug/kadakas`.
 - Other branches add `Shape` variants, commands and API methods at the same time. Add catch-all arms where a match does not need every kind, and keep shared edits small.
 - Before you finish, merge `main` into your branch, resolve conflicts, and run the checks again.
+
+## Version and changelog
+
+- The workspace version in `Cargo.toml` is the only truth. `scripts/set-version.sh VERSION` changes every place (crates, packager configs, Python, `Cargo.lock`, notices). `scripts/check-version.sh` fails if one place differs. CI runs it (job `version`). Workspace crates reference each other by `path` only, with no `version`.
+- Every change that a user can notice adds a line under `[Unreleased]` in `CHANGELOG.md` (Added, Changed, Fixed, Security), in the same commit or pull request. Describe the final result, not the steps. A security fix links the advisory and credits the reporter. AI agents follow the same rule. They add no co-author lines (humans may). `.github/scripts/test-changelog-scripts.sh` and `scripts/tests/test_versions.sh` test the changelog and version scripts (CI, job `version`). `main` carries a `-dev` version between releases (`docs/release.md`).
+- Releases: see `docs/release.md`.

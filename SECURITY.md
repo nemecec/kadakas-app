@@ -36,3 +36,5 @@ workflows of this repository.
 
 Out of scope: problems in third-party libraries that we do not ship, and problems that need
 a person with full access to the computer.
+
+Fixed vulnerabilities are listed under Security in `CHANGELOG.md`, with the link to the advisory.

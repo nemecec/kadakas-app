@@ -46,4 +46,4 @@ __all__ = [
     "LimitExceeded", "NotFound", "Obj", "Param", "Pending", "PluginObject", "PolicyRefused",
     "RequestTimeout", "Run", "UnknownMethod", "ValidationError", "connect", "is_id", "open",
 ]
-__version__ = "0.1.0"
+__version__ = "0.1.0b1"

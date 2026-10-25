@@ -619,6 +619,50 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_development_build_is_not_offered_the_older_release() {
+        // A build of main (0.1.1-dev) is newer than the last release 0.1.0.
+        let root = tmp("up-dev");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "0.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http, &[1], Some("0.1.1-dev"));
+        assert_eq!(
+            u.check(Channel::Stable).unwrap(),
+            UpdateStatus::Older {
+                current: v("0.1.1-dev"),
+                offered: v("0.1.0")
+            }
+        );
+        assert!(matches!(
+            u.update(Channel::Stable),
+            Err(UpdateError::Downgrade { .. })
+        ));
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
+    fn a_beta_build_follows_beta_and_stable() {
+        // The rehearsal: bundled 0.1.0-beta.1. The next beta and the stable release are offered.
+        let root = tmp("up-beta1");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "0.1.0-beta.2", Channel::Beta, &key(1));
+        let u = updater(&root, http, &[1], Some("0.1.0-beta.1"));
+        assert!(matches!(
+            u.check(Channel::Beta).unwrap(),
+            UpdateStatus::Available(_)
+        ));
+        crate::store::tests::rm_dir(&root);
+        let root = tmp("up-beta2");
+        let http = Arc::new(MockHttp::new());
+        publish(&http, "0.1.0", Channel::Stable, &key(1));
+        let u = updater(&root, http, &[1], Some("0.1.0-beta.1"));
+        assert!(matches!(
+            u.check(Channel::Stable).unwrap(),
+            UpdateStatus::Available(_)
+        ));
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
     fn channels_are_kept_apart() {
         let root = tmp("up-chan");
         let http = Arc::new(MockHttp::new());

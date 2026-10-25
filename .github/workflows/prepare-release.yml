@@ -1,0 +1,290 @@
+name: Prepare release
+# Makes a release from main: sets the version everywhere, promotes the Unreleased section of
+# CHANGELOG.md, commits "Release <version>", tags v<version>, pushes, and starts release.yml.
+# Start it from the Actions tab (or `gh workflow run prepare-release.yml -f version=0.1.0-beta.1`).
+# Always do a dry run first (the default): it changes nothing and shows the diff.
+#
+# A push made with the GITHUB_TOKEN does not start other workflows. So the job starts release.yml
+# by hand (workflow_dispatch on the tag). release.yml makes a DRAFT release. A person reads it and
+# presses Publish. Publishing starts update-manifest.yml, which needs the approval of the
+# environment update-signing. See docs/release.md.
+#
+# Needs the GitHub Environment "release" (a required reviewer is a good idea). The job that pushes
+# asks for contents: write and actions: write itself, so the default token rights of the
+# repository can stay read-only. If main is protected so that the Actions bot cannot push, the push
+# fails and nothing is left behind (the push of the commit and the tag is atomic).
+# Actions are pinned to commit SHAs, as in ci.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v, for example 0.1.0-beta.1 or 0.1.0"
+        type: string
+        required: true
+      dry_run:
+        description: "Dry run: change nothing, show the diff and the tag"
+        type: boolean
+        default: true
+      skip_ci_check:
+        description: "Do not require a green CI run on the head of main"
+        type: boolean
+        default: false
+      next_dev_version:
+        description: "Next development version, must end in -dev (empty: computed, for example 0.1.1-dev)"
+        type: string
+        default: ""
+      allow_empty_changelog:
+        description: "Allow an empty Unreleased section in CHANGELOG.md"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_NET_RETRY: "10"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read # gh run list
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      sha: ${{ steps.check.outputs.sha }}
+      next_dev: ${{ steps.check.outputs.next_dev }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      - id: check
+        name: Check the request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SKIP_CI: ${{ inputs.skip_ci_check }}
+          NEXT_DEV: ${{ inputs.next_dev_version }}
+          WF_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [ "$WF_REF" = "refs/heads/main" ] || { echo "::error::Start this workflow on the branch main (it was started on $WF_REF)."; exit 1; }
+          # The same pattern as the tag check in update-manifest.yml.
+          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          [[ "$VERSION" =~ $re ]] || { echo "::error::Bad version. Use 0.1.0 or 0.1.0-beta.1 (no v, lower case)."; exit 1; }
+          [ "${#VERSION}" -le 40 ] || { echo "::error::The version has more than 40 characters."; exit 1; }
+          tag="v$VERSION"
+          sha=$(git rev-parse HEAD)
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::The tag $tag exists already. Delete it first (Delete release workflow) or choose another version."; exit 1
+          fi
+          # A development version (-dev) is what main carries between releases. It is never released.
+          case "$VERSION" in *-dev|*-dev.*) echo "::error::$VERSION is a development version. Release a real version."; exit 1 ;; esac
+          # The new version must be newer than every tag. The workspace version is no help: it is
+          # a -dev version after a release (it sorts below the next release, but not always above the
+          # last tag, for example after a rehearsal).
+          tags=$(git tag --list 'v*')
+          if [ -z "$tags" ]; then
+            echo "No release tag exists yet. This is the first release: $VERSION is accepted although the workspace version is lower in semver terms (a first beta of 0.1.0 follows the workspace version 0.1.0)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          for t in $tags; do
+            v="${t#v}"
+            [[ "$v" =~ $re ]] || continue
+            [ "$(python3 -I scripts/version_cmp.py "$VERSION" "$v")" = "1" ] || { echo "::error::$VERSION is not newer than the existing tag $t."; exit 1; }
+          done
+          next_dev=$(scripts/next-dev-version.sh "$VERSION" "$NEXT_DEV")
+          echo "next_dev=$next_dev" >> "$GITHUB_OUTPUT"
+          # CI must be green on this commit. The nightly result is only a warning.
+          if [ "$SKIP_CI" != "true" ]; then
+            run=$(gh run list --workflow ci.yml --commit "$sha" --limit 1 --json status,conclusion,url --jq '.[0] // empty')
+            if [ -z "$run" ]; then echo "::error::No CI run for $sha. Wait for CI, or tick skip_ci_check."; exit 1; fi
+            status=$(jq -r .status <<<"$run"); concl=$(jq -r .conclusion <<<"$run")
+            if [ "$status" != "completed" ] || [ "$concl" != "success" ]; then
+              echo "::error::CI on $sha is $status/$concl ($(jq -r .url <<<"$run")). Wait for a green run, or tick skip_ci_check."; exit 1
+            fi
+          fi
+          since=$(date -u -d '3 days ago' +%Y-%m-%d)
+          night=$(gh run list --workflow nightly.yml --branch main --created ">=$since" --limit 1 --json status,conclusion,url --jq '.[0] // empty')
+          if [ -n "$night" ] && [ "$(jq -r .conclusion <<<"$night")" = "failure" ]; then
+            echo "::warning::The last Nightly run failed: $(jq -r .url <<<"$night")"
+          elif [ -z "$night" ]; then
+            echo "::warning::No Nightly run in the last 3 days."
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test-ubuntu-latest
+          save-if: "false"
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
+      - uses: ./.github/actions/wasi-sdk
+      - uses: ./.github/actions/cargo-about
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libxkbcommon-dev libgtk-3-dev
+      - name: Changelog is not empty
+        env:
+          ALLOW: ${{ inputs.allow_empty_changelog }}
+        run: |
+          if [ "$ALLOW" = "true" ]; then exit 0; fi
+          if ! awk '/^## \[Unreleased\]/ {s=1; next} /^## \[/ || /^\[[^]]+\]:/ {s=0} s && /[^[:space:]]/ {f=1} END {exit f?0:1}' CHANGELOG.md; then
+            echo "::error::The Unreleased section of CHANGELOG.md is empty. Add the changes, or tick allow_empty_changelog."; exit 1
+          fi
+      - name: Sources and a build check
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          cargo check --workspace --locked
+          scripts/check-version.sh
+      - name: Apply the release changes
+        env:
+          VERSION: ${{ inputs.version }}
+          ALLOW_EMPTY_CHANGELOG: ${{ inputs.allow_empty_changelog }}
+          TAG: ${{ steps.check.outputs.tag }}
+          SHA: ${{ steps.check.outputs.sha }}
+          NEXT_DEV: ${{ steps.check.outputs.next_dev }}
+        run: |
+          set -euo pipefail
+          scripts/apply-release.sh "$VERSION"
+          scripts/notices.sh
+          cargo fetch --locked
+          scripts/check-attribution.sh
+          git diff --stat
+          git diff > release.patch
+          # The second commit: the next development version.
+          git add -u
+          git -c user.name=plan -c user.email=plan@example.org commit -q -m "Release $VERSION"
+          scripts/set-version.sh "$NEXT_DEV"
+          git diff --stat
+          git diff > next-dev.patch
+          {
+            echo "## Plan: tag $TAG on $SHA, then the development version $NEXT_DEV"
+            echo
+            echo "Release commit:"
+            echo
+            git diff --stat HEAD~1 HEAD | sed 's/^/    /'
+            echo
+            echo "Next development commit:"
+            echo
+            git diff --stat | sed 's/^/    /'
+            echo
+            echo "The full diffs are in the artifact release-patch."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-patch
+          path: |
+            release.patch
+            next-dev.patch
+          if-no-files-found: error
+
+  release:
+    needs: plan
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: release # a required reviewer approves here
+    permissions:
+      contents: write # push the commit and the tag
+      actions: write # start release.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Main did not move since the plan
+        env:
+          PLAN_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          [ "$(git rev-parse HEAD)" = "$PLAN_SHA" ] || { echo "::error::main moved after the plan ($PLAN_SHA). Run the workflow again."; exit 1; }
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: ./.github/actions/cargo-about
+      - name: Apply the release changes
+        env:
+          VERSION: ${{ inputs.version }}
+          ALLOW_EMPTY_CHANGELOG: ${{ inputs.allow_empty_changelog }}
+        run: |
+          set -euo pipefail
+          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          [[ "$VERSION" =~ $re ]] || { echo "::error::bad version"; exit 1; }
+          cargo fetch --locked
+          scripts/apply-release.sh "$VERSION"
+      - name: Commit, tag, push
+        env:
+          VERSION: ${{ inputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [ "$TAG" = "v$VERSION" ]
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock packager.toml packager-macos.toml python/pyproject.toml python/kadakas/__init__.py THIRD_PARTY_NOTICES.txt CHANGELOG.md
+          if git status --porcelain | grep -qv '^M  '; then
+            echo "::error::Other files changed:"; git status --porcelain; exit 1
+          fi
+          git commit -m "Release $VERSION"
+          git tag -a "$TAG" -m "Kadakas $VERSION"
+          # Atomic: if main cannot be updated, the tag is not created on the server either.
+          if ! git push --atomic origin main "$TAG"; then
+            echo "::error::The push failed (main protected, or main moved). Nothing was pushed. Run the workflow again."; exit 1
+          fi
+      - name: Start the build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml --ref "$TAG"
+          {
+            echo "## Released $TAG"
+            echo
+            echo "The commit and the tag are pushed. The build of the installers started: [Release runs](https://github.com/$GITHUB_REPOSITORY/actions/workflows/release.yml)."
+            echo
+            echo "What you do next:"
+            echo "1. Wait for the run of Release. It makes a **draft** release."
+            echo "2. Read the draft: files, notes, pre-release flag. Press **Publish**."
+            echo "3. Approve the environment \`update-signing\` for the run of Update manifest."
+            echo "4. Check \`manifest-beta.json\` / \`manifest-stable.json\` in the release \`update-manifests\`."
+            echo "5. Test the update on a second machine."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Set the next development version
+        env:
+          NEXT_DEV: ${{ needs.plan.outputs.next_dev }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev$'
+          [[ "$NEXT_DEV" =~ $re ]] || { echo "::error::bad development version"; exit 1; }
+          cargo fetch --locked
+          scripts/set-version.sh "$NEXT_DEV"
+          git add Cargo.toml Cargo.lock packager.toml packager-macos.toml python/pyproject.toml python/kadakas/__init__.py THIRD_PARTY_NOTICES.txt
+          git commit -m "Set next development version $NEXT_DEV"
+          if ! git push origin main; then
+            echo "main moved. Trying once with a rebase."
+            if ! { git pull --rebase origin main && git push origin main; }; then
+              git rebase --abort 2>/dev/null || true
+              {
+                echo "## The release is done, but the development version is NOT set"
+                echo
+                echo "The tag $TAG and its commit are pushed and the build runs. Main did not take the second commit. Do this by hand:"
+                echo
+                echo "    git checkout main && git pull"
+                echo "    scripts/set-version.sh $NEXT_DEV"
+                echo "    git add -u && git commit -m 'Set next development version $NEXT_DEV' && git push"
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::The release is tagged ($TAG), but the push of the development version failed. See the summary for the commands."
+              exit 1
+            fi
+          fi
+          echo "Main now has $NEXT_DEV. The tag $TAG stays on the release commit." >> "$GITHUB_STEP_SUMMARY"

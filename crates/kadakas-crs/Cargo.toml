@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-crs"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,7 +9,7 @@ repository.workspace = true
 description = "Coordinate reference systems for Kadakas: parsing of EPSG codes, PROJ strings and WKT, the axis order table, point transforms, meridian convergence and true north. Pure Rust."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-core = { path = "../kadakas-core" }
 
 # The azimuthal equidistant projection needs a C compiler for the geodesic code, which the
 # browser build does not have. Without it the crate is still wasm-compatible.

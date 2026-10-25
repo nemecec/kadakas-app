@@ -468,6 +468,14 @@ mod tests {
         );
         // A local build is a pre-release of its base, so it sorts below the release.
         assert!(local_version(&base, None, 5).unwrap() < base);
+        // The base may be a beta or a development version: the local build takes its numbers and
+        // sorts above the beta and the dev version, and below the release.
+        for pre in ["0.1.0-beta.1", "0.1.0-dev"] {
+            let b = v(pre);
+            let l = local_version(&b, None, 5).unwrap();
+            assert_eq!(l.to_string(), "0.1.0-local.t5");
+            assert!(l > b && l < v("0.1.0"), "{pre}");
+        }
     }
 
     #[test]

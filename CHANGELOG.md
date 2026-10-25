@@ -1,0 +1,32 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+First public build. Kadakas is a CAD program for landscape architects. It is not stable yet.
+
+### Added
+
+- Desktop app for 2D landscape design: layers, classes, shapes, curved paths, hatches, dimensions, symbols, plants, irrigation, site models with grading, contours and cut and fill volumes, sheets and PDF print.
+- 3D modeler with Push/Pull, Follow Me, Offset, solid tools, scenes and analytic curves.
+- Import and export of DXF, IFC (including ifcZIP), STEP, OBJ, STL and glTF. DWG works through a converter that you install.
+- The `.kad` file: a ZIP container that any ZIP tool can open. A plain JSON form is available for git and diffs.
+- Agent API over JSON-RPC and MCP (`kadakas mcp`). Every change to a drawing is an undoable command, and a person can review what an agent did.
+- Python client (`import kadakas`), JavaScript scripts and sandboxed WebAssembly plug-ins.
+- Launcher that starts the app and fetches signed updates. You can choose the stable or the beta channel.
+- Crash reports and a feedback button. Nothing is sent without your consent.
+- Collaboration client for a shared drawing.
+- English and Estonian user interface.
+- Installers for macOS, Windows and Linux.
+
+### Known limitations
+
+- The installers are not signed. Your system warns you at the first start.
+- DWG needs a converter that you install separately.
+- The 3D modeler has no exact solids yet.
+
+[Unreleased]: https://github.com/nemecec/kadakas-app/commits/main

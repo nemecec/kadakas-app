@@ -37,7 +37,8 @@ cp packaging/icons/icon.icns "$app/Contents/Resources/icon.icns"
 for f in THIRD_PARTY_NOTICES.txt docs/attribution.md LICENSE-APACHE LICENSE-MIT; do
   if [ -f "$f" ]; then cp "$f" "$app/Contents/Resources/"; fi
 done
-sed "s/@VERSION@/$version/g" packaging/macos/App-Info.plist > "$app/Contents/Info.plist"
+# CFBundleVersion must be numeric (dots and digits): the version without the pre-release part.
+sed -e "s/@VERSION@/$version/g" -e "s/@BUILD@/${version%%-*}/g" packaging/macos/App-Info.plist > "$app/Contents/Info.plist"
 # Check that the plist is valid (plutil is part of macOS).
 if command -v plutil >/dev/null 2>&1; then plutil -lint "$app/Contents/Info.plist" >/dev/null; fi
 echo "$app (version $version)"
