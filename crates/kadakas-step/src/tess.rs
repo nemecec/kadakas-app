@@ -466,8 +466,8 @@ pub struct TessParams {
     pub cut_fuel: (u64, u64),
 }
 
-/// The usual limit for the cutting of a polygon: two million steps and four times the price.
-pub const CUT_FUEL: (u64, u64) = (2_000_000, 4);
+/// The usual limit for the cutting of a polygon: a million steps and twice the price.
+pub const CUT_FUEL: (u64, u64) = (1_000_000, 2);
 
 /// What a step of the job costs: output that is kept, or work that is done.
 #[derive(Clone, Copy, Debug)]
@@ -482,7 +482,7 @@ pub enum Cost {
 /// Steps of the cutting of a polygon that one unit of work is worth, and the price of a hole.
 const OPS_PER_UNIT: u64 = 10;
 const CUT_PER_HOLE: u64 = 1_200;
-const CUT_PER_POINT: u64 = 260;
+const CUT_PER_POINT: u64 = 280;
 
 pub const MAX_FACE_POINTS: usize = crate::mesh2d::MAX_POLYGON_POINTS;
 
@@ -945,6 +945,15 @@ impl Tessellator<'_> {
                 ix.reverse();
             }
         }
+        // Points that repeat the one before and holes that are the same as another loop are
+        // left out of the cutting, and the face says so.
+        let (cleaned, repeated) = crate::mesh2d::clean_loops(&points.uv, &loop_ix);
+        if repeated > 0 {
+            self.notes.push(format!(
+                "{repeated} repeated points and loops of a face on a {kind} were left out"
+            ));
+        }
+        let loop_ix = cleaned;
         let n_bound = points.uv.len();
         points.scale = metric(surface, &points);
         let max_tris = self.p.max_face_triangles.min(self.left_triangles() + 1);

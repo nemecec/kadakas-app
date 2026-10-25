@@ -65,6 +65,8 @@ pub fn area(uv: &[[f64; 2]], l: &[usize]) -> f64 {
         / 2.0
 }
 
+pub(crate) use crate::merge::clean_loops;
+
 /// Why a polygon was not cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cut {
@@ -84,6 +86,17 @@ pub fn ear_clip(
     loops: &[Vec<usize>],
     fuel: u64,
 ) -> Result<(Vec<[u32; 3]>, u64), Cut> {
+    // Points that are not numbers cannot be cut.
+    if loops
+        .iter()
+        .flatten()
+        .any(|&i| !(uv[i][0].is_finite() && uv[i][1].is_finite()))
+    {
+        return Err(Cut::Cannot);
+    }
+    let (cleaned, _) = crate::merge::clean_loops(uv, loops);
+    let (planar, plan_ops) = crate::merge::planarize(uv, &cleaned, fuel)?;
+    let loops = &planar[..];
     let outline = loops.first().ok_or(Cut::Cannot)?;
     let total: usize = loops.iter().map(Vec::len).sum();
     if outline.len() < 3 || total > MAX_POLYGON_POINTS {
@@ -98,15 +111,37 @@ pub fn ear_clip(
     };
     holes.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
     let (poly, mut ops) = if holes.is_empty() {
-        (outline.clone(), 0)
+        (outline.clone(), plan_ops)
     } else {
-        let mut m = crate::merge::Merger::new(uv, outline, &holes, fuel);
+        let mut m = crate::merge::Merger::new(uv, outline, &holes, fuel)?;
         for k in 0..holes.len() {
             m.join(k)?;
         }
-        (m.polygon(), m.ops)
+        (m.polygon(), m.ops + plan_ops)
     };
     let tris = clip(uv, xyz, scale, &poly, fuel, &mut ops)?;
+    // The result is checked against the region that was asked for (the outline less the holes,
+    // not the ring that the joining made), so that a mistake in the joining is a refusal.
+    let want = area(uv, outline).abs() - holes.iter().map(|h| area(uv, h).abs()).sum::<f64>();
+    let got: f64 = tris
+        .iter()
+        .map(|t| cross(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]) / 2.0)
+        .sum();
+    let extent = outline.iter().map(|&i| uv[i]).fold(0.0f64, |m, p| {
+        m.max((p[0] - uv[outline[0]][0]).abs())
+            .max((p[1] - uv[outline[0]][1]).abs())
+    });
+    let gap = (want - got).abs();
+    if gap.is_nan() || gap > 1e-9 * want.abs() + 1e-12 * extent * extent {
+        return Err(Cut::Cannot);
+    }
+    for t in &tris {
+        let (a, b, c) = (uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]);
+        let longest = dist2(a, b).max(dist2(b, c)).max(dist2(c, a));
+        if cross(a, b, c) < -1e-9 * longest {
+            return Err(Cut::Cannot);
+        }
+    }
     Ok((tris, ops))
 }
 
@@ -315,8 +350,46 @@ fn clip(
         let _ = xyz;
         if s.is_finite() { s } else { f64::MAX }
     };
+    // A corner is flat when its triangle is thin against its own edges, whatever the size of
+    // the polygon and the distance from the origin.
+    // The corners that the polygon has twice (it touches itself there) are not flat: they hold
+    // the polygon together. Their copies are kept by place.
+    let twins: HashMap<[u64; 2], Vec<usize>> = {
+        let mut by_place: HashMap<[u64; 2], Vec<usize>> = HashMap::new();
+        for i in 0..n {
+            by_place
+                .entry([(pt(i)[0] + 0.0).to_bits(), (pt(i)[1] + 0.0).to_bits()])
+                .or_default()
+                .push(i);
+        }
+        by_place.retain(|_, v| v.len() > 1);
+        by_place
+    };
+    let twin_key = |i: usize| [(pt(i)[0] + 0.0).to_bits(), (pt(i)[1] + 0.0).to_bits()];
+    let twin = |i: usize| twins.contains_key(&twin_key(i));
+    // Does a copy of the corner `c` have an edge that runs into the triangle at `c`? (`nx` and
+    // `pr` are the next and the previous corner of the counterclockwise triangle.) Then the
+    // triangle covers a piece of the outside.
+    let twin_enters =
+        |c: usize, nx: usize, pr: usize, prev: &[usize], next: &[usize], alive: &[bool]| -> bool {
+            let Some(copies) = twins.get(&twin_key(c)) else {
+                return false;
+            };
+            let (o, a, b) = (pt(c), pt(nx), pt(pr));
+            copies.iter().filter(|&&t| t != c && alive[t]).any(|&t| {
+                [prev[t], next[t]].iter().any(|&m| {
+                    let x = pt(m);
+                    cross(o, a, x) > 0.0 && cross(o, x, b) > 0.0
+                })
+            })
+        };
     let flat = |p: usize, i: usize, q: usize| {
-        cross(pt(p), pt(i), pt(q)).abs() <= 1e-18 * (1.0 + pt(i)[0].abs() + pt(i)[1].abs())
+        if twin(i) {
+            return false;
+        }
+        let (a, b, c) = (pt(p), pt(i), pt(q));
+        let longest = dist2(a, b).max(dist2(b, c)).max(dist2(a, c));
+        cross(a, b, c).abs() <= 1e-12 * longest
     };
     let mut out: Vec<[u32; 3]> = Vec::with_capacity(n);
     let mut left = n;
@@ -330,6 +403,7 @@ fn clip(
         }
         let mut heap: BinaryHeap<Reverse<(u64, usize, u32)>> = BinaryHeap::new();
         let first = (0..n).find(|i| alive[*i]).unwrap_or(0);
+        work.set(work.get() + first as u64 + 1);
         let mut v = first;
         for _ in 0..left {
             let (p, q) = (prev[v], next[v]);
@@ -353,12 +427,36 @@ fn clip(
             let ok = if is_flat {
                 mode >= 1
             } else {
-                convex(p, v, q) && (mode >= 2 || !inside_any(p, v, q, &prev, &next, &alive))
+                convex(p, v, q)
+                    && !(twin(p) && twin_enters(p, v, q, &prev, &next, &alive))
+                    && !(twin(v) && twin_enters(v, q, p, &prev, &next, &alive))
+                    && !(twin(q) && twin_enters(q, p, v, &prev, &next, &alive))
+                    && (mode >= 2 || !inside_any(p, v, q, &prev, &next, &alive))
             };
             if !ok {
                 continue;
             }
             // A bridge seen from both sides collapses: no triangle.
+            // The ring that is left is a corner and its copy with the same two edges the other
+            // way round: a pocket with no area. It goes, and no triangle is made.
+            if twin(v) {
+                let copy = twins.get(&twin_key(v)).and_then(|c| {
+                    c.iter()
+                        .copied()
+                        .find(|&t| t != v && alive[t] && prev[t] == q && next[t] == p)
+                });
+                if let Some(t) = copy {
+                    alive[v] = false;
+                    alive[t] = false;
+                    next[p] = q;
+                    prev[q] = p;
+                    left -= 2;
+                    progress = true;
+                    stamp[p] += 1;
+                    stamp[q] += 1;
+                    continue;
+                }
+            }
             if poly[p] != poly[q] && poly[p] != poly[v] && poly[v] != poly[q] {
                 out.push([poly[p] as u32, poly[v] as u32, poly[q] as u32]);
             }
@@ -384,8 +482,10 @@ fn clip(
         if progress {
             mode = 0;
         } else {
+            // Mode 2 (any convex ear, also with a point inside) made triangles that cross the
+            // polygon: the polygon is refused.
             mode += 1;
-            if mode > 2 {
+            if mode > 1 {
                 return Err(Cut::Cannot);
             }
         }

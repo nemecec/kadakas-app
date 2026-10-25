@@ -819,3 +819,21 @@ pub fn retessellate(
         kinds: t.kinds.into_iter().map(|(k, (f, t))| (k, f, t)).collect(),
     })
 }
+
+/// The cutting of a polygon with holes, for the fuzz tests of `tests/fuzz_cut.rs`. Not a
+/// public interface.
+#[doc(hidden)]
+pub mod cutting {
+    pub use crate::mesh2d::Cut;
+
+    /// The triangles of the outline `loops[0]` and the holes `loops[1..]` (indices of `uv`),
+    /// and the steps taken. `fuel` is the most steps that the cutting may take.
+    pub fn cut(
+        uv: &[[f64; 2]],
+        loops: &[Vec<usize>],
+        fuel: u64,
+    ) -> Result<(Vec<[u32; 3]>, u64), Cut> {
+        let xyz = vec![glam::DVec3::ZERO; uv.len()];
+        crate::mesh2d::ear_clip(uv, &xyz, [1.0, 1.0], loops, fuel)
+    }
+}

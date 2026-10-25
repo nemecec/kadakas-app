@@ -16,13 +16,16 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
-use crate::mesh2d::{Cut, dist2};
+use crate::mesh2d::{Cut, area, dist2};
 
 /// Most segments that a leaf of the tree holds before it is cut in four.
 const LEAF_MAX: usize = 12;
 const MAX_DEPTH: u8 = 24;
 /// The nearest corners that are tried for one hole before the ray is used.
 const TRY_NEAR: usize = 24;
+/// The most copies of a corner that are looked at for one hole (a corner that many holes
+/// share has a copy for each of them).
+const MAX_COPIES: usize = 64;
 const NONE: u32 = u32::MAX;
 
 fn cross0(u: [f64; 2], v: [f64; 2]) -> f64 {
@@ -94,8 +97,6 @@ struct Seg {
     vb: usize,
     /// True once the segment is an edge of the merged polygon (not of a hole that waits).
     merged: bool,
-    /// The node of the ring where the edge starts, for an edge of a loop (a bridge has none).
-    node: u32,
 }
 
 struct Node {
@@ -104,12 +105,20 @@ struct Node {
     kids: [u32; 4],
     segs: Vec<u32>,
     depth: u8,
+    /// The size at which a leaf that could not be split tries again.
+    retry: usize,
 }
 
 /// A quadtree of segments. A segment is in every leaf that it touches.
 struct QTree {
     nodes: Vec<Node>,
     eps: f64,
+    /// The entries in all leaves, and the most that are allowed: a segment is in every leaf
+    /// that it touches, so segments that pass through one point would be copied without end.
+    entries: usize,
+    max_entries: usize,
+    /// Steps of the cutting of the leaves, to be counted by the owner.
+    work: u64,
 }
 
 /// Does the segment ab touch the box (a little wider than it is)?
@@ -135,15 +144,19 @@ fn seg_in_box(lo: [f64; 2], hi: [f64; 2], eps: f64, a: [f64; 2], b: [f64; 2]) ->
 }
 
 impl QTree {
-    fn new(lo: [f64; 2], hi: [f64; 2]) -> QTree {
+    fn new(lo: [f64; 2], hi: [f64; 2], segments: usize) -> QTree {
         let size = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1e-300);
         QTree {
+            entries: 0,
+            max_entries: 8 * segments + 4096,
+            work: 0,
             nodes: vec![Node {
                 lo,
                 hi: [lo[0] + size, lo[1] + size],
                 kids: [NONE; 4],
                 segs: Vec::new(),
                 depth: 0,
+                retry: LEAF_MAX + 1,
             }],
             eps: size * 1e-9,
         }
@@ -159,37 +172,55 @@ impl QTree {
             (n.lo, n.hi, n.depth)
         };
         let mid = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-        let base = self.nodes.len() as u32;
-        for k in 0..4 {
+        let parent = self.nodes[ni].segs.len();
+        self.work += 4 * parent as u64;
+        // The kids' boxes and which segments go into each, before anything is changed.
+        let boxes: [([f64; 2], [f64; 2]); 4] = std::array::from_fn(|k| {
             let (xh, yh) = (k % 2, k / 2);
-            self.nodes.push(Node {
-                lo: [
+            (
+                [
                     if xh == 0 { lo[0] } else { mid[0] },
                     if yh == 0 { lo[1] } else { mid[1] },
                 ],
-                hi: [
+                [
                     if xh == 0 { mid[0] } else { hi[0] },
                     if yh == 0 { mid[1] } else { hi[1] },
                 ],
-                kids: [NONE; 4],
-                segs: Vec::new(),
-                depth: depth + 1,
-            });
-        }
-        let old = std::mem::take(&mut self.nodes[ni].segs);
-        self.nodes[ni].kids = [base, base + 1, base + 2, base + 3];
-        for id in old {
+            )
+        });
+        let mut parts: [Vec<u32>; 4] = Default::default();
+        for &id in &self.nodes[ni].segs {
             let s = &segs[id as usize];
-            for k in 0..4 {
-                let kid = (base + k) as usize;
-                if seg_in_box(self.nodes[kid].lo, self.nodes[kid].hi, self.eps, s.a, s.b) {
-                    self.nodes[kid].segs.push(id);
+            for (k, (blo, bhi)) in boxes.iter().enumerate() {
+                if seg_in_box(*blo, *bhi, self.eps, s.a, s.b) {
+                    parts[k].push(id);
                 }
             }
         }
+        let total: usize = parts.iter().map(Vec::len).sum();
+        // A split that copies the segments into several kids without parting them (they pass
+        // through one point, or lie on each other) only costs: the leaf stays as it is.
+        if total >= 2 * parent || self.entries + total - parent > self.max_entries {
+            self.nodes[ni].retry = 2 * parent;
+            return;
+        }
+        self.entries = self.entries + total - parent;
+        let base = self.nodes.len() as u32;
+        for (k, part) in parts.into_iter().enumerate() {
+            self.nodes.push(Node {
+                lo: boxes[k].0,
+                hi: boxes[k].1,
+                kids: [NONE; 4],
+                segs: part,
+                depth: depth + 1,
+                retry: LEAF_MAX + 1,
+            });
+        }
+        self.nodes[ni].segs = Vec::new();
+        self.nodes[ni].kids = [base, base + 1, base + 2, base + 3];
         for k in 0..4 {
             let kid = (base + k) as usize;
-            if self.nodes[kid].segs.len() > LEAF_MAX && depth + 1 < MAX_DEPTH {
+            if self.nodes[kid].segs.len() >= self.nodes[kid].retry && depth + 1 < MAX_DEPTH {
                 self.split(kid, segs);
             }
         }
@@ -198,24 +229,33 @@ impl QTree {
     /// Puts segment `id` in the leaves that it touches. Returns the nodes that were looked at.
     fn insert(&mut self, segs: &[Seg], id: u32) -> u64 {
         let (a, b) = (segs[id as usize].a, segs[id as usize].b);
-        let mut stack = vec![0usize];
+        let mut stack = if seg_in_box(self.nodes[0].lo, self.nodes[0].hi, self.eps, a, b) {
+            vec![0usize]
+        } else {
+            Vec::new()
+        };
         let mut seen = 0u64;
         while let Some(ni) = stack.pop() {
+            // Only the nodes that the segment touches are on the stack.
             seen += 1;
-            let (lo, hi) = (self.nodes[ni].lo, self.nodes[ni].hi);
-            if !seg_in_box(lo, hi, self.eps, a, b) {
-                continue;
-            }
             if self.is_leaf(ni) {
                 self.nodes[ni].segs.push(id);
-                if self.nodes[ni].segs.len() > LEAF_MAX && self.nodes[ni].depth < MAX_DEPTH {
+                self.entries += 1;
+                if self.nodes[ni].segs.len() >= self.nodes[ni].retry
+                    && self.nodes[ni].depth < MAX_DEPTH
+                {
                     self.split(ni, segs);
                 }
             } else {
-                stack.extend(self.nodes[ni].kids.iter().map(|k| *k as usize));
+                for k in self.nodes[ni].kids {
+                    let kid = &self.nodes[k as usize];
+                    if seg_in_box(kid.lo, kid.hi, self.eps, a, b) {
+                        stack.push(k as usize);
+                    }
+                }
             }
         }
-        seen
+        seen + std::mem::take(&mut self.work)
     }
 
     /// Calls `f` with the segments of the leaves that the segment ab touches, until `f` says
@@ -226,14 +266,17 @@ impl QTree {
         b: [f64; 2],
         f: &mut dyn FnMut(u32) -> bool,
     ) -> (bool, u64) {
-        let mut stack = vec![0usize];
+        let root = &self.nodes[0];
+        let mut stack = if seg_in_box(root.lo, root.hi, self.eps, a, b) {
+            vec![0usize]
+        } else {
+            Vec::new()
+        };
         let mut ops = 0u64;
         while let Some(ni) = stack.pop() {
+            // Only the nodes that the segment touches are on the stack.
             ops += 1;
             let n = &self.nodes[ni];
-            if !seg_in_box(n.lo, n.hi, self.eps, a, b) {
-                continue;
-            }
             if n.kids[0] == NONE {
                 for &id in &n.segs {
                     ops += 1;
@@ -242,7 +285,12 @@ impl QTree {
                     }
                 }
             } else {
-                stack.extend(n.kids.iter().map(|k| *k as usize));
+                for &k in &n.kids {
+                    let kid = &self.nodes[k as usize];
+                    if seg_in_box(kid.lo, kid.hi, self.eps, a, b) {
+                        stack.push(k as usize);
+                    }
+                }
             }
         }
         (false, ops)
@@ -324,7 +372,7 @@ impl<'a> Merger<'a> {
         outline: &[usize],
         holes: &'a [&'a Vec<usize>],
         fuel: u64,
-    ) -> Self {
+    ) -> Result<Self, Cut> {
         let edges = outline.len() + holes.iter().map(|h| h.len()).sum::<usize>();
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         for &i in outline.iter().chain(holes.iter().flat_map(|h| h.iter())) {
@@ -342,7 +390,7 @@ impl<'a> Merger<'a> {
             first: HashMap::new(),
             same: Vec::new(),
             segs: Vec::with_capacity(edges + holes.len()),
-            tree: QTree::new(lo, hi),
+            tree: QTree::new(lo, hi, edges + holes.len()),
             stamp: vec![0; uv.len()],
             epoch: 0,
             ops: 0,
@@ -351,13 +399,14 @@ impl<'a> Merger<'a> {
             hole_segs: Vec::new(),
         };
         m.head = m.ring(outline);
-        m.add_ring_segments(outline, true, m.head);
+        m.add_ring_segments(outline, true)?;
         for h in holes {
             m.hole_segs.push(m.segs.len());
-            m.add_ring_segments(h, false, NONE);
+            m.add_ring_segments(h, false)?;
         }
         m.hole_segs.push(m.segs.len());
-        m
+        m.spend(0)?;
+        Ok(m)
     }
 
     /// Makes the nodes of a loop in a ring and returns the first.
@@ -391,21 +440,15 @@ impl<'a> Merger<'a> {
         id
     }
 
-    /// The segments of a loop. `first_node` is the node where the first one starts (the nodes
-    /// of a ring are in order), or none.
-    fn add_ring_segments(&mut self, l: &[usize], merged: bool, first_node: u32) {
+    /// The segments of a loop.
+    fn add_ring_segments(&mut self, l: &[usize], merged: bool) -> Result<(), Cut> {
         for j in 0..l.len() {
-            let (va, vb) = (l[j], l[(j + 1) % l.len()]);
-            let node = if first_node == NONE {
-                NONE
-            } else {
-                first_node + j as u32
-            };
-            self.add_seg(va, vb, merged, node);
+            self.add_seg(l[j], l[(j + 1) % l.len()], merged)?;
         }
+        Ok(())
     }
 
-    fn add_seg(&mut self, va: usize, vb: usize, merged: bool, node: u32) -> u32 {
+    fn add_seg(&mut self, va: usize, vb: usize, merged: bool) -> Result<u32, Cut> {
         let id = self.segs.len() as u32;
         let (a, b) = (self.uv[va], self.uv[vb]);
         self.segs.push(Seg {
@@ -414,11 +457,10 @@ impl<'a> Merger<'a> {
             va,
             vb,
             merged,
-            node,
         });
         let seen = self.tree.insert(&self.segs, id);
-        self.ops += seen;
-        id
+        self.spend(seen)?;
+        Ok(id)
     }
 
     /// Counts steps and stops at the limit.
@@ -434,7 +476,7 @@ impl<'a> Merger<'a> {
     fn nodes_of(&self, v: usize) -> Vec<u32> {
         let mut out = Vec::new();
         let mut at = self.first.get(&v).copied().unwrap_or(NONE);
-        while at != NONE {
+        while at != NONE && out.len() < MAX_COPIES {
             out.push(at);
             at = self.same[at as usize];
         }
@@ -543,7 +585,9 @@ impl<'a> Merger<'a> {
         hn: [f64; 2],
     ) -> Result<Option<u32>, Cut> {
         for &v in vs {
-            for node in self.nodes_of(v) {
+            let nodes = self.nodes_of(v);
+            self.spend(1 + nodes.len() as u64)?;
+            for node in nodes {
                 if self.fits(node, m, hp, hn)? {
                     return Ok(Some(node));
                 }
@@ -596,10 +640,10 @@ impl<'a> Merger<'a> {
             found = self.first_fit(&all[near.len().min(all.len())..], m, hp, hn)?;
         }
         let node = found.ok_or(Cut::Cannot)?;
-        self.splice(node, hole, mi, Some(k));
+        self.splice(node, hole, mi);
         // The bridge is two edges of the polygon.
         let v = self.vert[node as usize];
-        self.add_seg(v, hole[mi], true, NONE);
+        self.add_seg(v, hole[mi], true)?;
         self.merge_hole_segments(k);
         self.spend(0)
     }
@@ -611,72 +655,19 @@ impl<'a> Merger<'a> {
         }
     }
 
-    /// A hole that touches the polygon at one of its corners, at a corner of the polygon or in
-    /// the middle of an edge, is joined there, with no bridge. True when it was joined.
+    /// A hole that has a corner in common with the polygon (the loops were made to share the
+    /// point, see [`planarize`]) is joined there, with no bridge. True when it was joined.
     fn touch(&mut self, k: usize) -> Result<bool, Cut> {
         let hole = self.holes[k];
         let h = hole.len();
         for j in 0..h {
-            let p = self.uv[hole[j]];
+            let nodes = self.nodes_of(hole[j]);
+            self.spend(1 + nodes.len() as u64)?;
             let (hp, hn) = (self.uv[hole[(j + h - 1) % h]], self.uv[hole[(j + 1) % h]]);
-            // The merged segments that p is on.
-            let mut on: Vec<u32> = Vec::new();
-            let segs = &self.segs;
-            let (_, ops) = self.tree.visit_segment(p, p, &mut |id| {
-                let s = &segs[id as usize];
-                if s.merged && cross3(s.a, s.b, p) == 0.0 && on_segment(s.a, s.b, p) {
-                    on.push(id);
-                }
-                false
-            });
-            self.spend(ops)?;
-            on.sort_unstable();
-            on.dedup();
-            for id in on {
-                let (a, b, va, vb, node) = {
-                    let s = &self.segs[id as usize];
-                    (s.a, s.b, s.va, s.vb, s.node)
-                };
-                // At a corner of the polygon: the nodes that are there.
-                let corner = if a == p {
-                    Some(va)
-                } else if b == p {
-                    Some(vb)
-                } else {
-                    None
-                };
-                let at = match corner {
-                    Some(v) => self
-                        .nodes_of(v)
-                        .into_iter()
-                        .find(|&n| self.inside_both(n, hp, hn)),
-                    None if node != NONE && self.next[node as usize] != NONE => {
-                        // In the middle of an edge of the ring: a new corner is made there.
-                        let x = self.node(hole[j]);
-                        let after = self.next[node as usize];
-                        self.next[node as usize] = x;
-                        self.prev[x as usize] = node;
-                        self.next[x as usize] = after;
-                        self.prev[after as usize] = x;
-                        self.segs[id as usize].node = NONE;
-                        let vx = hole[j];
-                        let first = self.add_seg(va, vx, true, node);
-                        let _ = first;
-                        self.add_seg(vx, vb, true, x);
-                        if self.inside_both(x, hp, hn) {
-                            Some(x)
-                        } else {
-                            // The hole is on the other side: the corner stays, harmless.
-                            None
-                        }
-                    }
-                    None => None,
-                };
-                if let Some(node) = at {
-                    self.touching_splice(node, hole, j, k);
-                    self.merge_hole_segments(k);
-                    return Ok(true);
-                }
+            if let Some(node) = nodes.into_iter().find(|&n| self.inside_both(n, hp, hn)) {
+                self.touching_splice(node, hole, j);
+                self.merge_hole_segments(k);
+                return Ok(true);
             }
         }
         Ok(false)
@@ -693,9 +684,8 @@ impl<'a> Merger<'a> {
     }
 
     /// Puts the hole into the ring after `node`: the node, the hole from its corner `j` round
-    /// to the corner again, and the node again (a bridge). The edges of the hole learn the
-    /// nodes where they start.
-    fn splice(&mut self, node: u32, hole: &[usize], j: usize, k: Option<usize>) {
+    /// to the corner again, and the node again (a bridge).
+    fn splice(&mut self, node: u32, hole: &[usize], j: usize) {
         let h = hole.len();
         let after = self.next[node as usize];
         let mut prev = node;
@@ -704,10 +694,6 @@ impl<'a> Merger<'a> {
             self.next[prev as usize] = id;
             self.prev[id as usize] = prev;
             prev = id;
-            if let (Some(k), true) = (k, i < h) {
-                let seg = self.hole_segs[k] + (j + i) % h;
-                self.segs[seg].node = id;
-            }
         }
         let again = self.node(self.vert[node as usize]);
         self.next[prev as usize] = again;
@@ -716,21 +702,17 @@ impl<'a> Merger<'a> {
         self.prev[after as usize] = again;
     }
 
-    /// Puts the hole into the ring where it touches the polygon at the corner `j`: the node,
+    /// Puts the hole into the ring where it shares the corner `j` with the polygon: the node,
     /// the hole from the corner after `j` round to the corner before it, and the node again.
-    fn touching_splice(&mut self, node: u32, hole: &[usize], j: usize, k: usize) {
+    fn touching_splice(&mut self, node: u32, hole: &[usize], j: usize) {
         let h = hole.len();
         let after = self.next[node as usize];
         let mut prev = node;
-        // The edge that starts at the corner j starts at the joint.
-        let first = self.hole_segs[k];
-        self.segs[first + j].node = node;
         for i in 1..h {
             let id = self.node(hole[(j + i) % h]);
             self.next[prev as usize] = id;
             self.prev[id as usize] = prev;
             prev = id;
-            self.segs[first + (j + i) % h].node = id;
         }
         let again = self.node(self.vert[node as usize]);
         self.next[prev as usize] = again;
@@ -752,4 +734,192 @@ impl<'a> Merger<'a> {
         }
         out
     }
+}
+
+/// The key of a loop that is the same for loops with the same points, whatever corner they
+/// start at and whichever way they run.
+fn loop_key(uv: &[[f64; 2]], l: &[usize]) -> Vec<[u64; 2]> {
+    let bits = |i: usize| {
+        let p = uv[i];
+        // -0 and +0 are the same place.
+        [(p[0] + 0.0).to_bits(), (p[1] + 0.0).to_bits()]
+    };
+    let forward: Vec<[u64; 2]> = l.iter().map(|&i| bits(i)).collect();
+    let mut backward = forward.clone();
+    backward.reverse();
+    let least = |v: &[[u64; 2]]| -> Vec<[u64; 2]> {
+        let n = v.len();
+        let min = v.iter().min().copied().unwrap_or([0, 0]);
+        let mut best: Option<Vec<[u64; 2]>> = None;
+        for s in (0..n).filter(|&s| v[s] == min) {
+            let rot: Vec<[u64; 2]> = (0..n).map(|i| v[(s + i) % n]).collect();
+            if best.as_ref().is_none_or(|b| rot < *b) {
+                best = Some(rot);
+            }
+        }
+        best.unwrap_or_default()
+    };
+    least(&forward).min(least(&backward))
+}
+
+/// The loops cleaned for the joining and the cutting: a point that repeats the one before it
+/// is dropped, a loop of fewer than three points is dropped, the outline runs counterclockwise
+/// and the holes clockwise, and a hole that is the same as another loop (the same points, from
+/// any corner, either way round) is dropped. Also the number of points and loops that went.
+pub(crate) fn clean_loops(uv: &[[f64; 2]], loops: &[Vec<usize>]) -> (Vec<Vec<usize>>, usize) {
+    let mut dropped = 0usize;
+    let mut out: Vec<Vec<usize>> = Vec::with_capacity(loops.len());
+    let mut seen: std::collections::HashSet<Vec<[u64; 2]>> = std::collections::HashSet::new();
+    for (i, l) in loops.iter().enumerate() {
+        let mut c: Vec<usize> = Vec::with_capacity(l.len());
+        for &v in l {
+            if c.last().is_none_or(|&q| uv[q] != uv[v]) {
+                c.push(v);
+            }
+        }
+        while c.len() > 1 && uv[c[0]] == uv[c[c.len() - 1]] {
+            c.pop();
+        }
+        dropped += l.len() - c.len();
+        if c.len() < 3 {
+            if i == 0 {
+                out.push(c);
+            } else {
+                dropped += c.len();
+            }
+            continue;
+        }
+        let a = area(uv, &c);
+        if (i == 0 && a < 0.0) || (i > 0 && a > 0.0) {
+            c.reverse();
+        }
+        if !seen.insert(loop_key(uv, &c)) && i > 0 {
+            dropped += c.len();
+            continue;
+        }
+        out.push(c);
+    }
+    (out, dropped)
+}
+
+/// The loops made to share the points where they touch. Two points with the same place become
+/// one point (the first), and a point that lies on a segment of a loop, between its ends, is
+/// put into that loop, so that the loops meet at points they have in common. Then a polygon
+/// that touches itself, or a hole that touches the outline or another hole, is a polygon with a
+/// point that comes twice, which the joining and the ear clipping know how to treat. Also the
+/// steps that this took, and no more than `fuel`.
+pub(crate) fn planarize(
+    uv: &[[f64; 2]],
+    loops: &[Vec<usize>],
+    fuel: u64,
+) -> Result<(Vec<Vec<usize>>, u64), Cut> {
+    let key = |i: usize| [(uv[i][0] + 0.0).to_bits(), (uv[i][1] + 0.0).to_bits()];
+    let mut canon: HashMap<[u64; 2], usize> = HashMap::new();
+    let mut out: Vec<Vec<usize>> = Vec::with_capacity(loops.len());
+    for l in loops {
+        let mut c: Vec<usize> = Vec::with_capacity(l.len());
+        for &i in l {
+            let v = *canon.entry(key(i)).or_insert(i);
+            if c.last() != Some(&v) {
+                c.push(v);
+            }
+        }
+        while c.len() > 1 && c[0] == c[c.len() - 1] {
+            c.pop();
+        }
+        out.push(c);
+    }
+    // A polygon of one loop has no other loop to touch, and the search for the points on its
+    // segments is not worth the steps (a polygon with long thin spikes would cost many).
+    if out.len() < 2 {
+        return Ok((out, 0));
+    }
+    // The tree of the segments of all the loops.
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for &v in canon.values() {
+        for k in 0..2 {
+            lo[k] = lo[k].min(uv[v][k]);
+            hi[k] = hi[k].max(uv[v][k]);
+        }
+    }
+    let total: usize = out.iter().map(Vec::len).sum();
+    let mut segs: Vec<Seg> = Vec::with_capacity(total);
+    // The loop and the place of each segment.
+    let mut owner: Vec<(usize, usize)> = Vec::with_capacity(total);
+    let mut tree = QTree::new(lo, hi, total);
+    let mut ops = 0u64;
+    let budget = 64 * total as u64 + 1_000_000;
+    for (li, l) in out.iter().enumerate() {
+        for j in 0..l.len() {
+            let (va, vb) = (l[j], l[(j + 1) % l.len()]);
+            let id = segs.len() as u32;
+            segs.push(Seg {
+                a: uv[va],
+                b: uv[vb],
+                va,
+                vb,
+                merged: true,
+            });
+            owner.push((li, j));
+            ops += tree.insert(&segs, id);
+            if ops > fuel {
+                return Err(Cut::Fuel(ops));
+            }
+            // Long thin segments are in many leaves: the search for the points on the
+            // segments is given up when it costs more than it is worth. The loops that share
+            // points are joined as they are.
+            if ops > budget {
+                return Ok((out, ops));
+            }
+        }
+    }
+    // The points that are on the inside of a segment.
+    let mut splits: HashMap<u32, Vec<usize>> = HashMap::new();
+    let mut points: Vec<usize> = canon.values().copied().collect();
+    points.sort_unstable();
+    for v in points {
+        let p = uv[v];
+        let (_, seen) = tree.visit_segment(p, p, &mut |id| {
+            let s = &segs[id as usize];
+            if s.va != v
+                && s.vb != v
+                && s.a != p
+                && s.b != p
+                && cross3(s.a, s.b, p) == 0.0
+                && on_segment(s.a, s.b, p)
+            {
+                splits.entry(id).or_default().push(v);
+            }
+            false
+        });
+        ops += seen;
+        if ops > fuel {
+            return Err(Cut::Fuel(ops));
+        }
+        if ops > budget {
+            return Ok((out, ops));
+        }
+    }
+    if splits.is_empty() {
+        return Ok((out, ops));
+    }
+    // Put the points into the loops, in order along each segment.
+    let mut inserts: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (id, mut vs) in splits {
+        let s = &segs[id as usize];
+        vs.sort_by(|&x, &y| dist2(s.a, uv[x]).total_cmp(&dist2(s.a, uv[y])));
+        vs.dedup();
+        inserts.insert(owner[id as usize], vs);
+    }
+    for (li, l) in out.iter_mut().enumerate() {
+        let mut c = Vec::with_capacity(l.len());
+        for (j, &v) in l.iter().enumerate() {
+            c.push(v);
+            if let Some(extra) = inserts.get(&(li, j)) {
+                c.extend_from_slice(extra);
+            }
+        }
+        *l = c;
+    }
+    Ok((out, ops))
 }

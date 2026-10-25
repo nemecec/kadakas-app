@@ -576,3 +576,106 @@ fn five_comb_faces_that_cost_too_much_are_left_out_or_read_fast() {
         assert!(i.set.totals.triangles > 0);
     }
 }
+
+/// Writes the file of a probe to the folder in `KEEP_PROBES` (to measure the memory with
+/// `/usr/bin/time -l cargo run --release -p kadakas-step --example probe -- FILE`).
+fn keep(name: &str, text: &str) {
+    if let Ok(dir) = std::env::var("KEEP_PROBES") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(PathBuf::from(dir).join(name), text).unwrap();
+    }
+}
+
+/// `n` thin triangles (clockwise) that all have the point `p` as a corner, around it.
+fn wedges(p: (f64, f64), n: usize, r: f64, from: f64, to: f64) -> Vec<Vec<(f64, f64)>> {
+    (0..n)
+        .map(|i| {
+            let step = (to - from) / n as f64;
+            let (a0, a1) = (
+                from + step * i as f64 + step * 0.1,
+                from + step * i as f64 + step * 0.8,
+            );
+            vec![
+                p,
+                (p.0 + r * a1.cos(), p.1 + r * a1.sin()),
+                (p.0 + r * a0.cos(), p.1 + r * a0.sin()),
+            ]
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "release probe"]
+fn holes_that_are_the_same_cost_one_hole() {
+    // 13 and 100 squares with the same four corners, and a hundred thousand: the quadtree of
+    // the segments copied them into every leaf (3.5 s and 3.9 GB, 22.9 s and 12.9 GB).
+    let outline = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+    for n in [13usize, 100, 50_000] {
+        let holes: Vec<Vec<(f64, f64)>> = (0..n)
+            .map(|i| {
+                let mut h = vec![(40.0, 40.0), (40.0, 60.0), (60.0, 60.0), (60.0, 40.0)];
+                h.rotate_left(i % 4);
+                if i % 3 == 0 {
+                    h.reverse();
+                }
+                h
+            })
+            .collect();
+        let text = faceted_face(&outline, &holes);
+        keep(&format!("same_{n}.step"), &text);
+        let (r, t) = timed(&text);
+        println!("{n} holes that are the same: {t:?}");
+        let r = r.unwrap_or_else(|e| panic!("{n}: {e}"));
+        assert_eq!(r.set.totals.triangles, 8, "{n}");
+        assert!(
+            r.set.notes.iter().any(|x| x.contains("left out")),
+            "{:?}",
+            r.set.notes
+        );
+        assert!(t < Duration::from_secs(2), "{n}: {t:?}");
+    }
+}
+
+#[test]
+#[ignore = "release probe"]
+fn many_triangles_that_touch_one_point_are_cut_or_refused_fast() {
+    use std::f64::consts::TAU;
+    let square = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)];
+    // 10,000 thin triangles around a point inside.
+    let inner = faceted_face(&square, &wedges((500.0, 500.0), 10_000, 100.0, 0.0, TAU));
+    keep("fan_inner_10000.step", &inner);
+    // 10,000 inside the corner of the outline.
+    let corner = faceted_face(
+        &square,
+        &wedges(
+            (0.0, 0.0),
+            10_000,
+            100.0,
+            0.001,
+            std::f64::consts::FRAC_PI_2 - 0.001,
+        ),
+    );
+    keep("fan_corner_10000.step", &corner);
+    // 100,000 around one point.
+    let many = faceted_face(&square, &wedges((500.0, 500.0), 100_000, 100.0, 0.0, TAU));
+    keep("fan_inner_100000.step", &many);
+    for (name, text, secs) in [
+        ("inner 10,000", &inner, 2),
+        ("corner 10,000", &corner, 2),
+        ("inner 100,000", &many, 2),
+    ] {
+        let (r, t) = timed(text);
+        println!("{name} triangles at one point: {t:?}");
+        match r {
+            Ok(i) => println!("  read, {} triangles", i.set.totals.triangles),
+            Err(e) => {
+                println!("  refused: {e}");
+                assert!(
+                    e.is_limit() || matches!(e, MeshError::Unsupported(_)),
+                    "{e}"
+                );
+            }
+        }
+        assert!(t < Duration::from_secs(secs), "{name}: {t:?}");
+    }
+}
