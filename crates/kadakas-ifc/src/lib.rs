@@ -34,6 +34,7 @@
 //! layers, materials) come from the project GUID (`drawing.project.guid`) and their names. The
 //! output is deterministic.
 
+pub mod container;
 pub mod geo;
 pub mod geom;
 pub use kadakas_core::guid;
@@ -54,6 +55,8 @@ mod tests_solids;
 mod tests_surface;
 #[cfg(test)]
 mod tests_wall;
+#[cfg(test)]
+mod tests_zip;
 
 use std::io::Write;
 use std::path::Path;
@@ -115,24 +118,55 @@ pub fn export_bytes(doc: &Document, opts: &IfcOptions) -> Result<(Vec<u8>, Repor
     export_to(doc, opts, Vec::new())
 }
 
-/// Writes the document to a file. The data goes to a temporary file in the same folder first, one
-/// entity at a time, and is renamed over `path` at the end, so a crash never leaves half a file.
+/// True when the path names an ifcZIP (`.ifczip`).
+pub fn is_ifczip_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ifczip"))
+}
+
+/// Writes the document as an ifcZIP (a zip with one `.ifc` file) into memory. `name` is the name
+/// of the file inside, for example `site.ifc`.
+pub fn export_zip_bytes(
+    doc: &Document,
+    opts: &IfcOptions,
+    name: &str,
+) -> Result<(Vec<u8>, Report), IfcError> {
+    let mut opts = opts.clone();
+    opts.file_name.get_or_insert_with(|| name.to_string());
+    let z = container::start(std::io::Cursor::new(Vec::new()), name)?;
+    let (z, report) = export_to(doc, &opts, z)?;
+    Ok((container::finish(z)?.into_inner(), report))
+}
+
+/// Writes the document to a file. A path that ends in `.ifczip` gets an ifcZIP. The data goes to a
+/// temporary file in the same folder first, one entity at a time, and is renamed over `path` at
+/// the end, so a crash never leaves half a file.
 pub fn export_file(path: &Path, doc: &Document, opts: &IfcOptions) -> Result<Report, IfcError> {
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let zipped = is_ifczip_path(&target);
+    let inner = container::inner_name(&name);
     let tmp = target.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
     let mut opts = opts.clone();
     if opts.file_name.is_none() {
-        opts.file_name = Some(name);
+        opts.file_name = Some(if zipped { inner.clone() } else { name });
     }
     let result = (|| {
         let file = std::fs::File::create(&tmp)
             .map_err(|e| IfcError::Io(format!("cannot write {}: {e}", path.display())))?;
-        let (out, report) = export_to(doc, &opts, std::io::BufWriter::new(file))?;
-        let file = out.into_inner().map_err(|e| IfcError::Io(e.to_string()))?;
+        let buffered = std::io::BufWriter::new(file);
+        let (file, report) = if zipped {
+            // The zip writer needs to seek, so it gets the file itself; the buffer sits inside.
+            let z = container::start(SeekBuf(buffered), &inner)?;
+            let (z, report) = export_to(doc, &opts, z)?;
+            (container::finish(z)?.0, report)
+        } else {
+            export_to(doc, &opts, buffered)?
+        };
+        let file = file.into_inner().map_err(|e| IfcError::Io(e.to_string()))?;
         file.sync_all()?;
         drop(file);
         kadakas_sys::fsio::replace_with_backup(&tmp, &target)
@@ -143,4 +177,22 @@ pub fn export_file(path: &Path, doc: &Document, opts: &IfcOptions) -> Result<Rep
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// A buffered file that can seek (a seek flushes the buffer first, which `BufWriter` does).
+struct SeekBuf(std::io::BufWriter<std::fs::File>);
+
+impl Write for SeekBuf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.write(b)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl std::io::Seek for SeekBuf {
+    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.0.seek(p)
+    }
 }

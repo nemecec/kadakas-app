@@ -18,6 +18,7 @@ glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
+zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 proptest = "1.11.0"

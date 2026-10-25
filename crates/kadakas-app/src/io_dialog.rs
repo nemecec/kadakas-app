@@ -35,7 +35,7 @@ fn kind_of(path: &Path) -> Kind {
         .as_deref()
     {
         Some("dxf" | "dwg") => Kind::Dxf,
-        Some("ifc") => Kind::Ifc,
+        Some("ifc" | "ifczip") => Kind::Ifc,
         _ => Kind::Gis,
     }
 }
@@ -308,7 +308,7 @@ fn pattern_name(i: usize) -> String {
 fn is_ifc(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("ifc"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("ifc") || e.eq_ignore_ascii_case("ifczip"))
 }
 
 impl ExportForm {
@@ -412,13 +412,13 @@ impl IoUi {
         let picked = rfd::FileDialog::new()
             .add_filter(
                 tr!("io-dialog-dxf-dwg-ifc-shapefile-geojson"),
-                &["dxf", "dwg", "ifc", "shp", "geojson", "json"],
+                &["dxf", "dwg", "ifc", "ifczip", "shp", "geojson", "json"],
             )
             .add_filter(tr!("meshio-ui-file-filter"), &["obj", "stl", "gltf", "glb"])
             .add_filter(tr!("meshio-ui-step-filter"), &["step", "stp"])
             .add_filter("DXF", &["dxf"])
             .add_filter(tr!("io-dialog-dwg-needs-a-converter"), &["dwg"])
-            .add_filter("IFC", &["ifc"])
+            .add_filter("IFC", &["ifc", "ifczip"])
             .add_filter("Shapefile", &["shp"])
             .add_filter("GeoJSON", &["geojson", "json"])
             .pick_file();
@@ -439,6 +439,7 @@ impl IoUi {
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
             .add_filter("IFC4", &["ifc"])
+            .add_filter("ifcZIP", &["ifczip"])
             .add_filter("STL", &["stl"])
             .add_filter("OBJ", &["obj"])
             .add_filter("glTF", &["gltf"])
