@@ -426,7 +426,11 @@ fn in_corner(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
     angle(next, d - b) < back_angle
 }
 
-pub(crate) fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
+/// The triangles of a polygon with holes, as indices into the rings written one after the other:
+/// the outline counterclockwise, the holes clockwise. The holes are joined to the outline by
+/// bridges between their own points, so no point is made and a wall that is built on the same
+/// rings meets the cap edge to edge. `None` when no bridge can be found.
+pub fn cap_triangles(rings: &[Vec<DVec2>]) -> Option<Vec<[u32; 3]>> {
     let mut pts: Vec<DVec2> = rings[0].clone();
     let mut ids: Vec<u32> = (0..rings[0].len() as u32).collect();
     let mut offsets = Vec::new();

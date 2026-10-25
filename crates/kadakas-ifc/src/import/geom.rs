@@ -189,7 +189,8 @@ impl Extrusion {
         (self.xf.matrix3 * self.dir).z.abs()
     }
 
-    /// The closed triangle mesh of the solid, in world coordinates.
+    /// The closed triangle mesh of the solid, in world coordinates. The caps and the walls use the
+    /// same points of the outline and the holes, so the mesh is closed with no point between.
     pub fn mesh(&self) -> MeshData {
         let mut out = MeshData::default();
         for r in &self.regions {
@@ -198,40 +199,50 @@ impl Extrusion {
             if outer.len() < 3 {
                 continue;
             }
+            // The holes run clockwise.
             let holes: Vec<Vec<DVec2>> = r
                 .holes
                 .iter()
                 .map(|h| clean(&ring(h), true))
                 .filter(|h| h.len() >= 3)
+                .map(|h| h.into_iter().rev().collect())
                 .collect();
+            let mut rings: Vec<Vec<DVec2>> = vec![outer];
+            rings.extend(holes);
+            let caps = if rings.len() == 1 {
+                Some(
+                    kadakas_core::mesh::triangulate_edge_exact(&rings[0])
+                        .into_iter()
+                        .map(|[a, b, c]| [a as u32, b as u32, c as u32])
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                kadakas_core::solid3d::cap_triangles(&rings)
+            };
+            let Some(caps) = caps else {
+                out.append(&self.mesh_split(&rings));
+                continue;
+            };
+            let total: usize = rings.iter().map(Vec::len).sum();
             let mut m = MeshData::default();
-            // Caps. Holes are cut out by splitting the area into pieces without holes.
-            let pieces = crate::geom::split_with_holes(&outer, &holes);
-            for piece in &pieces {
-                let tris = kadakas_core::mesh::triangulate(piece);
-                let base = m.v.len() as u32;
-                m.v.extend(piece.iter().map(|p| p.extend(0.0)));
-                let top = m.v.len() as u32;
-                m.v.extend(piece.iter().map(|p| p.extend(0.0) + self.dir));
-                for [a, b, c] in tris {
-                    // Bottom faces down (clockwise from above), top faces up.
-                    m.t.push([base + a as u32, base + c as u32, base + b as u32]);
-                    m.t.push([top + a as u32, top + b as u32, top + c as u32]);
-                }
+            m.v.extend(rings.iter().flatten().map(|p| p.extend(0.0)));
+            m.v.extend(rings.iter().flatten().map(|p| p.extend(0.0) + self.dir));
+            let top = total as u32;
+            for [a, b, c] in caps {
+                // Bottom faces down (clockwise from above), top faces up.
+                m.t.push([a, c, b]);
+                m.t.push([top + a, top + b, top + c]);
             }
             // Walls. The outline runs counterclockwise and the holes clockwise.
-            let mut rings: Vec<Vec<DVec2>> = vec![outer.clone()];
-            rings.extend(holes.iter().map(|h| h.iter().rev().copied().collect()));
+            let mut at = 0u32;
             for ring in &rings {
-                let base = m.v.len() as u32;
                 let n = ring.len() as u32;
-                m.v.extend(ring.iter().map(|p| p.extend(0.0)));
-                m.v.extend(ring.iter().map(|p| p.extend(0.0) + self.dir));
                 for i in 0..n {
                     let j = (i + 1) % n;
-                    m.t.push([base + i, base + j, base + n + j]);
-                    m.t.push([base + i, base + n + j, base + n + i]);
+                    m.t.push([at + i, at + j, top + at + j]);
+                    m.t.push([at + i, top + at + j, top + at + i]);
                 }
+                at += n;
             }
             // An extrusion against the profile normal turns the whole solid inside out.
             if self.dir.z < 0.0 {
@@ -241,6 +252,42 @@ impl Extrusion {
         }
         out.transform(&self.xf);
         out
+    }
+
+    /// The mesh of a region whose cap has no bridges (a rare outline): the area is cut into pieces
+    /// without holes. The pieces have points of their own, so the mesh may have cracks.
+    fn mesh_split(&self, rings: &[Vec<DVec2>]) -> MeshData {
+        let holes: Vec<Vec<DVec2>> = rings[1..]
+            .iter()
+            .map(|h| h.iter().rev().copied().collect())
+            .collect();
+        let mut m = MeshData::default();
+        for piece in &crate::geom::split_with_holes(&rings[0], &holes) {
+            let tris = kadakas_core::mesh::triangulate(piece);
+            let base = m.v.len() as u32;
+            m.v.extend(piece.iter().map(|p| p.extend(0.0)));
+            let top = m.v.len() as u32;
+            m.v.extend(piece.iter().map(|p| p.extend(0.0) + self.dir));
+            for [a, b, c] in tris {
+                m.t.push([base + a as u32, base + c as u32, base + b as u32]);
+                m.t.push([top + a as u32, top + b as u32, top + c as u32]);
+            }
+        }
+        for ring in rings {
+            let base = m.v.len() as u32;
+            let n = ring.len() as u32;
+            m.v.extend(ring.iter().map(|p| p.extend(0.0)));
+            m.v.extend(ring.iter().map(|p| p.extend(0.0) + self.dir));
+            for i in 0..n {
+                let j = (i + 1) % n;
+                m.t.push([base + i, base + j, base + n + j]);
+                m.t.push([base + i, base + n + j, base + n + i]);
+            }
+        }
+        if self.dir.z < 0.0 {
+            m.flip();
+        }
+        m
     }
 }
 
@@ -2034,6 +2081,42 @@ mod tests {
             (v / 1000.0 - area).abs() < area * 0.003,
             "{} {area}",
             v / 1000.0
+        );
+    }
+
+    #[test]
+    fn extrusions_of_profiles_with_voids_are_closed_solids() {
+        let hollow = |profile: &str| {
+            let data = format!("{BASE}#4={profile};\n#5=IFCEXTRUDEDAREASOLID(#4,#2,#3,3.);");
+            let (p, issues) = run(&data, 5);
+            assert!(issues.is_empty(), "{issues:?}");
+            piece_mesh(&p[0]).unwrap()
+        };
+        for profile in [
+            "IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,$,5.,0.2)",
+            "IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,4.,2.,0.2)",
+        ] {
+            let m = hollow(profile);
+            assert!(csg::is_closed(&m), "{profile} is open");
+            assert!(volume(&m) > 0.0, "{profile}");
+        }
+        // The rectangle is exact.
+        let m = hollow("IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,4.,2.,0.2)");
+        assert!((volume(&m) - (8.0 - 3.6 * 1.6) * 3.0).abs() < 1e-9);
+        // A profile with two voids.
+        let two = format!(
+            "{BASE}#10=IFCCARTESIANPOINT((-4.,-2.));#11=IFCCARTESIANPOINT((4.,-2.));#12=IFCCARTESIANPOINT((4.,2.));#13=IFCCARTESIANPOINT((-4.,2.));\n#14=IFCPOLYLINE((#10,#11,#12,#13,#10));\n\
+#20=IFCCARTESIANPOINT((-3.,-1.));#21=IFCCARTESIANPOINT((-1.,-1.));#22=IFCCARTESIANPOINT((-1.,1.));#23=IFCCARTESIANPOINT((-3.,1.));\n#24=IFCPOLYLINE((#20,#21,#22,#23,#20));\n\
+#30=IFCCARTESIANPOINT((1.,-1.5));#31=IFCCARTESIANPOINT((3.,-1.5));#32=IFCCARTESIANPOINT((2.,1.5));\n#34=IFCPOLYLINE((#30,#31,#32,#30));\n\
+#40=IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,$,#14,(#24,#34));\n#41=IFCEXTRUDEDAREASOLID(#40,#2,#3,2.);"
+        );
+        let (p, _) = run(&two, 41);
+        let m = piece_mesh(&p[0]).unwrap();
+        assert!(csg::is_closed(&m));
+        assert!(
+            (volume(&m) - (32.0 - 4.0 - 3.0) * 2.0).abs() < 1e-9,
+            "{}",
+            volume(&m)
         );
     }
 

@@ -227,3 +227,43 @@ fn many_walls_that_fail_the_same_way_give_one_note() {
         lines[0]
     );
 }
+
+/// A ring wall: the profile with its void, 3000 high, and a 400 x 600 x 1000 opening through the left wall.
+fn ring_wall(profile: &str) -> String {
+    format!(
+        "{}{}#60=IFCCARTESIANPOINT((-1900.,0.,1000.));\n#61=IFCAXIS2PLACEMENT3D(#60,$,$);\n#62=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,400.,600.);\n#63=IFCEXTRUDEDAREASOLID(#62,#61,#4,1000.);\n\
+#64=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',(#63));\n#65=IFCPRODUCTDEFINITIONSHAPE($,$,(#64));\n#66=IFCOPENINGELEMENT('ro',$,'Door',$,$,#7,#65,$,.OPENING.);\n#67=IFCRELVOIDSELEMENT('rv',$,$,$,#30,#66);\n",
+        extr(20, profile, 3000.0),
+        slab(30, "#21")
+    )
+}
+
+#[test]
+fn walls_with_a_void_in_their_profile_are_closed_and_take_their_openings() {
+    let want = (4000.0 * 2000.0 - 3600.0 * 1600.0) * 3000.0 - 200.0 * 600.0 * 1000.0;
+    let (ed, r) = run(
+        &ring_wall("IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,4000.,2000.,200.)"),
+        &IfcImportOptions::default(),
+    );
+    assert_eq!(objs(&ed).len(), 1, "no opening object: {r:?}");
+    assert!(
+        (volume_of(objs(&ed)[0]) - want).abs() < 1.0,
+        "{}",
+        volume_of(objs(&ed)[0])
+    );
+    assert!(
+        r.notes.iter().any(|n| n.starts_with("1 openings")),
+        "{:?}",
+        r.notes
+    );
+    // A hollow circle: an outer radius 2500 and a wall of 200, cut by the same box (its two faces
+    // are curved there, so the volume is the polygon one).
+    let (ed, r) = run(
+        &ring_wall("IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,$,2500.,200.)"),
+        &IfcImportOptions::default(),
+    );
+    assert_eq!(objs(&ed).len(), 1, "no opening object: {r:?}");
+    let ring = std::f64::consts::PI * (2500.0f64.powi(2) - 2300.0f64.powi(2)) * 3000.0;
+    let v = volume_of(objs(&ed)[0]);
+    assert!(v < ring && v > ring - 2.0e8, "{v} {ring}");
+}
