@@ -112,6 +112,53 @@ A circle or an arc is made by `edit_surface` with the action `add_curve`: a chai
 
 **Files from development builds.** Before soft and smooth were apart, Push/Pull wrote only `smooth` on the sides of a cylinder and the drawing left smooth edges out. Such files now show the side lines of their cylinders until the edges are softened (nothing was released, so there is no migration). The context menu of the 3D view has Soften, Smooth and Unsoften for the selected edges. Entity Info shows the three flags of a selected edge.
 
+### Circles and arcs with an exact description (MOD-15)
+
+The Circle, Arc and Polygon tools give the curve its exact circle: center, normal, radius and, for an arc, the start and end angle.
+The field is optional and sits next to the chain of edges. The number of segments is the number of edges. The core is `kadakas_core::surface::analytic`.
+
+**Entity Info.** Select one edge of a curve, or all edges of it. The panel shows the shape (circle, arc or regular polygon), the true radius and the center in the drawing.
+For an arc it also shows the start and end angle. It shows the length or the circumference. The field Segments takes a number from 3 to 1,000.
+The button Set segments rebuilds the chain on the same circle, in one undo step. The status line says what happened or why it was refused.
+
+**Set segments** (`edit_surface` with `set_curve_segments {curve, segments}`). The ends of an arc and the first vertex of a circle stay.
+The other vertices are new, at equal angles. The first edges keep their ids. The edges keep the flags of the first edge.
+Faces in the plane of the circle keep their loops with the new vertices. A loose circle, a disc, a ring, a D shape and an arc are supported.
+The edit is refused, with a reason in the language of the window, in these cases.
+- The curve has no exact circle.
+- Another edge meets the chain inside it.
+- A face on another plane uses the chain. A circle under the wall of a pushed cylinder is the usual case.
+- The new edges are shorter than the length tolerance, or the result is an invalid model.
+
+**What the other edits do.** The model keeps one rule: if a curve has the field, all its vertices lie on the circle within the length tolerance.
+A vertex that another edge cut into the chain lies on a chord and is allowed. The rule is kept after every edit.
+
+| Edit | The field |
+|---|---|
+| Move, rotate, mirror, uniform scale | follows the chain, with the new center and radius |
+| Scale with unequal factors, move of single points | dropped, with a note. The chain stays a curve |
+| Erase that cuts a circle | each piece is an arc on the same circle with its own angles |
+| Erase at the end of an arc | the arc is shorter, the angles are updated, the note says so |
+| Push/Pull, Follow Me, copy | the copy gets its own circle at the new place |
+| Offset | the new curve gets the circle of its corners, with another radius |
+| Group, component, explode | follows the chain |
+
+The offset of a circle by a distance `d` has the radius `r - d / cos(pi / n)`, because the sides of the polygon move by `d`.
+An arc offset has no field, because its ends move at right angles to the end edges and leave the circle.
+Heal and join keep the field of the curve that keeps its chain. Two curves are never joined into one.
+The notes of an edit are told in the language of the window and show in the status line.
+
+**Snap.** The center of a circle or an arc is an inference point (`Center`) from the field, also for an arc and for a chain that another edge cut.
+The Vectorworks-like app offers it in its snap list too (`snap_geometry` of the plan).
+
+**File.** The model field `curve_geometry` is a list of `[curve id, {description}]`. A file without it loads as before.
+An older program keeps the field it does not know. A row whose curve is gone, or whose points are off the circle, is left out on load.
+The API is `mesh.curve_info` and `mesh.set_segments` (`docs/mesh-api.md`).
+
+**Export.** DXF export keeps the mesh of a surface model. A true CIRCLE or ARC entity is a later step, as are STEP and IFC circles.
+
+**Tests.** Unit tests for every edit in `surface/tests_analytic.rs`, a property test with random sequences of edits (the invariant holds, a twin model gives the same result), fixtures of an old file and of a file with unknown fields, the segment tests, the API tests, the tests of Entity Info and the window.
+
 ### Faces that cross, and Intersect Faces
 
 **What is accepted.** Drawing does not cut faces that cross in other planes. An edge that passes through a face in another plane is accepted and is not split there. Other modelers of this kind work the same way (public documentation: edges and faces that cross are not split automatically). A sketch can hold such places.
