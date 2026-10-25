@@ -439,7 +439,7 @@ impl IoUi {
             .add_filter("DXF", &["dxf"])
             .add_filter("GeoJSON", &["geojson"])
             .add_filter("IFC4", &["ifc"])
-            .add_filter("ifcZIP", &["ifczip"])
+            .add_filter(tr!("io-dialog-ifczip-filter"), &["ifczip"])
             .add_filter("STL", &["stl"])
             .add_filter("OBJ", &["obj"])
             .add_filter("glTF", &["gltf"])
