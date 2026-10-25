@@ -457,18 +457,37 @@ fn mesh_of(polys: &[Polygon]) -> MeshData {
 
 /// Splits the triangles at the vertices that lie on their edges, so that the faces of a solid
 /// that came out of a boolean operation meet edge to edge (the result is closed again and can be
-/// the operand of the next operation). Work over [`HEAL_BUDGET`] (triangles times vertices) is skipped.
-fn heal_t_junctions(m: &mut MeshData) {
+/// the operand of the next operation).
+///
+/// The vertices are put in a grid whose cell size follows the size of the mesh in each direction
+/// (a long thin wall gets many cells along its length and one across). An edge looks only at the
+/// cells of its box, so the work follows the number of triangles and the vertices near their edges,
+/// not the product of the two. It gives up (and returns `false`, the mesh unchanged) when the cells
+/// that edges look at pass [`HEAL_CELLS`]: the budget is counted, not timed.
+fn heal_t_junctions(m: &mut MeshData) -> bool {
+    use std::collections::HashMap;
     let n = m.v.len();
-    if n == 0 || m.t.len().saturating_mul(n) > HEAL_BUDGET {
-        return;
+    let Some((lo, hi)) = m.bounds() else {
+        return true;
+    };
+    let extent = hi - lo;
+    let longest = extent.max_element().max(1e-9);
+    // Cells: at most 2048 along the longest side, and about one vertex in each.
+    let floor = longest / 2048.0;
+    let e = extent.max(DVec3::splat(floor));
+    let size = ((e.x * e.y * e.z) / n.max(1) as f64).cbrt().max(floor);
+    let cell = |p: DVec3| -> (i64, i64, i64) {
+        let q = (p - lo) / size;
+        (q.x.floor() as i64, q.y.floor() as i64, q.z.floor() as i64)
+    };
+    let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::with_capacity(n);
+    for (i, p) in m.v.iter().enumerate() {
+        grid.entry(cell(*p)).or_default().push(i as u32);
     }
-    let mut order: Vec<u32> = (0..n as u32).collect();
-    order.sort_by(|a, b| m.v[*a as usize].x.total_cmp(&m.v[*b as usize].x));
-    let xs: Vec<f64> = order.iter().map(|i| m.v[*i as usize].x).collect();
+    let mut visited = 0u64;
     let mut out: Vec<[u32; 3]> = Vec::with_capacity(m.t.len());
-    let triangles = std::mem::take(&mut m.t);
-    for t in &triangles {
+    let mut centres: Vec<DVec3> = Vec::new();
+    for t in &m.t {
         let mut ring: Vec<u32> = Vec::with_capacity(6);
         let mut split_any = false;
         for k in 0..3 {
@@ -480,26 +499,39 @@ fn heal_t_junctions(m: &mut MeshData) {
             if len2 < 1e-24 {
                 continue;
             }
-            let (lo, hi) = (pa.x.min(pb.x) - EPS, pa.x.max(pb.x) + EPS);
+            let (c0, c1) = (
+                cell(pa.min(pb) - DVec3::splat(EPS)),
+                cell(pa.max(pb) + DVec3::splat(EPS)),
+            );
+            let count = ((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) * (c1.2 - c0.2 + 1)).max(1) as u64;
+            visited += count;
+            if visited > heal_limit() {
+                return false;
+            }
             let mut extra: Vec<(f64, u32)> = Vec::new();
-            for j in xs.partition_point(|x| *x < lo)..n {
-                if xs[j] > hi {
-                    break;
-                }
-                let c = order[j];
-                if c == a || c == b {
-                    continue;
-                }
-                let pc = m.v[c as usize];
-                let s = (pc - pa).dot(ab) / len2;
-                if s <= 0.0 || s >= 1.0 {
-                    continue;
-                }
-                if (pc - (pa + ab * s)).length() <= EPS
-                    && (pc - pa).length() > EPS
-                    && (pc - pb).length() > EPS
-                {
-                    extra.push((s, c));
+            for x in c0.0..=c1.0 {
+                for y in c0.1..=c1.1 {
+                    for z in c0.2..=c1.2 {
+                        let Some(list) = grid.get(&(x, y, z)) else {
+                            continue;
+                        };
+                        for &c in list {
+                            if c == a || c == b {
+                                continue;
+                            }
+                            let pc = m.v[c as usize];
+                            let s = (pc - pa).dot(ab) / len2;
+                            if s <= 0.0 || s >= 1.0 {
+                                continue;
+                            }
+                            if (pc - (pa + ab * s)).length() <= EPS
+                                && (pc - pa).length() > EPS
+                                && (pc - pb).length() > EPS
+                            {
+                                extra.push((s, c));
+                            }
+                        }
+                    }
                 }
             }
             extra.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -513,17 +545,35 @@ fn heal_t_junctions(m: &mut MeshData) {
         // A fan around the centre of the triangle: the triangle is convex, so every piece has an
         // area, even where several points lie on one edge.
         let centre = (m.v[t[0] as usize] + m.v[t[1] as usize] + m.v[t[2] as usize]) / 3.0;
-        let c = m.v.len() as u32;
-        m.v.push(centre);
+        let c = (n + centres.len()) as u32;
+        centres.push(centre);
         for k in 0..ring.len() {
             out.push([c, ring[k], ring[(k + 1) % ring.len()]]);
         }
     }
+    m.v.extend(centres);
     m.t = out;
+    true
 }
 
-/// Triangles times vertices that the healing of T-junctions accepts.
-const HEAL_BUDGET: usize = 60_000_000;
+/// Cells that the healing of T-junctions may look at (a cell with a few vertices costs a few steps).
+const HEAL_CELLS: u64 = 400_000_000;
+
+#[cfg(test)]
+thread_local! {
+    /// A test can lower the limit to see what an import does with a result that is not healed.
+    pub(crate) static HEAL_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(HEAL_CELLS) };
+}
+
+#[cfg(test)]
+fn heal_limit() -> u64 {
+    HEAL_LIMIT.with(|c| c.get())
+}
+
+#[cfg(not(test))]
+fn heal_limit() -> u64 {
+    HEAL_CELLS
+}
 
 /// The operation on two polygon sets that face outward.
 fn run(pa: Vec<Polygon>, pb: Vec<Polygon>, op: Op, fuel: &Fuel) -> Result<Vec<Polygon>, CsgError> {
@@ -868,7 +918,7 @@ mod budget_tests {
 
     #[test]
     fn many_openings_are_cut_in_one_pass_with_a_counted_budget() {
-        for n in [3usize, 300, 1000] {
+        for n in [3usize, 300, 1000, 3000] {
             let (wall, cutters) = wall_with(n, 2000.0 * n as f64 + 1000.0, DVec3::ZERO);
             let fuel = Fuel::new(IMPORT_FUEL);
             let started = std::time::Instant::now();
@@ -880,12 +930,12 @@ mod budget_tests {
                 "{n}: {} {want}",
                 vol(&out)
             );
-            if n <= 300 {
-                assert!(is_closed(&out), "{n}");
-            }
+            assert!(is_closed(&out), "{n}: the result must be closed");
             let used = IMPORT_FUEL - fuel.left();
             println!("{n} openings used {used} units of work");
             assert!(used < PER_CALL_FUEL, "{n}: {used}");
+            // A hang guard only (about 2 s in a release build for 3,000 openings).
+            assert!(started.elapsed().as_secs() < 300);
         }
     }
 
