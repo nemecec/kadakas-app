@@ -204,10 +204,7 @@ mod tests {
             DVec2::new(1.0, 1.0),
             DVec2::new(1.0, -1.0),
         ];
-        assert_eq!(
-            split_with_holes(&sq(10.0), std::slice::from_ref(&hole)).len() > 0,
-            true
-        );
+        assert!(!split_with_holes(&sq(10.0), std::slice::from_ref(&hole)).is_empty());
         for big in [1.0e308, 1.0e13, f64::INFINITY, f64::NAN] {
             assert!(split_with_holes(&sq(big), std::slice::from_ref(&hole)).is_empty());
             assert!(split_with_holes(&sq(10.0), &[sq(big)]).is_empty());
