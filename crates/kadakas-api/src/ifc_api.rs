@@ -7,20 +7,22 @@ use serde_json::{Value, json};
 
 use crate::{RpcError, Session};
 
-/// True if the request asks for IFC: the format is `ifc`, or there is no format and the file ends in `.ifc`.
+/// True if the request asks for IFC: the format is `ifc` or `ifczip`, or there is no format and the
+/// file ends in `.ifc` or `.ifczip`.
 pub(crate) fn is_ifc(format: Option<&str>, path: &Path) -> bool {
+    let is = |s: &str| s.eq_ignore_ascii_case("ifc") || s.eq_ignore_ascii_case("ifczip");
+    let is =
+        |s: &str| is(s) || s.eq_ignore_ascii_case("ifcxml") || s.eq_ignore_ascii_case("ifcjson");
     match format {
-        Some(f) => f.trim().trim_start_matches('.').eq_ignore_ascii_case("ifc"),
-        None => path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("ifc")),
+        Some(f) => is(f.trim().trim_start_matches('.')),
+        None => path.extension().and_then(|e| e.to_str()).is_some_and(is),
     }
 }
 
 /// Options and mappings of the IFC export, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "format": "ifc: export IFC4 (IFC4 ADD2 TC1, the default), IFC2x3 or IFC4x3 (ADD2) as a STEP physical file (option version). import.file reads IFC2x3, IFC4 and IFC4x3 (see import below).",
+        "format": "ifc: export IFC4 (IFC4 ADD2 TC1, the default), IFC2x3 or IFC4x3 (ADD2) as a STEP physical file (option version). A path that ends in .ifczip gets an ifcZIP instead: a zip with one .ifc file inside. import.file reads IFC2x3, IFC4 and IFC4x3 as .ifc or .ifczip (see import below). IFC XML and IFC JSON are not supported: export STEP or ifcZIP.",
         "options": {
             "version": "IFC4 (default) | IFC2X3 | IFC4X3. IFC2X3: owner history, building element proxies instead of geographic elements, surface models instead of triangulated face sets, and the map conversion as the property sets ePSet_MapConversion and ePSet_ProjectedCRS of the site. IFC4X3: vegetation has its own predefined type (VEGETATION); the site, the terrain (IfcGeographicElement TERRAIN) and the map conversion are as in IFC4. No IfcAlignment",
             "classes_as_layers": "true (default): one IfcPresentationLayerAssignment per class",
@@ -53,7 +55,7 @@ pub(crate) fn describe() -> Value {
 /// Options and mappings of the IFC import, for `describe`.
 fn import_describe() -> Value {
     json!({
-        "call": "import.file with a path that ends in .ifc (or format \"ifc\"). One undo step. The result has imported, skipped, report (counts, skipped items with reasons, notes) and georeference.",
+        "call": "import.file with a path that ends in .ifc or .ifczip (or format \"ifc\"). The kind of file is found from its first bytes: STEP, or a zip with exactly one .ifc file (at most 1000 entries, the size limit max_file_mb for the unpacked file, at most 200 times the zip size above 64 MB; an entry name with .. or a drive letter refuses the file). IFC XML and IFC JSON give a clear error. One undo step. The result has imported, skipped, report (counts, skipped items with reasons, notes) and georeference.",
         "options": {
             "layers_from_storeys": "true (default): one design layer per IfcBuildingStorey with its elevation; other elements go to the layer \"Site\". false: the active layer",
             "classes_from_layers": "true (default): one class per IfcPresentationLayerAssignment. false: the active class",
@@ -141,7 +143,8 @@ impl Session {
         )?;
         let opts = IfcImportOptions::from_json(&options).map_err(import_rpc)?;
         let path = if checked {
-            self.check_path(&path, false, &["ifc"])
+            // .ifcxml and .ifcjson are allowed so that the answer is the message that names the format.
+            self.check_path(&path, false, &["ifc", "ifczip", "ifcxml", "ifcjson"])
                 .map_err(RpcError::policy)?
         } else {
             path
@@ -185,7 +188,7 @@ impl Session {
     ) -> Result<Value, RpcError> {
         let opts = IfcOptions::from_json(options).map_err(rpc)?;
         let path = if checked {
-            self.check_path(&path, true, &["ifc"])
+            self.check_path(&path, true, &["ifc", "ifczip"])
                 .map_err(RpcError::policy)?
         } else {
             path
@@ -214,6 +217,8 @@ mod tests {
         assert!(is_ifc(Some(".ifc"), Path::new("a")));
         assert!(is_ifc(None, Path::new("model.IFC")));
         assert!(!is_ifc(None, Path::new("model.dxf")));
+        assert!(is_ifc(None, Path::new("model.IFCZIP")));
+        assert!(is_ifc(Some("ifczip"), Path::new("a")));
         assert!(!is_ifc(Some("dxf"), Path::new("a.ifc")));
         assert!(describe()["options"]["version"].is_string());
     }

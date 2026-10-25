@@ -47,6 +47,7 @@ use kadakas_io::builder::Builder;
 use kadakas_io::{Context, ImportResult};
 use serde_json::{Value as Json, json};
 
+use crate::container::{self, Container};
 use crate::reader::{Limits, StepError, StepIndex};
 use crate::step::Entity;
 use ctx::{Ctx, attr, enum_of, items, num, text};
@@ -182,30 +183,68 @@ impl From<StepError> for IfcImportError {
     }
 }
 
-/// Reads an IFC file and plans the import into `doc`.
+/// Reads an IFC file (STEP or ifcZIP, found by the first bytes, not by the name) and plans the
+/// import into `doc`. IFC XML and IFC JSON are refused with a message.
 pub fn import_file(
     path: &Path,
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
-    let index = StepIndex::from_file(path, opts.limits.clone())?;
-    import_index(index, doc, opts)
+    use std::io::{Read, Seek};
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| IfcImportError::Io(format!("cannot read {}: {e}", path.display())))?;
+    let mut head = [0u8; 64];
+    let n = file.read(&mut head).unwrap_or(0);
+    match container::sniff(&head[..n]) {
+        Container::Step => {
+            drop(file);
+            let index = StepIndex::from_file(path, opts.limits.clone())?;
+            import_index(index, doc, opts, Vec::new())
+        }
+        Container::Zip => {
+            let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+            if len > opts.limits.max_bytes as u64 {
+                return Err(StepError::TooLarge(opts.limits.max_bytes).into());
+            }
+            file.rewind()
+                .map_err(|e| IfcImportError::Io(e.to_string()))?;
+            import_zip(std::io::BufReader::new(file), doc, opts)
+        }
+        other => Err(container::refusal(other)),
+    }
 }
 
-/// Plans the import of IFC bytes.
+fn import_zip<R: std::io::Read + std::io::Seek>(
+    r: R,
+    doc: &Document,
+    opts: &IfcImportOptions,
+) -> Result<ImportResult, IfcImportError> {
+    let unpacked = container::unpack(r, opts.limits.max_bytes)?;
+    let index = StepIndex::from_bytes(unpacked.data, opts.limits.clone())?;
+    import_index(index, doc, opts, unpacked.notes)
+}
+
+/// Plans the import of IFC bytes (STEP or ifcZIP).
 pub fn import_bytes(
     data: Vec<u8>,
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
-    let index = StepIndex::from_bytes(data, opts.limits.clone())?;
-    import_index(index, doc, opts)
+    match container::sniff(&data[..data.len().min(64)]) {
+        Container::Step => {
+            let index = StepIndex::from_bytes(data, opts.limits.clone())?;
+            import_index(index, doc, opts, Vec::new())
+        }
+        Container::Zip => import_zip(std::io::Cursor::new(data), doc, opts),
+        other => Err(container::refusal(other)),
+    }
 }
 
 fn import_index(
     index: StepIndex,
     doc: &Document,
     opts: &IfcImportOptions,
+    notes: Vec<String>,
 ) -> Result<ImportResult, IfcImportError> {
     let schemas = index.schemas();
     if !schemas.is_empty()
@@ -241,7 +280,7 @@ fn import_index(
         geometry_notes: BTreeMap::new(),
         z_dropped: 0,
     };
-    for n in &imp.cx.x.notes {
+    for n in notes.iter().chain(&imp.cx.x.notes) {
         imp.b.report.note(n);
     }
     imp.run();

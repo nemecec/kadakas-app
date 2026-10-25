@@ -56,8 +56,8 @@ fn format_of(name: Option<&str>) -> Result<Option<Format>, RpcError> {
 /// Formats, options and examples, for `describe`.
 pub(crate) fn describe() -> Value {
     json!({
-        "import_formats": ["dxf (text and binary, releases 12 to 2018)", "shp (with .dbf and .prj next to it)", "geojson", "ifc (IFC2x3, IFC4, IFC4x3; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)", "obj, stl, gltf, glb (triangle meshes, see describe.io.mesh_files)"],
-        "export_formats": ["dxf (text; option version: 12, 2000, 2004, 2013 or 2018)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc (IFC4, IFC2X3 or IFC4X3, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "stl (3D, binary or ASCII, see describe.io.mesh_files)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
+        "import_formats": ["dxf (text and binary, releases 12 to 2018)", "shp (with .dbf and .prj next to it)", "geojson", "ifc, ifczip (IFC2x3, IFC4, IFC4x3 as STEP or ifcZIP; options in describe.io.ifc.import)", "dwg (needs a converter that you install, see describe.io.dwg)", "obj, stl, gltf, glb (triangle meshes, see describe.io.mesh_files)"],
+        "export_formats": ["dxf (text; option version: 12, 2000, 2004, 2013 or 2018)", "geojson", "dwg (needs a converter that you install, see describe.io.dwg)", "ifc, ifczip (IFC4, IFC2X3 or IFC4X3; a path that ends in .ifczip gets an ifcZIP, see describe.io.ifc)", "gltf, glb, obj (3D, see describe.io.x3d)", "stl (3D, binary or ASCII, see describe.io.mesh_files)", "pdf, sheet_svg, sheet_png (sheet layers, see describe.sheets.export)"],
         "import_options": {
             "layer_mode": "classes (default: DXF layers become classes on one design layer) | layers (DXF layers become design layers)",
             "layer": "name of the design layer that receives the objects (created if needed). Default: for DXF and DWG with track_source (the default) a new layer named after the file, else the active layer; for GIS files the active layer",

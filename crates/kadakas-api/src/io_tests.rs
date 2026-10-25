@@ -338,6 +338,18 @@ fn ifc_export_follows_the_path_policy_and_never_changes_the_document() {
     .unwrap();
     assert_eq!(std::fs::read(&out).unwrap(), first);
     assert_eq!(s.editor.doc().drawing.project.guid, guid);
+    // An ifcZIP: the path decides, the import finds the file by its content.
+    let zipped = inside.join("site.ifczip");
+    let r = call(&mut s, "export.file", json!({"path": zipped})).unwrap();
+    assert_eq!(r["exported"], 1);
+    assert_eq!(&std::fs::read(&zipped).unwrap()[..2], b"PK");
+    assert_eq!(*s.editor.doc(), before);
+    let mut t = Session {
+        paths: crate::PathPolicy::restricted([inside.clone()]),
+        ..Session::with_sequential_ids()
+    };
+    let r = call(&mut t, "import.file", json!({"path": zipped})).unwrap();
+    assert_eq!(r["imported"], 1, "{r}");
     // The user's own dialog is not limited.
     let free = outside.join("free.ifc");
     s.export_file_trusted(json!({"path": free, "format": "ifc"}))
