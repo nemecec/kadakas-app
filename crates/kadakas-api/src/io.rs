@@ -174,7 +174,27 @@ impl Session {
         self.export_impl(p, false)
     }
 
+    /// Every import is caught here: a bug that a crafted file finds ends the import, not the program.
+    /// The steps that the import made are taken back, and the answer is a refusal.
     fn import_impl(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
+        let depth = self.editor.undo_depth();
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.import_unguarded(p, checked)
+        }));
+        match ran {
+            Ok(r) => r,
+            Err(_) => {
+                let steps = self.editor.undo_depth().saturating_sub(depth);
+                self.editor.rollback(steps);
+                self.prune_selection();
+                Err(RpcError::app(
+                    "the import failed on a damaged file (internal error)",
+                ))
+            }
+        }
+    }
+
+    fn import_unguarded(&mut self, p: Value, checked: bool) -> Result<Value, RpcError> {
         let FileParams {
             path,
             format,

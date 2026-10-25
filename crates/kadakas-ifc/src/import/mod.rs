@@ -94,6 +94,9 @@ pub struct IfcImportOptions {
     pub georef: bool,
     pub max_objects: usize,
     pub max_triangles: usize,
+    /// Work (split tests) that all booleans of one import may use: openings, `IfcBooleanResult`.
+    /// When it is used up, the remaining openings stay as objects and the report counts them.
+    pub boolean_work: u64,
     pub limits: Limits,
 }
 
@@ -109,6 +112,7 @@ impl Default for IfcImportOptions {
             georef: true,
             max_objects: 500_000,
             max_triangles: 20_000_000,
+            boolean_work: csg::IMPORT_FUEL,
             limits: Limits::default(),
         }
     }
@@ -143,6 +147,7 @@ impl IfcImportOptions {
                 "georef" => o.georef = flag()?,
                 "max_objects" => o.max_objects = count(1)?,
                 "max_triangles" => o.max_triangles = count(1)?,
+                "boolean_work" => o.boolean_work = count(0)? as u64,
                 "max_file_mb" => o.limits.max_bytes = count(1)?.saturating_mul(1 << 20),
                 "property_sets" => {
                     o.property_sets = match val.as_str() {
@@ -161,7 +166,7 @@ impl IfcImportOptions {
                 }
                 other => {
                     return Err(IfcImportError::Option(format!(
-                        "unknown option '{other}'. Options: layers_from_storeys, classes_from_layers, property_sets, terrain, instances, vegetation, georef, max_objects, max_triangles, max_file_mb"
+                        "unknown option '{other}'. Options: layers_from_storeys, classes_from_layers, property_sets, terrain, instances, vegetation, georef, max_objects, max_triangles, boolean_work, max_file_mb"
                     )));
                 }
             }
@@ -179,6 +184,9 @@ pub enum IfcImportError {
     Io(String),
     #[error("{0}")]
     Format(String),
+    /// A bug met a file nobody foresaw: the import was stopped and nothing was changed.
+    #[error("the import failed on a damaged file (internal error)")]
+    Internal,
 }
 
 impl From<StepError> for IfcImportError {
@@ -194,9 +202,35 @@ impl From<StepError> for IfcImportError {
     }
 }
 
+/// Runs an import and turns a panic into [`IfcImportError::Internal`]: a crafted file must never
+/// end the program.
+fn guarded<T>(f: impl FnOnce() -> Result<T, IfcImportError>) -> Result<T, IfcImportError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or(Err(IfcImportError::Internal))
+}
+
 /// Reads an IFC file (STEP or ifcZIP, found by the first bytes, not by the name) and plans the
-/// import into `doc`. IFC XML and IFC JSON are refused with a message.
+/// import into `doc`. IFC XML and IFC JSON are refused with a message. A panic inside is caught.
 pub fn import_file(
+    path: &Path,
+    doc: &Document,
+    opts: &IfcImportOptions,
+) -> Result<ImportResult, IfcImportError> {
+    guarded(|| import_file_unguarded(path, doc, opts))
+}
+
+/// Plans the import of IFC bytes (STEP or ifcZIP). A panic inside is caught.
+pub fn import_bytes(
+    data: Vec<u8>,
+    doc: &Document,
+    opts: &IfcImportOptions,
+) -> Result<ImportResult, IfcImportError> {
+    guarded(|| import_bytes_unguarded(data, doc, opts))
+}
+
+/// [`import_file`] without the catch of panics, for the tests that look for them.
+#[doc(hidden)]
+pub fn import_file_unguarded(
     path: &Path,
     doc: &Document,
     opts: &IfcImportOptions,
@@ -235,8 +269,9 @@ fn import_zip<R: std::io::Read + std::io::Seek>(
     import_index(index, doc, opts, unpacked.notes)
 }
 
-/// Plans the import of IFC bytes (STEP or ifcZIP).
-pub fn import_bytes(
+/// [`import_bytes`] without the catch of panics, for the tests that look for them.
+#[doc(hidden)]
+pub fn import_bytes_unguarded(
     data: Vec<u8>,
     doc: &Document,
     opts: &IfcImportOptions,
@@ -295,6 +330,8 @@ fn import_index(
             triangles: 0,
             geometry_notes: BTreeMap::new(),
             z_dropped: 0,
+            fuel: csg::Fuel::new(opts.boolean_work),
+            opening_failures: BTreeMap::new(),
             cut: HashSet::new(),
             uncut: HashSet::new(),
             bodyless: HashSet::new(),
@@ -346,6 +383,15 @@ fn far_from_origin(cx: &Ctx) -> bool {
     far
 }
 
+/// Hosts with openings that were not all cut, for one reason.
+#[derive(Default)]
+struct OpeningTally {
+    hosts: usize,
+    openings: usize,
+    /// The first hosts, with the number of their openings.
+    names: Vec<(String, usize)>,
+}
+
 /// A rigid motion in the plane (millimeters), for placing the file into the georeference of the document.
 #[derive(Clone, Copy, Debug, Default)]
 struct Frame {
@@ -394,6 +440,10 @@ struct Importer<'a> {
     geometry_notes: BTreeMap<String, usize>,
     z_dropped: usize,
     /// Openings that were cut from their host, and openings whose cut failed.
+    /// The work budget for the booleans of the whole import.
+    fuel: csg::Fuel,
+    /// Hosts whose openings could not all be cut, by reason and whether the cut was partial.
+    opening_failures: BTreeMap<(String, bool), OpeningTally>,
     cut: HashSet<u64>,
     uncut: HashSet<u64>,
     /// Openings that have no Body representation (a Reference representation is not subtracted).
@@ -479,6 +529,7 @@ impl<'a> Importer<'a> {
                 "{repeated_ids} products repeat the GlobalId of another product: all are imported"
             ));
         }
+        self.finish_opening_notes();
         if !self.cut.is_empty() {
             self.b.report.note(&format!(
                 "{} openings (IfcRelVoidsElement) were cut from their walls and slabs",
@@ -868,23 +919,15 @@ impl<'a> Importer<'a> {
         );
     }
 
-    /// Subtracts the openings of a host element (`IfcRelVoidsElement`) from its solid pieces. The
-    /// openings that were cut are remembered in `cut`. When a cut fails (an open mesh, a body that
-    /// is not a solid, a geometry too complex), the gross geometry stays, the openings stay as
-    /// objects of their own (`uncut`), and the report counts them with the reason.
+    /// Subtracts the openings of a host element (`IfcRelVoidsElement`) from its solid pieces. An
+    /// opening that was cut from every piece it reaches is remembered in `cut`. When a cut fails (an
+    /// open mesh, a body that is no solid, a geometry too complex, the work budget), the piece keeps
+    /// its gross shape and the openings that reached it stay as objects of their own (`uncut`). An
+    /// opening that was cut from one piece and not from another counts as cut, and the report says
+    /// that it was cut in part. The report counts both cases per host (see `finish_opening_notes`).
     fn cut_openings(&mut self, e: &Entity, reps: &[Rc<Entity>], out: &mut EvalOut, class: &str) {
         let Some(list) = self.model.openings_of.get(&e.id).cloned() else {
             return;
-        };
-        let fail = |imp: &mut Importer, ids: &[u64], why: &str| {
-            for id in ids {
-                imp.uncut.insert(*id);
-            }
-            *imp.geometry_notes
-                .entry(format!(
-                    "{class}: {why}: the gross geometry is kept and the opening is a separate object"
-                ))
-                .or_default() += ids.len();
         };
         // Instances cannot be cut: evaluate again without them.
         if out
@@ -930,9 +973,11 @@ impl<'a> Importer<'a> {
         if cutters.is_empty() {
             return;
         }
-        let ids: Vec<u64> = cutters.iter().map(|(i, _)| *i).collect();
+        // Per opening: in how many pieces it was cut and in how many the cut failed.
+        let mut cut_in: HashMap<u64, usize> = HashMap::new();
+        let mut failed_in: HashMap<u64, usize> = HashMap::new();
+        let mut reason: Option<String> = None;
         let mut pieces = Vec::with_capacity(out.pieces.len());
-        let mut failed: Option<csg::CsgError> = None;
         for p in std::mem::take(&mut out.pieces) {
             let Some(host) = geom::piece_mesh(&p) else {
                 pieces.push(p);
@@ -942,7 +987,7 @@ impl<'a> Importer<'a> {
                 continue;
             };
             // Only the openings that reach the piece.
-            let near: Vec<geom::MeshData> = cutters
+            let near: Vec<&(u64, geom::MeshData)> = cutters
                 .iter()
                 .filter(|(_, c)| {
                     c.bounds().is_some_and(|(a, b)| {
@@ -950,26 +995,102 @@ impl<'a> Importer<'a> {
                             && b.cmpge(lo - DVec3::splat(csg::EPS)).all()
                     })
                 })
-                .map(|(_, c)| c.clone())
                 .collect();
             if near.is_empty() {
                 pieces.push(p);
                 continue;
             }
-            match csg::subtract_all(&host, &near) {
+            let meshes: Vec<geom::MeshData> = near.iter().map(|(_, c)| c.clone()).collect();
+            let result = if self.fuel.left() == 0 {
+                Err(csg::CsgError::OutOfFuel)
+            } else {
+                self.fuel.scoped(csg::PER_CALL_FUEL, |own| {
+                    csg::subtract_all(&host, &meshes, own)
+                })
+            };
+            match result {
                 Ok(m) => {
+                    for (id, _) in &near {
+                        *cut_in.entry(*id).or_default() += 1;
+                    }
                     pieces.push(Piece::Mesh(m));
                 }
                 Err(why) => {
-                    failed = Some(why);
+                    for (id, _) in &near {
+                        *failed_in.entry(*id).or_default() += 1;
+                    }
+                    reason.get_or_insert_with(|| why.to_string());
                     pieces.push(p);
                 }
             }
         }
         out.pieces = pieces;
-        match failed {
-            None => self.cut.extend(ids),
-            Some(why) => fail(self, &ids, &why.to_string()),
+        let (mut kept, mut partly) = (0usize, 0usize);
+        for (id, _) in &cutters {
+            match (cut_in.contains_key(id), failed_in.contains_key(id)) {
+                (_, false) => {
+                    self.cut.insert(*id);
+                }
+                (true, true) => {
+                    self.cut.insert(*id);
+                    partly += 1;
+                }
+                (false, true) => {
+                    self.uncut.insert(*id);
+                    kept += 1;
+                }
+            }
+        }
+        let why = reason.unwrap_or_default();
+        let who = {
+            let name = text(attr(e, 2))
+                .map(|n| clean_text(n.trim(), 60))
+                .unwrap_or_default();
+            if name.is_empty() {
+                format!("{class} #{}", e.id)
+            } else {
+                format!("{class} '{name}'")
+            }
+        };
+        for (n, partial) in [(kept, false), (partly, true)] {
+            if n > 0 {
+                let t = self
+                    .opening_failures
+                    .entry((why.clone(), partial))
+                    .or_default();
+                t.hosts += 1;
+                t.openings += n;
+                if t.names.len() < 3 {
+                    t.names.push((who.clone(), n));
+                }
+            }
+        }
+    }
+
+    /// The notes about openings that could not be cut: one line for each host when there are few,
+    /// else one line for all hosts with the same reason.
+    fn finish_opening_notes(&mut self) {
+        for ((why, partial), t) in std::mem::take(&mut self.opening_failures) {
+            let what = if partial {
+                "cut from some parts only (the other parts keep their gross shape)"
+            } else {
+                "kept as objects of their own (the host keeps its gross shape)"
+            };
+            if t.hosts <= 3 {
+                for (who, n) in &t.names {
+                    self.b
+                        .report
+                        .note(&format!("{who}: {n} openings {what}: {why}"));
+                }
+            } else {
+                let names: Vec<&str> = t.names.iter().map(|(w, _)| w.as_str()).collect();
+                self.b.report.note(&format!(
+                    "{} hosts ({}, ...): {} openings {what}: {why}",
+                    t.hosts,
+                    names.join(", "),
+                    t.openings
+                ));
+            }
         }
     }
 
@@ -1083,6 +1204,7 @@ impl<'a> Importer<'a> {
             &self.cx,
             self.opts.max_triangles.saturating_sub(self.triangles),
         );
+        ev.fuel = Some(&self.fuel);
         if instancing && self.opts.instances {
             ev.instancing = Some(&ok);
         }
@@ -1234,7 +1356,10 @@ impl<'a> Importer<'a> {
                         && h * mm < limit
                         && o.iter().all(|p| p.abs().max_element() * mm < limit)
                 })
-                && center_ok(self.frame.point2(xf.translation.truncate() * mm), limit);
+                && center_ok(
+                    self.frame.point2(xf.translation.truncate() * mm) - self.shift,
+                    limit,
+                );
             if !fits {
                 self.b.report.skip(
                     class_name,
@@ -1531,6 +1656,16 @@ impl<'a> Importer<'a> {
         ) {
             let id = ObjectId(self.b.last_id());
             if !holes.is_empty() {
+                // The builder moved the outline; the holes must move with it.
+                let off = self.b.offset();
+                let holes: Vec<Vec<Vertex>> = holes
+                    .into_iter()
+                    .map(|h| {
+                        h.into_iter()
+                            .map(|v| Vertex::new(v.p - off, v.kind))
+                            .collect()
+                    })
+                    .collect();
                 self.b.push(Command::SetLandscapeArea {
                     ids: vec![id],
                     patch: kadakas_core::landscape::LandscapePatch {

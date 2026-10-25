@@ -22,6 +22,10 @@ use super::geom::MeshData;
 pub const EPS: f64 = 1e-7;
 /// The most polygons that one operation may hold at any time.
 pub const MAX_POLYGONS: usize = 400_000;
+/// The most work (split tests) that one boolean operation may use. The import has a budget of its own.
+pub const PER_CALL_FUEL: u64 = 60_000_000;
+/// The work of all booleans of one import.
+pub const IMPORT_FUEL: u64 = 1_500_000_000;
 /// The deepest tree.
 pub const MAX_DEPTH: usize = 400;
 
@@ -33,6 +37,83 @@ pub enum Op {
     Intersection,
 }
 
+/// A work budget that is counted, not timed, so the same file always does the same work. One unit
+/// is one polygon sent through the plane of one node of a tree (a split test).
+#[derive(Debug)]
+pub struct Fuel {
+    left: std::cell::Cell<u64>,
+}
+
+impl Fuel {
+    pub fn new(units: u64) -> Fuel {
+        Fuel {
+            left: std::cell::Cell::new(units),
+        }
+    }
+
+    /// The units that are left.
+    pub fn left(&self) -> u64 {
+        self.left.get()
+    }
+
+    /// Uses `n` units; the budget stays at zero when it was too small.
+    pub fn spend(&self, n: u64) {
+        self.left.set(self.left.get().saturating_sub(n));
+    }
+
+    /// Runs `f` with a budget of at most `cap` units taken from this one; what `f` used is spent
+    /// here. A single operation cannot use up the budget of the whole import.
+    pub fn scoped<T>(&self, cap: u64, f: impl FnOnce(&Fuel) -> T) -> T {
+        let own = Fuel::new(self.left().min(cap));
+        let before = own.left();
+        let r = f(&own);
+        self.spend(before - own.left());
+        r
+    }
+
+    fn take(&self, n: u64) -> Result<(), CsgError> {
+        let l = self.left.get();
+        if n > l {
+            self.left.set(0);
+            return Err(CsgError::OutOfFuel);
+        }
+        self.left.set(l - n);
+        Ok(())
+    }
+}
+
+/// A box in space.
+#[derive(Clone, Copy, Debug)]
+struct Aabb {
+    lo: DVec3,
+    hi: DVec3,
+}
+
+impl Aabb {
+    fn of(polys: &[Polygon]) -> Aabb {
+        let mut b = Aabb {
+            lo: DVec3::splat(f64::INFINITY),
+            hi: DVec3::splat(f64::NEG_INFINITY),
+        };
+        for p in polys {
+            for v in &p.v {
+                b.lo = b.lo.min(*v);
+                b.hi = b.hi.max(*v);
+            }
+        }
+        b
+    }
+
+    fn of_polygon(p: &Polygon) -> Aabb {
+        Aabb::of(std::slice::from_ref(p))
+    }
+
+    fn touches(&self, o: &Aabb) -> bool {
+        self.lo.cmple(o.hi + DVec3::splat(EPS)).all()
+            && o.lo.cmple(self.hi + DVec3::splat(EPS)).all()
+    }
+}
+
 /// Why an operation was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CsgError {
@@ -42,6 +123,8 @@ pub enum CsgError {
     Empty,
     /// The work would pass [`MAX_POLYGONS`] or [`MAX_DEPTH`].
     TooBig,
+    /// The work budget ([`Fuel`]) is used up.
+    OutOfFuel,
 }
 
 impl std::fmt::Display for CsgError {
@@ -50,6 +133,7 @@ impl std::fmt::Display for CsgError {
             CsgError::NotClosed => "a solid is not closed",
             CsgError::Empty => "a solid has no volume",
             CsgError::TooBig => "the solids are too complex for a boolean operation",
+            CsgError::OutOfFuel => "the work budget for boolean operations is used up",
         })
     }
 }
@@ -166,9 +250,9 @@ struct Node {
 }
 
 impl Node {
-    fn from(polygons: Vec<Polygon>) -> Result<Node, CsgError> {
+    fn from(polygons: Vec<Polygon>, fuel: &Fuel) -> Result<Node, CsgError> {
         let mut n = Node::default();
-        n.build(polygons, 0)?;
+        n.build(polygons, 0, fuel)?;
         Ok(n)
     }
 
@@ -189,10 +273,11 @@ impl Node {
     }
 
     /// The polygons that are not inside this tree.
-    fn clip_polygons(&self, polys: Vec<Polygon>) -> Vec<Polygon> {
+    fn clip_polygons(&self, polys: Vec<Polygon>, fuel: &Fuel) -> Result<Vec<Polygon>, CsgError> {
         let Some(plane) = &self.plane else {
-            return polys;
+            return Ok(polys);
         };
+        fuel.take(polys.len() as u64 + 1)?;
         let (mut front, mut back) = (Vec::new(), Vec::new());
         let mut cf = Vec::new();
         let mut cb = Vec::new();
@@ -202,25 +287,38 @@ impl Node {
         front.append(&mut cf);
         back.append(&mut cb);
         let mut front = match &self.front {
-            Some(f) => f.clip_polygons(front),
+            Some(f) => f.clip_polygons(front, fuel)?,
             None => front,
         };
         let back = match &self.back {
-            Some(b) => b.clip_polygons(back),
+            Some(b) => b.clip_polygons(back, fuel)?,
             None => Vec::new(),
         };
         front.extend(back);
-        front
+        Ok(front)
     }
 
-    fn clip_to(&mut self, other: &Node) {
-        self.polygons = other.clip_polygons(std::mem::take(&mut self.polygons));
+    /// Clips the polygons of this tree by `other`. With a box, a polygon that is outside of it is
+    /// left as it is (it cannot touch the solid of `other`).
+    fn clip_to(&mut self, other: &Node, only: Option<&Aabb>, fuel: &Fuel) -> Result<(), CsgError> {
+        let own = std::mem::take(&mut self.polygons);
+        self.polygons = match only {
+            None => other.clip_polygons(own, fuel)?,
+            Some(b) => {
+                let (near, mut far): (Vec<Polygon>, Vec<Polygon>) = own
+                    .into_iter()
+                    .partition(|p| Aabb::of_polygon(p).touches(b));
+                far.extend(other.clip_polygons(near, fuel)?);
+                far
+            }
+        };
         if let Some(f) = &mut self.front {
-            f.clip_to(other);
+            f.clip_to(other, only, fuel)?;
         }
         if let Some(b) = &mut self.back {
-            b.clip_to(other);
+            b.clip_to(other, only, fuel)?;
         }
+        Ok(())
     }
 
     fn all(&self, out: &mut Vec<Polygon>) {
@@ -239,13 +337,14 @@ impl Node {
             + self.back.as_ref().map_or(0, |n| n.count())
     }
 
-    fn build(&mut self, polys: Vec<Polygon>, depth: usize) -> Result<(), CsgError> {
+    fn build(&mut self, polys: Vec<Polygon>, depth: usize, fuel: &Fuel) -> Result<(), CsgError> {
         if polys.is_empty() {
             return Ok(());
         }
         if depth > MAX_DEPTH || polys.len() > MAX_POLYGONS {
             return Err(CsgError::TooBig);
         }
+        fuel.take(polys.len() as u64 + 1)?;
         let plane = match &self.plane {
             Some(p) => p.clone(),
             None => polys[0].plane.clone(),
@@ -261,11 +360,11 @@ impl Node {
         self.polygons.append(&mut own);
         if !front.is_empty() {
             let node = self.front.get_or_insert_with(Default::default);
-            node.build(front, depth + 1)?;
+            node.build(front, depth + 1, fuel)?;
         }
         if !back.is_empty() {
             let node = self.back.get_or_insert_with(Default::default);
-            node.build(back, depth + 1)?;
+            node.build(back, depth + 1, fuel)?;
         }
         Ok(())
     }
@@ -427,44 +526,44 @@ fn heal_t_junctions(m: &mut MeshData) {
 const HEAL_BUDGET: usize = 60_000_000;
 
 /// The operation on two polygon sets that face outward.
-fn run(pa: Vec<Polygon>, pb: Vec<Polygon>, op: Op) -> Result<Vec<Polygon>, CsgError> {
+fn run(pa: Vec<Polygon>, pb: Vec<Polygon>, op: Op, fuel: &Fuel) -> Result<Vec<Polygon>, CsgError> {
     if pa.len() + pb.len() > MAX_POLYGONS {
         return Err(CsgError::TooBig);
     }
-    let mut a = Node::from(pa)?;
-    let mut b = Node::from(pb)?;
+    let mut a = Node::from(pa, fuel)?;
+    let mut b = Node::from(pb, fuel)?;
     match op {
         Op::Union => {
-            a.clip_to(&b);
-            b.clip_to(&a);
+            a.clip_to(&b, None, fuel)?;
+            b.clip_to(&a, None, fuel)?;
             b.invert();
-            b.clip_to(&a);
+            b.clip_to(&a, None, fuel)?;
             b.invert();
             let mut rest = Vec::new();
             b.all(&mut rest);
-            a.build(rest, 0)?;
+            a.build(rest, 0, fuel)?;
         }
         Op::Difference => {
             a.invert();
-            a.clip_to(&b);
-            b.clip_to(&a);
+            a.clip_to(&b, None, fuel)?;
+            b.clip_to(&a, None, fuel)?;
             b.invert();
-            b.clip_to(&a);
+            b.clip_to(&a, None, fuel)?;
             b.invert();
             let mut rest = Vec::new();
             b.all(&mut rest);
-            a.build(rest, 0)?;
+            a.build(rest, 0, fuel)?;
             a.invert();
         }
         Op::Intersection => {
             a.invert();
-            b.clip_to(&a);
+            b.clip_to(&a, None, fuel)?;
             b.invert();
-            a.clip_to(&b);
-            b.clip_to(&a);
+            a.clip_to(&b, None, fuel)?;
+            b.clip_to(&a, None, fuel)?;
             let mut rest = Vec::new();
             b.all(&mut rest);
-            a.build(rest, 0)?;
+            a.build(rest, 0, fuel)?;
             a.invert();
         }
     }
@@ -476,23 +575,94 @@ fn run(pa: Vec<Polygon>, pb: Vec<Polygon>, op: Op) -> Result<Vec<Polygon>, CsgEr
     Ok(out)
 }
 
-/// `a` combined with `b`. Both must be closed. The result faces outward.
-pub fn boolean(a: &MeshData, b: &MeshData, op: Op) -> Result<MeshData, CsgError> {
-    let out = run(polygons_of(a)?, polygons_of(b)?, op)?;
-    Ok(mesh_of(&out))
+/// The middle of the box of a mesh. The operands move there before the work and the result moves
+/// back: far from the origin (6.5e9 mm) a double has no room left for the tolerance.
+fn centre_of(m: &MeshData) -> DVec3 {
+    m.bounds()
+        .map_or(DVec3::ZERO, |(lo, hi)| ((lo + hi) / 2.0).round())
 }
 
-/// `host` less every cutter, one after the other. The host and each cutter must be closed; the
-/// intermediate results are polygon sets (they may have T-junctions) and are not checked again.
-pub fn subtract_all(host: &MeshData, cutters: &[MeshData]) -> Result<MeshData, CsgError> {
-    let mut cur = polygons_of(host)?;
-    for c in cutters {
-        cur = run(cur, polygons_of(c)?, Op::Difference)?;
-        if cur.is_empty() {
-            return Err(CsgError::Empty);
-        }
+fn moved(m: &MeshData, by: DVec3) -> MeshData {
+    let mut c = m.clone();
+    c.exact = None;
+    c.v.iter_mut().for_each(|p| *p -= by);
+    c
+}
+
+fn put_back(mut m: MeshData, by: DVec3) -> MeshData {
+    m.v.iter_mut().for_each(|p| *p += by);
+    m
+}
+
+/// `a` combined with `b`. Both must be closed. The result faces outward.
+pub fn boolean(a: &MeshData, b: &MeshData, op: Op, fuel: &Fuel) -> Result<MeshData, CsgError> {
+    let c = centre_of(a);
+    let out = run(
+        polygons_of(&moved(a, c))?,
+        polygons_of(&moved(b, c))?,
+        op,
+        fuel,
+    )?;
+    Ok(put_back(mesh_of(&out), c))
+}
+
+/// `host` less every cutter. The host and each cutter must be closed. Cutters that do not touch
+/// each other (the openings of a wall) are cut in one pass: the tree of the host is built once and
+/// each cutter only meets the polygons near it. Cutters that overlap are cut one after the other.
+pub fn subtract_all(
+    host: &MeshData,
+    cutters: &[MeshData],
+    fuel: &Fuel,
+) -> Result<MeshData, CsgError> {
+    let c = centre_of(host);
+    let host_polys = polygons_of(&moved(host, c))?;
+    let mut cutter_polys = Vec::with_capacity(cutters.len());
+    for k in cutters {
+        cutter_polys.push(polygons_of(&moved(k, c))?);
     }
-    Ok(mesh_of(&cur))
+    let boxes: Vec<Aabb> = cutter_polys.iter().map(|p| Aabb::of(p)).collect();
+    let apart =
+        (0..boxes.len()).all(|i| (i + 1..boxes.len()).all(|j| !boxes[i].touches(&boxes[j])));
+    let out = if apart && !cutter_polys.is_empty() {
+        // One pass: the host tree is inverted once, every cutter clips it, and the cutters are
+        // clipped by it, as in the pair operation.
+        let mut a = Node::from(host_polys, fuel)?;
+        a.invert();
+        let mut nodes = Vec::with_capacity(cutter_polys.len());
+        for p in cutter_polys {
+            nodes.push(Node::from(p, fuel)?);
+        }
+        for (n, b) in nodes.iter().zip(&boxes) {
+            a.clip_to(n, Some(b), fuel)?;
+        }
+        let mut result = Vec::new();
+        a.all(&mut result);
+        for n in &mut nodes {
+            n.clip_to(&a, None, fuel)?;
+            n.invert();
+            n.clip_to(&a, None, fuel)?;
+            n.invert();
+            n.all(&mut result);
+        }
+        result.iter_mut().for_each(Polygon::flip);
+        if result.len() > MAX_POLYGONS {
+            return Err(CsgError::TooBig);
+        }
+        result
+    } else {
+        let mut cur = host_polys;
+        for p in cutter_polys {
+            cur = run(cur, p, Op::Difference, fuel)?;
+            if cur.is_empty() {
+                return Err(CsgError::Empty);
+            }
+        }
+        cur
+    };
+    if out.is_empty() {
+        return Err(CsgError::Empty);
+    }
+    Ok(put_back(mesh_of(&out), c))
 }
 
 #[cfg(test)]
@@ -507,6 +677,10 @@ mod tests {
         signed_volume(m)
     }
 
+    fn fuel() -> Fuel {
+        Fuel::new(u64::MAX / 2)
+    }
+
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
     }
@@ -516,7 +690,7 @@ mod tests {
         // Wall 5000 x 250 x 3000; opening 1000 x 250 x 1200 flush with both faces.
         let wall = bx([0.0, 0.0, 0.0], [5000.0, 250.0, 3000.0]);
         let open = bx([1000.0, 0.0, 900.0], [2000.0, 250.0, 2100.0]);
-        let r = boolean(&wall, &open, Op::Difference).unwrap();
+        let r = boolean(&wall, &open, Op::Difference, &fuel()).unwrap();
         assert!(
             close(vol(&r), 5000.0 * 250.0 * 3000.0 - 1000.0 * 250.0 * 1200.0),
             "{}",
@@ -528,7 +702,7 @@ mod tests {
         );
         // An opening that sticks out of both faces gives the same result.
         let open2 = bx([1000.0, -10.0, 900.0], [2000.0, 260.0, 2100.0]);
-        let r2 = boolean(&wall, &open2, Op::Difference).unwrap();
+        let r2 = boolean(&wall, &open2, Op::Difference, &fuel()).unwrap();
         assert!(close(vol(&r2), vol(&r)));
     }
 
@@ -536,26 +710,32 @@ mod tests {
     fn blind_pockets_notches_and_missing_the_host() {
         let host = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
         let pocket = bx([2.0, 2.0, 5.0], [4.0, 4.0, 12.0]);
-        let r = boolean(&host, &pocket, Op::Difference).unwrap();
+        let r = boolean(&host, &pocket, Op::Difference, &fuel()).unwrap();
         assert!(close(vol(&r), 1000.0 - 2.0 * 2.0 * 5.0));
         // A corner notch.
         let notch = bx([5.0, 5.0, -1.0], [11.0, 11.0, 11.0]);
-        let r = boolean(&host, &notch, Op::Difference).unwrap();
+        let r = boolean(&host, &notch, Op::Difference, &fuel()).unwrap();
         assert!(close(vol(&r), 1000.0 - 5.0 * 5.0 * 10.0));
         // Far away: nothing changes.
         let far = bx([20.0, 20.0, 20.0], [30.0, 30.0, 30.0]);
         assert!(close(
-            vol(&boolean(&host, &far, Op::Difference).unwrap()),
+            vol(&boolean(&host, &far, Op::Difference, &fuel()).unwrap()),
             1000.0
         ));
         // Two holes one after the other.
         let h1 = bx([1.0, 1.0, -1.0], [2.0, 2.0, 11.0]);
         let h2 = bx([6.0, 6.0, -1.0], [8.0, 8.0, 11.0]);
-        let r = subtract_all(&host, &[h1.clone(), h2.clone()]).unwrap();
+        let r = subtract_all(&host, &[h1.clone(), h2.clone()], &fuel()).unwrap();
         assert!(close(vol(&r), 1000.0 - 10.0 - 40.0));
         assert!(is_closed(&r));
         // The result is a valid operand of the next operation.
-        let again = boolean(&r, &bx([0.0, 0.0, 0.0], [10.0, 10.0, 1.0]), Op::Difference).unwrap();
+        let again = boolean(
+            &r,
+            &bx([0.0, 0.0, 0.0], [10.0, 10.0, 1.0]),
+            Op::Difference,
+            &fuel(),
+        )
+        .unwrap();
         assert!(
             close(
                 vol(&again),
@@ -571,13 +751,19 @@ mod tests {
         let a = bx([0.0, 0.0, 0.0], [4.0, 4.0, 4.0]);
         let b = bx([2.0, 2.0, 2.0], [6.0, 6.0, 6.0]);
         assert!(close(
-            vol(&boolean(&a, &b, Op::Union).unwrap()),
+            vol(&boolean(&a, &b, Op::Union, &fuel()).unwrap()),
             64.0 + 64.0 - 8.0
         ));
-        assert!(close(vol(&boolean(&a, &b, Op::Intersection).unwrap()), 8.0));
+        assert!(close(
+            vol(&boolean(&a, &b, Op::Intersection, &fuel()).unwrap()),
+            8.0
+        ));
         // Boxes that share a face.
         let c = bx([4.0, 0.0, 0.0], [8.0, 4.0, 4.0]);
-        assert!(close(vol(&boolean(&a, &c, Op::Union).unwrap()), 128.0));
+        assert!(close(
+            vol(&boolean(&a, &c, Op::Union, &fuel()).unwrap()),
+            128.0
+        ));
     }
 
     #[test]
@@ -585,7 +771,7 @@ mod tests {
         let host = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
         let mut inside_out = bx([2.0, 2.0, -1.0], [4.0, 4.0, 11.0]);
         inside_out.flip();
-        let r = boolean(&host, &inside_out, Op::Difference).unwrap();
+        let r = boolean(&host, &inside_out, Op::Difference, &fuel()).unwrap();
         assert!(close(vol(&r), 1000.0 - 40.0));
     }
 
@@ -595,11 +781,11 @@ mod tests {
         let mut open = host.clone();
         open.t.pop();
         assert_eq!(
-            boolean(&host, &open, Op::Difference).unwrap_err(),
+            boolean(&host, &open, Op::Difference, &fuel()).unwrap_err(),
             CsgError::NotClosed
         );
         assert_eq!(
-            boolean(&host, &MeshData::default(), Op::Union).unwrap_err(),
+            boolean(&host, &MeshData::default(), Op::Union, &fuel()).unwrap_err(),
             CsgError::Empty
         );
         assert!(CsgError::TooBig.to_string().contains("complex"));
@@ -614,7 +800,7 @@ mod tests {
         let r = glam::DAffine3::from_rotation_z(std::f64::consts::FRAC_PI_6);
         host.transform(&r);
         let cutter = bx([-1.0, -1.0, -1.0], [1.0, 1.0, 5.0]);
-        let out = boolean(&host, &cutter, Op::Difference).unwrap();
+        let out = boolean(&host, &cutter, Op::Difference, &fuel()).unwrap();
         assert!(close(vol(&out), 400.0 - 2.0 * 2.0 * 4.0), "{}", vol(&out));
         // A 24-sided prism in a box.
         let mut prism = MeshData::default();
@@ -642,12 +828,137 @@ mod tests {
             prism.t.push([c + 1, n as u32 + i, n as u32 + j]);
         }
         let host = bx([-5.0, -5.0, 2.0], [5.0, 5.0, 12.0]);
-        let out = boolean(&host, &prism, Op::Difference).unwrap();
+        let out = boolean(&host, &prism, Op::Difference, &fuel()).unwrap();
         assert!(
             close(vol(&out), 1000.0 - area * 10.0),
             "{} {}",
             vol(&out),
             area
         );
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn bx(lo: [f64; 3], hi: [f64; 3]) -> MeshData {
+        MeshData::cuboid(DVec3::from(lo), DVec3::from(hi))
+    }
+
+    /// The volume, computed near the origin: far from it the sum of products loses digits.
+    fn vol(m: &MeshData) -> f64 {
+        signed_volume(&moved(m, centre_of(m)))
+    }
+
+    /// A wall `len` long with `n` openings of 1000 x (thickness + 20) x 1000, 2000 apart.
+    fn wall_with(n: usize, len: f64, at: DVec3) -> (MeshData, Vec<MeshData>) {
+        let wall = MeshData::cuboid(at, at + DVec3::new(len, 250.0, 3000.0));
+        let cutters = (0..n)
+            .map(|i| {
+                let x = 1000.0 + 2000.0 * i as f64;
+                MeshData::cuboid(
+                    at + DVec3::new(x, -10.0, 900.0),
+                    at + DVec3::new(x + 1000.0, 260.0, 1900.0),
+                )
+            })
+            .collect();
+        (wall, cutters)
+    }
+
+    #[test]
+    fn many_openings_are_cut_in_one_pass_with_a_counted_budget() {
+        for n in [3usize, 300, 1000] {
+            let (wall, cutters) = wall_with(n, 2000.0 * n as f64 + 1000.0, DVec3::ZERO);
+            let fuel = Fuel::new(IMPORT_FUEL);
+            let started = std::time::Instant::now();
+            let out = subtract_all(&wall, &cutters, &fuel).unwrap();
+            println!("{n} openings took {:?}", started.elapsed());
+            let want = vol(&wall) - n as f64 * 1000.0 * 250.0 * 1000.0;
+            assert!(
+                (vol(&out) - want).abs() < 1e-6 * want,
+                "{n}: {} {want}",
+                vol(&out)
+            );
+            if n <= 300 {
+                assert!(is_closed(&out), "{n}");
+            }
+            let used = IMPORT_FUEL - fuel.left();
+            println!("{n} openings used {used} units of work");
+            assert!(used < PER_CALL_FUEL, "{n}: {used}");
+        }
+    }
+
+    #[test]
+    fn a_wall_far_from_the_origin_is_cut() {
+        // A wall at (6.5e8, 6.5e9) mm: a double has a step of about 1e-6 there, more than EPS.
+        let at = DVec3::new(6.5e8, 6.5e9, 0.0);
+        for n in [1usize, 3] {
+            let (wall, cutters) = wall_with(n, 2000.0 * n as f64 + 1000.0, at);
+            let out = subtract_all(&wall, &cutters, &Fuel::new(IMPORT_FUEL)).unwrap();
+            let want = vol(&wall) - n as f64 * 1000.0 * 250.0 * 1000.0;
+            assert!(
+                (vol(&out) - want).abs() < 1e-6 * want.abs(),
+                "{n}: {} {want}",
+                vol(&out)
+            );
+            let (lo, _) = out.bounds().unwrap();
+            assert!(
+                (lo - at).length() < 1e-3,
+                "the result is back in place: {lo}"
+            );
+        }
+        // The pair operation too, with a turned wall.
+        let mut wall = MeshData::cuboid(DVec3::ZERO, DVec3::new(5000.0, 250.0, 3000.0));
+        wall.transform(&glam::DAffine3::from_rotation_translation(
+            glam::DQuat::from_rotation_z(0.6),
+            at,
+        ));
+        let mut hole = MeshData::cuboid(
+            DVec3::new(1000.0, -10.0, 900.0),
+            DVec3::new(2000.0, 260.0, 1900.0),
+        );
+        hole.transform(&glam::DAffine3::from_rotation_translation(
+            glam::DQuat::from_rotation_z(0.6),
+            at,
+        ));
+        let out = boolean(&wall, &hole, Op::Difference, &Fuel::new(IMPORT_FUEL)).unwrap();
+        let want = 5000.0 * 250.0 * 3000.0 - 1000.0 * 250.0 * 1000.0;
+        assert!(
+            (vol(&out) - want).abs() < 1e-6 * want,
+            "{} {want}",
+            vol(&out)
+        );
+    }
+
+    #[test]
+    fn overlapping_cutters_are_cut_one_after_the_other() {
+        let host = bx([0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
+        let a = bx([2.0, 2.0, -1.0], [6.0, 6.0, 11.0]);
+        let b = bx([4.0, 4.0, -1.0], [8.0, 8.0, 11.0]);
+        let out = subtract_all(&host, &[a, b], &Fuel::new(IMPORT_FUEL)).unwrap();
+        // 16 + 16 - 4 = 28 of the base, 10 high.
+        assert!((vol(&out) - (1000.0 - 280.0)).abs() < 1e-6, "{}", vol(&out));
+    }
+
+    #[test]
+    fn a_used_up_budget_stops_the_work_safely() {
+        let (wall, cutters) = wall_with(50, 100_000.0, DVec3::ZERO);
+        let fuel = Fuel::new(200);
+        assert_eq!(
+            subtract_all(&wall, &cutters, &fuel).unwrap_err(),
+            CsgError::OutOfFuel
+        );
+        assert_eq!(fuel.left(), 0);
+        assert!(CsgError::OutOfFuel.to_string().contains("budget"));
+        // A scope cannot use more than its cap, and spends what it used.
+        let g = Fuel::new(1_000_000);
+        let r = g.scoped(10, |own| {
+            assert_eq!(own.left(), 10);
+            own.take(4).unwrap();
+            own.take(100)
+        });
+        assert_eq!(r, Err(CsgError::OutOfFuel));
+        assert_eq!(g.left(), 1_000_000 - 10);
     }
 }

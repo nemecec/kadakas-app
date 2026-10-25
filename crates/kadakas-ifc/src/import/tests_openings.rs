@@ -117,10 +117,113 @@ fn a_host_that_cannot_be_cut_keeps_its_gross_shape_and_the_opening_becomes_an_ob
     assert_eq!(o.len(), 2, "{r:?}");
     assert!(o.iter().any(|x| x.data["ifc_class"] == "IfcOpeningElement"));
     assert!(
-        r.notes
-            .iter()
-            .any(|n| n.contains("1 x IfcSlab") && n.contains("a solid is not closed")),
+        r.notes.iter().any(
+            |n| n.contains("1 openings kept as objects") && n.contains("a solid is not closed")
+        ),
         "{:?}",
         r.notes
+    );
+}
+
+fn opening_at_origin(n: u64, host: u64) -> String {
+    format!(
+        "#{a}=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.);\n#{b}=IFCEXTRUDEDAREASOLID(#{a},#5,#4,500.);\n#{c}=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',(#{b}));\n#{d}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{c}));\n#{e}=IFCOPENINGELEMENT('o{n}',$,'Hole {n}',$,$,#7,#{d},$,.OPENING.);\n#{f}=IFCRELVOIDSELEMENT('v{n}',$,$,$,#{host},#{e});\n",
+        a = n,
+        b = n + 1,
+        c = n + 2,
+        d = n + 3,
+        e = n + 4,
+        f = n + 5,
+    )
+}
+
+#[test]
+fn an_opening_cut_from_one_piece_but_not_from_another_is_reported_as_cut_in_part() {
+    // The slab has two pieces: a solid and an open surface. The hole reaches both.
+    let data = format!(
+        "{}#40=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1000.,0.,0.),(0.,1000.,0.)));\n#41=IFCTRIANGULATEDFACESET(#40,$,.F.,((1,2,3)),$);\n{}{}",
+        extr(20, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,200.,200.)", 100.0),
+        slab(30, "#21,#41"),
+        opening_at_origin(50, 30)
+    );
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    // The hole is not an object of its own: it was cut from the solid piece.
+    assert!(
+        objs(&ed)
+            .iter()
+            .all(|o| o.data["ifc_class"] != "IfcOpeningElement"),
+        "{r:?}"
+    );
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("1 openings cut from some parts only")
+                && n.contains("a solid is not closed")
+                && n.contains("IfcSlab 'N30'")),
+        "{:?}",
+        r.notes
+    );
+}
+
+#[test]
+fn a_used_up_work_budget_keeps_the_gross_shape_and_counts_the_openings() {
+    let doc = Document::with_sequential_ids();
+    let opts = IfcImportOptions {
+        boolean_work: 1,
+        ..Default::default()
+    };
+    let r = import_bytes(fixture("wall_with_openings.ifc"), &doc, &opts).unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    assert_eq!(
+        objs(&ed).len(),
+        3,
+        "the wall and its two openings: {:?}",
+        r.report
+    );
+    let wall = objs(&ed)
+        .into_iter()
+        .find(|o| o.data["ifc_class"] == "IfcWall")
+        .unwrap();
+    assert!((volume_of(wall) - 4000.0 * 200.0 * 2800.0).abs() < 1.0);
+    assert!(
+        r.report.notes.iter().any(|n| n
+            .contains("IfcWall 'Garden wall': 2 openings kept as objects")
+            && n.contains("work budget")),
+        "{:?}",
+        r.report.notes
+    );
+}
+
+#[test]
+fn many_walls_that_fail_the_same_way_give_one_note() {
+    let mut data = String::new();
+    for i in 0..6u64 {
+        let base = 100 + i * 100;
+        data.push_str(&format!(
+            "#{p}=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1000.,0.,0.),(0.,1000.,0.)));\n#{q}=IFCTRIANGULATEDFACESET(#{p},$,.F.,((1,2,3)),$);\n{}{}",
+            slab(base + 10, &format!("#{}", base + 1)),
+            opening_at_origin(base + 50, base + 10),
+            p = base,
+            q = base + 1
+        ));
+    }
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 12);
+    let lines: Vec<&String> = r
+        .notes
+        .iter()
+        .filter(|n| n.contains("kept as objects"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{:?}", r.notes);
+    assert!(
+        lines[0].starts_with("6 hosts (IfcSlab 'N110'"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains("6 openings kept as objects"),
+        "{}",
+        lines[0]
     );
 }
