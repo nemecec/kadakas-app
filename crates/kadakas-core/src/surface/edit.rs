@@ -272,7 +272,7 @@ fn run_noted(
             edges,
             matrix,
             count,
-        } => transform::copy_geometry(m, faces, edges, matrix, *count),
+        } => transform::copy_geometry(m, faces, edges, matrix, *count, notes),
         Edit::EraseFaces { faces } => {
             let ids = existing_faces(m, faces)?;
             let mut w = Work::new(m);

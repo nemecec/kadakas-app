@@ -1157,6 +1157,7 @@ pub(super) fn copy_geometry(
     edges: &[EdgeId],
     matrix: &[f64; 12],
     count: u32,
+    notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
     let xf = affine(matrix)?;
     if count == 0 {
@@ -1192,6 +1193,7 @@ pub(super) fn copy_geometry(
         at = xf * at;
         a.absorb(&part, Some(at))?;
     }
+    notes.extend(a.take_notes());
     let work = a.finish();
     check_limits(&work)?;
     *m = work;

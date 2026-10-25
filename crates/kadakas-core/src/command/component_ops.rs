@@ -584,6 +584,7 @@ impl Tx<'_> {
                         ));
                     }
                     t.absorb(&s, rel).map_err(|e| invalid(e.to_string()))?;
+                    self.exact_notes.extend(t.take_notes());
                     dirty = true;
                     gone.push(kid);
                 }

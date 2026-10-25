@@ -76,11 +76,11 @@ pub const MESH_ADD_CURVE: (&str, &str) = (
 );
 pub const MESH_CURVE_INFO: (&str, &str) = (
     "mesh.curve_info",
-    "The curves of a surface model with their exact circle (MOD-15). params: {id, curve? (one curve, else all curves, a page), offset?, limit? (default 100, at most 1000)}. Returns {total, offset, items: [{curve, edges: [edge ids in chain order], segments (the number of edges), closed, geometry: null | {kind (circle | arc | polygon), center: [x, y, z], normal, axis, radius, start_deg?, end_deg? (arcs), length_mm (arc length or circumference), radians: {start?, end?}}}]}. Coordinates are local mm. A curve without geometry is an old curve or one that an edit made inexact: its chain is still a curve.",
+    "The curves of a surface model with their exact circle (MOD-15). params: {id, curve? (one curve, else all curves, a page), offset?, limit? (default 100, at most 1000)}. Returns {total, offset, items: [{curve, edges: [edge ids in chain order], segments (the number of edges), closed, length_mm (the circumference of a circle, else the length of the chain: an arc, the true perimeter of a polygon), geometry: null | {kind (circle | arc | polygon, a kind of a newer program is read only), center: [x, y, z], normal, axis, radius, start_deg?, end_deg? (arcs), radians: {start?, end?}}}]}. Coordinates are local mm. A curve without geometry is an old curve or one that an edit made inexact: its chain is still a curve.",
 );
 pub const MESH_SET_SEGMENTS: (&str, &str) = (
     "mesh.set_segments",
-    "Rebuild a circle or an arc with another number of segments, on the same circle, in one undo step. params: {id, curve, segments (3 to 1000)}. The ends of an arc and the first vertex of a circle stay. Faces on the curve in the plane of the circle are rebuilt with the new vertices. Refused with a stable error_id: no_such_curve, curve_without_description (an old curve), segments_out_of_range, curve_vertex_shared (another edge meets the chain inside), curve_borders_other_plane (a face on another plane uses it, for example the wall of a pushed circle), curve_loop_unclear, curve_result_invalid (for example edges shorter than the length tolerance). Returns the change.",
+    "Rebuild a circle or an arc with another number of segments, on the same circle, in one undo step. params: {id, curve, segments (3 to 1000)}. The ends of an arc and the first vertex of a circle stay. Faces on the curve in the plane of the circle are rebuilt with the new vertices. Refused with a stable error_id: no_such_curve, curve_without_description (an old curve), segments_out_of_range, curve_vertex_shared (another edge meets the chain inside), curve_borders_other_plane (a face on another plane uses it, for example the wall of a pushed circle), curve_loop_unclear, curve_result_invalid (for example edges shorter than the length tolerance), curve_unknown_kind (a kind of a newer program is read only). A model limit is a limit error (model_limit). Returns the change.",
 );
 pub const MESH_ERASE: (&str, &str) = (
     "mesh.erase",
@@ -214,6 +214,7 @@ pub const ERROR_IDS: &[&str] = &[
     "curve_borders_other_plane",
     "curve_loop_unclear",
     "curve_result_invalid",
+    "curve_unknown_kind",
 ];
 
 /// The id of the first model in a fresh session with sequential ids, for the examples.

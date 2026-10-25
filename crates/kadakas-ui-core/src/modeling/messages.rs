@@ -15,7 +15,7 @@ fn at_most(text: &str) -> Option<String> {
 /// The text of a refusal or a note of an edit, for the person.
 pub fn localize(text: &str) -> String {
     let has = |s: &str| text.contains(s);
-    if has("lost its circle description") {
+    if has("lost its circle description") && !has("its kind is not known") {
         tr!("uic-curve-note-dropped")
     } else if has("its start and end angle are updated") {
         tr!("uic-curve-note-angles")
@@ -24,6 +24,8 @@ pub fn localize(text: &str) -> String {
             "uic-curve-note-kind",
             kind = if has("arc") { "arc" } else { "circle" }
         )
+    } else if has("its kind is not known to this program") {
+        tr!("uic-curve-note-unknown-kind")
     } else if has("no curve was made") {
         tr!("uic-curve-note-not-made")
     } else if has("has no circle description") {
@@ -36,6 +38,8 @@ pub fn localize(text: &str) -> String {
         tr!("uic-curve-refused-plane")
     } else if has("in a way that cannot be rebuilt") {
         tr!("uic-curve-refused-loop")
+    } else if has("that this program does not know and does not change") {
+        tr!("uic-curve-refused-unknown-kind")
     } else if has("the new chain would make the model invalid") {
         tr!("uic-curve-refused-invalid")
     } else if has("is not fully inside it") {
@@ -91,6 +95,7 @@ fn curve_text(e: &CurveError) -> String {
         CurveError::BordersOtherPlane { .. } => tr!("uic-curve-refused-plane"),
         CurveError::LoopUnclear { .. } => tr!("uic-curve-refused-loop"),
         CurveError::Invalid { .. } => tr!("uic-curve-refused-invalid"),
+        CurveError::UnknownKind(_) => tr!("uic-curve-refused-unknown-kind"),
     }
 }
 

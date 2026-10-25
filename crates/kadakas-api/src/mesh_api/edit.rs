@@ -889,7 +889,11 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
         SurfaceError::Refused(_) => (Validation, "edit_refused", json!({})),
         SurfaceError::Curve(c) => {
             let facts = match c {
-                CurveError::NoCurve(x) | CurveError::NoDescription(x) => json!({"curve": x}),
+                CurveError::NoCurve(x)
+                | CurveError::NoDescription(x)
+                | CurveError::UnknownKind(x) => {
+                    json!({"curve": x})
+                }
                 CurveError::Segments { segments, min, max } => {
                     json!({"segments": segments, "min": min, "max": max})
                 }

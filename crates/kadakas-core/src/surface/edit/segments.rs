@@ -3,8 +3,8 @@
 //!
 //! The ends of an arc and the first vertex of a circle stay where they are. The interior
 //! vertices are new (at equal angles), the first edges of the chain keep their ids, the extra
-//! edges go or are new, and the edges keep the attributes of the first edge of the chain (soft,
-//! smooth, faceted). The curve keeps its id and its description.
+//! edges go or are new. An edge that stays keeps its own attributes (soft, smooth, faceted). A new
+//! edge gets the attributes of the first edge of the chain. The curve keeps its id and its description.
 //!
 //! **What is supported.** A vertex inside the chain has only the two chain edges. A face that
 //! uses the chain lies in the plane of the circle, and each of its loops runs once along the whole
@@ -47,6 +47,9 @@ pub(super) fn set_curve_segments(
     let Some(a) = m.analytic.get(&curve).cloned() else {
         return Err(refuse(CurveError::NoDescription(curve)));
     };
+    if !analytic::is_known_kind(&a.kind) {
+        return Err(refuse(CurveError::UnknownKind(curve)));
+    }
     if !(MIN_SEGMENTS..=MAX_SEGMENTS).contains(&segments) {
         return Err(refuse(CurveError::Segments {
             segments,
@@ -64,26 +67,54 @@ pub(super) fn set_curve_segments(
         return Ok(());
     }
 
-    // The new vertices on the circle.
-    let a0 = a.angle_of(pts[0]);
-    let second = a.angle_of(pts[1]);
-    let mut d = (second - a0).rem_euclid(std::f64::consts::TAU);
-    if d > std::f64::consts::PI {
-        d -= std::f64::consts::TAU;
-    }
-    let dir = if d < 0.0 { -1.0 } else { 1.0 };
-    let span = if closed {
-        std::f64::consts::TAU
-    } else {
-        let end = a.angle_of(pts[n]);
-        let w = if dir > 0.0 { end - a0 } else { a0 - end };
-        let w = w.rem_euclid(std::f64::consts::TAU);
-        if w == 0.0 { std::f64::consts::TAU } else { w }
+    // The new vertices on the circle. The direction and the span of an arc come from the stored
+    // angles (the chain of one edge cannot tell an arc of more than half a turn from the other
+    // side); the chain starts at the end that lies at the start angle, else at the end angle and
+    // goes clockwise.
+    let (a0, dir, span) = match (closed, a.start, a.end, a.sweep()) {
+        (false, Some(s), Some(e), Some(sweep)) => {
+            let tol = geom::tol(&pts);
+            if a.point_at(s).distance(pts[0]) <= tol {
+                (s, 1.0, sweep)
+            } else {
+                (e, -1.0, sweep)
+            }
+        }
+        _ => {
+            let a0 = a.angle_of(pts[0]);
+            let dir = analytic::chain_direction(&a, &pts);
+            let span = if closed {
+                std::f64::consts::TAU
+            } else {
+                let end = a.angle_of(pts[n]);
+                let w = if dir > 0.0 { end - a0 } else { a0 - end };
+                let w = w.rem_euclid(std::f64::consts::TAU);
+                if w == 0.0 { std::f64::consts::TAU } else { w }
+            };
+            (a0, dir, span)
+        }
     };
     let fresh: Vec<DVec3> = (1..target)
         .map(|k| a.point_at(a0 + dir * span * k as f64 / target as f64))
         .collect();
 
+    // The limits of the model, with a reason of their own.
+    let vc = (m.vertices.len() + target).saturating_sub(n);
+    let ecount = (m.edges.len() + target).saturating_sub(n);
+    if vc > super::super::MAX_VERTICES {
+        return Err(SurfaceError::Limit {
+            what: "vertices",
+            max: super::super::MAX_VERTICES,
+            count: vc,
+        });
+    }
+    if ecount > super::super::MAX_EDGES {
+        return Err(SurfaceError::Limit {
+            what: "edges",
+            max: super::super::MAX_EDGES,
+            count: ecount,
+        });
+    }
     // Faces that use the chain: in the plane of the circle, with loops that run along it.
     let chain_pairs: BTreeSet<(VertexId, VertexId)> = es
         .iter()

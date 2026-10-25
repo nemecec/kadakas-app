@@ -175,9 +175,13 @@ fn local_circle(doc: &Document, model: Option<ObjectId>, a: &Analytic) -> Analyt
         if fr.matrix3.determinant().abs() > 1e-12 {
             let inv = fr.matrix3.inverse();
             let (u, n) = (a.axis(), a.normal());
-            out.radius = (inv * (u * a.radius)).length();
-            out.axis = (inv * u).normalize_or_zero().to_array();
-            out.normal = (fr.matrix3.transpose() * n).normalize_or_zero().to_array();
+            // The normal comes from the mapped axes, so that a mirrored model keeps the
+            // direction of the angles (the start and the end angle stay true).
+            let v = n.cross(u);
+            let (lu, lv) = (inv * u, inv * v);
+            out.radius = (lu * a.radius).length();
+            out.axis = lu.normalize_or_zero().to_array();
+            out.normal = lu.cross(lv).normalize_or_zero().to_array();
         }
     }
     out

@@ -268,6 +268,7 @@ impl SurfaceModel {
             if let Some(list) = mapped {
                 // A chain that is not a chain any more (the edge was cut) is not a curve. The
                 // circle of the curve is fitted again where the chain landed.
+                // The note of a description that is lost has no place in the plain absorb.
                 let _ = work.add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
             }
         }
@@ -283,15 +284,25 @@ impl SurfaceModel {
 /// After an error it is not to be used again.
 pub struct Absorber {
     s: Session,
+    notes: Vec<String>,
 }
 
 impl Absorber {
     pub fn new(m: SurfaceModel) -> Absorber {
-        Absorber { s: Session::new(m) }
+        Absorber {
+            s: Session::new(m),
+            notes: Vec::new(),
+        }
     }
 
     pub fn model(&self) -> &SurfaceModel {
         self.s.model()
+    }
+
+    /// What the absorbs changed that was not asked for: a circle description that a curve lost
+    /// where it landed. Takes the notes out.
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
     }
 
     pub fn finish(self) -> SurfaceModel {
@@ -406,10 +417,13 @@ impl Absorber {
             let mapped: Option<Vec<EdgeId>> = es.iter().map(|e| find(&self.s, *e)).collect();
             if let Some(list) = mapped {
                 // A chain that is not a chain any more (the edge was cut) is not a curve.
-                let _ = self
+                let made = self
                     .s
                     .model_mut()
                     .add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
+                if let Ok((_, Some(note))) = made {
+                    self.notes.push(note);
+                }
             }
         }
         Ok(())

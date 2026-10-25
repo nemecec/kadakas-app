@@ -14,3 +14,5 @@ uic-curve-refused-shared = Another edge meets the curve inside, so the curve can
 uic-curve-refused-plane = A face on another plane uses the curve, such as the wall of a pushed circle. The curve cannot be rebuilt.
 uic-curve-refused-loop = A face uses the curve in a way that cannot be rebuilt.
 uic-curve-refused-invalid = The new segments would make the model invalid, for example edges that are too short.
+uic-curve-refused-unknown-kind = This circle has a kind that this program does not know, so it does not change it.
+uic-curve-note-unknown-kind = A circle of a kind that this program does not know lost its description, because the curve changed.

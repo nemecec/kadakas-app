@@ -592,7 +592,7 @@ impl SurfaceModel {
     /// and circles (MOD-08). Fails when an edge does not exist, is in a curve already, or the
     /// edges are not a chain.
     pub fn add_curve(&mut self, edges: Vec<EdgeId>) -> Result<CurveId, SurfaceError> {
-        self.add_curve_shaped(edges, None)
+        self.add_curve_shaped(edges, None).map(|(id, _)| id)
     }
 
     pub fn vertex(&self, id: VertexId) -> Option<DVec3> {

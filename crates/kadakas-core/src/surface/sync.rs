@@ -135,6 +135,11 @@ pub enum Intent {
     Place { transform: [f64; 12] },
     /// A change that cannot be replayed (for example a new curve).
     Unlogged,
+    /// An entry of the log that this version does not know or cannot read (a file of a newer
+    /// program, or a field that does not fit). It is kept as it is, with the fields of the entry
+    /// except the three of [`Entry`], and written back unchanged. It cannot be replayed.
+    #[serde(skip)]
+    Unknown(Value),
 }
 
 impl Intent {
@@ -332,6 +337,7 @@ impl Intent {
             Intent::FollowMeAt { path, .. } => path.len() + 1,
             Intent::Place { .. }
             | Intent::Unlogged
+            | Intent::Unknown(_)
             | Intent::PushPullAt { .. }
             | Intent::OffsetAt { .. }
             | Intent::IntersectModel => 1,
@@ -343,8 +349,9 @@ fn unique<T: Ord + Copy>(ids: &[T]) -> impl Iterator<Item = T> {
     ids.iter().copied().collect::<BTreeSet<T>>().into_iter()
 }
 
-/// One edit in the log.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// One edit in the log. An entry that this version cannot read is kept as an
+/// [`Intent::Unknown`] and written back unchanged, so a file of a newer program loads.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     /// Names this edit after this history.
     pub stamp: u64,
@@ -352,8 +359,52 @@ pub struct Entry {
     pub base: u64,
     /// The revision that this edit made.
     pub n: u64,
-    #[serde(flatten)]
     pub intent: Intent,
+}
+
+impl Serialize for Entry {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeMap};
+        let rest = match &self.intent {
+            Intent::Unknown(v) => v.clone(),
+            other => serde_json::to_value(other).map_err(S::Error::custom)?,
+        };
+        let Value::Object(rest) = rest else {
+            return Err(S::Error::custom("an entry of the log is an object"));
+        };
+        let mut map = s.serialize_map(Some(3 + rest.len()))?;
+        map.serialize_entry("stamp", &self.stamp)?;
+        map.serialize_entry("base", &self.base)?;
+        map.serialize_entry("n", &self.n)?;
+        for (k, v) in &rest {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let Value::Object(mut o) = Value::deserialize(d)? else {
+            return Err(D::Error::custom("an entry of the log is an object"));
+        };
+        let mut num = |name: &str| {
+            o.remove(name)
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| D::Error::custom(format!("an entry of the log needs {name}")))
+        };
+        let (stamp, base, n) = (num("stamp")?, num("base")?, num("n")?);
+        let rest = Value::Object(o);
+        let intent =
+            serde_json::from_value::<Intent>(rest.clone()).unwrap_or(Intent::Unknown(rest));
+        Ok(Entry {
+            stamp,
+            base,
+            n,
+            intent,
+        })
+    }
 }
 
 /// A hash in 53 bits, so that the number is exact in JSON readers that use doubles.
@@ -711,6 +762,10 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
         }
         Intent::Unlogged => Err(SurfaceError::Unsolved(
             "this change cannot be replayed on another model".into(),
+        )),
+        Intent::Unknown(_) => Err(SurfaceError::Unsolved(
+            "this change was written by another version of the program and cannot be replayed"
+                .into(),
         )),
     }
 }
