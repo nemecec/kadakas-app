@@ -30,9 +30,18 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+def pytest_sessionfinish(session):
+    """With pytest-xdist (`-n`), the controller also imports helpers.py and makes a private home
+    that no test uses. The workers remove their own in `built_cli`."""
+    if hasattr(session.config, "workerinput"):
+        return
+    shutil.rmtree(TEST_HOME, ignore_errors=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def built_cli():
-    """Builds the CLI once per session. Set KADAKAS_SKIP_BUILD=1 to use an existing binary."""
+    """Builds the CLI once per session (once per worker with pytest-xdist: the builds wait for each
+    other and the later ones find nothing to do). Set KADAKAS_SKIP_BUILD=1 to use an existing binary."""
     if not os.environ.get("KADAKAS_SKIP_BUILD"):
         subprocess.run(["cargo", "build", "-p", "kadakas-cli"], cwd=REPO, check=True)
     assert BIN.exists(), f"kadakas binary not found at {BIN}"
