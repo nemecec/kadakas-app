@@ -9,6 +9,7 @@ use std::rc::Rc;
 use glam::{DAffine2, DAffine3, DVec2, DVec3};
 use kadakas_core::curve::{self, Vertex, VertexKind};
 
+use super::csg;
 use super::ctx::{Ctx, attr, enum_of, flag, int, items, num, numbers};
 use crate::step::Value;
 
@@ -578,15 +579,126 @@ impl<'a> Eval<'a> {
                 }
             }
             ("DIFFERENCE", Some(s)) if s.name == "IFCPOLYGONALBOUNDEDHALFSPACE" => {
-                self.issue("a bounded half space is not applied: the solid is not clipped")
+                // The removed volume is a prism of the polygon, cut by the plane.
+                let tail: Vec<Piece> = self.pieces.drain(start..).collect();
+                let Some(host) = solid_mesh(&tail) else {
+                    self.issue(
+                        "a bounded half space is not applied: the solid is not a closed mesh",
+                    );
+                    self.pieces.extend(tail);
+                    return;
+                };
+                match self.bounded_half_space(&s, xf, &host) {
+                    Some(cutter) => self.combine(csg::Op::Difference, host, cutter, tail),
+                    None => {
+                        self.issue("a bounded half space is not applied: its boundary or plane cannot be read");
+                        self.pieces.extend(tail);
+                    }
+                }
             }
-            ("UNION", Some(s)) => self.item(s.id, xf, depth + 1),
+            (o @ ("DIFFERENCE" | "UNION" | "INTERSECTION"), Some(s)) => {
+                // The second operand is a solid of its own.
+                let mid = self.pieces.len();
+                self.item(s.id, xf, depth + 1);
+                let second: Vec<Piece> = self.pieces.drain(mid..).collect();
+                let first: Vec<Piece> = self.pieces.drain(start..).collect();
+                let kind = match o {
+                    "DIFFERENCE" => csg::Op::Difference,
+                    "UNION" => csg::Op::Union,
+                    _ => csg::Op::Intersection,
+                };
+                match (solid_mesh(&first), solid_mesh(&second)) {
+                    (Some(a), Some(b)) => {
+                        let mut all = first;
+                        all.extend(second);
+                        self.combine(kind, a, b, all)
+                    }
+                    _ => {
+                        self.issue(format!(
+                            "a boolean {o} with {} is not applied: only the first operand is used",
+                            s.name
+                        ));
+                        self.pieces.extend(first);
+                        if kind == csg::Op::Union {
+                            self.pieces.extend(second);
+                        }
+                    }
+                }
+            }
             (_, Some(s)) => self.issue(format!(
                 "a boolean {op} with {} is not applied: only the first operand is used",
                 s.name
             )),
             _ => {}
         }
+    }
+
+    /// Applies a boolean operation to two meshes. When it is refused, the `fallback` pieces are kept
+    /// and an issue says why.
+    fn combine(&mut self, op: csg::Op, a: MeshData, b: MeshData, fallback: Vec<Piece>) {
+        match csg::boolean(&a, &b, op) {
+            Ok(m) => {
+                if !m.t.is_empty() {
+                    self.add_mesh(m);
+                }
+            }
+            Err(why) => {
+                self.issue(format!(
+                    "a boolean {} is not applied ({why}): the operands are kept as they are",
+                    match op {
+                        csg::Op::Difference => "DIFFERENCE",
+                        csg::Op::Union => "UNION",
+                        csg::Op::Intersection => "INTERSECTION",
+                    }
+                ));
+                self.pieces.extend(fallback);
+            }
+        }
+    }
+
+    /// The volume that an `IfcPolygonalBoundedHalfSpace` removes, as a closed mesh: the prism of its
+    /// polygon along the Z axis of its position, cut by the base plane. `host` sets the length of the prism.
+    fn bounded_half_space(
+        &mut self,
+        s: &crate::step::Entity,
+        xf: &DAffine3,
+        host: &MeshData,
+    ) -> Option<MeshData> {
+        let plane = self.cx.get(attr(s, 0)).filter(|p| p.name == "IFCPLANE")?;
+        let plane_pos = self
+            .cx
+            .get(attr(&plane, 0))
+            .and_then(|p| self.cx.axis3(&p))?;
+        let pos = self
+            .cx
+            .get(attr(s, 2))
+            .and_then(|p| self.cx.axis3(&p))
+            .unwrap_or(DAffine3::IDENTITY);
+        let ring = self.ring(attr(s, 3))?;
+        let (lo, hi) = host.bounds()?;
+        let reach = ((hi - lo).length() + 1.0) * 4.0
+            + (xf.translation - lo).length()
+            + pos.translation.length();
+        let prism = Extrusion {
+            regions: vec![Region {
+                outer: ring,
+                holes: Vec::new(),
+            }],
+            dir: DVec3::new(0.0, 0.0, 2.0 * reach),
+            xf: *xf * pos * DAffine3::from_translation(DVec3::new(0.0, 0.0, -reach)),
+            tol: self.tol,
+        }
+        .mesh();
+        let world = *xf * plane_pos;
+        let n = world.matrix3.z_axis.normalize_or_zero();
+        // With the agreement flag TRUE the normal points out of the removed half space.
+        let removed = if flag(attr(s, 1)).unwrap_or(true) {
+            -n
+        } else {
+            n
+        };
+        let cutter = clip_mesh(&prism, world.translation, removed);
+        (!cutter.t.is_empty()).then_some(cutter)
     }
 
     // ------------------------------------------------------------ bounding box
@@ -1274,6 +1386,15 @@ pub fn add_polygon(m: &mut MeshData, rings: &[Vec<DVec3>]) {
     }
 }
 
+/// One mesh of all pieces, if every piece is solid geometry. `None` for an empty list.
+pub fn solid_mesh(pieces: &[Piece]) -> Option<MeshData> {
+    let mut out = MeshData::default();
+    for p in pieces {
+        out.append(&piece_mesh(p)?);
+    }
+    (!out.t.is_empty()).then_some(out)
+}
+
 /// The mesh of a piece, if it is solid geometry.
 pub fn piece_mesh(p: &Piece) -> Option<MeshData> {
     match p {
@@ -1741,6 +1862,57 @@ mod tests {
         // Nested clipping removes everything.
         let (p, _) = run(&data, 13);
         assert!(p.is_empty());
+    }
+
+    #[test]
+    fn booleans_with_a_solid_second_operand_and_a_bounded_half_space() {
+        let data = format!(
+            "{BASE}#4=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,2.,2.);\n#5=IFCEXTRUDEDAREASOLID(#4,#2,#3,4.);\n\
+#14=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,1.,1.);\n#15=IFCEXTRUDEDAREASOLID(#14,#2,#3,4.);\n\
+#16=IFCBOOLEANRESULT(.DIFFERENCE.,#5,#15);\n#17=IFCBOOLEANRESULT(.INTERSECTION.,#5,#15);\n\
+#18=IFCCARTESIANPOINT((10.,0.,0.));\n#19=IFCAXIS2PLACEMENT3D(#18,$,$);\n#20=IFCEXTRUDEDAREASOLID(#14,#19,#3,4.);\n\
+#21=IFCBOOLEANRESULT(.UNION.,#5,#20);\n#22=IFCBOOLEANRESULT(.DIFFERENCE.,#16,#20);\n\
+#30=IFCCARTESIANPOINT((0.,0.,2.));\n#31=IFCAXIS2PLACEMENT3D(#30,$,$);\n#32=IFCPLANE(#31);\n\
+#33=IFCCARTESIANPOINT((-0.5,-0.5));\n#34=IFCCARTESIANPOINT((0.5,-0.5));\n#35=IFCCARTESIANPOINT((0.5,0.5));\n#36=IFCCARTESIANPOINT((-0.5,0.5));\n\
+#37=IFCPOLYLINE((#33,#34,#35,#36,#33));\n#38=IFCPOLYGONALBOUNDEDHALFSPACE(#32,.F.,#2,#37);\n#39=IFCBOOLEANCLIPPINGRESULT(.DIFFERENCE.,#5,#38);"
+        );
+        let vol = |id: u64| {
+            let (p, issues) = run(&data, id);
+            assert!(issues.is_empty(), "{issues:?}");
+            p.iter()
+                .map(|p| volume(&piece_mesh(p).unwrap()))
+                .sum::<f64>()
+        };
+        assert!((vol(16) - 12.0).abs() < 1e-6);
+        assert!((vol(17) - 4.0).abs() < 1e-6);
+        assert!((vol(21) - 20.0).abs() < 1e-6);
+        // A second cutter that misses the solid changes nothing.
+        assert!((vol(22) - 12.0).abs() < 1e-6);
+        // The flag FALSE: the part above the plane z = 2 inside the polygon goes: 1 x 1 x 2.
+        assert!((vol(39) - 14.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_boolean_with_an_open_operand_keeps_the_first_one_and_says_so() {
+        let data = format!(
+            "{BASE}#4=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,2.,2.);\n#5=IFCEXTRUDEDAREASOLID(#4,#2,#3,4.);\n\
+#40=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(0.,1.,0.)));\n#41=IFCTRIANGULATEDFACESET(#40,$,.F.,((1,2,3)),$);\n\
+#42=IFCBOOLEANRESULT(.DIFFERENCE.,#5,#41);"
+        );
+        let (p, issues) = run(&data, 42);
+        assert!(
+            issues.iter().any(|i| i.contains("not applied")),
+            "{issues:?}"
+        );
+        assert!(
+            (p.iter()
+                .map(|p| volume(&piece_mesh(p).unwrap()))
+                .sum::<f64>()
+                - 16.0)
+                .abs()
+                < 1e-6
+                || p.len() == 2
+        );
     }
 
     #[test]

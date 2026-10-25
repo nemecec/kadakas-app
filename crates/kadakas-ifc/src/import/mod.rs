@@ -20,6 +20,7 @@
 //! `IfcMapConversion` sets the georeference of an empty document, or moves the geometry into the
 //! georeference of the document when both use the same CRS.
 
+pub mod csg;
 pub mod ctx;
 pub mod geom;
 pub mod model;
@@ -29,6 +30,8 @@ mod props;
 mod tests;
 #[cfg(test)]
 mod tests_more;
+#[cfg(test)]
+mod tests_openings;
 #[cfg(test)]
 mod tests_real;
 
@@ -279,6 +282,9 @@ fn import_index(
         triangles: 0,
         geometry_notes: BTreeMap::new(),
         z_dropped: 0,
+        cut: HashSet::new(),
+        uncut: HashSet::new(),
+        bodyless: HashSet::new(),
     };
     for n in notes.iter().chain(&imp.cx.x.notes) {
         imp.b.report.note(n);
@@ -330,6 +336,11 @@ struct Importer<'a> {
     triangles: usize,
     geometry_notes: BTreeMap<String, usize>,
     z_dropped: usize,
+    /// Openings that were cut from their host, and openings whose cut failed.
+    cut: HashSet<u64>,
+    uncut: HashSet<u64>,
+    /// Openings that have no Body representation (a Reference representation is not subtracted).
+    bodyless: HashSet<u64>,
 }
 
 /// Wall-clock-free helpers for the object data.
@@ -352,6 +363,16 @@ impl<'a> Importer<'a> {
                 cands.insert(*id);
             }
         }
+        // Openings come last: a host has cut them (or failed to) before they are looked at.
+        let is_opening = |x: &StepIndex, id: u64| {
+            matches!(
+                x.name_of(id),
+                Some("IFCOPENINGELEMENT" | "IFCOPENINGSTANDARDCASE")
+            )
+        };
+        let (late, mut cands): (Vec<u64>, Vec<u64>) =
+            cands.into_iter().partition(|id| is_opening(self.cx.x, *id));
+        cands.extend(late);
         let mut seen_classes: BTreeMap<String, usize> = BTreeMap::new();
         let mut global_ids: HashSet<String> = HashSet::new();
         let mut repeated_ids = 0usize;
@@ -401,10 +422,10 @@ impl<'a> Importer<'a> {
                 "{repeated_ids} products repeat the GlobalId of another product: all are imported"
             ));
         }
-        if self.model.voids > 0 {
+        if !self.cut.is_empty() {
             self.b.report.note(&format!(
-                "{} openings (IfcRelVoidsElement) were not cut from their walls and slabs",
-                self.model.voids
+                "{} openings (IfcRelVoidsElement) were cut from their walls and slabs",
+                self.cut.len()
             ));
         }
         for (what, n) in std::mem::take(&mut self.geometry_notes) {
@@ -559,11 +580,28 @@ impl<'a> Importer<'a> {
     fn product(&mut self, e: &Entity, rep: &Entity) {
         let class = model::class_name(&e.name);
         match e.name.as_str() {
-            "IFCOPENINGELEMENT" => {
-                self.b
-                    .report
-                    .skip(&class, "an opening: it is not cut from its host element");
-                return;
+            "IFCOPENINGELEMENT" | "IFCOPENINGSTANDARDCASE" => {
+                if self.cut.contains(&e.id) {
+                    self.b
+                        .report
+                        .skip(&class, "an opening: it was cut from its host element");
+                    return;
+                }
+                if self.bodyless.contains(&e.id) {
+                    self.b.report.skip(
+                        &class,
+                        "an opening without a Body representation: a Reference representation is not subtracted",
+                    );
+                    return;
+                }
+                if !self.uncut.contains(&e.id) {
+                    self.b.report.skip(
+                        &class,
+                        "an opening whose host element was not imported or has no body",
+                    );
+                    return;
+                }
+                // The cut failed: the opening stays as an object of its own (see `cut_openings`).
             }
             "IFCSPACE" | "IFCEXTERNALSPATIALELEMENT" => {
                 self.b
@@ -614,6 +652,9 @@ impl<'a> Importer<'a> {
             out = self.eval_product(e, &reps, false);
         }
         let mut notes = std::mem::take(&mut out.issues);
+        if !out.pieces.is_empty() && self.model.openings_of.contains_key(&e.id) {
+            self.cut_openings(e, &reps, &mut out, &class);
+        }
         if out.pieces.is_empty() {
             // The bounding box stands in for geometry that is not supported.
             if let Some(b) = self.box_piece(e, &reps) {
@@ -722,6 +763,111 @@ impl<'a> Importer<'a> {
             color,
             &name,
         );
+    }
+
+    /// Subtracts the openings of a host element (`IfcRelVoidsElement`) from its solid pieces. The
+    /// openings that were cut are remembered in `cut`. When a cut fails (an open mesh, a body that
+    /// is not a solid, a geometry too complex), the gross geometry stays, the openings stay as
+    /// objects of their own (`uncut`), and the report counts them with the reason.
+    fn cut_openings(&mut self, e: &Entity, reps: &[Rc<Entity>], out: &mut EvalOut, class: &str) {
+        let Some(list) = self.model.openings_of.get(&e.id).cloned() else {
+            return;
+        };
+        let fail = |imp: &mut Importer, ids: &[u64], why: &str| {
+            for id in ids {
+                imp.uncut.insert(*id);
+            }
+            *imp.geometry_notes
+                .entry(format!(
+                    "{class}: {why}: the gross geometry is kept and the opening is a separate object"
+                ))
+                .or_default() += ids.len();
+        };
+        // Instances cannot be cut: evaluate again without them.
+        if out
+            .pieces
+            .iter()
+            .any(|p| matches!(p, Piece::Instance { .. }))
+        {
+            let again = self.eval_product(e, reps, false);
+            out.pieces = again.pieces;
+        }
+        // The cutters, in the units of the file (the host is in the same units).
+        let mut cutters: Vec<(u64, geom::MeshData)> = Vec::new();
+        for id in &list {
+            let Some(op) = self.cx.ent(*id) else { continue };
+            let Some(shape) = self.cx.get(attr(&op, 6)) else {
+                continue;
+            };
+            if shape.name != "IFCPRODUCTDEFINITIONSHAPE" {
+                continue;
+            }
+            // Only a Body representation is subtracted, not a Reference one.
+            let op_reps: Vec<Rc<Entity>> = self
+                .cx
+                .get_all(attr(&shape, 2))
+                .into_iter()
+                .filter(|r| {
+                    text(attr(r, 1)).is_none_or(|i| i.is_empty() || i.eq_ignore_ascii_case("Body"))
+                })
+                .collect();
+            let got = self.eval_product(&op, &op_reps, false);
+            let mut m = geom::MeshData::default();
+            for p in &got.pieces {
+                if let Some(pm) = geom::piece_mesh(p) {
+                    m.append(&pm);
+                }
+            }
+            if m.t.is_empty() {
+                self.bodyless.insert(*id);
+                continue;
+            }
+            cutters.push((*id, m));
+        }
+        if cutters.is_empty() {
+            return;
+        }
+        let ids: Vec<u64> = cutters.iter().map(|(i, _)| *i).collect();
+        let mut pieces = Vec::with_capacity(out.pieces.len());
+        let mut failed: Option<csg::CsgError> = None;
+        for p in std::mem::take(&mut out.pieces) {
+            let Some(host) = geom::piece_mesh(&p) else {
+                pieces.push(p);
+                continue;
+            };
+            let Some((lo, hi)) = host.bounds() else {
+                continue;
+            };
+            // Only the openings that reach the piece.
+            let near: Vec<geom::MeshData> = cutters
+                .iter()
+                .filter(|(_, c)| {
+                    c.bounds().is_some_and(|(a, b)| {
+                        a.cmple(hi + DVec3::splat(csg::EPS)).all()
+                            && b.cmpge(lo - DVec3::splat(csg::EPS)).all()
+                    })
+                })
+                .map(|(_, c)| c.clone())
+                .collect();
+            if near.is_empty() {
+                pieces.push(p);
+                continue;
+            }
+            match csg::subtract_all(&host, &near) {
+                Ok(m) => {
+                    pieces.push(Piece::Mesh(m));
+                }
+                Err(why) => {
+                    failed = Some(why);
+                    pieces.push(p);
+                }
+            }
+        }
+        out.pieces = pieces;
+        match failed {
+            None => self.cut.extend(ids),
+            Some(why) => fail(self, &ids, &why.to_string()),
+        }
     }
 
     fn predefined(&self, e: &Entity) -> String {

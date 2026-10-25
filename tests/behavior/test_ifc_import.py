@@ -48,17 +48,17 @@ def mesh_volume(shape):
     return abs(total) / 6.0
 
 
-def test_wall_with_an_opening_is_a_mesh_and_the_opening_is_reported(cad, generated):
+def test_wall_with_an_opening_is_cut_and_the_opening_is_reported(cad, generated):
     r = cad.result("import.file", {"path": str(generated / "wall_opening.ifc")})
     assert r["imported"] == 1
     shape = objects(cad)[0]["shape"]
     assert shape["kind"] == "mesh3d"
-    assert mesh_volume(shape) == approx(5000 * 250 * 2400, rel=1e-6)
+    assert mesh_volume(shape) == approx(5000 * 250 * 2400 - 1000 * 250 * 2000, rel=1e-6)
     data = objects(cad)[0]["data"]
     assert data["ifc_class"] == "IfcWall" and data["ifc"]["name"] == "Garden wall"
     skipped = {(s["entity"], s["reason"]) for s in r["report"]["skipped"]}
     assert any(e == "IfcOpeningElement" for e, _ in skipped)
-    assert any("openings" in n and "not cut" in n for n in r["report"]["notes"])
+    assert any("openings" in n and "were cut" in n for n in r["report"]["notes"])
     # The property set is a record.
     record = data["Pset_WallCommon"]
     assert record["IsExternal"] is True and record["FireRating"] == "EI30"
