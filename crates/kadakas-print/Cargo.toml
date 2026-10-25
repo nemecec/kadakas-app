@@ -19,7 +19,7 @@ kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 epaint_default_fonts = "0.35.0"
 glam = { version = "0.34.1" }
-miniz_oxide = "0.8.9"
+miniz_oxide = "0.9.1"
 pdf-writer = "0.15.0"
 png = "0.18"
 tiny-skia = "0.12.0"
