@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(inbox.deliver(Vec::new()), Delivery::Queued);
         assert_eq!(inbox.take_pending(), files(&["/a.kad", "/b.kad"]));
         assert!(inbox.take_pending().is_empty());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
         );
         assert!(link.take_open().is_empty());
         assert!(!inbox.unread("1a-2b"));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -251,7 +251,7 @@ mod tests {
         assert!(inbox.take_pending().is_empty());
         assert!(inbox.unread("1a"));
         assert_eq!(inbox.reclaim("1a"), files(&["/a.kad"]));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -270,7 +270,7 @@ mod tests {
         // After the end, files wait.
         assert_eq!(inbox.deliver(files(&["/c.kad"])), Delivery::Queued);
         assert_eq!(inbox.end_run(), files(&["/c.kad"]));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
         }
         drop(beat);
         assert!(!inbox.alive_stamp("1a-2b"));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(inbox.deliver(files(&["/a.kad"])), Delivery::Queued);
         assert_eq!(inbox.end_run(), files(&["/a.kad"]));
         assert!(!inbox.unlinked());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -325,7 +325,7 @@ mod tests {
         // The request cannot be written, so the files wait instead of being lost.
         assert_eq!(inbox.deliver(files(&["/a.kad"])), Delivery::Queued);
         assert_eq!(inbox.take_pending(), files(&["/a.kad"]));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -348,6 +348,6 @@ mod tests {
         crate::handshake::send_open(&d, "1b", &[PathBuf::from("/x.kad")]).unwrap();
         assert!(crate::handshake::take_open(&d, "1a").is_empty());
         assert_eq!(crate::handshake::take_open(&d, "1b").len(), 1);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 }

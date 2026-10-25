@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(f[0].id, "kadakas-app");
         assert_eq!(pick(&f, "other").unwrap().id, "kadakas-app");
         assert!(pick(&[], "x").is_none());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -187,8 +187,8 @@ mod tests {
         let e = tmp("flv-other");
         touch_exact(&e, "Other.app/Contents/MacOS/kadakas-app");
         assert!(!has_app(&e));
-        std::fs::remove_dir_all(&d).unwrap();
-        std::fs::remove_dir_all(&e).unwrap();
+        crate::store::tests::rm_dir(&d);
+        crate::store::tests::rm_dir(&e);
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         let f = discover(&d);
         assert_eq!(f.len(), 2);
         assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -231,7 +231,7 @@ mod tests {
             f[1].exe,
             Path::new("Kadakas Engine.app/Contents/MacOS/kadakas-modeler")
         );
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(ids, ["kadakas-app", "sketch", "third"]);
         assert_eq!(f[2].name, "Third");
         assert_eq!(pick(&f, "sketch").unwrap().name, "3D-first");
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -268,6 +268,6 @@ mod tests {
         touch(&d, "kadakas-app");
         std::fs::write(d.join("flavors.json"), b"[[").unwrap();
         assert_eq!(discover(&d).len(), 1);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 }

@@ -457,7 +457,7 @@ pub(crate) mod tests {
         // And the user can roll back.
         assert_eq!(u.rollback().unwrap(), Slot::Bundled);
         assert_eq!(active_text(&u), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -472,7 +472,7 @@ pub(crate) mod tests {
         ));
         u.update(Channel::Stable).unwrap();
         assert_eq!(active_text(&u), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -499,7 +499,7 @@ pub(crate) mod tests {
         // Only the manifest was asked for. Nobody fetched the archive.
         assert!(http.requests().iter().all(|r| r.starts_with(BASE)));
         assert_eq!(active_text(&u), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -512,7 +512,7 @@ pub(crate) mod tests {
             u.check(Channel::Stable),
             Err(UpdateError::BadSignature)
         ));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -533,7 +533,7 @@ pub(crate) mod tests {
         assert!(later.check(Channel::Stable).is_err());
         publish(&http, "1.3.0", Channel::Stable, &key(2));
         assert!(later.check(Channel::Stable).is_ok());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -559,7 +559,7 @@ pub(crate) mod tests {
             0
         );
         assert!(!u.store().versions_dir().join("1.1.0").exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -594,7 +594,7 @@ pub(crate) mod tests {
         http.put(&url, archive_bytes("1.1.0"));
         u.update(Channel::Stable).unwrap();
         assert_eq!(active_text(&u), "app 1.1.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -615,7 +615,7 @@ pub(crate) mod tests {
             Err(UpdateError::Downgrade { .. })
         ));
         assert_eq!(active_text(&u), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -640,7 +640,7 @@ pub(crate) mod tests {
         ));
         u.update(Channel::Beta).unwrap();
         assert_eq!(active_text(&u), "app 2.0.0-beta.1");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -673,7 +673,7 @@ pub(crate) mod tests {
             u.check(Channel::Stable),
             Err(UpdateError::Manifest(_))
         ));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -695,7 +695,7 @@ pub(crate) mod tests {
         again.store().recover();
         again.update(Channel::Stable).unwrap();
         assert_eq!(active_text(&again), "app 1.1.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -715,7 +715,7 @@ pub(crate) mod tests {
             Err(UpdateError::Expired { .. })
         ));
         assert_eq!(active_text(&late), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -751,7 +751,7 @@ pub(crate) mod tests {
         // Another channel has its own memory.
         publish(&http, "1.0.2-beta.1", Channel::Beta, &key(1));
         assert!(again.check(Channel::Beta).is_ok());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     // ---- Local update sites and unsigned manifests (PLAT-17) ----
@@ -839,7 +839,7 @@ pub(crate) mod tests {
             UpdateStatus::UpToDate { .. }
         ));
         assert_eq!(u.store().seen(Channel::Local), None);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -872,7 +872,7 @@ pub(crate) mod tests {
         let e = u.check(Channel::Local).unwrap_err();
         assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
         assert!(!http.requests().iter().any(|r| r.contains("local")));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -904,7 +904,7 @@ pub(crate) mod tests {
         let url = path_to_file_url(&dir.join("kadakas.tar.gz"));
         site(&dir, "1.1.0", Channel::Local, None, &url);
         assert_eq!(u.update(Channel::Local).unwrap(), v("1.1.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -951,7 +951,7 @@ pub(crate) mod tests {
         // A missing folder is an error, not a panic.
         let gone = local_updater(&root, &root.join("nothing"), "1.0.0");
         assert!(gone.check(Channel::Local).is_err());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -966,7 +966,7 @@ pub(crate) mod tests {
         };
         let e = u.download(&v("1.1.0"), &file).unwrap_err();
         assert!(matches!(e, UpdateError::LocalOnly(_)), "{e}");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -997,7 +997,7 @@ pub(crate) mod tests {
             u.update(Channel::Stable),
             Err(UpdateError::AlreadyCurrent(_))
         ));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1015,7 +1015,7 @@ pub(crate) mod tests {
             u.check(Channel::Stable).unwrap(),
             UpdateStatus::Available(_)
         ));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1034,7 +1034,7 @@ pub(crate) mod tests {
         // The channel local is fine.
         site(&dir, "1.1.0", Channel::Local, None, "kadakas.tar.gz");
         assert!(u.check(Channel::Local).is_ok());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1053,7 +1053,7 @@ pub(crate) mod tests {
         }
         assert!(http.requests().is_empty());
         assert_eq!(active_text(&u), "app 1.0.0");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]

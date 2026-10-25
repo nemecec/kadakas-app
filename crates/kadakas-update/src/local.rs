@@ -407,7 +407,7 @@ mod tests {
             assert!(FileHttp.get("file:///dev/zero", 100, &mut out).is_err());
             assert_eq!(out.len(), 101);
         }
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -425,7 +425,7 @@ mod tests {
         r.get("https://x.example/a", 10, &mut out).unwrap();
         assert_eq!(out, b"net");
         assert_eq!(net.requests(), ["https://x.example/a"]);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
         // A bundle without the program is no build.
         std::fs::remove_file(mac.join("kadakas-app")).unwrap();
         assert!(matches!(find_build(&d), Err(UpdateError::BadBuild(_))));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[cfg(unix)]
@@ -529,7 +529,7 @@ mod tests {
         // A link out of the bundle makes the build invalid.
         std::os::unix::fs::symlink("../../../../x", c.join("MacOS/escape")).unwrap();
         assert!(matches!(find_build(&d), Err(UpdateError::BadBuild(_))));
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -576,7 +576,7 @@ mod tests {
                 PathBuf::from(exe("kadakas-modeler")),
             ]
         );
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -672,7 +672,7 @@ mod tests {
             store.meta(&crate::store::Slot::Version(rel)).label,
             "nightly"
         );
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -701,7 +701,7 @@ mod tests {
         assert!(!info.dirty);
         std::fs::write(d.join("f"), b"2").unwrap();
         assert!(git_info(&d).unwrap().dirty);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
         assert_eq!(git_info(&d), None);
     }
 }

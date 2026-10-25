@@ -365,7 +365,7 @@ pub(crate) mod tests {
                 .mode();
             assert_eq!(m & 0o7777, 0o644);
         }
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -385,7 +385,7 @@ pub(crate) mod tests {
             let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
             assert!(matches!(e, UpdateError::UnsafePath(_)), "{name}: {e}");
             assert!(!outside.exists(), "{name} escaped");
-            std::fs::remove_dir_all(&d).unwrap();
+            crate::store::tests::rm_dir(&d);
         }
     }
 
@@ -408,7 +408,7 @@ pub(crate) mod tests {
             }]);
             let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
             assert!(matches!(e, UpdateError::UnsafePath(_)), "{kind:?}");
-            std::fs::remove_dir_all(&d).unwrap();
+            crate::store::tests::rm_dir(&d);
         }
     }
 
@@ -454,7 +454,7 @@ pub(crate) mod tests {
             std::fs::read_link(d.join("Kadakas.app/Current")).unwrap(),
             Path::new("Contents/MacOS")
         );
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[cfg(unix)]
@@ -482,7 +482,7 @@ pub(crate) mod tests {
                 std::fs::symlink_metadata(d.join(name)).is_err(),
                 "{name} -> {to}"
             );
-            std::fs::remove_dir_all(&d).unwrap();
+            crate::store::tests::rm_dir(&d);
         }
     }
 
@@ -500,8 +500,8 @@ pub(crate) mod tests {
         let d2 = tmp("twice");
         let a = build(&[link("l", "a"), link("l", "b")]);
         assert!(extract_tar_gz(&a[..], &d2, Limits::default()).is_err());
-        std::fs::remove_dir_all(&d).unwrap();
-        std::fs::remove_dir_all(&d2).unwrap();
+        crate::store::tests::rm_dir(&d);
+        crate::store::tests::rm_dir(&d2);
     }
 
     /// APFS and HFS+ see composed and decomposed Unicode (and upper and lower case) as one name.
@@ -537,7 +537,7 @@ pub(crate) mod tests {
             {
                 assert!(matches!(r, Err(UpdateError::UnsafePath(_))), "{r:?}");
             }
-            std::fs::remove_dir_all(&d).unwrap();
+            crate::store::tests::rm_dir(&d);
         }
     }
 
@@ -558,7 +558,7 @@ pub(crate) mod tests {
         assert!(refuse_links_on_disk(&d, Path::new("real/x"), false).is_ok());
         assert!(refuse_links_on_disk(&d, Path::new("new/deeper/x"), false).is_ok());
         assert!(refuse_links_on_disk(&d, Path::new("l"), false).is_ok());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -569,7 +569,7 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(d.join("a")).unwrap(), b"1");
         let a = build(&[file("b", b"1"), file("b/c", b"2")]);
         assert!(extract_tar_gz(&a[..], &d, Limits::default()).is_err());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -593,8 +593,8 @@ pub(crate) mod tests {
             extract_tar_gz(&a[..], &d2, tiny),
             Err(UpdateError::Archive(_))
         ));
-        std::fs::remove_dir_all(&d).unwrap();
-        std::fs::remove_dir_all(&d2).unwrap();
+        crate::store::tests::rm_dir(&d);
+        crate::store::tests::rm_dir(&d2);
     }
 
     #[test]
@@ -604,7 +604,7 @@ pub(crate) mod tests {
         let mut a = build(&[file("a", b"1")]);
         a.truncate(a.len() / 2);
         assert!(extract_tar_gz(&a[..], &d, Limits::default()).is_err());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -621,7 +621,7 @@ pub(crate) mod tests {
             file("a", b"1"),
         ]);
         assert_eq!(extract_tar_gz(&a[..], &d, Limits::default()).unwrap(), 1);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -650,13 +650,13 @@ pub(crate) mod tests {
             let a = build(&[file(names[0], b"1"), file(names[1], b"2")]);
             let e = extract_tar_gz(&a[..], &d, Limits::default()).unwrap_err();
             assert!(matches!(e, UpdateError::UnsafePath(_)), "{names:?}: {e}");
-            std::fs::remove_dir_all(&d).unwrap();
+            crate::store::tests::rm_dir(&d);
         }
         // The same folder written twice in the same way is fine.
         let d = tmp("case-ok");
         let a = build(&[file("Dir/x", b"1"), file("Dir/y", b"2")]);
         assert_eq!(extract_tar_gz(&a[..], &d, Limits::default()).unwrap(), 2);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     proptest::proptest! {

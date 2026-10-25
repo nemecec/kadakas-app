@@ -502,7 +502,7 @@ mod tests {
         assert_eq!(picked(choose(&s, &st, &[])), "1.0.0");
         s.activate(&Slot::Version(local.clone())).unwrap();
         assert_eq!(picked(choose(&s, &st, &[])), "1.0.0-local.ga");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -521,6 +521,6 @@ mod tests {
         assert_eq!(picked(choose(&s, &st, &[])), "1.0.0");
         let empty = Store::new(root.join("none"), None);
         assert!(choose(&empty, &st, &[]).is_none());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 }

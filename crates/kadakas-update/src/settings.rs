@@ -212,7 +212,7 @@ mod tests {
         };
         s.save(&root.join("sub")).unwrap();
         assert_eq!(Settings::load(&root.join("sub")), s);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
         std::fs::write(Settings::path(&root), br#"{"profile":"p1"}"#).unwrap();
         let s = Settings::load(&root);
         assert_eq!((s.channel, s.profile.as_str()), (Channel::Stable, "p1"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(s.flavor, MAIN_FLAVOR);
         assert!(valid_site("") && valid_site("file:///a/b"));
         assert!(!valid_site("file:///a b") && !valid_site("http://x") && !valid_site("/a"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
         let blocker = root.join("blocker");
         std::fs::write(&blocker, b"x").unwrap();
         assert!(Settings::update(&blocker.join("x"), |_| {}).is_err());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]

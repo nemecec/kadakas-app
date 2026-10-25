@@ -865,6 +865,19 @@ pub(crate) mod tests {
         d
     }
 
+    /// Removes a test folder. On Windows a program that has just ended, or still ends, keeps its
+    /// file (and so the folder) for a moment: try again for a few seconds. A folder that stays
+    /// is in the temp folder and does no harm, so the last failure is not an error.
+    pub fn rm_dir(d: impl AsRef<Path>) {
+        for _ in 0..100 {
+            match std::fs::remove_dir_all(d.as_ref()) {
+                Ok(()) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+
     /// The file name of a program: with `.exe` on Windows.
     pub fn exe_name(n: &str) -> String {
         format!("{n}{}", std::env::consts::EXE_SUFFIX)
@@ -997,7 +1010,7 @@ pub(crate) mod tests {
                     .is_file()
             );
         }
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1014,7 +1027,7 @@ pub(crate) mod tests {
         s.set_keep_older(0);
         s.prune().unwrap();
         assert_eq!(folders(&s), ["1.4.0"]);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1053,7 +1066,7 @@ pub(crate) mod tests {
         s.stage(&v("1.7.0"), &archive_file(&root, "1.7.0"), "stable")
             .unwrap();
         assert_eq!(folders(&s), ["1.5.0", "1.7.0"]);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1087,7 +1100,7 @@ pub(crate) mod tests {
             s.activate(&Slot::Version(v("9.0.0"))),
             Err(UpdateError::NotInstalled(_))
         ));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1103,7 +1116,7 @@ pub(crate) mod tests {
         // The folder is not trusted without its meta file: it is unpacked again.
         s.stage(&v("1.1.0"), &a, "nightly").unwrap();
         assert_eq!(s.meta(&Slot::Version(v("1.1.0"))).label, "nightly");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     fn fake_build(root: &Path, name: &str, with_cli: bool) -> crate::local::LocalBuild {
@@ -1169,7 +1182,7 @@ pub(crate) mod tests {
                 .exists()
         );
         assert!(!s.versions_dir().join(other.to_string()).exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1198,7 +1211,7 @@ pub(crate) mod tests {
         s.remove(&v("1.2.0")).unwrap();
         assert!(s.rollback_target().is_none());
         assert_eq!(s.pointer().previous, None);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1212,7 +1225,7 @@ pub(crate) mod tests {
         s.rollback().unwrap();
         assert!(!s.rolled_back_slots().contains(&Slot::Version(v("1.1.0"))));
         assert!(s.rolled_back_slots().contains(&Slot::Bundled));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1240,7 +1253,7 @@ pub(crate) mod tests {
         s.activate(&Slot::Version(v("1.1.0"))).unwrap();
         s.activate(&Slot::Version(v("1.2.0"))).unwrap();
         assert!(s.explicit_choice().is_some());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1264,7 +1277,7 @@ pub(crate) mod tests {
         // skipped folder down to the first good one stays.
         let f = folders(&s);
         assert!(f.contains(&"1.4.0".to_string()), "{f:?}");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
 
         // The case with a good version below the skipped newest ones.
         let root = tmp("keep-fallback-2");
@@ -1276,7 +1289,7 @@ pub(crate) mod tests {
         s.prune().unwrap();
         // 1.3.0 (newest), 1.2.0 (skipped) and 1.1.0 (the first good one) stay.
         assert_eq!(folders(&s), ["1.1.0", "1.2.0", "1.3.0"]);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1319,7 +1332,7 @@ pub(crate) mod tests {
         s.recover();
         assert!(!dir.join(format!(".old-{ver}")).exists());
         assert!(s.list().iter().any(|i| i.version == ver));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1330,7 +1343,7 @@ pub(crate) mod tests {
         assert!(s.list().is_empty());
         assert!(matches!(s.rollback(), Err(UpdateError::NothingToRollBack)));
         assert_eq!(s.pointer(), Pointer::default());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1361,7 +1374,7 @@ pub(crate) mod tests {
             .unwrap();
         let names: Vec<String> = s.list().iter().map(|i| i.slot.to_string()).collect();
         assert_eq!(names, ["bundled", "1.2.0", "1.3.0"]);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1384,7 +1397,7 @@ pub(crate) mod tests {
         // Only an explicit flag allows it.
         s.install(&v("1.0.0"), &old, true).unwrap();
         assert_eq!(s.active().unwrap().version, v("1.0.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1403,7 +1416,7 @@ pub(crate) mod tests {
         // The rollback survives a new Store value (it is on disk).
         let again = Store::new(root.join("r"), Some(bundled(&root, "1.0.0")));
         assert_eq!(again.active().unwrap().version, v("1.1.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1417,7 +1430,7 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(s.versions_dir().join("1.0.0")).unwrap();
         assert!(matches!(s.rollback(), Err(UpdateError::NothingToRollBack)));
         assert_eq!(s.active().unwrap().version, v("1.1.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1464,7 +1477,7 @@ pub(crate) mod tests {
                 assert_eq!(app_text(&after.active().unwrap()), "app 1.1.0");
                 assert_eq!(after.rollback_target().unwrap().version, v("1.0.0"));
             }
-            std::fs::remove_dir_all(&root).unwrap();
+            crate::store::tests::rm_dir(&root);
         }
     }
 
@@ -1490,7 +1503,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(s.pointer(), Pointer::default());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1522,7 +1535,7 @@ pub(crate) mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["1.0.0"]);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1533,7 +1546,7 @@ pub(crate) mod tests {
         std::fs::write(s.downloads_dir().join("x.part"), b"1").unwrap();
         s.recover();
         assert!(!s.downloads_dir().join("x.part").exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1564,7 +1577,7 @@ pub(crate) mod tests {
             .install(&v("1.2.0"), &archive_file(&root, "1.2.0"), false)
             .unwrap_err();
         assert!(matches!(e, UpdateError::Downgrade { .. }), "{e}");
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1591,7 +1604,7 @@ pub(crate) mod tests {
         b.install(&v("1.1.0"), &archive_file(&root, "1.1.0"), false)
             .unwrap();
         assert_eq!(a.active().unwrap().version, v("1.1.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1608,7 +1621,7 @@ pub(crate) mod tests {
         drop(held);
         t.join().unwrap().unwrap();
         assert_eq!(a.active().unwrap().version, v("1.0.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1641,7 +1654,7 @@ pub(crate) mod tests {
         };
         s.install(&v("1.0.0"), &gone, true).unwrap();
         assert_eq!(s.active().unwrap().version, v("1.0.0"));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1656,7 +1669,7 @@ pub(crate) mod tests {
         ));
         assert!(s.active().is_none());
         assert!(!s.versions_dir().join("1.0.0").exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -1674,6 +1687,6 @@ pub(crate) mod tests {
             Store::new(root.join("r"), None).seen(Channel::Stable),
             Some(v("1.2.0"))
         );
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 }

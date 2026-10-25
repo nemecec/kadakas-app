@@ -244,8 +244,8 @@ mod tests {
         // Without the app next to the program there is no command.
         let lone = tmp("sibling-none");
         assert!(sibling_app_command(&lone.join(exe_name("kadakas-modeler")), &files).is_none());
-        std::fs::remove_dir_all(&d).unwrap();
-        std::fs::remove_dir_all(&lone).unwrap();
+        crate::store::tests::rm_dir(&d);
+        crate::store::tests::rm_dir(&lone);
     }
 
     #[test]
@@ -288,7 +288,7 @@ mod tests {
             )
         });
         assert_eq!(got, want);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
             Ok(Sent::Asked)
         );
         assert_eq!(link.take_open(), vec![file]);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -352,6 +352,6 @@ mod tests {
             ..flavor()
         };
         assert!(launch(&d, &gone, "").is_err());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 }

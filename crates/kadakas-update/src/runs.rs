@@ -541,7 +541,7 @@ mod tests {
         // Everything of the run is gone.
         assert!(!run_file(s.root(), &id, "json").exists());
         assert!(!run_file(s.root(), &id, "lock").exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(s.rolled_back_slots().len(), 1);
         s.clear_crash(&slot("1.1.0")).unwrap();
         assert!(s.rolled_back_slots().is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -604,7 +604,7 @@ mod tests {
         assert!(runs_dir(s.root()).join("zz.json").exists());
         assert_eq!(s.running_slots(), [slot("1.3.0")]);
         drop(g3);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -622,7 +622,7 @@ mod tests {
         // A damaged health file reads as "no crash".
         std::fs::write(s.root().join(HEALTH), b"{ nope").unwrap();
         assert!(s.crashed_slots().is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -652,7 +652,7 @@ mod tests {
         let g = RunGuard::begin(&s, &a).unwrap();
         g.finish(&s);
         assert!(s.crashed_slots().contains(&a));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -668,7 +668,7 @@ mod tests {
         assert!(new.rolled_back_slots().is_empty());
         // The old marks are still there for the old version.
         assert!(old.crashed_slots().contains(&Slot::Bundled));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -701,7 +701,7 @@ mod tests {
         assert!(s.crashed_slots().contains(&slot("1.1.0")));
         assert!(!run_file(s.root(), &id, "json").exists());
         assert!(!run_file(s.root(), &id, "app.lock").exists());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]
@@ -729,6 +729,6 @@ mod tests {
         // Five runs, five strikes: every run counted once, none twice.
         assert_eq!(h["crashed"]["1.1.0"]["count"], 5, "{text}");
         assert!(read_records(s.root()).is_empty());
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 }

@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(describe(&r), "Rolled back to bundled.");
         let r = run(&u, Channel::Beta, Task::Check);
         assert!(describe(&r).starts_with("Failed: "), "{}", describe(&r));
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 
     #[test]

@@ -787,7 +787,7 @@ mod tests {
         assert!(crate::runs::valid_run_id(&env[ENV_RUN]));
         // The run is settled: nothing is left.
         assert!(w.store().running_slots().is_empty());
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
             w.started()[0].files,
             [OsString::from("/a.kad"), OsString::from("/b.kad")]
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -822,7 +822,7 @@ mod tests {
             [PathBuf::from("/second.kad")]
         );
         assert!(sup.inbox().running().is_none());
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -838,7 +838,7 @@ mod tests {
         let reports = sup.run(vec![]).unwrap();
         assert_eq!(reports.len(), 2);
         assert_eq!(w.started()[1].files, [OsString::from("/late.kad")]);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
             matches!(seen.last(), Some(UpdateState::Failed { .. })),
             "{seen:?}"
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -883,7 +883,7 @@ mod tests {
         );
         // The new version is in the store and is not running.
         assert!(w.store().list().iter().any(|i| i.version == v("1.1.0")));
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -909,7 +909,7 @@ mod tests {
         let want: Vec<OsString> = docs.into_iter().map(Into::into).collect();
         assert_eq!(reports[1].files, want);
         assert_eq!(w.started()[1].files, want);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -929,7 +929,7 @@ mod tests {
             .map(|rd| rd.count())
             .unwrap_or(0);
         assert_eq!(left, 0);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -954,7 +954,7 @@ mod tests {
                 .count(),
             0
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -980,7 +980,7 @@ mod tests {
             let kept = kadakas_crash::queue::list(&w.root.join("r"));
             assert_eq!(kept.len(), 1, "{name}");
             assert_eq!(kept[0].file.survived_gap_secs.is_some(), survived, "{name}");
-            std::fs::remove_dir_all(&w.root).unwrap();
+            crate::store::tests::rm_dir(&w.root);
         }
     }
 
@@ -1026,7 +1026,7 @@ mod tests {
                 .count(),
             0
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1052,7 +1052,7 @@ mod tests {
         });
         sup.run(vec![]).unwrap();
         assert_eq!(kadakas_crash::queue::list(&w.root.join("r")).len(), 1);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1080,7 +1080,7 @@ mod tests {
         let kept = kadakas_crash::queue::list(&root);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].file.message, "left behind");
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1121,7 +1121,7 @@ mod tests {
                 .crashed_slots()
                 .contains(&Slot::Version(v("1.1.0")))
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
         // Nothing can start: an error, not a hang.
         w.spawner.broken.lock().unwrap().push("bundled-dir".into());
         assert!(sup.run(vec![]).is_err());
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1170,7 +1170,7 @@ mod tests {
         );
         // The download did not switch: the person chose the bundled app.
         assert_eq!(w.store().active().unwrap().slot, Slot::Bundled);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1188,7 +1188,7 @@ mod tests {
         assert_eq!(reports.len(), 2, "{reports:?}");
         assert_eq!(reports[1].version, v("1.1.0"));
         assert_eq!(w.store().active().unwrap().version, v("1.1.0"));
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1203,7 +1203,7 @@ mod tests {
         sup.run(vec![]).unwrap();
         let before = w.http.requests().len();
         assert!(before >= 2, "the check ran again: {before}");
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
 
         let (w, sup) = world("sup-nosite", "1.0.0");
         w.settings(|s| s.channel = Channel::Local);
@@ -1217,7 +1217,7 @@ mod tests {
         assert!(w.http.requests().is_empty(), "nobody was asked");
         let seen = w.spawner.seen.lock().unwrap().clone();
         assert_eq!(seen.last(), Some(&UpdateState::UpToDate), "{seen:?}");
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1236,7 +1236,7 @@ mod tests {
             spec.env,
             [(handshake::ENV_VIA.to_string(), "1".to_string())]
         );
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1267,7 +1267,7 @@ mod tests {
         assert_eq!(reports[1].version, v("1.0.0"));
         let want: Vec<OsString> = docs.into_iter().map(Into::into).collect();
         assert_eq!(reports[1].files, want);
-        std::fs::remove_dir_all(&w.root).unwrap();
+        crate::store::tests::rm_dir(&w.root);
     }
 
     #[test]
@@ -1307,6 +1307,6 @@ mod tests {
         assert_eq!(ready_version(&st, Channel::Stable, &v("1.1.0")), None);
         st.note_run_end(&Slot::Version(v("1.1.0")), false).unwrap();
         assert_eq!(ready_version(&st, Channel::Stable, &now), None);
-        std::fs::remove_dir_all(&root).unwrap();
+        crate::store::tests::rm_dir(&root);
     }
 }

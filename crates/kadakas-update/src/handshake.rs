@@ -482,7 +482,7 @@ mod tests {
         assert!(AppLink::from_env(&|k| (k == ENV_ROOT).then(|| "/x".into())).is_none());
         let l = AppLink::from_env(&env(&d, "1a-2b")).unwrap();
         assert_eq!(l.root(), d);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -521,7 +521,7 @@ mod tests {
         drop(beat);
         assert!(!run_file(&d, "1a-1", "program").exists());
         assert_eq!(running_program(&d, &me, "2b-2"), None);
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod tests {
             (s.running.as_str(), s.update),
             ("2.0.0", UpdateState::Checking)
         );
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
@@ -580,7 +580,7 @@ mod tests {
         assert!(!run_file(&d, "1a", "clean").exists());
         l.mark_clean_exit().unwrap();
         assert!(run_file(&d, "1a", "clean").is_file());
-        std::fs::remove_dir_all(&d).unwrap();
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]
