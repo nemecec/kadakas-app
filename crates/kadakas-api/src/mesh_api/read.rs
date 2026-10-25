@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::surface::{
-    ATTR_BACK_MATERIAL, ATTR_MATERIAL, EdgeId, FaceId, SurfaceModel, VertexId,
+    ATTR_BACK_MATERIAL, ATTR_MATERIAL, Analytic, CurveId, EdgeId, FaceId, SurfaceModel, VertexId,
 };
 
 use super::{model_of, models, object_id};
@@ -26,8 +26,63 @@ pub(super) fn handle(doc: &Document, op: &str, p: Value) -> Result<Value, RpcErr
         "edges" => edges(doc, p),
         "faces" => faces(doc, p),
         "solid_report" => solid_report(doc, p),
+        "curve_info" => curve_info(doc, p),
         _ => bounds(doc, p),
     }
+}
+
+/// The exact circle of a curve as JSON (MOD-15).
+fn geometry_json(a: &Analytic) -> Value {
+    let mut v = json!({
+        "kind": a.kind,
+        "center": a.center,
+        "normal": a.normal,
+        "axis": a.axis,
+        "radius": a.radius,
+        "length_mm": a.length(),
+    });
+    if let (Some(s), Some(e)) = (a.start, a.end) {
+        v["start_deg"] = json!(s.to_degrees());
+        v["end_deg"] = json!(e.to_degrees());
+        v["radians"] = json!({"start": s, "end": e});
+    }
+    v
+}
+
+fn curve_json(m: &SurfaceModel, id: CurveId) -> Value {
+    json!({
+        "curve": id,
+        "edges": m.curve_edges(id).unwrap_or_default(),
+        "segments": m.curve_segments(id).unwrap_or(0),
+        "closed": m.curve_closed(id),
+        "geometry": m.curve_geometry(id).map(geometry_json),
+    })
+}
+
+fn curve_info(doc: &Document, p: Value) -> Result<Value, RpcError> {
+    let q: MeshCurveInfoParams = serde_json::from_value(p).map_err(bad)?;
+    let id = object_id(&q.id.0)?;
+    let m = model_of(doc, id)?;
+    if let Some(c) = q.curve {
+        if m.curve_segments(CurveId(c)).is_none() {
+            return Err(super::typed(
+                RpcError::not_found(format!("curve {c} does not exist")),
+                "no_such_curve",
+                json!({"object": id, "curve": c}),
+            ));
+        }
+        return Ok(json!({"total": 1, "offset": 0, "items": [curve_json(m, CurveId(c))]}));
+    }
+    let pg = page(
+        m.curves().map(|(c, _)| c.0),
+        m.curves().count(),
+        None,
+        q.offset,
+        q.limit,
+        |_| true,
+    )?;
+    let items = pg.ids.iter().map(|c| curve_json(m, CurveId(*c))).collect();
+    Ok(paged(pg, items))
 }
 
 fn point(p: DVec3) -> Value {

@@ -16,6 +16,7 @@
 //! Select (Space) uses [`select`]: [`select::pick`], [`select::rect_select`] and
 //! [`select::SubSelection`]. See `docs/modeler.md`.
 
+pub mod curve;
 pub mod exec;
 pub mod messages;
 pub mod paint;
@@ -29,6 +30,7 @@ mod tape;
 mod tools;
 mod xform;
 
+pub use curve::{CurveShape, curve_shape};
 pub use exec::{
     Action, GuideSpec, Ran, Target, run as run_actions, run_full as run_actions_full,
     run_noted as run_actions_noted,

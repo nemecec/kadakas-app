@@ -28,6 +28,7 @@ Reads. They change nothing.
 | `mesh.bounds` | The box around a model, local and in the drawing. |
 | `mesh.near` | Faces, edges or vertices near a point. |
 | `mesh.pick` | The faces that a ray meets. |
+| `mesh.curve_info` | The curves of a model with their exact circle, radius, center and segments (MOD-15). |
 
 Edits. Each one is one undo step.
 
@@ -35,7 +36,8 @@ Edits. Each one is one undo step.
 |---|---|
 | `mesh.create` | An empty model. |
 | `mesh.add_edges` | Straight edges. Faces form and split by themselves. |
-| `mesh.add_curve` | A chain that stays one curve, such as a circle. |
+| `mesh.add_curve` | A chain that stays one curve, such as a circle. It takes the exact circle as `analytic`. |
+| `mesh.set_segments` | Rebuild a circle or an arc with another number of segments (MOD-15). |
 | `mesh.erase` | Erase edges and faces. |
 | `mesh.reverse_faces` | Turn faces over. |
 | `mesh.push_pull` | Push or pull a face. |
@@ -223,9 +225,62 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `mesh_too_large_for_surface` | The mesh is over a limit of a surface model. Nothing changes. | `over` (each count with its limit), `counts` |
 | `mesh_not_convertible` | The mesh gives no valid surface model (no triangle with an area, or a point out of range). | |
 | `no_exact_data` | `mesh3d.exact_info` or `mesh3d.retessellate` was called on a mesh that keeps no exact data (only a STEP import with `keep_exact` does). | `object` |
+| `no_such_curve` | The curve is not in the model. | `object`, `curve` |
+| `curve_without_description` | The curve has no exact circle. Old curves and curves that an edit made inexact have none. | `curve` |
+| `segments_out_of_range` | The number of segments is not from 3 to 1000. | `segments`, `min`, `max` |
+| `curve_vertex_shared` | Another edge meets the chain inside it. | `vertex` |
+| `curve_borders_other_plane` | A face on another plane uses the curve, for example the wall of a pushed circle. | `face` |
+| `curve_loop_unclear` | A loop of a face does not run once along the whole chain. | `face` |
+| `curve_result_invalid` | The new chain makes the model invalid, for example edges that are too short. | `reason` |
 | `exact_stale` | `mesh3d.retessellate`: the triangles were edited after the import, so the exact data no longer fits. | `object` |
 
 `operand` is `first` or `second`. `open_kind` is `border`, `non_manifold` or `reversed`. In a batch the data also has `step`.
+
+## Circles and arcs (MOD-15)
+
+A curve is a chain of straight edges that stays one circle or arc. A curve also keeps the exact circle that its corners lie on.
+The circle has a kind (`circle`, `arc` or `polygon`), a center, a normal, an axis, a radius and, for an arc, a start and an end angle.
+The axis is the direction of the angle 0. Angles run counterclockwise about the normal. The number of segments is the number of edges.
+Coordinates are local, in millimeters and radians.
+
+`mesh.add_curve` takes the circle as `analytic`. The core keeps it only when every point lies on the circle within the length tolerance.
+Else the curve is drawn without it and the notes say so.
+
+`mesh.curve_info` reads the curves of a model, or one curve with `curve`. Each item has `edges`, `segments`, `closed` and `geometry`.
+`geometry` is null for an old curve. An arc also has `start_deg`, `end_deg` and `radians`.
+
+```json
+{"method": "mesh.curve_info", "params": {"id": "<model>", "curve": 20}}
+{"total": 1, "offset": 0, "items": [{"curve": 20, "edges": [21, 22], "segments": 24, "closed": true,
+  "geometry": {"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0],
+               "radius": 300, "length_mm": 1884.96}}]}
+```
+
+`mesh.set_segments {id, curve, segments}` rebuilds the chain with 3 to 1000 edges on the same circle. It is one undo step.
+The ends of an arc stay. The first vertex of a circle stays. Faces in the plane of the circle follow, with the new vertices.
+The edges keep the flags of the first edge of the chain (soft, smooth, faceted).
+
+The call is refused, with an `error_id`, in these cases.
+- The curve has no circle: `curve_without_description`.
+- Another edge meets the chain inside: `curve_vertex_shared`.
+- A face on another plane uses the chain: `curve_borders_other_plane`. A circle under the wall of a pushed cylinder is an example.
+- The new edges are too short or cross other geometry: `curve_result_invalid`.
+
+What the other edits do with the circle.
+
+| Edit | Result |
+|---|---|
+| Move, rotate, mirror, uniform scale | The circle moves with the chain. The radius scales. |
+| Scale with other factors, move of single points | The circle is dropped. The notes say so. The chain stays a curve. |
+| Erase that cuts a circle | The pieces are arcs on the same circle, with new angles. |
+| Erase at the ends of an arc | The arc is shorter. The angles are updated. |
+| Edge across the curve | The chain gets a vertex on the chord. The circle stays. |
+| Push/Pull, Follow Me, copy | The copy gets its own circle, at the new place. |
+| Offset | The new curve gets a circle with the radius of its corners. |
+| Group, component, explode | The circle follows the chain. It is fitted again where the chain lands. |
+
+The file keeps the circles in the model field `curve_geometry`, a list of `[curve id, {description}]`. A file without it loads as before.
+An older program keeps the field it does not know. A row whose curve is gone or whose points are off the circle is left out on load.
 
 ## Reading in pages
 

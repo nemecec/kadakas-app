@@ -1749,6 +1749,27 @@ impl ModelerApp {
                     .soften
                     .preview(self.session.editor.doc(), &self.edit.sub);
             }
+            TrayAction::CurveSegments {
+                model,
+                curve,
+                segments,
+            } => {
+                self.status = match kadakas_ui_core::modeling::curve::set_segments(
+                    &mut self.session.editor,
+                    model,
+                    curve,
+                    segments,
+                ) {
+                    Ok(notes) => {
+                        let done = tr!("modeler-curve-segments-set", segments = segments);
+                        std::iter::once(done)
+                            .chain(notes)
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    }
+                    Err(e) => tr!("modeler-edit-failed", reason = e),
+                };
+            }
             TrayAction::Material(req) => {
                 let result = self.materials.apply(
                     &mut self.session.editor,

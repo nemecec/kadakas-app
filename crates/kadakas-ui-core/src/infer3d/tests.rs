@@ -2011,3 +2011,84 @@ mod instances {
         assert_eq!(Tag::NONE.kind(), TagKind::Other);
     }
 }
+
+/// A circle of 12 corners with the exact description and a line across it.
+fn cut_circle_with_field() -> SurfaceModel {
+    use kadakas_core::surface::Analytic;
+    let mut m = SurfaceModel::new();
+    let pts: Vec<[f64; 3]> = (0..12)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+            [800.0 * a.cos(), 800.0 * a.sin(), 100.0]
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: pts,
+        closed: true,
+        faceted: false,
+        analytic: Some(Analytic::circle(
+            DVec3::new(0.0, 0.0, 100.0),
+            DVec3::Z,
+            DVec3::X,
+            800.0,
+        )),
+    })
+    .unwrap();
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[-900.0, 130.0, 100.0], [900.0, 130.0, 100.0]]],
+    })
+    .unwrap();
+    m
+}
+
+#[test]
+fn the_exact_center_of_a_circle_is_offered_also_when_a_cut_chain_is_no_regular_polygon() {
+    let m = cut_circle_with_field();
+    let s = scene(|b| {
+        b.add_surface_model(&m, 3);
+    });
+    let c = cam();
+    let mut i = Inferencer::default();
+    let ctr = DVec3::new(0.0, 0.0, 100.0);
+    let r = ask(&mut i, &s, &c, px(&c, ctr), None);
+    assert_eq!(r.kind, Kind::Center);
+    assert!(r.point.distance(ctr) < 1e-6);
+    assert_eq!(r.label, "Center");
+    // The chain was cut by the line: it has chord vertices, so the corners alone give no circle.
+    let curve = m.curves().next().unwrap().0;
+    assert!(m.curve_segments(curve).unwrap() > 12);
+}
+
+#[test]
+fn the_exact_center_of_an_arc_without_a_face_is_offered() {
+    use kadakas_core::surface::Analytic;
+    let mut m = SurfaceModel::new();
+    let pts: Vec<[f64; 3]> = (0..=5)
+        .map(|i| {
+            let a = 0.2 + 1.4 * f64::from(i) / 5.0;
+            [500.0 * a.cos(), 500.0 * a.sin(), 0.0]
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: pts,
+        closed: false,
+        faceted: false,
+        analytic: Some(Analytic::arc(
+            DVec3::ZERO,
+            DVec3::Z,
+            DVec3::X,
+            500.0,
+            0.2,
+            1.6,
+        )),
+    })
+    .unwrap();
+    let s = scene(|b| {
+        b.add_surface_model(&m, 1);
+    });
+    let c = cam();
+    let mut i = Inferencer::default();
+    let r = ask(&mut i, &s, &c, px(&c, DVec3::ZERO), None);
+    assert_eq!(r.kind, Kind::Center);
+    assert_eq!(r.source.kind(), TagKind::Curve);
+}

@@ -12,6 +12,7 @@
 mod about;
 mod app;
 mod canvas;
+mod curve_panel;
 mod edit3d;
 mod files;
 mod icons;

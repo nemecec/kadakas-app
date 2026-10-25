@@ -223,6 +223,38 @@ pub struct MeshAddCurveParams {
     /// true: a polygon, the edges between its sides stay creases, default false
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub faceted: Option<bool>,
+    /// the exact circle of the curve (MOD-15): {kind (circle | arc | polygon), center, normal,
+    /// axis (the direction of the angle 0), radius, start?, end? (radians, arcs only)} in local
+    /// mm. It is kept when all points lie on it, else dropped with a note
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analytic: Option<kadakas_core::surface::Analytic>,
+}
+
+// Parameters of `mesh.curve_info`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeshCurveInfoParams {
+    pub id: ObjectRef,
+    /// one curve ID; without it all curves of the model, a page
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<u32>,
+    /// how many to skip, default 0
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    /// at most this many, default 100, at most 1000
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+// Parameters of `mesh.set_segments`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeshSetSegmentsParams {
+    pub id: ObjectRef,
+    /// the curve to rebuild; it needs an exact circle (see mesh.curve_info)
+    pub curve: u32,
+    /// the new number of edges, 3 to 1000
+    pub segments: u32,
 }
 
 // Parameters of `mesh.erase`.
@@ -505,9 +537,9 @@ pub struct MeshBatchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectRef>,
     /// 1 to 50 edits, run in this order. Each is {method, ...params of mesh.<method>} where method
-    /// is one of add_edges, add_curve, erase, reverse_faces, push_pull, follow_me, offset,
-    /// intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group,
-    /// make_component, explode. All succeed or none does
+    /// is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me,
+    /// offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid,
+    /// make_group, make_component, explode. All succeed or none does
     pub edits: Vec<Obj>,
 }
 
@@ -580,6 +612,8 @@ entries! {
     "mesh.create" => MeshCreateParams,
     "mesh.add_edges" => MeshAddEdgesParams,
     "mesh.add_curve" => MeshAddCurveParams,
+    "mesh.curve_info" => MeshCurveInfoParams,
+    "mesh.set_segments" => MeshSetSegmentsParams,
     "mesh.erase" => MeshEraseParams,
     "mesh.reverse_faces" => MeshReverseFacesParams,
     "mesh.push_pull" => MeshPushPullParams,

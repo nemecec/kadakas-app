@@ -2,7 +2,7 @@
 //! with ids (for agents and logs); the window shows the same reason in the language of the UI,
 //! without internal ids. A text that is not known here is shown as it is.
 
-use kadakas_core::surface::{Operand, SolidError, SurfaceError};
+use kadakas_core::surface::{CurveError, Operand, SolidError, SurfaceError};
 use kadakas_l10n::tr;
 
 /// The number in "at most about 12.5 mm" of a core message.
@@ -15,7 +15,30 @@ fn at_most(text: &str) -> Option<String> {
 /// The text of a refusal or a note of an edit, for the person.
 pub fn localize(text: &str) -> String {
     let has = |s: &str| text.contains(s);
-    if has("is not fully inside it") {
+    if has("lost its circle description") {
+        tr!("uic-curve-note-dropped")
+    } else if has("its start and end angle are updated") {
+        tr!("uic-curve-note-angles")
+    } else if has(" is now an arc") || has(" is now a circle") {
+        tr!(
+            "uic-curve-note-kind",
+            kind = if has("arc") { "arc" } else { "circle" }
+        )
+    } else if has("no curve was made") {
+        tr!("uic-curve-note-not-made")
+    } else if has("has no circle description") {
+        tr!("uic-curve-refused-no-description")
+    } else if has("the number of segments must be from") {
+        tr!("uic-curve-refused-range")
+    } else if has("has other edges, so the chain cannot be rebuilt") {
+        tr!("uic-curve-refused-shared")
+    } else if has("is not in the plane of the circle") {
+        tr!("uic-curve-refused-plane")
+    } else if has("in a way that cannot be rebuilt") {
+        tr!("uic-curve-refused-loop")
+    } else if has("the new chain would make the model invalid") {
+        tr!("uic-curve-refused-invalid")
+    } else if has("is not fully inside it") {
         tr!("uic-modeling-hole-partial")
     } else if has("lies back to back under the") {
         tr!("uic-modeling-hole-stacked")
@@ -52,8 +75,22 @@ pub fn localize(text: &str) -> String {
 pub fn localize_error(e: &SurfaceError) -> String {
     match e {
         SurfaceError::Solid(s) => solid_text(s),
+        SurfaceError::Curve(c) => curve_text(c),
         SurfaceError::Limit { .. } => tr!("uic-solid-refused-limit"),
         other => localize(&other.to_string()),
+    }
+}
+
+/// The refusal of a curve edit (MOD-15), without ids.
+fn curve_text(e: &CurveError) -> String {
+    match e {
+        CurveError::NoCurve(_) => tr!("uic-curve-refused-no-curve"),
+        CurveError::NoDescription(_) => tr!("uic-curve-refused-no-description"),
+        CurveError::Segments { .. } => tr!("uic-curve-refused-range"),
+        CurveError::VertexShared { .. } => tr!("uic-curve-refused-shared"),
+        CurveError::BordersOtherPlane { .. } => tr!("uic-curve-refused-plane"),
+        CurveError::LoopUnclear { .. } => tr!("uic-curve-refused-loop"),
+        CurveError::Invalid { .. } => tr!("uic-curve-refused-invalid"),
     }
 }
 

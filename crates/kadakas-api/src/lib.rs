@@ -692,6 +692,8 @@ pub const METHODS: &[(&str, &str)] = &[
     mesh_api::MESH_CREATE,
     mesh_api::MESH_ADD_EDGES,
     mesh_api::MESH_ADD_CURVE,
+    mesh_api::MESH_CURVE_INFO,
+    mesh_api::MESH_SET_SEGMENTS,
     mesh_api::MESH_ERASE,
     mesh_api::MESH_REVERSE_FACES,
     mesh_api::MESH_PUSH_PULL,

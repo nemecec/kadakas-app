@@ -14,8 +14,8 @@ use kadakas_core::command::{Command, CommandError};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::resource::ResourceId;
 use kadakas_core::surface::{
-    EdgeId, Edit, FaceId, IntersectScope, PaintSide, SolidError, SolidOp, SurfaceError,
-    SurfaceModel, VertexId, soften_plan,
+    CurveError, CurveId, EdgeId, Edit, FaceId, IntersectScope, PaintSide, SolidError, SolidOp,
+    SurfaceError, SurfaceModel, VertexId, soften_plan,
 };
 
 use super::{create_command, model_of, object_id, typed};
@@ -39,9 +39,10 @@ pub const BATCH_EDGES_MAX: usize = 10_000;
 const LIST_MAX: usize = 1000;
 
 /// The edits that `mesh.batch` takes.
-const BATCH_OPS: [&str; 18] = [
+const BATCH_OPS: [&str; 19] = [
     "add_edges",
     "add_curve",
+    "set_segments",
     "erase",
     "reverse_faces",
     "push_pull",
@@ -321,7 +322,17 @@ fn plan(s: &Session, op: &str, p: Value) -> Result<Planned, RpcError> {
                     points: q.points,
                     closed: q.closed.unwrap_or(false),
                     faceted: q.faceted.unwrap_or(false),
-                    analytic: None,
+                    analytic: q.analytic,
+                },
+            ));
+        }
+        "set_segments" => {
+            let (q, id) = with_model!(q: MeshSetSegmentsParams);
+            out.steps.push(surface(
+                id,
+                Edit::SetCurveSegments {
+                    curve: CurveId(q.curve),
+                    segments: q.segments,
                 },
             ));
         }
@@ -876,6 +887,24 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
         ),
         SurfaceError::Unsolved(_) => (Validation, "faces_unsolved", json!({})),
         SurfaceError::Refused(_) => (Validation, "edit_refused", json!({})),
+        SurfaceError::Curve(c) => {
+            let facts = match c {
+                CurveError::NoCurve(x) | CurveError::NoDescription(x) => json!({"curve": x}),
+                CurveError::Segments { segments, min, max } => {
+                    json!({"segments": segments, "min": min, "max": max})
+                }
+                CurveError::VertexShared { vertex } => json!({"vertex": vertex}),
+                CurveError::BordersOtherPlane { face } | CurveError::LoopUnclear { face } => {
+                    json!({"face": face})
+                }
+                CurveError::Invalid { reason } => json!({"reason": reason}),
+            };
+            let kind = match c {
+                CurveError::NoCurve(_) => NotFound,
+                _ => Validation,
+            };
+            (kind, c.code(), facts)
+        }
         SurfaceError::Solid(s) => {
             let (id, facts) = match s {
                 SolidError::Empty(w) => ("solid_empty", json!({"operand": w})),
