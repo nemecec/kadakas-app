@@ -11,6 +11,7 @@ kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
 kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-step = { version = "0.1.0", path = "../kadakas-step" }
+kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
 kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 i_overlay = "9.0.1"

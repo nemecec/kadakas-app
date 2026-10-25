@@ -9,6 +9,8 @@ use std::rc::Rc;
 use glam::{DAffine2, DAffine3, DVec2, DVec3};
 use kadakas_core::curve::{self, Vertex, VertexKind};
 
+mod solids;
+
 use super::csg;
 use super::ctx::{Ctx, attr, enum_of, flag, int, items, num, numbers};
 use crate::step::Value;
@@ -18,10 +20,22 @@ use crate::step::Value;
 pub struct MeshData {
     pub v: Vec<DVec3>,
     pub t: Vec<[u32; 3]>,
+    /// The exact surfaces of the solid (an `IfcAdvancedBrep`), in the units and the frame of the
+    /// vertices. It follows a move, a turn and a uniform scale; any other change of the mesh (a cut,
+    /// a join with another body) drops it.
+    pub exact: Option<Box<kadakas_core::exact::ExactSolid>>,
 }
 
 impl MeshData {
     pub fn append(&mut self, o: &MeshData) {
+        self.exact = match (self.v.is_empty(), self.exact.take(), &o.exact) {
+            (true, _, e) => e.clone(),
+            (false, Some(mut a), Some(b)) => {
+                a.merge(b);
+                Some(a)
+            }
+            _ => None,
+        };
         let base = self.v.len() as u32;
         self.v.extend_from_slice(&o.v);
         self.t
@@ -31,6 +45,9 @@ impl MeshData {
     pub fn transform(&mut self, xf: &DAffine3) {
         for p in &mut self.v {
             *p = xf.transform_point3(*p);
+        }
+        if let Some(e) = self.exact.take() {
+            self.exact = e.transformed(xf).ok().map(Box::new);
         }
         if xf.matrix3.determinant() < 0.0 {
             self.flip();
@@ -131,7 +148,7 @@ impl MeshData {
             [3, 0, 4],
             [3, 4, 7],
         ];
-        MeshData { v, t }
+        MeshData { v, t, exact: None }
     }
 }
 
@@ -415,6 +432,20 @@ impl<'a> Eval<'a> {
                 self.triangulated(&e, xf)
             }
             "IFCPOLYGONALFACESET" => self.polygonal(&e, xf),
+            _ if matches!(
+                e.name.as_str(),
+                "IFCFACETEDBREP"
+                    | "IFCFACETEDBREPWITHVOIDS"
+                    | "IFCSHELLBASEDSURFACEMODEL"
+                    | "IFCFACEBASEDSURFACEMODEL"
+                    | "IFCCLOSEDSHELL"
+                    | "IFCOPENSHELL"
+                    | "IFCCONNECTEDFACESET"
+            ) && self.has_curved_faces(&e) =>
+            {
+                // Faces on curved surfaces, or with edge loops: the STEP reader cuts them.
+                self.advanced_brep(&e, xf)
+            }
             "IFCFACETEDBREP" => self.shell(attr(&e, 0), xf),
             "IFCFACETEDBREPWITHVOIDS" => self.shell(attr(&e, 0), xf),
             "IFCSHELLBASEDSURFACEMODEL" | "IFCFACEBASEDSURFACEMODEL" => {
@@ -435,6 +466,15 @@ impl<'a> Eval<'a> {
             }
             "IFCMAPPEDITEM" => self.mapped(&e, xf, depth),
             "IFCBOOLEANRESULT" | "IFCBOOLEANCLIPPINGRESULT" => self.boolean(&e, xf, depth),
+            "IFCREVOLVEDAREASOLID" => self.revolved(&e, xf),
+            "IFCSWEPTDISKSOLID" | "IFCSWEPTDISKSOLIDPOLYGONAL" => self.swept_disk(&e, xf),
+            "IFCCSGSOLID" => self.csg_solid(&e, xf, depth),
+            "IFCBLOCK"
+            | "IFCSPHERE"
+            | "IFCRIGHTCIRCULARCYLINDER"
+            | "IFCRIGHTCIRCULARCONE"
+            | "IFCRECTANGULARPYRAMID" => self.primitive(&e, xf),
+            "IFCADVANCEDBREP" | "IFCADVANCEDBREPWITHVOIDS" => self.advanced_brep(&e, xf),
             "IFCBOUNDINGBOX" => self.bounding_box(&e, xf),
             "IFCGEOMETRICSET" | "IFCGEOMETRICCURVESET" => {
                 for v in items(attr(&e, 0)) {
@@ -887,7 +927,17 @@ impl<'a> Eval<'a> {
                     (-hw, -hd + tf),
                 ]
                 .iter()
-                .map(|(x, y)| corner(DVec2::new(*x, *y)))
+                .enumerate()
+                .map(|(i, (x, y))| {
+                    // The four inner corners, between the web and the flanges, have the fillet.
+                    let r = num(attr(&e, 7)).unwrap_or(0.0).min(hw - ht).min(hd - tf);
+                    let kind = if r > 0.0 && matches!(i, 3 | 4 | 9 | 10) {
+                        VertexKind::Arc { radius: r }
+                    } else {
+                        VertexKind::Corner
+                    };
+                    Vertex::new(DVec2::new(*x, *y), kind)
+                })
                 .collect();
                 vec![Region {
                     outer: place(&a, pts),
@@ -1217,6 +1267,7 @@ impl<'a> Eval<'a> {
         let mut m = MeshData {
             v: coords.iter().map(|p| xf.transform_point3(*p)).collect(),
             t: Vec::new(),
+            exact: None,
         };
         for t in items(attr(e, 3)) {
             let l = items(t);
@@ -1916,6 +1967,23 @@ mod tests {
     }
 
     #[test]
+    fn the_fillets_of_an_i_shape_add_their_area() {
+        // IPE 600: 220 wide, 600 deep, web 12, flange 19, fillet 24 (the file is in millimeters here).
+        let data = format!(
+            "{BASE}#4=IFCISHAPEPROFILEDEF(.AREA.,$,$,220.,600.,12.,19.,24.,$,$);\n#5=IFCEXTRUDEDAREASOLID(#4,#2,#3,1000.);"
+        );
+        let (p, issues) = run(&data, 5);
+        assert!(issues.is_empty(), "{issues:?}");
+        let area = 2.0 * 220.0 * 19.0 + (600.0 - 38.0) * 12.0 + (4.0 - PI) * 24.0 * 24.0;
+        let v = volume(&piece_mesh(&p[0]).unwrap());
+        assert!(
+            (v / 1000.0 - area).abs() < area * 0.003,
+            "{} {area}",
+            v / 1000.0
+        );
+    }
+
+    #[test]
     fn unsupported_operands_and_items_are_reported() {
         let data = format!(
             "{BASE}#4=IFCRECTANGLEPROFILEDEF(.AREA.,$,$,2.,2.);\n#5=IFCEXTRUDEDAREASOLID(#4,#2,#3,4.);\n#6=IFCPOLYGONALBOUNDEDHALFSPACE($,$,$,$);\n#7=IFCBOOLEANRESULT(.DIFFERENCE.,#5,#6);\n#8=IFCBOOLEANRESULT(.INTERSECTION.,#5,#4);\n#9=IFCADVANCEDBREP($);\n#10=IFCISHAPEPROFILEDEF(.AREA.,$,$,2.,4.,0.5,0.5,0.);\n#11=IFCEXTRUDEDAREASOLID(#10,#2,#3,4.);\n#12=IFCCSHAPEPROFILEDEF(.AREA.,$,$,2.);\n#13=IFCEXTRUDEDAREASOLID(#12,#2,#3,4.);"
@@ -1926,7 +1994,10 @@ mod tests {
         let (_, issues) = run(&data, 8);
         assert!(issues[0].contains("IFCRECTANGLEPROFILEDEF"), "{issues:?}");
         let (_, issues) = run(&data, 9);
-        assert_eq!(issues, vec!["unsupported geometry IFCADVANCEDBREP"]);
+        assert!(
+            issues[0].starts_with("unsupported geometry IFCADVANCEDBREP"),
+            "{issues:?}"
+        );
         let (p, _) = run(&data, 11);
         assert!(
             (volume(&piece_mesh(&p[0]).unwrap()) - (2.0 * 0.5 * 2.0 + 3.0 * 0.5) * 4.0 / 1.0 * 1.0)
