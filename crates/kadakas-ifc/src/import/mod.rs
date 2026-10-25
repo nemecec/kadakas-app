@@ -184,9 +184,10 @@ pub enum IfcImportError {
     Io(String),
     #[error("{0}")]
     Format(String),
-    /// A bug met a file nobody foresaw: the import was stopped and nothing was changed.
-    #[error("the import failed on a damaged file (internal error)")]
-    Internal,
+    /// A bug met a file nobody foresaw: the import was stopped and nothing was changed. The text
+    /// is the message and the place of the panic, for the bug report.
+    #[error("the import failed on a damaged file (internal error: {0})")]
+    Internal(String),
 }
 
 impl From<StepError> for IfcImportError {
@@ -205,8 +206,14 @@ impl From<StepError> for IfcImportError {
 /// Runs an import and turns a panic into [`IfcImportError::Internal`]: a crafted file must never
 /// end the program.
 fn guarded<T>(f: impl FnOnce() -> Result<T, IfcImportError>) -> Result<T, IfcImportError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-        .unwrap_or(Err(IfcImportError::Internal))
+    // The panic is handled on purpose: it writes no crash file (see `kadakas_crash::ring::catch`).
+    kadakas_crash::ring::catch(f).unwrap_or_else(|detail| Err(IfcImportError::Internal(detail)))
+}
+
+/// Runs `f` and returns its result, or the error of a panic. For tests of the guard.
+#[doc(hidden)]
+pub fn run_guarded<T>(f: impl FnOnce() -> T) -> Result<T, IfcImportError> {
+    guarded(|| Ok(f()))
 }
 
 /// Reads an IFC file (STEP or ifcZIP, found by the first bytes, not by the name) and plans the
@@ -333,6 +340,8 @@ fn import_index(
             z_dropped: 0,
             fuel: csg::Fuel::new(opts.boolean_work),
             brep_cache: Default::default(),
+            internal_count: 0,
+            internal_errors: Vec::new(),
             open_cuts: HashSet::new(),
             opening_failures: BTreeMap::new(),
             cut: HashSet::new(),
@@ -461,6 +470,9 @@ struct Importer<'a> {
     fuel: csg::Fuel,
     /// Advanced breps that were read already.
     brep_cache: geom::BrepCache,
+    /// Products that were skipped after a panic: how many, and the first messages.
+    internal_count: usize,
+    internal_errors: Vec<String>,
     /// Hosts whose mesh after the cut is not closed (data `ifc.mesh_closed` is false).
     open_cuts: HashSet<u64>,
     /// Hosts whose openings could not all be cut, by reason and whether the cut was partial.
@@ -603,7 +615,14 @@ impl<'a> Importer<'a> {
             // Every product with a representation is read; it either gives objects or has a line
             // in `skipped`, so the accounting is exact (`entities_read` = imported + skipped).
             let (objects, skipped) = (self.b.report.total(), self.b.report.skipped_total());
-            self.product(&e, &rep);
+            // A panic in the geometry of one product skips that product, not the file.
+            if let Err(detail) = kadakas_crash::ring::catch(|| self.product(&e, &rep)) {
+                self.b.report.skip(&class, "internal error in this product");
+                if self.internal_errors.len() < 3 {
+                    self.internal_errors.push(detail);
+                }
+                self.internal_count += 1;
+            }
             self.b.report.entities_read += 1;
             if self.b.report.total() > objects {
                 self.b.report.entities_imported += 1;
@@ -627,6 +646,13 @@ impl<'a> Importer<'a> {
             ));
         }
         self.finish_opening_notes();
+        if self.internal_count > 0 {
+            self.b.report.note(&format!(
+                "{} products were skipped after an internal error (a bug; first: {})",
+                self.internal_count,
+                self.internal_errors.join("; ")
+            ));
+        }
         if !self.open_cuts.is_empty() {
             self.b.report.note(&format!(
                 "{} meshes are not closed after the cut of their openings (the volume is right, but a solid tool may refuse them): their data ifc.mesh_closed is false",

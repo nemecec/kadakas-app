@@ -200,12 +200,16 @@ fn a_big_file_imports_in_time_and_a_file_over_the_cap_is_refused_with_the_option
 }
 
 #[test]
-fn a_panic_inside_an_import_becomes_a_refusal() {
+fn a_panic_inside_an_import_becomes_a_refusal_with_its_place() {
     let r: Result<(), IfcImportError> = super::guarded(|| panic!("a bug"));
-    assert_eq!(r, Err(IfcImportError::Internal));
+    let Err(IfcImportError::Internal(detail)) = r else {
+        panic!("{r:?}")
+    };
+    assert!(detail.starts_with("a bug at "), "{detail}");
+    assert!(detail.contains("tests_real.rs"), "{detail}");
     assert_eq!(
-        IfcImportError::Internal.to_string(),
-        "the import failed on a damaged file (internal error)"
+        IfcImportError::Internal("x".into()).to_string(),
+        "the import failed on a damaged file (internal error: x)"
     );
 }
 
