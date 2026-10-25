@@ -460,3 +460,67 @@ fn a_file_that_the_samples_did_not_show_is_found_by_a_second_pass() {
         r.report
     );
 }
+
+#[test]
+fn profiles_with_huge_numbers_are_refused_not_a_panic() {
+    // 1E308 in a circle of a void, in a hollow circle and in a hollow rectangle: one product is
+    // skipped with a reason, and the other product of the file is imported.
+    for bad in [
+        "IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,$,1.E308,200.)",
+        "IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,$,5000.,1.E308)",
+        "IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,1.E308,2000.,200.)",
+        "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,1.E308,1.E308)",
+        "IFCCIRCLEPROFILEDEF(.AREA.,$,$,1.E308)",
+    ] {
+        let data = format!(
+            "{}{}{}{}",
+            extr(20, bad, 3000.0),
+            slab(30, "#21"),
+            extr(40, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0),
+            slab(50, "#41")
+        );
+        let (ed, r) = run(&data, &IfcImportOptions::default());
+        assert_eq!(objs(&ed).len(), 1, "{bad}: {r:?}");
+        // Skipped with a line: out of range, or no body (a wall thicker than the radius).
+        assert!(!r.skipped.is_empty(), "{bad}: {r:?}");
+    }
+    // A void whose circle is huge, in an arbitrary profile with voids.
+    let data = format!(
+        "#100=IFCCARTESIANPOINT((0.,0.));#101=IFCCARTESIANPOINT((1000.,0.));#102=IFCCARTESIANPOINT((1000.,1000.));#103=IFCCARTESIANPOINT((0.,1000.));\n\
+#104=IFCPOLYLINE((#100,#101,#102,#103,#100));\n#105=IFCAXIS2PLACEMENT2D(#100,$);\n#106=IFCCIRCLE(#105,1.E308);\n\
+#110=IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,$,#104,(#106));\n#111=IFCEXTRUDEDAREASOLID(#110,#5,#4,100.);\n{}",
+        slab(120, "#111")
+    );
+    let (_, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(r.entities_read, 1);
+}
+
+#[test]
+fn a_panic_in_one_product_skips_that_product_only() {
+    super::PANIC_AT.with(|c| c.set(1));
+    let data = format!(
+        "{}{}{}{}",
+        body(),
+        slab(30, "#21"),
+        extr(40, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0),
+        slab(50, "#41")
+    );
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 1, "{r:?}");
+    assert_eq!(r.entities_read, 2);
+    assert_eq!((r.entities_imported, r.entities_skipped), (1, 1));
+    assert!(
+        r.skipped
+            .iter()
+            .any(|s| s.reason == "internal error in this product"),
+        "{r:?}"
+    );
+    assert!(
+        r.notes.iter().any(
+            |n| n.starts_with("1 products were skipped after an internal error")
+                && n.contains("a bug in the geometry of a product at ")
+        ),
+        "{:?}",
+        r.notes
+    );
+}

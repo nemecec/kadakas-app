@@ -406,6 +406,12 @@ fn import_index(
     Ok(imp.b.finish())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test sets it to N to make the Nth product panic (see `run`).
+    static PANIC_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Hosts with openings that were not all cut, for one reason.
 #[derive(Default)]
 struct OpeningTally {
@@ -878,6 +884,17 @@ impl<'a> Importer<'a> {
     // ------------------------------------------------------------ products
 
     fn product(&mut self, e: &Entity, rep: &Entity) {
+        #[cfg(test)]
+        PANIC_AT.with(|c| {
+            let n = c.get();
+            if n == 1 {
+                c.set(0);
+                panic!("a bug in the geometry of a product");
+            }
+            if n > 1 {
+                c.set(n - 1);
+            }
+        });
         let class = model::class_name(&e.name);
         match e.name.as_str() {
             "IFCOPENINGELEMENT" | "IFCOPENINGSTANDARDCASE" => {

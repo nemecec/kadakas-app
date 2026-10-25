@@ -425,6 +425,8 @@ pub struct Eval<'a> {
     cache: HashMap<u64, Option<Rc<Vec<Piece>>>>,
 }
 
+/// The largest coordinate or size of a profile, in millimeters (10 km).
+const MAX_PROFILE_MM: f64 = 1.0e7;
 const MAX_DEPTH: usize = 16;
 /// Most items that one evaluation visits (and pieces it copies from mapped sources).
 const MAX_VISITS: usize = 100_000;
@@ -871,6 +873,30 @@ impl<'a> Eval<'a> {
 
     /// The regions of a profile definition.
     pub fn profile(&mut self, id: u64) -> Option<Vec<Region>> {
+        let regions = self.profile_inner(id)?;
+        // Every number is checked before an overlay or a mesh sees it: a profile of 1E308 would
+        // overflow the integer grid of the overlay.
+        let limit = MAX_PROFILE_MM / self.cx.units.length_mm.max(1e-9);
+        let fine = |v: &Vertex| {
+            v.p.is_finite()
+                && v.p.abs().max_element() <= limit
+                && match v.kind {
+                    VertexKind::Arc { radius } => radius.is_finite() && radius.abs() <= limit,
+                    _ => true,
+                }
+        };
+        if regions
+            .iter()
+            .all(|r| r.outer.iter().chain(r.holes.iter().flatten()).all(fine))
+        {
+            Some(regions)
+        } else {
+            self.issue("a profile is out of range (more than 1e7 mm) or not a number");
+            None
+        }
+    }
+
+    fn profile_inner(&mut self, id: u64) -> Option<Vec<Region>> {
         let e = self.cx.ent(id)?;
         let corner = |p: DVec2| Vertex::corner(p);
         let place = |a: &DAffine2, v: Vec<Vertex>| -> Vec<Vertex> {

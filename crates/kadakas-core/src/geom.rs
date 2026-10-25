@@ -113,11 +113,25 @@ pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
     ring
 }
 
+/// The largest coordinate that [`split_with_holes`] accepts. The overlay of `i_overlay` puts the
+/// shape on an integer grid, and a number beyond this bound (or one that is not finite) would
+/// overflow it.
+pub const MAX_OVERLAY_COORD: f64 = 1.0e12;
+
 /// Splits a ring with holes into simple polygons without holes. It cuts the area into horizontal
 /// strips at the height of every hole vertex. Inside a strip, a hole crosses the whole strip, so the
 /// pieces have no holes. `outer` is counterclockwise. At most 400 cuts are used. With more, a piece
 /// may still have a hole, and the hole is filled.
 pub fn split_with_holes(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DVec2>> {
+    // The overlay works on an integer grid: a number that is not finite or is beyond the bound
+    // would overflow it. Such an outline has no pieces.
+    if outer
+        .iter()
+        .chain(holes.iter().flatten())
+        .any(|p| !p.is_finite() || p.abs().max_element() > MAX_OVERLAY_COORD)
+    {
+        return Vec::new();
+    }
     if holes.is_empty() {
         return vec![outer.to_vec()];
     }
@@ -173,6 +187,32 @@ pub fn split_with_holes(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DVec2>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rings_beyond_the_bound_or_not_finite_have_no_pieces() {
+        let sq = |s: f64| {
+            vec![
+                DVec2::new(-s, -s),
+                DVec2::new(s, -s),
+                DVec2::new(s, s),
+                DVec2::new(-s, s),
+            ]
+        };
+        let hole = vec![
+            DVec2::new(-1.0, -1.0),
+            DVec2::new(-1.0, 1.0),
+            DVec2::new(1.0, 1.0),
+            DVec2::new(1.0, -1.0),
+        ];
+        assert_eq!(
+            split_with_holes(&sq(10.0), std::slice::from_ref(&hole)).len() > 0,
+            true
+        );
+        for big in [1.0e308, 1.0e13, f64::INFINITY, f64::NAN] {
+            assert!(split_with_holes(&sq(big), std::slice::from_ref(&hole)).is_empty());
+            assert!(split_with_holes(&sq(10.0), &[sq(big)]).is_empty());
+        }
+    }
 
     #[test]
     fn square_area() {
