@@ -105,13 +105,13 @@ if TYPE_CHECKING:
     ReportAreasParams = TypedDict("ReportAreasParams", {}, total=False)
 
     ImportFileParams = TypedDict("ImportFileParams", {
-        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc', 'obj', 'stl', 'gltf', 'glb', 'step'] | None,
+        'format': Literal['dxf', 'dwg', 'shp', 'geojson', 'ifc', 'ifczip', 'obj', 'stl', 'gltf', 'glb', 'step'] | None,
         'options': dict[str, Any] | None,
         'path': Required[str],
     }, total=False)
 
     ExportFileParams = TypedDict("ExportFileParams", {
-        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'gltf', 'glb', 'obj', 'stl', 'pdf', 'sheet_svg', 'sheet_png'] | None,
+        'format': Literal['dxf', 'geojson', 'dwg', 'ifc', 'ifczip', 'gltf', 'glb', 'obj', 'stl', 'pdf', 'sheet_svg', 'sheet_png'] | None,
         'options': dict[str, Any] | None,
         'overwrite': bool | None,
         'path': Required[str],

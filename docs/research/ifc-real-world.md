@@ -271,3 +271,24 @@ Top 5 gaps:
 3. No real-world corpus test. All fixtures are hand-written.
 4. IfcOpeningElement voids are not cut.
 5. IfcAdvancedBrep with B-splines and several swept solid kinds (revolved, swept disk, CSG) become boxes or are skipped.
+
+## 14. Status after IOP-29
+
+Corrections found when the corpus ran. The scene `Infra-Landscaping.ifc` (IFC4) has 8 IfcSite (1 COMPLEX, 7 PARTIAL), 76 IfcGeographicElement (14 terrain, 62 vegetation) and 101 products with a shape; the numbers 11 and 9 of section 12 are the numbers of types and materials. `\X\hh` was already decoded; `\S\` and `\P\` were not. Plants of the scene: 8 trees have a size, the other 54 vegetation parts (fruit, ground cover) stay meshes.
+
+| Gap | Status |
+|---|---|
+| 1 escapes | done: `\S\`, `\P<A-I>\`, code page of `\X\`, partial units dropped |
+| 2 ifcZIP, XML, JSON | ifcZIP done (read, write, caps); XML and JSON refused by name, backlog in `docs/interop.md` |
+| 3 corpus | done (`ifc_corpus.rs`, 16 tests, pinned commits, hashes) |
+| 4 nested sites | done: a layer per site when the file has several; assemblies follow their site |
+| 5 openings | done: boolean cut, Reference not subtracted, failures kept as objects |
+| 6 advanced breps | done through the STEP reader; cone, torus and seam-less cylinders of the Bentley samples are not cut by that reader (named in the report) |
+| 7 revolved, swept disk, CSG | done, volumes against analytic values and IfcOpenShell |
+| 8 TIN flags and holes | done (holes stay open, mesh); breaklines counted only; RC1 files without `PnIndex` read right |
+| 9 map conversion edge cases | scale 0.001 tested; far projected coordinates done; factors of `IfcMapConversionScaled` noted, not applied; ePSet spellings tested; double site offset and feet CRS untested (no public file) |
+| 10 large files | 24 MB synthetic file tested, cap message names `max_file_mb`; 200 MB and 2 GB not run |
+| 11 grid and linear placement | grid placement done; linear placement counted in a note |
+| 12 lower case, space after `=`, duplicates | done |
+| 13 Allplan site face set | done: option `site_surface` |
+
