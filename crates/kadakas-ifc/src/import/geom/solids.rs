@@ -12,6 +12,9 @@ use super::{Eval, MeshData, Piece, Region, clean};
 use crate::import::ctx::{attr, num};
 use crate::step::Entity;
 
+/// The least tolerance of a curved solid, as a share of its radius (0.02%).
+pub const RELATIVE_TOLERANCE: f64 = 2.0e-4;
+
 /// The most triangles of one solid that the import makes (a sphere of 256 sides has 65,000).
 pub const MAX_SOLID_TRIANGLES: usize = 400_000;
 
@@ -24,6 +27,9 @@ fn sides_for(r: f64, angle: f64, tol: f64) -> usize {
     if !(r > 0.0 && tol > 0.0 && angle > 0.0) {
         return MIN_SIDES;
     }
+    // The tolerance is the given one or 0.02% of the radius, whichever is larger: a solid of 300 m
+    // does not need chords of 2 mm.
+    let tol = tol.max(r * RELATIVE_TOLERANCE);
     let step = 2.0 * (1.0 - (tol / r).min(1.0)).acos();
     let n = if step > 1e-9 {
         (angle / step).ceil()

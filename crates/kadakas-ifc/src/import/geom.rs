@@ -427,6 +427,9 @@ pub struct Eval<'a> {
 
 /// The largest coordinate or size of a profile, in millimeters (10 km).
 const MAX_PROFILE_MM: f64 = 1.0e7;
+/// The most triangles of the two operands of an `IfcBooleanResult` (the work of the tree grows
+/// faster than the number of triangles).
+const MAX_BOOLEAN_TRIANGLES: usize = 20_000;
 const MAX_DEPTH: usize = 16;
 /// Most items that one evaluation visits (and pieces it copies from mapped sources).
 const MAX_VISITS: usize = 100_000;
@@ -738,11 +741,11 @@ impl<'a> Eval<'a> {
     /// and an issue says why.
     fn combine(&mut self, op: csg::Op, a: MeshData, b: MeshData, fallback: Vec<Piece>) {
         // Counted before the work: the operands must fit in the memory of the boolean.
-        if a.t.len() + b.t.len() > csg::MAX_POLYGONS / 2 {
+        if a.t.len() + b.t.len() > MAX_BOOLEAN_TRIANGLES {
             self.issue(format!(
                 "a boolean is not applied: the operands have {} triangles, more than {}: the operands are kept as they are",
                 a.t.len() + b.t.len(),
-                csg::MAX_POLYGONS / 2
+                MAX_BOOLEAN_TRIANGLES
             ));
             self.pieces.extend(fallback);
             return;
