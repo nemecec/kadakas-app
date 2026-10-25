@@ -35,10 +35,10 @@ fn statements(text: &str) -> Vec<(usize, usize)> {
             comment = true;
         } else if c == b'#' && start.is_none() {
             start = Some(i);
-        } else if c == b';' {
-            if let Some(s) = start.take() {
-                out.push((s, i + 1));
-            }
+        } else if c == b';'
+            && let Some(s) = start.take()
+        {
+            out.push((s, i + 1));
         }
         i += 1;
     }
