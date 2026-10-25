@@ -112,7 +112,7 @@ The example generators in `docs/scripts/` (`random-ashlar.js`, `radial-fan.js`) 
 
 ## New Rust crates for review (REV-06)
 
-`zip` 8.6.0 (MIT; features `deflate-flate2` only, so it uses `flate2` and `typed-path`, `crc32fast`, `indexmap` and `memchr`) reads and writes the BCF archives, and `roxmltree` 0.21.1 (MIT OR Apache-2.0, already used by `kadakas-gis`) reads the XML. Both are in `THIRD_PARTY_NOTICES.txt`. The container format of DOC-20 uses the same `zip` crate.
+`zip` 9.0.4 (MIT; features `deflate-flate2` only, so it uses `flate2` and `typed-path`, `crc32fast`, `indexmap` and `memchr`) reads and writes the BCF archives, and `roxmltree` 0.21.1 (MIT OR Apache-2.0, already used by `kadakas-gis`) reads the XML. Both are in `THIRD_PARTY_NOTICES.txt`. The container format of DOC-20 uses the same `zip` crate.
 
 ## Tools that we use but do not ship
 
@@ -130,6 +130,13 @@ These tools build, test or check Kadakas. They are not part of the installers.
 - The tests fetch public sample files at run time from fixed commits of ezdxf (MIT) and GDAL (https://github.com/OSGeo/gdal, MIT style licence, `LICENSE.TXT` of that repository). They go into `tests/data/dxf-public/`, which git ignores. They are not in the repository and not shipped. Nothing of LibreCAD (GPL) is used.
 - `crates/kadakas-io/tests/fixtures/dxf_public_counts.json` is derived from those files with the ezdxf reader (`tests/data/make_public_counts.py`): counts of entities, layouts and viewports, short MTEXT strings, and points on splines. It holds numbers and short strings, no drawing.
 - The files in `tests/data/dxf-own/` are our own work (`tests/data/make_own_files.py`), under the project license.
+
+## IFC test data (IOP-29)
+
+- The tests fetch public IFC files at run time, with `curl`, from fixed commits of two repositories of buildingSMART: Certification-datasets (https://github.com/buildingSMART/Certification-datasets, commit 80d976a9, Copyright buildingSMART International Ltd., licensed under the Creative Commons Attribution 4.0 International License, see its `LICENSE`) and the community Sample-Test-Files (https://github.com/buildingsmart-community/Community-Sample-Test-Files, commit 7ddf57a2, licensed under CC BY 4.0; the authors of the files are named in the folders: for example 12d Solutions for the TIN scenarios and Bentley Systems for the NURBS samples; "(C) original authors"). The files are not changed.
+- The files go into `tests/data/ifc-public/`, which git ignores. They are not in the repository, not shipped and not redistributed. Each file is checked against the SHA-256 in `crates/kadakas-ifc/tests/fixtures/ifc_public_sha256.json` (made by `tests/data/make_ifc_public_hashes.py`). The Simple-Scene files (the "Infra-Landscaping" scenes and the others) were written by a SketchUp exporter, as the header of the file says.
+- No file with an unclear licence is used: the Schependomlaan dataset, the Duplex apartment files and files from issue trackers are not listed.
+- ifcopenshell (LGPL-3.0) generates further test files at test time; it is a tool that we do not ship, and its test files are not copied.
 
 ## Asset list (checked by CI)
 
@@ -190,6 +197,9 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | Own STEP test files and their generator | `tests/data/step/*` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 | CadQuery STEP sample (red cube, blue cylinder) | `ext:cadquery-public-step` | CadQuery contributors | Apache-2.0 | https://github.com/CadQuery/cadquery | test |
 | OpenCascade reference check for STEP tests | `tests/behavior/step_occ_check.py` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| buildingSMART Certification-datasets: Simple-Scene and ISO Reference View IFC files (commit 80d976a9, fetched at run time into tests/data/ifc-public/, not in the repository, not redistributed) | `ext:bsi-certification-datasets` | buildingSMART International Ltd. | CC-BY-4.0 | https://github.com/buildingSMART/Certification-datasets | test |
+| buildingSMART community Sample-Test-Files: ISO Spec archive, IFC 4.3 RC TIN and georeferencing scenarios, Bentley NURBS samples (commit 7ddf57a2, fetched at run time into tests/data/ifc-public/, not in the repository, not redistributed) | `ext:bsi-community-sample-test-files` | the authors named in each folder (12d Solutions, Bentley Systems, buildingSMART International Ltd. and others); (C) original authors | CC-BY-4.0 | https://github.com/buildingsmart-community/Community-Sample-Test-Files | test |
+| Public IFC corpus list and SHA-256 hashes | `crates/kadakas-ifc/tests/fixtures/ifc_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 
 ## Keep this page current
 

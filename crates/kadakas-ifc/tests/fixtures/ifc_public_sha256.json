@@ -1,0 +1,409 @@
+{
+ "repos": {
+  "bsi-cert": {
+   "slug": "buildingSMART/Certification-datasets",
+   "commit": "80d976a9b193a26a8e928c3e79bff67af1de68a8"
+  },
+  "bsi-community": {
+   "slug": "buildingsmart-community/Community-Sample-Test-Files",
+   "commit": "7ddf57a201f88a0c213d5322b02ed15e94a60a40"
+  }
+ },
+ "files": {
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Architecture.ifc": {
+   "sha256": "c4db65ba847f6b369a95d6c54fa11f4750cbe6d59f021934e8923d8d578e5885",
+   "size": 92542,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Hvac.ifc": {
+   "sha256": "f39478ce12ae2029eed8b565551412a3a4b518d10a8b501bc5e9c2a8a6d78bdb",
+   "size": 69893,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Landscaping.ifc": {
+   "sha256": "5ca6782566f4a263fa742154f05ab6a30608835734fd8cbae38472f91ae8dbaf",
+   "size": 521142,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Building-Structural.ifc": {
+   "sha256": "25c09f1ea35dbf51e88b8829c423b9ce13a8264e69c620e932859772937aa25b",
+   "size": 109012,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Bridge.ifc": {
+   "sha256": "50e4aa79c42281b6410ea47da16750c78d24acb3913a90780d582ec3b01e50bd",
+   "size": 807671,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Electrical.ifc": {
+   "sha256": "60b55dfa3513076df211e3232b4dee29fd1f361abc7908f7c87f47d3b5412e98",
+   "size": 72140,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Landscaping.ifc": {
+   "sha256": "4d868f360b99dfdeef3b79057bd5d3cd41071d959d46196b36297f80750396bc",
+   "size": 1180719,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Plumbing.ifc": {
+   "sha256": "1724daf0cf0ca43797f44e2cdcd18d273c432afc6b411012cc9c1d382408d149",
+   "size": 187456,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Rail.ifc": {
+   "sha256": "8dc7c13ba9f5758a764c2322e4e585f29651b10eec69dd0be6701f191ebcf223",
+   "size": 108325,
+   "lfs": false
+  },
+  "bsi-cert:IFC 2.3.0.1 (IFC 2x3 TC1)/Simple-Scene/Infra-Road.ifc": {
+   "sha256": "45efd6b6d2a26daf17a3f83a331c780234faf0b73069f0410155ffa7ead222f4",
+   "size": 175399,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/basin-tessellation.ifc": {
+   "sha256": "7278769ec5ef35d388819d2f197519061c7f0f68dd43a733f333ddeb74578121",
+   "size": 12131,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/column-straight-rectangle-tessellation.ifc": {
+   "sha256": "58bb9b2cae96edf2c368de95f526650f3f282e4e7fc37c0065c501bdbeed00a1",
+   "size": 4594,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/tessellated-item.ifc": {
+   "sha256": "758974f7d558f11b8d8121816954179def32594ed7eafcd1faae70ee0a8e5946",
+   "size": 5199,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/tessellation-with-individual-colors.ifc": {
+   "sha256": "3ab1290207d8538da9d8ebc14826b769eeb79fce7d75aaa85c35ed7a5a8dbd92",
+   "size": 2593,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/ISO Spec - ReferenceView_V1.2/wall-with-opening-and-window.ifc": {
+   "sha256": "73b0e45d931d5dc13bfee5fdc7bd80f796526445458b2de74c4168d209097832",
+   "size": 12492,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Architecture.ifc": {
+   "sha256": "8790a1e193e82b8e7e7f337ec2633cd40f2120590317a1443503a25b079e2e80",
+   "size": 142325,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Hvac.ifc": {
+   "sha256": "2c17ecad2b0fbd3335420ee42ba48963b5a395294e86bcdcfc786ee559f9a344",
+   "size": 111375,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Landscaping.ifc": {
+   "sha256": "937dc9c0e013b0dbbf56dc0fa0dc435efe16a2234cd364af820d2cf1deaa3d7f",
+   "size": 1074044,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Building-Structural.ifc": {
+   "sha256": "903b5a005901397aa2b235daf6a60f46c099eae286cb01c815abf0a341707432",
+   "size": 185185,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Bridge.ifc": {
+   "sha256": "6012bb5e0c33d9923d08fd04e561f0c2d897674a8f3066808494addcadae1276",
+   "size": 1742591,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Electrical.ifc": {
+   "sha256": "18ec714203238bc33ef767306cfcaa8209fcda186a8fe8ad2db7f204bc6b5a49",
+   "size": 120095,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Landscaping.ifc": {
+   "sha256": "aefdccddd57d9c73d7395b0caaface371e548b4dad08cca4f415b3e1c291396b",
+   "size": 2349038,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Plumbing.ifc": {
+   "sha256": "f44c401de3bbc1b08d7717807b5add12a1c319f98b42a6c633a69fbcf61d83d1",
+   "size": 350757,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Rail.ifc": {
+   "sha256": "d284d418d19489a4cfecb4134ee1145d1bc3f3ee9148da3919a4e741e3e63ef0",
+   "size": 162605,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.0.2.1 (IFC 4 ADD2 TC1)/Simple-Scene/Infra-Road.ifc": {
+   "sha256": "ebc5c85f6da454de08dc63675af242b6572682692682dff1a064a71b6bcd73e8",
+   "size": 277133,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Architecture.ifc": {
+   "sha256": "96e7103812b15b65eb1fd7802d36b9962833485dce5ead4f440bbf529530881d",
+   "size": 141965,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Hvac.ifc": {
+   "sha256": "22891586f153793d098811caec8a510cd404f6c2f1979fb329eeeebc3f475642",
+   "size": 111304,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Landscaping.ifc": {
+   "sha256": "93253acebf6c2d9bfeb1300c3c8d2fdf663ea24746e5cddb8392aaf50f9a0ca8",
+   "size": 1073991,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Building-Structural.ifc": {
+   "sha256": "db64895488aad4eab082c8292f5632145b0fc864c0642d4fe667404882bacf27",
+   "size": 185139,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Bridge.ifc": {
+   "sha256": "97e84cb93e07bfbedbc1bdc57aef161f4998e09accd77175dd0561af2ab4ffab",
+   "size": 1739554,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Electrical.ifc": {
+   "sha256": "39eebb4612c303e5db5adbab54cdf31ab5f04e02b1887ee49953257fa903a544",
+   "size": 120043,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Landscaping.ifc": {
+   "sha256": "378f25564c4fc969225370e322e8ec0d16ce52239e68dd5572e4681879e33fca",
+   "size": 2348837,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Plumbing.ifc": {
+   "sha256": "a6ac7a0f4c80c91f04a1a66b73899be064f9c3992b2e886c92f0e3145c0ca50f",
+   "size": 350835,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Rail.ifc": {
+   "sha256": "c9073051e17796b8b59f96cf268207f4011c08eedeaa791774480c33e9defbb3",
+   "size": 161670,
+   "lfs": false
+  },
+  "bsi-cert:IFC 4.3.2.0 (IFC 4.3 ADD2)/Simple-Scene/Infra-Road.ifc": {
+   "sha256": "a3cb29433d7176bd31ff7535a596b5d7cd4eb7f2fb0eb6eee451612063c1f167",
+   "size": 263708,
+   "lfs": false
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/basin-advanced-brep.ifc": {
+   "sha256": "2d64cbb23ba78eb7a9ed8b8e87543593381191c3913015a0e9addd40491fdd37",
+   "size": 9962,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/basin-faceted-brep.ifc": {
+   "sha256": "46682d569775e46c436653ba42cbb322847f8f5298e047ce313c492868dcde91",
+   "size": 31853,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/bath-csg-solid.ifc": {
+   "sha256": "7abe25d98698caf55017714cdb13dff2715f049e7f797c5fa3e1d1875df3bed5",
+   "size": 3521,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/beam-extruded-solid.ifc": {
+   "sha256": "bb64226a58cde416d91c3471b4f1a62ba41c22d756d1e69297a63b9482c76d1a",
+   "size": 5764,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/beam-revolved-solid.ifc": {
+   "sha256": "5485c248d8ffcdd51413f2df9a98b46c603ea35f825e3d4eceb290ef2815a2ea",
+   "size": 6432,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/brep-model.ifc": {
+   "sha256": "fa2b80d60f95f73b046ab520dcedee5780726c2bd78b42c309281e3a470accd0",
+   "size": 6206,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/csg-primitive.ifc": {
+   "sha256": "3d17b1c5e994f406aabc5868517cbb9a5d740ed857eaf6f51599faa8d0d395df",
+   "size": 5143,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/cube-advanced-brep.ifc": {
+   "sha256": "6f90cfd2641e868b490d650fd8bcbbdafc39bda23a43fc7a7c15c1e881066b9d",
+   "size": 10611,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/extruded-solid.ifc": {
+   "sha256": "51b79f61ed9cf84799b469a77f58e25abe41cb16e4bb44a0aaca5ad3809021df",
+   "size": 5473,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/geographic-referencing.ifc": {
+   "sha256": "5f42621fcc85737ba9839cdc394b9437b900ce4abbaea435b12100c1d410f437",
+   "size": 3394,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/geographic-referencing.json": {
+   "sha256": "194edd0bff8ab4f3d2fdf463328b31b97dec47fb7e5fe51303d1a6f99d1cc67c",
+   "size": 21847,
+   "lfs": false
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/geographic-referencing.xml": {
+   "sha256": "83411a72b2985d8fcce84f5a7c1e07dd9eaf03a280c522c6f956f0bd1219ff56",
+   "size": 19447,
+   "lfs": false
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/grid-placement.ifc": {
+   "sha256": "554ad4cc323ca2a04ea91c4159e7412936eb9fed805ca444603ee32128b939e5",
+   "size": 30605,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/mapped-shape-with-transformation.ifc": {
+   "sha256": "09d78267fb26c6173f58c173377072f055f497ffe788d4fa0d45055fe8f4769a",
+   "size": 6762,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/slab-openings.ifc": {
+   "sha256": "ad8708583a490eda9d44196067e64fa15c6a585a596951275312f09d3249d1bc",
+   "size": 4706,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/slab-standard-case.ifc": {
+   "sha256": "a982cee35d9ed628e0fc3c2b1f0efb08eba479f034e472d88f11a7cde54a14bd",
+   "size": 3501,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/surface-model.ifc": {
+   "sha256": "194a9d979a32f36a92dc3494d46a19a14db230b7be7ac3dbab8e3a8b496db13d",
+   "size": 6259,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/tessellated-item.ifc": {
+   "sha256": "fb993718c7f8dd3b242669c8edc8446ee3cc62174f31d43b0728c16f95874c32",
+   "size": 5352,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/wall-standard-case.ifc": {
+   "sha256": "bf2e5ce8a2842c5bf73c1e4cb3938a08aadb59832782fdd4097fb7c861c0a207",
+   "size": 3535,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/ISO Spec archive/wall-with-opening-and-window.ifc": {
+   "sha256": "f1cfe45b18968f2edb925549219f3d62331246c84c48770b20cfd0ce66307351",
+   "size": 12586,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Cylinder/BsplineSurf.PolyCurve.ifc": {
+   "sha256": "aab79bfdcdb0b8e7ba152e7af6c40957df3e867326d9ae41c2e7fc3172ce4ce8",
+   "size": 20278,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Cylinder/Facet.ifc": {
+   "sha256": "c389c500f103e457865bb2c4b8cc3fffcb41429a96e05e7c0c5f85a3b3e1e424",
+   "size": 19340,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Cylinder/OnlyBsplines.ifc": {
+   "sha256": "4ecf7875c3302d55c1e1237be7ebd91d6698fa10f5913bc7359d38906783e4ed",
+   "size": 20485,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Cylinder/Plane.Cyllinder.Ellipse.PolyCurve.ifc": {
+   "sha256": "001794d03d7c05ec9fd0d2cd1b26b9f69684a31dd861c25499c4281625cefa27",
+   "size": 18913,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Cylinder/Plane.Cyllinder.PolyCurve.ifc": {
+   "sha256": "ab559e9f50e92dc3c62875ae2309775d69a4a2e55e8f54222b64edf99c999a3f",
+   "size": 19102,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/3.Torus.facet.ifc": {
+   "sha256": "36e91e073817e9b6b9e916f09ca067440f2f8bb752ff0bba1359f5f9e7c7773d",
+   "size": 113015,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/3.Torus.ifc": {
+   "sha256": "8dd53d3a0206ee262b9e690b007e823ce54a3432f227c7a275ffbed35cf8bf59",
+   "size": 24528,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/5.Cone.facet.ifc": {
+   "sha256": "9e15446d459a8c581874f998daa6d8a7f5a62f5a447497125617964e7e193e69",
+   "size": 19670,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/5.Cone.ifc": {
+   "sha256": "7adbb3b70841a423451b5e642e90f94513e7df942b1a903d5440473eba708a8d",
+   "size": 18827,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/6.RectWithHole.facet.ifc": {
+   "sha256": "424652f651c32d9c0d353f5a2da2f31d1dfe08f53845957a7d68bf9841df09f3",
+   "size": 21875,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/Faces/6.RectWithHole.ifc": {
+   "sha256": "6aaf65762858b9b65cf26386e3cb918efbb0a506e57ac7e772b722dc0a7ceaa9",
+   "size": 260019,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/SolidsAndSheets/WithPlaneSurface.facet.ifc": {
+   "sha256": "e8ba5c19d927b0f81fac2899958bffbd718a1b9c3ed264ec3948f31d84b2a4bc",
+   "size": 17863,
+   "lfs": true
+  },
+  "bsi-community:IFC 4.0.2.1 (IFC 4)/NURBS/Bentley Building Designer/SolidsAndSheets/WithPlaneSurface.ifc": {
+   "sha256": "69df63c8e290bebc2d475e8f92e1f09fb7c9c181fa0eb59d8f42b99eb272da51",
+   "size": 50584,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing-1 (RC2)/UT_GeoRef_1.ifc": {
+   "sha256": "cf5c01c0ac8ce313ee60659eeb40d38e4f0c6e05c17c58f1c7b7c6fa94c77984",
+   "size": 4386,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tin_1 (RC1)/UT_Tin_in_MGA_56.ifc": {
+   "sha256": "4fcb01b992c81f1cf0364f4013ebb9d9d4a005ea484ce67fb046276abde8b493",
+   "size": 67225,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tin_2 (RC1)/UT_Tin_ifcMapConversion_to_place_in_MGA_56.ifc": {
+   "sha256": "e5a30f1481bc0662dcf330a1de305c6fdecadfaa97073236093b0759d61b7ed4",
+   "size": 67489,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tin_3 (RC1)/UT_Tin_with_one_hole_in_MGA_56.ifc": {
+   "sha256": "acdb383b97076d1107301a3a48c25da15bf626e9871c474ede41ccdfbb8d93f9",
+   "size": 66985,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tin_4 (RC1)/UT_Tin_with_two colours_in_MGA2020_56.ifc": {
+   "sha256": "836b0c243b1d3491a9463a5289170149500e8bd233203251737ef634e7160b45",
+   "size": 67210,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tin_5 (RC1)/UT_Tin_ifcMapConversion_to_place_in_MGA_56_Standard_origin.ifc": {
+   "sha256": "4bf3ac92fadb8cfc6e412f663d7e60a460593976a6960aff7079775519ccc39d",
+   "size": 67279,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Georeferencing_Tiny_Survey_1 (RC1)/UT_one_string_one_pont.ifc": {
+   "sha256": "1068ad3490213df3c60be4cfe6e8d163685b02f7690fc79fcc5eb61d5910a53a",
+   "size": 4658,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Tin_1 (RC1)/UT_Tin_1.ifc": {
+   "sha256": "8eb09eba789774e20f2e23a8d1ec3fabd4afe261bb53f11d88da43ca71c3be81",
+   "size": 178715,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Tin_2 (RC1)/UT_Tin_2.ifc": {
+   "sha256": "a24621974ff7309fcd3417ac5a0655fdebd6823631ae0819a50c9ec812de2907",
+   "size": 178277,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Tin_3 (RC1)/UT_Tin_3.ifc": {
+   "sha256": "d51f4a2a97dc0364ca185bcc8153c9bc4c50fedc62ccb4de679e2504a86363e8",
+   "size": 62147,
+   "lfs": true
+  },
+  "bsi-community:dev archive/IFC 4.3.RC Archive/Tin_4 (RC1)/UT_Tin_4.ifc": {
+   "sha256": "25c13f8b4da917aea65c1ca474f5bc55b0590dbf3ae7f07be90e7dd97d3d541d",
+   "size": 62491,
+   "lfs": true
+  }
+ }
+}

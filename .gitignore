@@ -10,3 +10,4 @@ __pycache__/
 /dist-app
 /tests/data/dxf-public/
 /tests/data/step-public/
+/tests/data/ifc-public/
