@@ -4,7 +4,7 @@
 //! time is replaced by a bad value (a missing reference, a wrong kind, a huge number, a wrong list).
 //! The import must return, with a result or an error, never a panic.
 //!
-//! The default run damages a sample (about 15 s in a build with optimisation, under a minute without). The full run damages everything:
+//! The default run damages a sample (measured: 44 to 49 s in a build without optimisation, on a busy computer). The full run damages everything:
 //! `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored`.
 
 mod support;
