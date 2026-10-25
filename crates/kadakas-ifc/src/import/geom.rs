@@ -15,8 +15,92 @@ use super::csg;
 use super::ctx::{Ctx, attr, enum_of, flag, int, items, num, numbers};
 use crate::step::Value;
 
-/// The meshes of advanced breps that were read, with the sentences of the report, by item.
-pub type BrepCache = std::cell::RefCell<HashMap<u64, Rc<(Option<MeshData>, Vec<String>)>>>;
+/// One cached advanced brep: its mesh (if it has one) and the sentences of the report.
+pub type BrepRead = Rc<(Option<MeshData>, Vec<String>)>;
+
+/// The most bytes of meshes that the cache of advanced breps keeps (the least recently used
+/// ones are dropped; a dropped solid that is used again is read again).
+pub const BREP_CACHE_BYTES: usize = 256 * 1024 * 1024;
+
+/// The meshes of advanced breps that were read, by item, with a limit of bytes.
+#[derive(Default)]
+pub struct BrepCache {
+    inner: std::cell::RefCell<BrepCacheInner>,
+    /// Test hook: another limit than `BREP_CACHE_BYTES` (0 means the default).
+    limit: std::cell::Cell<usize>,
+}
+
+#[derive(Default)]
+struct BrepCacheInner {
+    map: HashMap<u64, (BrepRead, usize, u64)>,
+    bytes: usize,
+    tick: u64,
+}
+
+impl BrepCache {
+    /// A cache that keeps `limit` bytes.
+    pub fn with_limit(limit: usize) -> Self {
+        let c = Self::default();
+        c.limit.set(limit);
+        c
+    }
+
+    /// The read of this item, now the most recently used.
+    pub fn get(&self, id: u64) -> Option<BrepRead> {
+        let mut i = self.inner.borrow_mut();
+        i.tick += 1;
+        let tick = i.tick;
+        i.map.get_mut(&id).map(|(r, _, t)| {
+            *t = tick;
+            r.clone()
+        })
+    }
+
+    /// Keeps a read. The least recently used reads go while the total is over the limit; one
+    /// read that is over the limit by itself is not kept.
+    pub fn insert(&self, id: u64, read: BrepRead) {
+        let size = read
+            .0
+            .as_ref()
+            .map_or(0, |m| m.v.len() * 24 + m.t.len() * 12)
+            + read.1.iter().map(|s| s.len() + 24).sum::<usize>()
+            + 64;
+        let limit = match self.limit.get() {
+            0 => BREP_CACHE_BYTES,
+            n => n,
+        };
+        if size > limit {
+            return;
+        }
+        let mut i = self.inner.borrow_mut();
+        if let Some((_, old, _)) = i.map.remove(&id) {
+            i.bytes -= old;
+        }
+        while i.bytes + size > limit {
+            let Some(oldest) = i
+                .map
+                .iter()
+                .min_by_key(|(_, (_, _, t))| *t)
+                .map(|(k, _)| *k)
+            else {
+                break;
+            };
+            if let Some((_, old, _)) = i.map.remove(&oldest) {
+                i.bytes -= old;
+            }
+        }
+        i.tick += 1;
+        let tick = i.tick;
+        i.map.insert(id, (read, size, tick));
+        i.bytes += size;
+    }
+
+    /// The bytes and the number of reads that the cache holds.
+    pub fn held(&self) -> (usize, usize) {
+        let i = self.inner.borrow();
+        (i.bytes, i.map.len())
+    }
+}
 
 /// An indexed triangle mesh.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -2121,6 +2205,41 @@ mod tests {
             "{} {area}",
             v / 1000.0
         );
+    }
+
+    #[test]
+    fn the_cache_of_advanced_breps_has_a_byte_limit_and_drops_the_least_recently_used() {
+        let mesh = |n: usize| {
+            Rc::new((
+                Some(MeshData {
+                    v: vec![DVec3::ZERO; n],
+                    ..Default::default()
+                }),
+                vec![],
+            ))
+        };
+        // One read takes 100 * 24 + 64 = 2,464 bytes: the limit holds three of them.
+        let c = BrepCache::with_limit(3 * 2_464 + 10);
+        for id in 1..=3 {
+            c.insert(id, mesh(100));
+        }
+        assert_eq!(c.held().1, 3);
+        // Item 1 is used, so item 2 is the least recently used one and goes.
+        assert!(c.get(1).is_some());
+        c.insert(4, mesh(100));
+        assert_eq!(c.held().1, 3);
+        assert!(
+            c.get(2).is_none() && c.get(1).is_some() && c.get(3).is_some() && c.get(4).is_some()
+        );
+        assert!(c.held().0 <= 3 * 2_464 + 10);
+        // A read that is over the limit alone is not kept, and nothing else goes for it.
+        c.insert(5, mesh(10_000));
+        assert!(c.get(5).is_none());
+        assert_eq!(c.held().1, 3);
+        // The same item again replaces the old read (the bytes do not add up).
+        c.insert(4, mesh(100));
+        assert_eq!(c.held().1, 3);
+        assert_eq!(c.held().0, 3 * 2_464);
     }
 
     #[test]

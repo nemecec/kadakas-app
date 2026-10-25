@@ -16,6 +16,11 @@ use crate::step::Entity;
 pub const RELATIVE_TOLERANCE: f64 = 2.0e-4;
 
 /// The most triangles of one solid that the import makes (a sphere of 256 sides has 65,000).
+/// The work (see `kadakas_step::StepLimits::max_work`) and the triangles of one face that an advanced
+/// brep of a product may take.
+const BREP_MAX_WORK: u64 = 12_000_000;
+const BREP_MAX_FACE_TRIANGLES: usize = 50_000;
+
 pub const MAX_SOLID_TRIANGLES: usize = 400_000;
 
 /// The fewest and most corners of a circle.
@@ -619,13 +624,13 @@ impl Eval<'_> {
     /// solid that many products use (a mapped type, a repeated item) is read once: the mesh comes
     /// from the cache of the import, and every copy is placed and counted by `add_mesh`.
     pub(super) fn advanced_brep(&mut self, e: &Entity, xf: &DAffine3) {
-        let cached = self.brep_cache.and_then(|c| c.borrow().get(&e.id).cloned());
+        let cached = self.brep_cache.and_then(|c| c.get(e.id));
         let read = match cached {
             Some(r) => r,
             None => {
                 let r = std::rc::Rc::new(self.read_brep(e));
                 if let Some(c) = self.brep_cache {
-                    c.borrow_mut().insert(e.id, r.clone());
+                    c.insert(e.id, r.clone());
                 }
                 r
             }
@@ -657,6 +662,14 @@ impl Eval<'_> {
             unit: Some(kadakas_meshio::Unit::Millimetre),
             tolerance_mm: Some(self.tol),
             keep_exact: true,
+            step: kadakas_step::StepLimits {
+                // A product is a part of a building: the work of one B-rep is bounded far below
+                // the limit of a whole STEP file (a file without units makes the sizes 1000 times
+                // too big, and the tolerance in millimeters then asks for too many triangles).
+                max_work: BREP_MAX_WORK,
+                max_face_triangles: BREP_MAX_FACE_TRIANGLES,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let imp = match kadakas_step::read(&bytes, &opts) {

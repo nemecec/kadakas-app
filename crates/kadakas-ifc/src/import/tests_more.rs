@@ -790,6 +790,38 @@ fn annotations_with_3d_curves_and_unsupported_items() {
             .any(|s| s.entity == "IfcAnnotation" && s.reason.contains("unsupported")),
         "{r:?}"
     );
+    // One skipped annotation is one line with the count 1, not two lines.
+    let lines: Vec<_> = r
+        .skipped
+        .iter()
+        .filter(|s| s.entity.starts_with("IfcAnnotation"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].count, 1, "{lines:?}");
+}
+
+#[test]
+fn an_annotation_with_only_unsupported_items_is_one_skipped_line() {
+    let data = "#27=IFCTEXTLITERAL('hello',#5,.LEFT.);\n#28=IFCSHAPEREPRESENTATION($,'Annotation','Annotation2D',(#27));\n#29=IFCPRODUCTDEFINITIONSHAPE($,$,(#28));\n#30=IFCANNOTATION('b',$,'Label',$,$,#7,#29);\n";
+    let (_, r) = run(data, &IfcImportOptions::default());
+    let lines: Vec<_> = r
+        .skipped
+        .iter()
+        .filter(|s| s.entity.starts_with("IfcAnnotation"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{:?}", r.skipped);
+    assert_eq!(lines[0].count, 1, "{lines:?}");
+    assert_eq!(r.skipped_total(), 1, "{:?}", r.skipped);
+}
+
+#[test]
+fn an_annotation_that_the_builder_refuses_is_one_skipped_line() {
+    // A point at 1E15 mm is out of range: the builder skips it and says why. The product has no
+    // second line ("no curves or points").
+    let data = "#27=IFCCARTESIANPOINT((1.E15,0.,0.));\n#28=IFCSHAPEREPRESENTATION($,'Annotation','Point',(#27));\n#29=IFCPRODUCTDEFINITIONSHAPE($,$,(#28));\n#30=IFCANNOTATION('b',$,'Far',$,$,#7,#29);\n";
+    let (_, r) = run(data, &IfcImportOptions::default());
+    assert_eq!(r.skipped_total(), 1, "{:?}", r.skipped);
+    assert_eq!(r.skipped.len(), 1, "{:?}", r.skipped);
 }
 
 #[test]

@@ -175,3 +175,34 @@ fn an_export_to_ifczip_is_a_zip_with_one_ifc_file() {
     ));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_bzip2_entry_is_refused_with_a_message_that_says_what_to_do() {
+    let plain = fixture("extruded_rect.ifc");
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("x.ifc", o).unwrap();
+    z.write_all(&plain).unwrap();
+    let mut bytes = z.finish().unwrap().into_inner();
+    // Method 12 (bzip2) in the local header (offset 8) and in the central directory (offset 10).
+    let local = bytes.windows(4).position(|w| w == b"PK\x03\x04").unwrap();
+    let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    bytes[local + 8] = 12;
+    bytes[central + 10] = 12;
+    let err = run(bytes).err().expect("refused").to_string();
+    assert!(err.contains("bzip2 is not supported, use deflate"), "{err}");
+}
+
+#[test]
+fn the_zip_writer_allows_entries_over_4_gb() {
+    // `large_file` writes the zip64 fields: a plain entry that grows past 4 GB cannot fail.
+    let plain = fixture("extruded_rect.ifc");
+    let mut z = crate::container::start(std::io::Cursor::new(Vec::new()), "m.ifc").unwrap();
+    z.write_all(&plain).unwrap();
+    let bytes = crate::container::finish(z).unwrap().into_inner();
+    let local = bytes.windows(4).position(|w| w == b"PK\x03\x04").unwrap();
+    // Version needed to extract is 4.5 (45) when zip64 is in use.
+    assert_eq!(bytes[local + 4], 45);
+    assert!(run(bytes).is_ok());
+}
