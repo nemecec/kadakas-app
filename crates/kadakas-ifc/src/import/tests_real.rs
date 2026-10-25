@@ -560,7 +560,7 @@ fn big_solids_of_a_file_without_units_are_bounded_before_they_are_made() {
     assert!(
         r.report.notes.iter().any(
             |n| n.contains("a boolean is not applied: the operands have")
-                && n.contains("triangles, more than 75000")
+                && n.contains("triangles, more than 20000")
         ),
         "{:?}",
         r.report.notes
