@@ -259,6 +259,55 @@ A surface model is written as `IfcFacetedBrep` when it is a closed solid. The fa
 
 A surface model is written as a polyface mesh by default. The option `mesh_entity` is `polyface`, `face3d` (one 3DFACE per triangle) or `mesh` (one MESH entity, a subdivision mesh at level 0 with triangle faces). The heights include the elevation of the layer. A hidden face is left out. A component instance is written too (MOD-13), as one mesh for each part of its definition through the transform of the instance, and a part in a class that is switched off is left out. The diagonals that cut a face into triangles and the soft edges are marked invisible (the edge flags of a 3DFACE, the negative indices of a polyface face), so a CAD program draws the edges of the faces only. The file is release 2004 (`AC1018`) with its code page, unless the option `version` says another one (see the DXF files section). The audit of ezdxf accepts the MESH entity in it. A DXF file with a MESH entity is best read by a program that reads DXF 2010 or later. Kadakas reads the MESH entity too (IOP-15): it becomes a `mesh3d` object with the control mesh.
 
+## IFC files (IOP-29)
+
+What Kadakas reads and writes of the IFC files that other programs make. The sources are public (`docs/research/ifc-real-world.md`); the tests run against public files with a clear licence.
+
+### Containers and text
+
+- **STEP** (`.ifc`) and **ifcZIP** (`.ifczip`, a zip with one `.ifc`) are read and written. The kind of a file is found from its first bytes, not from its name. A zip is refused when it has more than 1,000 entries, more than one `.ifc`, an entry name with `..`, a drive letter or a leading slash, an unpacked IFC file over the size limit (`max_file_mb`), or, above 64 MB, more than 200 times the size of the zip. Nothing is written to disk when a zip is read. An export to a path that ends in `.ifczip` writes an ifcZIP (same bytes for the same document).
+- **IFC XML** and **IFC JSON** are not read. The answer names the format: `IFC XML is not supported; export STEP (.ifc) or ifcZIP`. Backlog: a reader for ifcXML (the ISO samples have twins in XML) when users ask for it; the schema is large and a safe reader needs a size and depth budget like the STEP reader has.
+- Strings: `\X\hh`, `\S\c`, `\P<A-I>\` (ISO 8859 parts 1 to 9), `\X2\...\X0\` and `\X4\...\X0\` are decoded; an escape that is not complete stays as written. Keywords are not case sensitive (`#2= ifcactorrole(.architect.,$,$);` is read), `DATA`, `HEADER` and `ENDSEC` too. A repeated step id keeps the first entity and the report counts the others. Products that repeat a GlobalId are all imported and counted in a note.
+- The report has `entities_read` (products with a representation), `entities_imported` and `entities_skipped`; the first equals the sum of the others, and every skipped product has a line in `skipped`.
+
+### Geometry
+
+| IFC | Result |
+|---|---|
+| `IfcRelVoidsElement` openings | cut from the Body of the host with a boolean on the closed meshes (walls, slabs, any solid). A `Reference` representation is not subtracted. When a cut fails (an open mesh, a body that is no solid, too complex), the host keeps its gross shape, the opening becomes an object of its own, and a note counts them with the reason |
+| `IfcBooleanResult` with a solid | difference, union and intersection of closed meshes. `IfcPolygonalBoundedHalfSpace` is a prism cut by the plane |
+| `IfcRevolvedAreaSolid` | exact profile (arcs), the angle in the angle unit of the file |
+| `IfcSweptDiskSolid` | a pipe along the directrix, mitered at the bends, hollow with `InnerRadius`. Start and end parameters are applied on polylines, and reported as not applied on curved directrices |
+| `IfcCsgSolid`, `IfcBlock`, `IfcSphere`, `IfcRightCircularCylinder`, `IfcRightCircularCone`, `IfcRectangularPyramid` | meshes within the curve tolerance (2 mm); booleans of them work |
+| `IfcAdvancedBrep`, `...WithVoids`, and shells with edge loops | the geometry entities are those of STEP, so the solid is written as a small STEP file in memory and read by `kadakas-step` (planes, cylinders, spheres, tori, B-spline surfaces, rational too). The exact surfaces stay with the mesh (MOD-14, `docs/exact-solids.md`). A face the STEP reader cannot cut is left out and counted. When no face can be cut the bounding box stands in |
+| `IfcTriangulatedIrregularNetwork` | flags below zero (-1 hole, -2 void) leave the triangle out and the terrain becomes a 3D mesh so that the holes stay open; breakline flags are counted, not kept as lines. Works for IFC4X3 and for the release candidates (no `PnIndex`) |
+| `IfcIShapeProfileDef` | with the fillet radius |
+
+The boolean (`import/csg.rs`) is a binary space partition on polygons with a tolerance of 1e-7 file units. It needs closed operands (welded, T-junctions healed) and refuses more than 400,000 polygons or a tree deeper than 400. The result is healed, so it is closed and can be the operand of the next operation.
+
+### Placement, sites and georeference
+
+- A product far from the origin (projected coordinates used as model coordinates, 100 km and more) is moved to the origin when the document has no georeference; the shift (whole meters) goes into the georeference, together with `IfcMapConversion` if the file has one.
+- A file with more than one `IfcSite` (a complex site with partial sites) puts the elements of each site on a layer with the name of the site, when they are in no storey. Parts of an `IfcElementAssembly` follow their assembly.
+- `IfcGridPlacement` is read (crossing of two axes, offsets, optional direction). `IfcLinearPlacement` is counted in a note and the product keeps the place of its parent.
+- `IfcMapConversionScaled`: the factors are read and reported as not applied. Property set names of the IFC2x3 georeference are matched without case.
+
+### Export options
+
+- `site_surface` writes the proposed surface of the first site model also as the shape of the `IfcSite` (Allplan reads an `IfcSite` with a face set as a terrain).
+
+### Test corpus
+
+`cargo test -p kadakas-ifc --test ifc_corpus` downloads CC BY 4.0 files of buildingSMART (`Certification-datasets`, `Community-Sample-Test-Files`) into `tests/data/ifc-public/` (ignored by git) from pinned commits, checks each against `crates/kadakas-ifc/tests/fixtures/ifc_public_sha256.json` (made by `tests/data/make_ifc_public_hashes.py`) and skips offline, with `KADAKAS_CORPUS=off`, and in CI unless `KADAKAS_CORPUS=fetch`. Files in Git LFS come from the media server; a pointer file is skipped with a message. The tests check, for every file, that nothing panics, the time, and the accounting; and for chosen files the counts of the scene, the georeference, the volumes (openings, revolved beam, CSG, advanced breps against IfcOpenShell and the tessellated twin), the TIN flags and the grid placement. `tests/behavior/test_ifc_solids.py` compares volumes with IfcOpenShell (known: its advanced brep volume of `basin-advanced-brep.ifc` is 2.7 times that of its own tessellated twin; Kadakas agrees with the twin).
+
+### Left out, with the reason
+
+- Surfaces of revolution and of extrusion inside an advanced brep (in IFC their curve is a profile, not a curve), `IfcIndexedPolyCurve` edges, and faces that the STEP reader cannot cut (a cylinder or cone whose loop goes around the axis without a seam edge, a torus). Reason: the STEP reader's face cutting has these limits (`docs/interop.md`, STEP section); the product is kept as its bounding box when nothing could be cut, and the report names the faces.
+- `IfcSurfaceCurveSweptAreaSolid`, `IfcFixedReferenceSweptAreaSolid`, `IfcExtrudedAreaSolidTapered`: no test file and no user ask yet.
+- Breaklines of a TIN as lines of the site model: a site model has no breakline type that matches the triangle flags.
+- Grid factors of `IfcMapConversionScaled`, the double offset of a site placement on top of a map conversion, a CRS in feet: reported (factors) or untested for lack of a public file. IFC XML and JSON: see above.
+- Memory of a file over 1 GiB: the cap stays (`max_file_mb`, at most 4096) and the message names the option; the index keeps 24 bytes per entity, the file stays on disk (`reader.rs`).
+
 ## DXF files (IOP-01, IOP-15, IOP-16, IOP-27)
 
 This section is about real-world DXF files. The research with its sources is `docs/research/dxf-real-world.md`. The code is in `crates/kadakas-io/src/dxf`.
