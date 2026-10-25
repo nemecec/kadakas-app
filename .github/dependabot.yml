@@ -1,6 +1,9 @@
 # Dependabot version updates. Security updates are on in the repository settings and work
-# without this file. These rules make the routine updates small and quiet:
-# one pull request for all minor and patch updates of a group, one for each major update.
+# without this file. These rules make the routine updates few and quiet:
+# - Grouped: all minor and patch updates of an ecosystem come in one pull request, and all
+#   major updates in a second one. No pull request for each dependency.
+# - Cooldown: a new version waits 7 days after its release before Dependabot proposes it.
+#   Security updates ignore the cooldown, so a fix for a known vulnerability is never late.
 # Each pull request runs the CI, so keep the number low.
 version: 2
 updates:
@@ -11,12 +14,18 @@ updates:
       day: monday
       time: "05:00"
       timezone: Europe/Tallinn
-    open-pull-requests-limit: 4
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "deps"
+    cooldown:
+      default-days: 7
     groups:
       rust-minor-and-patch:
+        patterns: ["*"]
         update-types: [minor, patch]
+      rust-major:
+        patterns: ["*"]
+        update-types: [major]
     # The UI and graphics stack moves together. A major update of one of them needs a person.
     ignore:
       - dependency-name: "wgpu*"
@@ -37,6 +46,8 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "ci"
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -44,6 +55,11 @@ updates:
     directory: /python
     schedule:
       interval: monthly
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 1
     commit-message:
       prefix: "deps"
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
