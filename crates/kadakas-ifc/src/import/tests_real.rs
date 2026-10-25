@@ -524,3 +524,70 @@ fn a_panic_in_one_product_skips_that_product_only() {
         r.notes
     );
 }
+
+#[test]
+fn big_solids_of_a_file_without_units_are_bounded_before_they_are_made() {
+    // A 4 KB file whose project has no unit assignment: 300 and 290 are meters, so the spheres have
+    // 256 sides and 65,000 triangles each, and a boolean of two of them is refused before the work.
+    let mut s = String::from(
+        "#10=IFCCARTESIANPOINT((0.,0.,0.));\n#11=IFCAXIS2PLACEMENT3D(#10,$,$);\n#12=IFCCARTESIANPOINT((100.,0.,0.));\n#13=IFCAXIS2PLACEMENT3D(#12,$,$);\n",
+    );
+    for i in 0..4u64 {
+        let b = 100 + i * 20;
+        s.push_str(&format!(
+            "#{a}=IFCSPHERE(#11,300.);\n#{c}=IFCSPHERE(#13,290.);\n#{d}=IFCBOOLEANRESULT(.DIFFERENCE.,#{a},#{c});\n#{e}=IFCCSGSOLID(#{d});\n",
+            a = b,
+            c = b + 1,
+            d = b + 2,
+            e = b + 3
+        ));
+        s.push_str(&product(
+            b + 4,
+            "IFCBUILDINGELEMENTPROXY",
+            &format!("#{}", b + 3),
+            "$,@,$,$",
+        ));
+    }
+    // The same without the unit: take the unit assignment out of the header of the test file.
+    let bytes = super::tests_more::file("IFC4", &s);
+    let text = String::from_utf8(bytes)
+        .unwrap()
+        .replace("$,$,$,$,$,#2);", "$,$,$,$,$,$);");
+    let started = std::time::Instant::now();
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    assert_eq!(r.report.total(), 4, "{:?}", r.report);
+    assert!(
+        r.report.notes.iter().any(
+            |n| n.contains("a boolean is not applied: the operands have")
+                && n.contains("triangles, more than 75000")
+        ),
+        "{:?}",
+        r.report.notes
+    );
+    assert!(started.elapsed().as_secs() < 600, "hang guard");
+    // A solid that would need too many triangles is not made: a sphere of 100 m with a fine
+    // tolerance in a file whose unit is the millimeter, with the limit of the import at 1000.
+    let opts = IfcImportOptions {
+        max_triangles: 1000,
+        ..Default::default()
+    };
+    let text = String::from_utf8(super::tests_more::file(
+        "IFC4",
+        &format!(
+            "#20=IFCSPHERE(#5,100000.);\n#21=IFCCSGSOLID(#20);\n{}",
+            product(22, "IFCBUILDINGELEMENTPROXY", "#21", "$,@,$,$")
+        ),
+    ))
+    .unwrap();
+    let r = import_bytes(text.into_bytes(), &Document::with_sequential_ids(), &opts).unwrap();
+    assert_eq!(r.report.total(), 0);
+    assert!(
+        r.report
+            .skipped
+            .iter()
+            .any(|s| s.reason.contains("would need about")),
+        "{:?}",
+        r.report
+    );
+}
