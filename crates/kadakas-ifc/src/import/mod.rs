@@ -20,6 +20,7 @@
 //! `IfcMapConversion` sets the georeference of an empty document, or moves the geometry into the
 //! georeference of the document when both use the same CRS.
 
+pub mod advanced;
 pub mod csg;
 pub mod ctx;
 pub mod geom;
@@ -34,6 +35,8 @@ mod tests_more;
 mod tests_openings;
 #[cfg(test)]
 mod tests_real;
+#[cfg(test)]
+mod tests_swept;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1232,6 +1235,12 @@ impl<'a> Importer<'a> {
         for v in &mut m.v {
             *v = self.frame.point(*v * mm);
         }
+        if let Some(e) = m.exact.take() {
+            let map = DAffine3::from_translation(self.frame.shift.extend(0.0))
+                * DAffine3::from_rotation_z(self.frame.rotation)
+                * DAffine3::from_scale(DVec3::splat(mm));
+            m.exact = e.transformed(&map).ok().map(Box::new);
+        }
         m.weld(0.01);
         m
     }
@@ -1325,14 +1334,18 @@ impl<'a> Importer<'a> {
         name: &str,
     ) {
         self.triangles += m.t.len();
-        let shape = Shape::Mesh3d(Box::new(kadakas_core::mesh3d::Mesh3d {
+        let mut mesh = kadakas_core::mesh3d::Mesh3d {
             name: name.to_string(),
             vertices: m.v,
             triangles: m.t,
             color,
             exact: None,
             exact_unusable: None,
-        }));
+        };
+        if let Some(e) = m.exact {
+            mesh.set_exact(*e);
+        }
+        let shape = Shape::Mesh3d(Box::new(mesh));
         if self
             .b
             .add(class_name, shape, layer, class, Attributes::default(), data)

@@ -275,6 +275,7 @@ impl Node {
 fn polygons_of(m: &MeshData) -> Result<Vec<Polygon>, CsgError> {
     let mut mesh = m.clone();
     mesh.weld(EPS);
+    heal_t_junctions(&mut mesh);
     if mesh.t.is_empty() {
         return Err(CsgError::Empty);
     }

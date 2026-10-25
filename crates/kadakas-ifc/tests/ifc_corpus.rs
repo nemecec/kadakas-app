@@ -326,3 +326,96 @@ fn the_slab_with_a_round_hole_and_a_recess_has_the_analytic_volume() {
         rep.notes
     );
 }
+
+#[test]
+fn advanced_breps_with_spline_faces_have_a_volume_and_keep_their_exact_surfaces() {
+    // cube-advanced-brep: a unit cube turned by 75 degrees from the bottom to the top, with four
+    // B-spline side faces (a ruled surface). The file is in meters. Its volume is 5/6 of a cubic
+    // meter: the section at the height z is a square of side 1 rotated by 75 degrees * z and
+    // shrunk to the chord of the rotation.
+    let Some(file) = corpus::iso("cube-advanced-brep.ifc") else {
+        return;
+    };
+    let (ed, rep) = load(&file);
+    let o = objects(&ed);
+    assert_eq!(o.len(), 1, "{rep:?}");
+    let want = 5.0 / 6.0 * 1e9;
+    let got = mesh_volume(o[0]);
+    assert!((got - want).abs() < want * 0.01, "{got} {want}");
+    let Shape::Mesh3d(m) = &o[0].shape else {
+        panic!()
+    };
+    assert_eq!(m.exact_state(), Some(kadakas_core::exact::State::Fresh));
+    let exact = m.exact.as_ref().unwrap();
+    assert_eq!(exact.faces.len(), 6);
+    // The payload is in millimeters like the triangles.
+    let (lo, hi) = m.bounds3();
+    let ev = exact
+        .vertices
+        .iter()
+        .fold(glam::DVec3::NEG_INFINITY, |a, v| a.max(*v));
+    assert!(
+        (ev.z - hi.z).abs() < 1e-6 && hi.z > 999.0 && lo.z.abs() < 1e-6,
+        "{ev} {hi}"
+    );
+    assert!(rep.notes.is_empty() && rep.skipped.is_empty(), "{rep:?}");
+}
+
+#[test]
+fn the_revolved_beam_and_the_csg_samples_have_their_analytic_volumes() {
+    if let Some(file) = corpus::iso("beam-revolved-solid.ifc") {
+        // IPE 600 turned by 1.522 radians about an axis 7.25 m from the centre of the profile
+        // (the theorem of Pappus). The 2 mm tolerance cuts the 24 mm fillets into few lines.
+        let (w, d, tw, tf, fr) = (0.22, 0.6, 0.012, 0.019, 0.024);
+        let area = 2.0 * w * tf + (d - 2.0 * tf) * tw + (4.0 - std::f64::consts::PI) * fr * fr;
+        let want = area * 7.25 * 1.52202550844946 * 1e9;
+        let (ed, _) = load(&file);
+        let got = mesh_volume(objects(&ed)[0]);
+        assert!((got - want).abs() < want * 0.015, "{got} {want}");
+    }
+    if let Some(file) = corpus::iso("csg-primitive.ifc") {
+        let (ed, _) = load(&file);
+        assert!((mesh_volume(objects(&ed)[0]) - 1000.0 * 1000.0 * 2000.0).abs() < 1.0);
+    }
+    if let Some(file) = corpus::iso("bath-csg-solid.ifc") {
+        // A block 2000 x 800 x 800 less a rounded rectangle 1800 x 600 (corner radius 200), 700 deep.
+        let hole = 1800.0 * 600.0 - (4.0 - std::f64::consts::PI) * 200.0 * 200.0;
+        let want = 2000.0 * 800.0 * 800.0 - hole * 700.0;
+        let (ed, _) = load(&file);
+        let got = mesh_volume(objects(&ed)[0]);
+        assert!((got - want).abs() < want * 0.01, "{got} {want}");
+    }
+}
+
+#[test]
+fn nurbs_samples_of_bentley_match_their_facet_twins_or_say_what_is_missing() {
+    // Each sample has a twin written as facets. Where the surfaces can be cut, the volumes agree.
+    for (nurbs, facet) in [
+        ("Faces/6.RectWithHole.ifc", "Faces/6.RectWithHole.facet.ifc"),
+        (
+            "SolidsAndSheets/WithPlaneSurface.ifc",
+            "SolidsAndSheets/WithPlaneSurface.facet.ifc",
+        ),
+    ] {
+        let (Some(a), Some(b)) = (corpus::bentley(nurbs), corpus::bentley(facet)) else {
+            continue;
+        };
+        let (ea, ra) = load(&a);
+        let (eb, _) = load(&b);
+        let (va, vb) = (mesh_volume(objects(&ea)[0]), mesh_volume(objects(&eb)[0]));
+        assert!((va - vb).abs() < vb * 0.01, "{nurbs}: {va} {vb}");
+        assert!(ra.skipped.is_empty(), "{nurbs}: {ra:?}");
+    }
+    // Faces that the STEP reader cannot cut (a cone or a torus without seam edges) are named. The
+    // product is still there, as its bounding box.
+    if let Some(a) = corpus::bentley("Faces/5.Cone.ifc") {
+        let (ed, rep) = load(&a);
+        assert_eq!(objects(&ed).len(), 1);
+        assert!(
+            rep.skipped
+                .iter()
+                .any(|s| s.reason.contains("imported as a bounding box")),
+            "{rep:?}"
+        );
+    }
+}
