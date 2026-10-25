@@ -9,6 +9,7 @@ BSD-2-Clause
 BSD-3-Clause
 CC0-1.0
 CC-BY-ND-4.0 test-only
+CC-BY-4.0 test-only
 OFL-1.1
 Ubuntu-font-1.0
 Bitstream-Vera

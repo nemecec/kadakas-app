@@ -373,8 +373,23 @@ impl<'a> Importer<'a> {
             if rep.name != "IFCPRODUCTDEFINITIONSHAPE" {
                 continue;
             }
-            *seen_classes.entry(model::class_name(&e.name)).or_default() += 1;
+            let class = model::class_name(&e.name);
+            *seen_classes.entry(class.clone()).or_default() += 1;
+            // Every product with a representation is read; it either gives objects or has a line
+            // in `skipped`, so the accounting is exact (`entities_read` = imported + skipped).
+            let (objects, skipped) = (self.b.report.total(), self.b.report.skipped_total());
             self.product(&e, &rep);
+            self.b.report.entities_read += 1;
+            if self.b.report.total() > objects {
+                self.b.report.entities_imported += 1;
+            } else {
+                if self.b.report.skipped_total() == skipped {
+                    self.b
+                        .report
+                        .skip(&class, "no object could be made from it");
+                }
+                self.b.report.entities_skipped += 1;
+            }
             // Parsed entities of a big file would fill the memory.
             if id % 4096 == 0 {
                 self.cx.x.clear_cache();
@@ -755,6 +770,9 @@ impl<'a> Importer<'a> {
         }
         if !name.is_empty() {
             info.insert("name".into(), json!(name));
+        }
+        if let Some(d) = text(attr(e, 3)).map(str::trim).filter(|d| !d.is_empty()) {
+            info.insert("description".into(), json!(clean_text(d, 500)));
         }
         if !predefined.is_empty() {
             info.insert("predefined_type".into(), json!(predefined));
