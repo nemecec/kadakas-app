@@ -354,6 +354,32 @@ fn import_index(
         imp.b.report.note(n);
     }
     imp.run();
+    // Last resort: the coordinates were far, but the samples did not show it (products out of range
+    // were skipped). The geometry itself says where the file is: a pass that only measures.
+    let out_of_range = imp
+        .b
+        .report
+        .skipped
+        .iter()
+        .any(|s| s.reason.contains("out of range"));
+    if out_of_range && opts.georef && doc.georef.is_none() && imp.shift == DVec2::ZERO {
+        let mut probe = make();
+        probe.b.set_probe();
+        probe.run();
+        if let Some((lo, hi)) = probe.b.bounds() {
+            let c = (lo + hi) / 2.0;
+            if c.is_finite() && c.abs().max_element() < 1.0e12 {
+                let mut again = make();
+                again.shift = (c / 1000.0).round() * 1000.0;
+                for n in notes.iter().chain(&again.cx.x.notes) {
+                    again.b.report.note(n);
+                }
+                again.b.report.note("the geometry was far from the origin and out of range: the file was read again with a shift");
+                again.run();
+                return Ok(again.b.finish());
+            }
+        }
+    }
     Ok(imp.b.finish())
 }
 
@@ -484,18 +510,34 @@ impl<'a> Importer<'a> {
                 placed.add(DVec2::new(t.x, t.y) * mm);
             }
         }
-        for id in self
-            .cx
-            .x
-            .ids_of("IFCCARTESIANPOINTLIST3D")
-            .into_iter()
-            .take(8)
-        {
-            if let Some(e) = self.cx.ent(id) {
-                for row in items(attr(&e, 0)).iter().take(4) {
-                    let v = ctx::numbers(row);
+        // Points: a stride sample of up to 100,000 of the cartesian points and of the first points
+        // of the point lists. Only the far ones count for the place, because a point near the origin
+        // is a point of a profile or of a local frame.
+        const MAX_POINTS: usize = 100_000;
+        for (name, per_entity) in [
+            ("IFCCARTESIANPOINT", 1),
+            ("IFCCARTESIANPOINTLIST3D", 4),
+            ("IFCCARTESIANPOINTLIST2D", 4),
+        ] {
+            let ids = self.cx.x.ids_of(name);
+            let stride = ids.len().div_ceil(MAX_POINTS).max(1);
+            for id in ids.into_iter().step_by(stride) {
+                let Some(e) = self.cx.ent(id) else { continue };
+                let rows: Vec<Vec<f64>> = if name == "IFCCARTESIANPOINT" {
+                    vec![ctx::numbers(attr(&e, 0))]
+                } else {
+                    items(attr(&e, 0))
+                        .iter()
+                        .take(per_entity)
+                        .map(ctx::numbers)
+                        .collect()
+                };
+                for v in rows {
                     if v.len() >= 2 {
-                        points.add(DVec2::new(v[0], v[1]) * mm);
+                        let p = DVec2::new(v[0], v[1]) * mm;
+                        if p.is_finite() && p.abs().max_element() > FAR_MM {
+                            points.add(p);
+                        }
                     }
                 }
             }
