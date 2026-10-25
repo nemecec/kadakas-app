@@ -332,6 +332,7 @@ fn import_index(
             z_dropped: 0,
             fuel: csg::Fuel::new(opts.boolean_work),
             brep_cache: Default::default(),
+            open_cuts: HashSet::new(),
             opening_failures: BTreeMap::new(),
             cut: HashSet::new(),
             uncut: HashSet::new(),
@@ -417,6 +418,8 @@ struct Importer<'a> {
     fuel: csg::Fuel,
     /// Advanced breps that were read already.
     brep_cache: geom::BrepCache,
+    /// Hosts whose mesh after the cut is not closed (data `ifc.mesh_closed` is false).
+    open_cuts: HashSet<u64>,
     /// Hosts whose openings could not all be cut, by reason and whether the cut was partial.
     opening_failures: BTreeMap<(String, bool), OpeningTally>,
     cut: HashSet<u64>,
@@ -582,6 +585,12 @@ impl<'a> Importer<'a> {
             ));
         }
         self.finish_opening_notes();
+        if !self.open_cuts.is_empty() {
+            self.b.report.note(&format!(
+                "{} meshes are not closed after the cut of their openings (the volume is right, but a solid tool may refuse them): their data ifc.mesh_closed is false",
+                self.open_cuts.len()
+            ));
+        }
         if !self.cut.is_empty() {
             self.b.report.note(&format!(
                 "{} openings (IfcRelVoidsElement) were cut from their walls and slabs",
@@ -1062,6 +1071,10 @@ impl<'a> Importer<'a> {
             };
             match result {
                 Ok(m) => {
+                    // The cut is exact in volume. A mesh that is not closed is told, not hidden.
+                    if !csg::is_closed(&m) {
+                        self.open_cuts.insert(e.id);
+                    }
                     for (id, _) in &near {
                         *cut_in.entry(*id).or_default() += 1;
                     }
@@ -1204,6 +1217,9 @@ impl<'a> Importer<'a> {
         }
         if let Some(t) = text(attr(e, 7)) {
             info.insert("tag".into(), json!(clean_text(t, 100)));
+        }
+        if self.open_cuts.contains(&e.id) {
+            info.insert("mesh_closed".into(), json!(false));
         }
         info.insert("schema".into(), json!(self.schema));
         let mut data = BTreeMap::new();
