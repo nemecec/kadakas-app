@@ -195,7 +195,8 @@ pub fn encode_string(s: &str) -> String {
     out
 }
 
-/// Reads the text of a STEP string (without the quotes). It understands `''`, `\\`, `\X\hh`,
+/// Reads the text of a STEP string (without the quotes). It understands `''`, `\\`, `\X\hh` (always
+/// ISO 8859-1, not the page of `\P\`; the two digits must be hexadecimal),
 /// `\S\c` (a character of the upper half of the code page), `\P<letter>\` (selects the ISO 8859
 /// part A to I, part 1 at first), `\X2\...\X0\` (UTF-16) and `\X4\...\X0\` (UTF-32). An escape
 /// that is not complete or not valid stays as it is, so no text is lost.
@@ -204,8 +205,13 @@ pub fn decode_string(s: &str) -> String {
     let mut out = String::new();
     let mut i = 0;
     let mut page = 0usize;
-    let hex =
-        |digits: &[u8]| u32::from_str_radix(std::str::from_utf8(digits).unwrap_or("zz"), 16).ok();
+    // Exactly hexadecimal digits: `from_str_radix` alone would accept a sign.
+    let hex = |digits: &[u8]| {
+        if digits.is_empty() || !digits.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        u32::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
+    };
     while i < b.len() {
         match b[i] {
             b'\'' if b.get(i + 1) == Some(&b'\'') => {
@@ -217,9 +223,11 @@ pub fn decode_string(s: &str) -> String {
                 i += 2;
             }
             b'\\' if b[i..].starts_with(b"\\X\\") && i + 5 <= b.len() => {
-                match hex(&b[i + 3..i + 5]) {
+                // `\X\hh` is the character with this code of ISO 8859-1 (Latin-1), whatever page
+                // `\P..\` chose: only `\S\` follows the page (as IfcOpenShell reads it too).
+                match hex(&b[i + 3..i + 5]).and_then(char::from_u32) {
                     Some(c) => {
-                        out.push(codepages::char_of(page, c as u8));
+                        out.push(c);
                         i += 5;
                     }
                     None => {
@@ -233,7 +241,10 @@ pub fn decode_string(s: &str) -> String {
                     && b.get(i + 3).is_some_and(|c| (0x20..0x7F).contains(c)) =>
             {
                 out.push(codepages::char_of(page, b[i + 3] | 0x80));
-                i += 4;
+                // The character after `\S\` is written as in any string: an apostrophe or a
+                // backslash is doubled, and both bytes belong to the escape.
+                let doubled = matches!(b[i + 3], b'\'' | b'\\') && b.get(i + 4) == Some(&b[i + 3]);
+                i += if doubled { 5 } else { 4 };
             }
             b'\\'
                 if b.get(i + 1) == Some(&b'P')
@@ -388,24 +399,59 @@ pub struct StepFile {
     pub duplicates: Vec<u64>,
 }
 
+/// The schema names of `FILE_SCHEMA` in the text of a header. The keyword is found in any case
+/// (some exporters write `file_schema`), outside of strings.
+pub fn header_schemas(header: &str) -> Vec<String> {
+    let Some(at) = find_keyword(header, "FILE_SCHEMA") else {
+        return Vec::new();
+    };
+    let rest = &header[at..];
+    // The statement ends at the first semicolon outside of a string.
+    let (mut end, mut quote) = (rest.len(), false);
+    for (i, c) in rest.char_indices() {
+        match c {
+            '\'' => quote = !quote,
+            ';' if !quote => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    let mut parts = rest[..end].split('\'');
+    parts.next();
+    while let Some(name) = parts.next() {
+        out.push(name.to_string());
+        parts.next();
+    }
+    out
+}
+
+/// The place of a header keyword (upper case) in any case, outside of strings and on a word start.
+pub fn find_keyword(header: &str, keyword: &str) -> Option<usize> {
+    let (b, k) = (header.as_bytes(), keyword.as_bytes());
+    let mut quote = false;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\'' {
+            quote = !quote;
+        } else if !quote
+            && b[i..].len() >= k.len()
+            && b[i..i + k.len()].eq_ignore_ascii_case(k)
+            && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'))
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 impl StepFile {
     /// The schema names of `FILE_SCHEMA`.
     pub fn schemas(&self) -> Vec<String> {
-        let Some(at) = self.header.find("FILE_SCHEMA") else {
-            return Vec::new();
-        };
-        let rest = &self.header[at..];
-        let Some(end) = rest.find(';') else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        let mut parts = rest[..end].split('\'');
-        parts.next();
-        while let Some(name) = parts.next() {
-            out.push(name.to_string());
-            parts.next();
-        }
-        out
+        header_schemas(&self.header)
     }
 
     /// The entity with this ID.
@@ -881,7 +927,14 @@ mod tests {
         assert_eq!(decode_string("\\S\\d\\S\\|"), "\u{E4}\u{FC}");
         // \P<letter>\ selects the part of ISO 8859: part 2 (B) has a-ogonek at 0xB1.
         assert_eq!(decode_string("\\PB\\\\S\\1"), "\u{105}");
-        assert_eq!(decode_string("\\PB\\\\X\\B1"), "\u{105}");
+        // \X\hh is Latin-1 whatever the page (the plus sign of from_str_radix is no digit).
+        assert_eq!(decode_string("\\PB\\\\X\\B1"), "\u{B1}");
+        assert_eq!(decode_string("\\X\\+1"), "\\X\\+1");
+        assert_eq!(decode_string("\\X\\-1"), "\\X\\-1");
+        assert_eq!(decode_string("\\X\\4g"), "\\X\\4g");
+        // The doubled apostrophe and backslash after \S\ are one character.
+        assert_eq!(decode_string("a\\S\\''b"), "a\u{A7}b");
+        assert_eq!(decode_string("a\\S\\\\\\b"), "a\u{DC}b");
         assert_eq!(decode_string("\\PE\\\\S\\0"), "\u{410}");
         // The page stays until the next \P...\.
         assert_eq!(decode_string("\\PB\\\\S\\1\\PA\\\\S\\q"), "\u{105}\u{F1}");

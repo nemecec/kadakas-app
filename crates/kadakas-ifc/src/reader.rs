@@ -462,21 +462,9 @@ impl StepIndex {
         &self.header
     }
 
-    /// The schema names of `FILE_SCHEMA`, for example `IFC4`.
+    /// The schema names of `FILE_SCHEMA`, for example `IFC4`. The keyword may be in any case.
     pub fn schemas(&self) -> Vec<String> {
-        let Some(at) = self.header.find("FILE_SCHEMA") else {
-            return Vec::new();
-        };
-        let rest = &self.header[at..];
-        let end = rest.find(';').unwrap_or(rest.len());
-        let mut out = Vec::new();
-        let mut parts = rest[..end].split('\'');
-        parts.next();
-        while let Some(name) = parts.next() {
-            out.push(name.to_string());
-            parts.next();
-        }
-        out
+        crate::step::header_schemas(&self.header)
     }
 
     /// Number of entities in the index.
@@ -858,6 +846,20 @@ mod tests {
 
     #[test]
     fn lower_case_files_are_indexed() {
+        let x = idx(
+            "ISO-10303-21;\nheader;\nfile_name('a','',(''),(''),'','','');\nfile_schema(('IFC2X3'));\nendsec;\ndata;\n#1=IFCX();\nendsec;\n",
+        );
+        assert_eq!(x.schemas(), vec!["IFC2X3".to_string()]);
+        // A string that holds the word is not the keyword.
+        let y = idx(
+            "ISO-10303-21;\nHEADER;\nFILE_NAME('file_schema(x)','',(''),(''),'','','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n#1=IFCX();\nENDSEC;\n",
+        );
+        assert_eq!(y.schemas(), vec!["IFC4".to_string()]);
+        assert!(
+            idx("ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=IFCX();\nENDSEC;\n")
+                .schemas()
+                .is_empty()
+        );
         let x = idx(
             "iso-10303-21;\nheader;\nfile_schema(('IFC4X3'));\nendsec;\ndata;\n#1= ifcactorrole(.architect.,$,$);\n#2 =IfcLabel('a\\X\\27b');\nendsec;\n",
         );

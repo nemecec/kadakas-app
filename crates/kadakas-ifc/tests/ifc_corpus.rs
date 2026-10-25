@@ -15,11 +15,22 @@ use kadakas_ifc::{IfcImportError, IfcImportOptions, import_file};
 use kadakas_io::Report;
 use support::corpus;
 
-/// A debug build of a 2 MB file takes well under a second; a minute means a loop.
-const TIME_BOUND: Duration = Duration::from_secs(60);
+/// Only a guard against a hang. The work of an import is bounded by counted budgets, not by the
+/// clock: the tests below give a small triangle limit and boolean budget and assert that no file
+/// passes them, so the result does not depend on the speed of the machine.
+const HANG_GUARD: Duration = Duration::from_secs(600);
+
+/// The counted budgets of the corpus tests (a scene of 2 MB makes well under 200,000 triangles).
+fn bounded() -> IfcImportOptions {
+    IfcImportOptions {
+        max_triangles: 2_000_000,
+        boolean_work: 100_000_000,
+        ..Default::default()
+    }
+}
 
 fn load(path: &Path) -> (Editor, Report) {
-    load_with(path, &IfcImportOptions::default())
+    load_with(path, &bounded())
 }
 
 fn load_with(path: &Path, opts: &IfcImportOptions) -> (Editor, Report) {
@@ -61,12 +72,20 @@ fn every_file_imports_without_a_panic_in_time_and_the_accounting_holds() {
         seen += 1;
         let start = Instant::now();
         let doc = Document::with_sequential_ids();
-        let r = import_file(&file, &doc, &IfcImportOptions::default())
-            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        let r = import_file(&file, &doc, &bounded()).unwrap_or_else(|e| panic!("{path}: {e}"));
         assert!(
-            start.elapsed() < TIME_BOUND,
+            start.elapsed() < HANG_GUARD,
             "{path} took {:?}",
             start.elapsed()
+        );
+        // No counted budget was used up: the work is bounded by counts, not by the clock.
+        assert!(
+            !r.report
+                .notes
+                .iter()
+                .any(|n| n.contains("limit was reached") || n.contains("work budget")),
+            "{path}: {:?}",
+            r.report.notes
         );
         let mut ed = Editor::new(doc);
         ed.execute(&r.command)
