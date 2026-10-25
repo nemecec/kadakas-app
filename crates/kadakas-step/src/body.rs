@@ -217,6 +217,7 @@ impl<'a> Ctx<'a> {
         solid.tolerance_mm = self.tol * scale;
         solid.angle_deg = self.angle.to_degrees();
         let params = TessParams {
+            cut_fuel: crate::tess::CUT_FUEL,
             tol: self.tol * scale,
             angle: self.angle,
             max_face_triangles: self.limits.max_face_triangles,

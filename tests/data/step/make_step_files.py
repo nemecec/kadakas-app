@@ -701,7 +701,7 @@ class Step:
             p2 = self.add(f"PRESENTATION_STYLE_ASSIGNMENT((#{u2}))")
             self.add(f"STYLED_ITEM('',(#{p2}),#{items[0]})")
 
-    def mapped_assembly(self, name="Plate", count=2, with_usage=False):
+    def mapped_assembly(self, name="Plate", count=2, with_usage=False, usage_at=None):
         """A product of one box and an assembly that maps its representation twice."""
         box = self.box(10, 10, 5, name="plate")
         pd, rep, origin = self.product(name, [box])
@@ -726,6 +726,17 @@ class Step:
             nauo = self.add(f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#{apd},#{pd},$)")
             npds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{nauo})")
             rel = self.add(f"SHAPE_REPRESENTATION_RELATIONSHIP('','',#{rep},#{arep})")
+            self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
+        if usage_at is not None:
+            # The frame also uses the plate with a transformation of its own.
+            nauo = self.add(f"NEXT_ASSEMBLY_USAGE_OCCURRENCE('','','',#{apd},#{pd},$)")
+            npds = self.add(f"PRODUCT_DEFINITION_SHAPE('','',#{nauo})")
+            target = self.axis(*usage_at)
+            idt = self.add(f"ITEM_DEFINED_TRANSFORMATION('','',#{origin},#{target})")
+            rel = self.add(
+                f"(REPRESENTATION_RELATIONSHIP('','',#{rep},#{arep}) "
+                f"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{idt}) SHAPE_REPRESENTATION_RELATIONSHIP())"
+            )
             self.add(f"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{rel},#{npds})")
         return pd, rep, origin
 
@@ -960,6 +971,14 @@ def fixtures():
     s = Step()
     s.mapped_related()
     out["mapped_related.step"] = s
+    # The frame maps the plate twice and also uses it, once with a transformation that no
+    # mapped item has (a third plate) and once with the transformation of a mapped item.
+    s = Step()
+    s.mapped_assembly(usage_at=((500, 0, 0), (0, 0, 1), (1, 0, 0)))
+    out["mapped_usage_far.step"] = s
+    s = Step()
+    s.mapped_assembly(usage_at=((50, 0, 0), (0, 0, 1), (1, 0, 0)))
+    out["mapped_usage_same.step"] = s
     s = Step()
     s.related_representations()
     out["related.step"] = s

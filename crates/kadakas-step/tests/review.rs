@@ -754,3 +754,52 @@ fn a_mapped_representation_without_geometry_follows_its_relationship() {
         .collect();
     assert!(xs.iter().cloned().fold(f64::INFINITY, f64::min) > 40.0);
 }
+
+#[test]
+fn a_usage_with_a_placement_that_no_mapped_item_has_is_one_more_plate() {
+    // The frame maps the plate at x = 50 and x = 100, and also uses it with a transformation
+    // to x = 500. The plate at 500 was dropped without a word: 24 triangles.
+    let r = load("mapped_usage_far.step");
+    let triangles: usize = r.set.parts.iter().map(|p| p.triangles.len()).sum();
+    assert_eq!(triangles, 36, "{:?}", r.set.notes);
+    assert!(
+        r.set
+            .parts
+            .iter()
+            .any(|p| p.positions.iter().any(|v| v[0] >= 500.0))
+    );
+    // A usage that has the transformation of a mapped item is that plate, not another one.
+    let r = load("mapped_usage_same.step");
+    let triangles: usize = r.set.parts.iter().map(|p| p.triangles.len()).sum();
+    assert_eq!(triangles, 24, "{:?}", r.set.notes);
+}
+
+#[test]
+fn a_hole_that_touches_the_outline_at_a_corner_on_an_edge_is_joined_there() {
+    // The outline has a straight corner at (100, 40.75) and the hole has a corner there. The
+    // bridge went to (0, 100) and the face was left out of the solid.
+    let r = run(
+        "#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=CARTESIAN_POINT('',(30.25,0.,0.));\n#3=CARTESIAN_POINT('',(100.,0.,0.));\n\
+         #4=CARTESIAN_POINT('',(100.,40.75,0.));\n#5=CARTESIAN_POINT('',(100.,100.,0.));\n#6=CARTESIAN_POINT('',(0.,100.,0.));\n\
+         #7=CARTESIAN_POINT('',(90.96,36.23,0.));\n#8=CARTESIAN_POINT('',(90.96,45.27,0.));\n#9=CARTESIAN_POINT('',(100.,40.75,0.));\n\
+         #10=POLY_LOOP('',(#1,#2,#3,#4,#5,#6));\n#11=FACE_OUTER_BOUND('',#10,.T.);\n\
+         #12=POLY_LOOP('',(#7,#8,#9));\n#13=FACE_BOUND('',#12,.T.);\n#14=FACE('',(#11,#13));\n\
+         #15=CLOSED_SHELL('',(#14));\n#16=FACETED_BREP('b',#15);\n",
+    );
+    let p = &r.set.parts[0];
+    let area: f64 = p
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| p.positions[i as usize]);
+            (((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0).abs()
+        })
+        .sum();
+    let want = 10_000.0 - 0.5 * 9.04 * 9.04;
+    assert!((area - want).abs() < 1e-6, "{area} instead of {want}");
+    assert!(
+        !r.set.notes.iter().any(|n| n.contains("not cut")),
+        "{:?}",
+        r.set.notes
+    );
+}

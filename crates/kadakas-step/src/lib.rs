@@ -16,6 +16,7 @@ mod assembly;
 mod body;
 mod ctx;
 mod geom;
+mod merge;
 mod mesh2d;
 pub mod part21;
 mod read_brep;
@@ -724,6 +725,7 @@ pub fn retessellate(
         ));
     }
     let params = tess::TessParams {
+        cut_fuel: crate::tess::CUT_FUEL,
         tol: tolerance_mm,
         angle: angle_deg.to_radians().clamp(0.02, 1.5),
         max_face_triangles: StepLimits::default().max_face_triangles,

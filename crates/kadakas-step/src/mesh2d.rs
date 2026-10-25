@@ -97,542 +97,20 @@ pub fn ear_clip(
             .fold(f64::NEG_INFINITY, f64::max)
     };
     holes.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
-    let (poly, ops) = if holes.is_empty() {
+    let (poly, mut ops) = if holes.is_empty() {
         (outline.clone(), 0)
     } else {
-        let mut m = Merger::new(uv, outline, &holes, fuel);
+        let mut m = crate::merge::Merger::new(uv, outline, &holes, fuel);
         for k in 0..holes.len() {
             m.join(k)?;
         }
         (m.polygon(), m.ops)
     };
-    clip(uv, xyz, scale, &poly)
-        .map(|t| (t, ops))
-        .ok_or(Cut::Cannot)
+    let tris = clip(uv, xyz, scale, &poly, fuel, &mut ops)?;
+    Ok((tris, ops))
 }
 
-fn cross0(u: [f64; 2], v: [f64; 2]) -> f64 {
-    u[0] * v[1] - u[1] * v[0]
-}
-
-fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    [a[0] - b[0], a[1] - b[1]]
-}
-
-/// Does the direction `d` from the corner `v` run into the inside of a counterclockwise polygon
-/// (not along an edge)? `next` and `prev` are the neighbours of the corner.
-fn in_wedge(v: [f64; 2], next: [f64; 2], prev: [f64; 2], target: [f64; 2]) -> bool {
-    let (a, b, d) = (sub2(next, v), sub2(prev, v), sub2(target, v));
-    let turn = cross0(a, b);
-    if turn > 0.0 {
-        cross0(a, d) > 0.0 && cross0(d, b) > 0.0
-    } else if turn < 0.0 {
-        !(cross0(b, d) >= 0.0 && cross0(d, a) >= 0.0)
-    } else if a[0] * b[0] + a[1] * b[1] < 0.0 {
-        // A straight corner: the inside is on the left of the edge.
-        cross0(a, d) > 0.0
-    } else {
-        false
-    }
-}
-
-fn on_segment(p: [f64; 2], q: [f64; 2], r: [f64; 2]) -> bool {
-    r[0] >= p[0].min(q[0])
-        && r[0] <= p[0].max(q[0])
-        && r[1] >= p[1].min(q[1])
-        && r[1] <= p[1].max(q[1])
-}
-
-/// Do the segments pq and ab share a point (also one end on the other, or an overlap)?
-fn segments_meet(p: [f64; 2], q: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
-    if p[0].max(q[0]) < a[0].min(b[0])
-        || a[0].max(b[0]) < p[0].min(q[0])
-        || p[1].max(q[1]) < a[1].min(b[1])
-        || a[1].max(b[1]) < p[1].min(q[1])
-    {
-        return false;
-    }
-    let o1 = cross(p, q, a);
-    let o2 = cross(p, q, b);
-    let o3 = cross(a, b, p);
-    let o4 = cross(a, b, q);
-    if ((o1 > 0.0 && o2 < 0.0) || (o1 < 0.0 && o2 > 0.0))
-        && ((o3 > 0.0 && o4 < 0.0) || (o3 < 0.0 && o4 > 0.0))
-    {
-        return true;
-    }
-    (o1 == 0.0 && on_segment(p, q, a))
-        || (o2 == 0.0 && on_segment(p, q, b))
-        || (o3 == 0.0 && on_segment(a, b, p))
-        || (o4 == 0.0 && on_segment(a, b, q))
-}
-
-/// A segment of the outline, a hole or a bridge.
-struct Seg {
-    a: [f64; 2],
-    b: [f64; 2],
-    /// The indices of the ends in `uv`.
-    va: usize,
-    vb: usize,
-    /// True once the segment is an edge of the merged polygon (not of a hole that waits).
-    merged: bool,
-}
-
-/// The merged polygon as a ring of corners (a corner that a bridge doubles is two nodes), with
-/// all segments in a grid, so that a hole finds its neighbours without looking at the rest.
-/// A hole is joined by a bridge between its rightmost corner and a corner of the polygon that
-/// it can see. The corner comes from the ray to the right and the corners inside the triangle
-/// of the ray, as usual. Every choice is checked: the bridge must run inside the polygon at both
-/// ends and must not meet any segment (the merged polygon with its bridges, the holes that
-/// wait, the hole itself). A corner that the polygon has twice is taken at the copy that has the
-/// bridge inside its angle. When the usual corner does not fit, the nearest one that fits is
-/// taken. The cost of a hole is the cells around its bridge, not the size of the polygon.
-struct Merger<'a> {
-    uv: &'a [[f64; 2]],
-    holes: &'a [&'a Vec<usize>],
-    /// The ring: the index in `uv` of each node and its neighbours.
-    vert: Vec<usize>,
-    next: Vec<u32>,
-    prev: Vec<u32>,
-    /// The nodes of each corner: the first, and the next of the same corner.
-    first: HashMap<usize, u32>,
-    same: Vec<u32>,
-    segs: Vec<Seg>,
-    lo: [f64; 2],
-    size: [f64; 2],
-    n: usize,
-    cells: Vec<Vec<u32>>,
-    /// Steps taken (cells visited, segments tested) and the most that are allowed.
-    pub ops: u64,
-    fuel: u64,
-    /// The start node of the ring.
-    head: u32,
-    /// The segments of each hole are `hole_segs[k]..hole_segs[k + 1]`.
-    hole_segs: Vec<usize>,
-}
-
-const NONE: u32 = u32::MAX;
-
-impl<'a> Merger<'a> {
-    fn new(uv: &'a [[f64; 2]], outline: &[usize], holes: &'a [&'a Vec<usize>], fuel: u64) -> Self {
-        let edges = outline.len() + holes.iter().map(|h| h.len()).sum::<usize>();
-        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for &i in outline.iter().chain(holes.iter().flat_map(|h| h.iter())) {
-            for k in 0..2 {
-                lo[k] = lo[k].min(uv[i][k]);
-                hi[k] = hi[k].max(uv[i][k]);
-            }
-        }
-        let n = ((edges as f64).sqrt().ceil() as usize).clamp(1, 1024);
-        let size = [
-            ((hi[0] - lo[0]) / n as f64).max(1e-300),
-            ((hi[1] - lo[1]) / n as f64).max(1e-300),
-        ];
-        let mut m = Merger {
-            uv,
-            holes,
-            vert: Vec::with_capacity(edges + 2 * holes.len() + 2),
-            next: Vec::new(),
-            prev: Vec::new(),
-            first: HashMap::new(),
-            same: Vec::new(),
-            segs: Vec::with_capacity(edges + holes.len()),
-            lo,
-            size,
-            n,
-            cells: vec![Vec::new(); n * n],
-            ops: 0,
-            fuel,
-            head: 0,
-            hole_segs: Vec::new(),
-        };
-        let o = m.ring(outline);
-        m.head = o;
-        m.add_ring_segments(outline, true);
-        for h in holes {
-            m.hole_segs.push(m.segs.len());
-            m.add_ring_segments(h, false);
-        }
-        m.hole_segs.push(m.segs.len());
-        m
-    }
-
-    /// Makes the nodes of a loop in a ring and returns the first.
-    fn ring(&mut self, l: &[usize]) -> u32 {
-        let base = self.vert.len() as u32;
-        let k = l.len() as u32;
-        for (j, &v) in l.iter().enumerate() {
-            let id = base + j as u32;
-            self.vert.push(v);
-            self.next.push(base + (j as u32 + 1) % k);
-            self.prev.push(base + (j as u32 + k - 1) % k);
-            self.same.push(NONE);
-            self.link_same(v, id);
-        }
-        base
-    }
-
-    fn link_same(&mut self, v: usize, id: u32) {
-        let head = self.first.entry(v).or_insert(NONE);
-        self.same[id as usize] = *head;
-        *head = id;
-    }
-
-    fn node(&mut self, v: usize) -> u32 {
-        let id = self.vert.len() as u32;
-        self.vert.push(v);
-        self.next.push(NONE);
-        self.prev.push(NONE);
-        self.same.push(NONE);
-        self.link_same(v, id);
-        id
-    }
-
-    fn add_ring_segments(&mut self, l: &[usize], merged: bool) {
-        for j in 0..l.len() {
-            let (va, vb) = (l[j], l[(j + 1) % l.len()]);
-            self.add_seg(va, vb, merged);
-        }
-    }
-
-    fn cell_of(&self, p: [f64; 2]) -> (usize, usize) {
-        let f = |k: usize| {
-            (((p[k] - self.lo[k]) / self.size[k]).floor().max(0.0) as usize).min(self.n - 1)
-        };
-        (f(0), f(1))
-    }
-
-    /// Calls `f` with each cell on the way from `a` to `b` (a grid walk). `f` says when to stop.
-    fn walk(&self, a: [f64; 2], b: [f64; 2], mut f: impl FnMut(usize, usize) -> bool) {
-        let (mut cx, mut cy) = self.cell_of(a);
-        let (ex, ey) = self.cell_of(b);
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let step = |d: f64| if d > 0.0 { 1isize } else { -1 };
-        let (sx, sy) = (step(dx), step(dy));
-        let tmax = |c: usize, s: isize, d: f64, k: usize| {
-            if d == 0.0 {
-                f64::INFINITY
-            } else {
-                let edge = self.lo[k] + (c as isize + isize::from(s > 0)) as f64 * self.size[k];
-                (edge - a[k]) / d
-            }
-        };
-        let mut tx = tmax(cx, sx, dx, 0);
-        let mut ty = tmax(cy, sy, dy, 1);
-        let tdx = if dx == 0.0 {
-            f64::INFINITY
-        } else {
-            self.size[0] / dx.abs()
-        };
-        let tdy = if dy == 0.0 {
-            f64::INFINITY
-        } else {
-            self.size[1] / dy.abs()
-        };
-        let mut left = (cx.abs_diff(ex) + cy.abs_diff(ey)) + 2;
-        loop {
-            if !f(cx, cy) || (cx == ex && cy == ey) || left == 0 {
-                break;
-            }
-            left -= 1;
-            if tx < ty {
-                let nx = cx as isize + sx;
-                if nx < 0 || nx >= self.n as isize {
-                    break;
-                }
-                cx = nx as usize;
-                tx += tdx;
-            } else {
-                let ny = cy as isize + sy;
-                if ny < 0 || ny >= self.n as isize {
-                    break;
-                }
-                cy = ny as usize;
-                ty += tdy;
-            }
-        }
-    }
-
-    fn add_seg(&mut self, va: usize, vb: usize, merged: bool) {
-        let id = self.segs.len() as u32;
-        let (a, b) = (self.uv[va], self.uv[vb]);
-        self.segs.push(Seg {
-            a,
-            b,
-            va,
-            vb,
-            merged,
-        });
-        // In the cells on its way and their neighbours: a segment that only touches the edge
-        // of a cell is still found from the next cell.
-        let mut cells: Vec<usize> = Vec::new();
-        let n = self.n;
-        self.walk(a, b, |cx, cy| {
-            for y in cy.saturating_sub(1)..=(cy + 1).min(n - 1) {
-                for x in cx.saturating_sub(1)..=(cx + 1).min(n - 1) {
-                    cells.push(y * n + x);
-                }
-            }
-            true
-        });
-        cells.sort_unstable();
-        cells.dedup();
-        self.ops += cells.len() as u64;
-        for c in cells {
-            self.cells[c].push(id);
-        }
-    }
-
-    fn spend(&mut self, n: u64) -> Result<(), Cut> {
-        self.ops += n;
-        if self.ops > self.fuel {
-            Err(Cut::Fuel(self.ops))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Does the open segment from `m` to `v` meet a segment of the polygon, of a waiting hole
-    /// or of the hole itself, other than the ones that end at `m` or `v`?
-    fn blocked(&mut self, m: [f64; 2], v: [f64; 2]) -> Result<bool, Cut> {
-        let mut hit = false;
-        let mut cells: Vec<usize> = Vec::new();
-        let n = self.n;
-        self.walk(m, v, |cx, cy| {
-            cells.push(cy * n + cx);
-            true
-        });
-        self.spend(cells.len() as u64)?;
-        for c in cells {
-            for k in 0..self.cells[c].len() {
-                let s = &self.segs[self.cells[c][k] as usize];
-                let (a, b) = (s.a, s.b);
-                if a == m || b == m || a == v || b == v {
-                    continue;
-                }
-                if segments_meet(m, v, a, b) {
-                    hit = true;
-                    break;
-                }
-            }
-            self.ops += self.cells[c].len() as u64;
-            if hit {
-                break;
-            }
-        }
-        self.spend(0)?;
-        Ok(hit)
-    }
-
-    /// Can the hole corner `m` (with neighbours `hp` and `hn` in its loop) be joined to the node
-    /// `k`? The bridge must run into the inside at both ends and meet no segment.
-    fn fits(&mut self, k: u32, m: [f64; 2], hp: [f64; 2], hn: [f64; 2]) -> Result<bool, Cut> {
-        let v = self.uv[self.vert[k as usize]];
-        if v == m {
-            return Ok(false);
-        }
-        let (pp, pn) = (
-            self.uv[self.vert[self.prev[k as usize] as usize]],
-            self.uv[self.vert[self.next[k as usize] as usize]],
-        );
-        if !in_wedge(v, pn, pp, m) || !in_wedge(m, hn, hp, v) {
-            return Ok(false);
-        }
-        Ok(!self.blocked(m, v)?)
-    }
-
-    fn nodes_of(&self, v: usize) -> Vec<u32> {
-        let mut out = Vec::new();
-        let mut at = self.first.get(&v).copied().unwrap_or(NONE);
-        while at != NONE {
-            out.push(at);
-            at = self.same[at as usize];
-        }
-        out
-    }
-
-    /// The first segment of the merged polygon that the ray to the right of `m` meets, by
-    /// the grid walk: its crossing and its end with the larger x.
-    fn ray(&mut self, m: [f64; 2]) -> Result<Option<(f64, usize)>, Cut> {
-        let far = [self.lo[0] + self.size[0] * (self.n as f64 + 1.0), m[1]];
-        let mut best: Option<(f64, usize)> = None;
-        let mut visited: Vec<(usize, usize)> = Vec::new();
-        self.walk(m, far, |cx, cy| {
-            visited.push((cx, cy));
-            true
-        });
-        for (cx, cy) in visited {
-            let right = self.lo[0] + (cx + 1) as f64 * self.size[0];
-            self.spend(1 + self.cells[cy * self.n + cx].len() as u64)?;
-            for &id in &self.cells[cy * self.n + cx] {
-                let s = &self.segs[id as usize];
-                let (a, b) = (s.a, s.b);
-                if !s.merged || (a[1] - m[1]) * (b[1] - m[1]) > 0.0 || a[1] == b[1] {
-                    continue;
-                }
-                let x = a[0] + (m[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]);
-                if x >= m[0] - 1e-12 && x <= right && best.is_none_or(|(bx, _)| x < bx) {
-                    best = Some((x, id as usize));
-                }
-            }
-            if best.is_some() {
-                break;
-            }
-        }
-        Ok(best)
-    }
-
-    /// Joins the hole `k` to the polygon.
-    fn join(&mut self, k: usize) -> Result<(), Cut> {
-        let hole = self.holes[k];
-        let h = hole.len();
-        let (mi, _) = hole
-            .iter()
-            .enumerate()
-            .max_by(|a, b| self.uv[*a.1][0].total_cmp(&self.uv[*b.1][0]))
-            .ok_or(Cut::Cannot)?;
-        let m = self.uv[hole[mi]];
-        let (hp, hn) = (self.uv[hole[(mi + h - 1) % h]], self.uv[hole[(mi + 1) % h]]);
-        let mut tries: Vec<usize> = Vec::new();
-        if let Some((ix, si)) = self.ray(m)? {
-            let s = &self.segs[si];
-            let (p, pv) = if s.a[0] > s.b[0] {
-                (s.a, s.va)
-            } else {
-                (s.b, s.vb)
-            };
-            let ipt = [ix, m[1]];
-            // The corners inside the triangle (M, I, P) block the view: the one with the
-            // smallest angle to the ray is the candidate.
-            let mut blockers: Vec<(f64, f64, usize)> = Vec::new();
-            let (lo, hi) = (
-                self.cell_of([m[0], m[1].min(p[1])]),
-                self.cell_of([ix.max(p[0]), m[1].max(p[1])]),
-            );
-            if (hi.0 - lo.0 + 1) * (hi.1 - lo.1 + 1) <= 4096 {
-                self.spend(((hi.0 - lo.0 + 1) * (hi.1 - lo.1 + 1)) as u64)?;
-                let mut seen: Vec<usize> = Vec::new();
-                for cy in lo.1..=hi.1 {
-                    for cx in lo.0..=hi.0 {
-                        for &id in &self.cells[cy * self.n + cx] {
-                            let s = &self.segs[id as usize];
-                            if !s.merged {
-                                continue;
-                            }
-                            for (q, qv) in [(s.a, s.va), (s.b, s.vb)] {
-                                if qv != pv && in_triangle(m, ipt, p, q) && !seen.contains(&qv) {
-                                    seen.push(qv);
-                                    let ang = (q[1] - m[1]).abs().atan2(q[0] - m[0]);
-                                    blockers.push((ang, dist2(m, q), qv));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            blockers.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-            tries.extend(blockers.iter().take(8).map(|b| b.2));
-            tries.push(pv);
-        }
-        let mut found: Option<u32> = None;
-        'usual: for v in tries {
-            for node in self.nodes_of(v) {
-                if self.fits(node, m, hp, hn)? {
-                    found = Some(node);
-                    break 'usual;
-                }
-            }
-        }
-        if found.is_none() {
-            found = self.nearest_fit(m, hp, hn)?;
-        }
-        let node = found.ok_or(Cut::Cannot)?;
-        self.splice(node, hole, mi);
-        // The hole's own segments are part of the polygon from now on.
-        for s in self.hole_segs[k]..self.hole_segs[k + 1] {
-            self.segs[s].merged = true;
-        }
-        // The bridge is two edges of the polygon.
-        let v = self.vert[node as usize];
-        self.add_seg(v, hole[mi], true);
-        self.spend(0)
-    }
-
-    /// The nearest corner of the polygon that the corner `m` can be joined to: rings of cells
-    /// around `m`, each ring by distance.
-    fn nearest_fit(&mut self, m: [f64; 2], hp: [f64; 2], hn: [f64; 2]) -> Result<Option<u32>, Cut> {
-        let (cx, cy) = self.cell_of(m);
-        let n = self.n;
-        let mut tested: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        for r in 0..=n {
-            let mut ring: Vec<(f64, usize)> = Vec::new();
-            for y in cy.saturating_sub(r)..=(cy + r).min(n - 1) {
-                for x in cx.saturating_sub(r)..=(cx + r).min(n - 1) {
-                    if x.abs_diff(cx).max(y.abs_diff(cy)) != r {
-                        continue;
-                    }
-                    for &id in &self.cells[y * n + x] {
-                        let s = &self.segs[id as usize];
-                        if !s.merged {
-                            continue;
-                        }
-                        for (q, qv) in [(s.a, s.va), (s.b, s.vb)] {
-                            if tested.insert(qv) {
-                                ring.push((dist2(m, q), qv));
-                            }
-                        }
-                    }
-                }
-            }
-            self.spend(1 + ring.len() as u64)?;
-            ring.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (_, v) in ring {
-                for node in self.nodes_of(v) {
-                    if self.fits(node, m, hp, hn)? {
-                        return Ok(Some(node));
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    /// Puts the hole into the ring after `node`: the node, the hole from its corner `mi` round
-    /// to the corner again, and the node again.
-    fn splice(&mut self, node: u32, hole: &[usize], mi: usize) {
-        let h = hole.len();
-        let after = self.next[node as usize];
-        let rotated: Vec<usize> = (0..=h).map(|j| hole[(mi + j) % h]).collect();
-        let mut prev = node;
-        for v in rotated {
-            let id = self.node(v);
-            self.next[prev as usize] = id;
-            self.prev[id as usize] = prev;
-            prev = id;
-        }
-        let again = self.node(self.vert[node as usize]);
-        self.next[prev as usize] = again;
-        self.prev[again as usize] = prev;
-        self.next[again as usize] = after;
-        self.prev[after as usize] = again;
-    }
-
-    /// The corners of the ring in order, from the head.
-    fn polygon(&self) -> Vec<usize> {
-        let mut out = Vec::with_capacity(self.vert.len());
-        let mut at = self.head;
-        loop {
-            out.push(self.vert[at as usize]);
-            at = self.next[at as usize];
-            if at == self.head {
-                break;
-            }
-        }
-        out
-    }
-}
-
-fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
 }
 
@@ -645,78 +123,186 @@ fn in_triangle(a: [f64; 2], b: [f64; 2], c: [f64; 2], p: [f64; 2]) -> bool {
     !(neg && pos)
 }
 
+/// A quadtree of points, each with a number. It answers "is there a point in this box that
+/// passes this test" and visits only the places near the box.
+struct PointTree {
+    nodes: Vec<PNode>,
+}
+
+struct PNode {
+    lo: [f64; 2],
+    hi: [f64; 2],
+    kids: [u32; 4],
+    points: Vec<([f64; 2], usize)>,
+}
+
+impl PointTree {
+    const LEAF: usize = 16;
+    const DEPTH: u32 = 40;
+
+    fn build(points: &[([f64; 2], usize)]) -> PointTree {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for (p, _) in points {
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        if points.is_empty() {
+            lo = [0.0; 2];
+            hi = [0.0; 2];
+        }
+        let mut t = PointTree {
+            nodes: vec![PNode {
+                lo,
+                hi,
+                kids: [u32::MAX; 4],
+                points: points.to_vec(),
+            }],
+        };
+        t.split(0, 0);
+        t
+    }
+
+    fn split(&mut self, ni: usize, depth: u32) {
+        if self.nodes[ni].points.len() <= Self::LEAF || depth >= Self::DEPTH {
+            return;
+        }
+        let (lo, hi) = (self.nodes[ni].lo, self.nodes[ni].hi);
+        let mid = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+        if mid[0] <= lo[0] && mid[1] <= lo[1] {
+            return;
+        }
+        let pts = std::mem::take(&mut self.nodes[ni].points);
+        let mut parts: [Vec<([f64; 2], usize)>; 4] = Default::default();
+        for p in pts {
+            let k = usize::from(p.0[0] > mid[0]) + 2 * usize::from(p.0[1] > mid[1]);
+            parts[k].push(p);
+        }
+        let base = self.nodes.len() as u32;
+        for (k, part) in parts.into_iter().enumerate() {
+            let (xh, yh) = (k % 2, k / 2);
+            self.nodes.push(PNode {
+                lo: [
+                    if xh == 0 { lo[0] } else { mid[0] },
+                    if yh == 0 { lo[1] } else { mid[1] },
+                ],
+                hi: [
+                    if xh == 0 { mid[0] } else { hi[0] },
+                    if yh == 0 { mid[1] } else { hi[1] },
+                ],
+                kids: [u32::MAX; 4],
+                points: part,
+            });
+        }
+        self.nodes[ni].kids = [base, base + 1, base + 2, base + 3];
+        for k in 0..4 {
+            self.split((base + k) as usize, depth + 1);
+        }
+    }
+
+    /// Is there a point in the triangle abc (ends included) for which `test` says yes? Only the
+    /// boxes that the triangle touches are looked at, so a long thin triangle in a crowd of
+    /// points costs what is near it. `steps` counts the nodes and the points looked at.
+    fn any_in_triangle(
+        &self,
+        tri: [[f64; 2]; 3],
+        steps: &mut u64,
+        test: &mut dyn FnMut(usize) -> bool,
+    ) -> bool {
+        let orient = cross(tri[0], tri[1], tri[2]);
+        let sign = if orient < 0.0 { -1.0 } else { 1.0 };
+        let (lo, hi) = (
+            [
+                tri[0][0].min(tri[1][0]).min(tri[2][0]),
+                tri[0][1].min(tri[1][1]).min(tri[2][1]),
+            ],
+            [
+                tri[0][0].max(tri[1][0]).max(tri[2][0]),
+                tri[0][1].max(tri[1][1]).max(tri[2][1]),
+            ],
+        );
+        let mut stack = vec![0usize];
+        while let Some(ni) = stack.pop() {
+            *steps += 1;
+            let n = &self.nodes[ni];
+            if n.hi[0] < lo[0] || n.lo[0] > hi[0] || n.hi[1] < lo[1] || n.lo[1] > hi[1] {
+                continue;
+            }
+            // The box is outside the triangle when all its corners are outside one edge.
+            let corners = [n.lo, [n.hi[0], n.lo[1]], n.hi, [n.lo[0], n.hi[1]]];
+            let outside = (0..3).any(|e| {
+                corners
+                    .iter()
+                    .all(|c| sign * cross(tri[e], tri[(e + 1) % 3], *c) < 0.0)
+            });
+            if outside {
+                continue;
+            }
+            if n.kids[0] == u32::MAX {
+                for &(p, id) in &n.points {
+                    *steps += 1;
+                    if in_triangle(tri[0], tri[1], tri[2], p) && test(id) {
+                        return true;
+                    }
+                }
+            } else {
+                stack.extend(n.kids.iter().map(|k| *k as usize));
+            }
+        }
+        false
+    }
+}
+
+/// Steps that one push on the heap of the ears or one pop is worth.
+const HEAP_STEPS: u64 = 30;
+
 /// Ear clipping of a counterclockwise polygon (repeated indices allowed, for bridges). The ear
 /// with the shortest longest edge goes first, which gives short diagonals and round triangles.
-fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Option<Vec<[u32; 3]>> {
+fn clip(
+    uv: &[[f64; 2]],
+    xyz: &[DVec3],
+    scale: [f64; 2],
+    poly: &[usize],
+    fuel: u64,
+    ops: &mut u64,
+) -> Result<Vec<[u32; 3]>, Cut> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     let n = poly.len();
+    // The steps taken: ears tried and corners looked at.
+    let work = std::cell::Cell::new(*ops);
     let mut next: Vec<usize> = (0..n).map(|i| (i + 1) % n).collect();
     let mut prev: Vec<usize> = (0..n).map(|i| (i + n - 1) % n).collect();
     let mut alive = vec![true; n];
     let mut stamp = vec![0u32; n];
     let pt = |i: usize| uv[poly[i]];
     let convex = |p: usize, i: usize, q: usize| cross(pt(p), pt(i), pt(q)) > 0.0;
-    // The reflex points, in a grid.
+    // The reflex points, in a quadtree: a cluster of holes has many of them in a small place.
     let reflex0: Vec<usize> = (0..n).filter(|&i| !convex(prev[i], i, next[i])).collect();
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    for &i in &reflex0 {
-        for k in 0..2 {
-            lo[k] = lo[k].min(pt(i)[k]);
-            hi[k] = hi[k].max(pt(i)[k]);
-        }
-    }
-    let cells = ((reflex0.len() as f64 / 2.0).sqrt().ceil() as usize).clamp(1, 512);
-    let size = [
-        ((hi[0] - lo[0]) / cells as f64).max(1e-300),
-        ((hi[1] - lo[1]) / cells as f64).max(1e-300),
-    ];
-    let cell_of = |p: [f64; 2]| -> (usize, usize) {
-        (
-            (((p[0] - lo[0]) / size[0]).floor().max(0.0) as usize).min(cells - 1),
-            (((p[1] - lo[1]) / size[1]).floor().max(0.0) as usize).min(cells - 1),
-        )
-    };
-    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); cells * cells];
-    for &i in &reflex0 {
-        let (cx, cy) = cell_of(pt(i));
-        grid[cy * cells + cx].push(i);
-    }
+    let reflex_tree = PointTree::build(&reflex0.iter().map(|&i| (pt(i), i)).collect::<Vec<_>>());
+    work.set(work.get() + reflex0.len() as u64 * 4);
     let inside_any =
         |a: usize, b: usize, c: usize, prev: &[usize], next: &[usize], alive: &[bool]| -> bool {
             let (pa, pb, pc) = (pt(a), pt(b), pt(c));
-            let (x0, x1) = (pa[0].min(pb[0]).min(pc[0]), pa[0].max(pb[0]).max(pc[0]));
-            let (y0, y1) = (pa[1].min(pb[1]).min(pc[1]), pa[1].max(pb[1]).max(pc[1]));
-            if reflex0.is_empty() || x1 < lo[0] || x0 > hi[0] || y1 < lo[1] || y0 > hi[1] {
-                return false;
-            }
-            let (cx0, cy0) = cell_of([x0, y0]);
-            let (cx1, cy1) = cell_of([x1, y1]);
-            for cy in cy0..=cy1 {
-                for cx in cx0..=cx1 {
-                    for &r in &grid[cy * cells + cx] {
-                        if r == a || r == b || r == c || !alive[r] {
-                            continue;
-                        }
-                        let q = pt(r);
-                        // The same position as a corner: a bridge copy, not a blocker.
-                        if poly[r] == poly[a] || poly[r] == poly[b] || poly[r] == poly[c] {
-                            continue;
-                        }
-                        if q == pa || q == pb || q == pc {
-                            continue;
-                        }
-                        // Still reflex now?
-                        if convex(prev[r], r, next[r]) {
-                            continue;
-                        }
-                        if in_triangle(pa, pb, pc, q) {
-                            return true;
-                        }
-                    }
+            let mut steps = 0u64;
+            let found = reflex_tree.any_in_triangle([pa, pb, pc], &mut steps, &mut |r| {
+                if r == a || r == b || r == c || !alive[r] {
+                    return false;
                 }
-            }
-            false
+                let q = pt(r);
+                // The same position as a corner: a bridge copy, not a blocker.
+                if poly[r] == poly[a] || poly[r] == poly[b] || poly[r] == poly[c] {
+                    return false;
+                }
+                if q == pa || q == pb || q == pc {
+                    return false;
+                }
+                // Still reflex now?
+                !convex(prev[r], r, next[r])
+            });
+            work.set(work.get() + steps);
+            found
         };
     let score = |p: usize, i: usize, q: usize| -> f64 {
         let sc = [
@@ -738,6 +324,10 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
     // triangle with no area, which the flips repair). Mode 2: any convex ear.
     let mut mode = 0u8;
     while left > 3 {
+        work.set(work.get() + left as u64 * HEAP_STEPS);
+        if work.get() > fuel {
+            return Err(Cut::Fuel(work.get()));
+        }
         let mut heap: BinaryHeap<Reverse<(u64, usize, u32)>> = BinaryHeap::new();
         let first = (0..n).find(|i| alive[*i]).unwrap_or(0);
         let mut v = first;
@@ -751,8 +341,12 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
         }
         let mut progress = false;
         while let Some(Reverse((_, v, st))) = heap.pop() {
+            work.set(work.get() + HEAP_STEPS);
             if !alive[v] || stamp[v] != st || left <= 3 {
                 continue;
+            }
+            if work.get() > fuel {
+                return Err(Cut::Fuel(work.get()));
             }
             let (p, q) = (prev[v], next[v]);
             let is_flat = flat(p, v, q);
@@ -780,6 +374,7 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
                 let is_flat = flat(a, w, c);
                 if (is_flat && mode >= 1) || (!is_flat && convex(a, w, c)) {
                     heap.push(Reverse((score(a, w, c).to_bits(), w, stamp[w])));
+                    work.set(work.get() + HEAP_STEPS);
                 }
             }
         }
@@ -791,12 +386,12 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
         } else {
             mode += 1;
             if mode > 2 {
-                return None;
+                return Err(Cut::Cannot);
             }
         }
     }
     // The last three points.
-    let v = (0..n).find(|i| alive[*i])?;
+    let v = (0..n).find(|i| alive[*i]).ok_or(Cut::Cannot)?;
     let (p, q) = (prev[v], next[v]);
     if left == 3
         && cross(pt(p), pt(v), pt(q)) >= 0.0
@@ -812,7 +407,12 @@ fn clip(uv: &[[f64; 2]], xyz: &[DVec3], scale: [f64; 2], poly: &[usize]) -> Opti
         .iter()
         .map(|t| cross(uv[t[0] as usize], uv[t[1] as usize], uv[t[2] as usize]) / 2.0)
         .sum();
-    ((want - got).abs() <= 1e-6 * want.abs().max(1e-300)).then_some(out)
+    *ops = work.get();
+    if (want - got).abs() <= 1e-6 * want.abs().max(1e-300) {
+        Ok(out)
+    } else {
+        Err(Cut::Cannot)
+    }
 }
 
 fn polygon_area(uv: &[[f64; 2]], poly: &[usize]) -> f64 {
@@ -1530,6 +1130,26 @@ mod tests {
         assert_covers_to(1e-9, uv, loops, want, t);
     }
 
+    /// The triangles have positive areas that add up to the area of the region: they cover it
+    /// once. Where holes touch, the edges of the triangles do not match by number.
+    fn assert_area_once(uv: &[[f64; 2]], want: f64, t: &[[u32; 3]]) {
+        let got = area_of(uv, t);
+        assert!(
+            (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+            "{got} {want}"
+        );
+        for tri in t {
+            assert!(
+                cross(
+                    uv[tri[0] as usize],
+                    uv[tri[1] as usize],
+                    uv[tri[2] as usize]
+                ) >= -1e-12,
+                "a triangle looks the wrong way"
+            );
+        }
+    }
+
     fn assert_covers_to(
         tol: f64,
         uv: &[[f64; 2]],
@@ -1626,6 +1246,25 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(128))]
+        #[test]
+        fn random_touching_rows_are_covered_once(
+            nx in 1usize..9,
+            ny in 1usize..7,
+            ri in 0usize..4,
+            gi in 0usize..4,
+            skip in 0u64..6,
+        ) {
+            // Sizes that add up exactly in binary, so that corners that should touch do.
+            let (r, gap) = ([0.25, 0.5, 1.0, 2.0][ri], [0.125, 0.25, 0.5, 1.0][gi]);
+            let (uv, loops, want) = touching_rows(nx, ny, r, gap, skip);
+            let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops);
+            proptest::prop_assert!(t.is_some(), "{} pairs x {} rows r {} gap {} skip {}", nx, ny, r, gap, skip);
+            assert_area_once(&uv, want, &t.unwrap());
+        }
+    }
+
     #[test]
     fn joining_holes_stops_at_its_fuel() {
         let (uv, loops, _) = grid_holes(10, 10, 0.0, 1, 0);
@@ -1683,6 +1322,242 @@ mod tests {
         }
         let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops).unwrap();
         assert_covers(&uv, &loops, want, &t);
+    }
+
+    /// A named polygon: its points and its loops.
+    type Shape = (String, Vec<[f64; 2]>, Vec<Vec<usize>>);
+
+    /// The polygons that the reviewers used to find the cost of the cutting, as (points, loops).
+    fn shapes(big: bool) -> Vec<Shape> {
+        let mut out = Vec::new();
+        let holes_along =
+            |name: &str, n: usize, pos: &dyn Fn(usize) -> (f64, f64, f64), outline: [f64; 4]| {
+                let mut uv = vec![
+                    [outline[0], outline[1]],
+                    [outline[2], outline[1]],
+                    [outline[2], outline[3]],
+                    [outline[0], outline[3]],
+                ];
+                let mut loops = vec![vec![0, 1, 2, 3]];
+                for i in 0..n {
+                    let (x, y, side) = pos(i);
+                    let base = uv.len();
+                    uv.extend([[x, y], [x, y + side], [x + side, y + side], [x + side, y]]);
+                    loops.push((base..base + 4).collect());
+                }
+                (name.to_string(), uv, loops)
+            };
+        let diagonals: &[usize] = if big {
+            &[1000, 3000, 10_000, 30_000, 90_000]
+        } else {
+            &[100, 300]
+        };
+        for &n in diagonals {
+            let s = 1000.0 / n as f64;
+            out.push(holes_along(
+                &format!("diagonal {n}"),
+                n,
+                &|i| (i as f64 * s, i as f64 * s, s / 2.0),
+                [-1.0, -1.0, 1001.0, 1001.0],
+            ));
+        }
+        out.push(holes_along(
+            "row",
+            if big { 10_000 } else { 200 },
+            &|i| (i as f64 * 0.1 + 0.025, 0.5, 0.05),
+            [0.0, 0.0, if big { 1000.0 } else { 20.0 }, 1.0],
+        ));
+        // A comb: teeth up from a base. n points.
+        let comb = |teeth: usize| {
+            let mut uv = vec![[0.0, 0.0], [teeth as f64 * 2.0, 0.0]];
+            for t in (0..teeth).rev() {
+                let x = t as f64 * 2.0;
+                uv.push([x + 2.0, 10.0]);
+                uv.push([x + 1.0, 10.0]);
+                uv.push([x + 1.0, 1.0]);
+                uv.push([x + 0.5, 1.0]);
+                uv.push([x + 0.5, 10.0]);
+                uv.push([x, 10.0]);
+            }
+            let n = uv.len();
+            (uv, vec![(0..n).collect::<Vec<usize>>()])
+        };
+        let (uv, l) = comb(if big { 30_000 } else { 300 });
+        out.push(("comb".to_string(), uv, l));
+        // Holes of sizes from a thousandth to the cell, one in each cell of a grid.
+        {
+            let mut state = 0x9E37_79B9_7F4A_7C15u64;
+            let mut rnd = move || {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 11) as f64 / (1u64 << 53) as f64
+            };
+            let (g, cell) = (32usize, 10_000.0 / 32.0);
+            let mut uv = vec![
+                [0.0, 0.0],
+                [10_000.0, 0.0],
+                [10_000.0, 10_000.0],
+                [0.0, 10_000.0],
+            ];
+            let mut loops = vec![vec![0, 1, 2, 3]];
+            for j in 0..g {
+                for i in 0..g {
+                    let side = (1e-3f64).powf(1.0 - rnd()) * (cell * 0.8f64).min(800.0);
+                    let (x, y) = (
+                        i as f64 * cell + rnd() * (cell - side),
+                        j as f64 * cell + rnd() * (cell - side),
+                    );
+                    let base = uv.len();
+                    uv.extend([[x, y], [x, y + side], [x + side, y + side], [x + side, y]]);
+                    loops.push((base..base + 4).collect());
+                }
+            }
+            out.push(("random 1024".to_string(), uv, loops));
+        }
+        let n = if big { 390_000usize } else { 3_900 };
+        let ring = |f: &dyn Fn(usize) -> [f64; 2]| -> (Vec<[f64; 2]>, Vec<Vec<usize>>) {
+            ((0..n).map(f).collect(), vec![(0..n).collect()])
+        };
+        let (uv, l) = ring(&|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            [100.0 * a.cos(), 100.0 * a.sin()]
+        });
+        out.push(("circle".into(), uv, l));
+        let (uv, l) = ring(&|i| {
+            let a = std::f64::consts::TAU * i as f64 / n as f64;
+            let r = if i % 2 == 0 { 100.0 } else { 60.0 };
+            [r * a.cos(), r * a.sin()]
+        });
+        out.push(("star".into(), uv, l));
+        let (uv, l) = ring(&|i| {
+            // Zigzag teeth along the top of a long strip, counterclockwise: the bottom from
+            // left to right, then the teeth from right to left.
+            let half = n / 2;
+            if i < half {
+                [i as f64, -5.0]
+            } else {
+                let j = n - 1 - i;
+                [j as f64, if j.is_multiple_of(2) { 0.0 } else { 1.0 }]
+            }
+        });
+        out.push(("zigzag".into(), uv, l));
+        out
+    }
+
+    /// Rows of diamond holes. In each row the first touches the left edge of the outline with
+    /// a corner, and the others are in pairs that touch each other with a corner. Every hole
+    /// touches one thing at one point, and the gaps keep the face in one piece.
+    fn touching_rows(
+        pairs: usize,
+        ny: usize,
+        r: f64,
+        gap: f64,
+        skip: u64,
+    ) -> (Vec<[f64; 2]>, Vec<Vec<usize>>, f64) {
+        let row_w = 2.0 * r + gap + pairs as f64 * (4.0 * r + gap);
+        let (w, h) = (row_w, (2.0 * r + gap) * ny as f64 + gap);
+        let mut uv = vec![[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]];
+        let mut loops = vec![vec![0, 1, 2, 3]];
+        let mut want = w * h;
+        for j in 0..ny {
+            let cy = gap + r + (2.0 * r + gap) * j as f64;
+            let mut centres = vec![r];
+            for k in 0..pairs {
+                if skip > 0 && ((k * 5 + j * 11) as u64).is_multiple_of(skip) {
+                    continue;
+                }
+                let left = 2.0 * r + gap + k as f64 * (4.0 * r + gap);
+                centres.push(left + r);
+                centres.push(left + 3.0 * r);
+            }
+            for cx in centres {
+                let base = uv.len();
+                uv.extend([[cx - r, cy], [cx, cy + r], [cx + r, cy], [cx, cy - r]]);
+                want -= 2.0 * r * r;
+                loops.push((base..base + 4).collect());
+            }
+        }
+        (uv, loops, want)
+    }
+
+    #[test]
+    fn holes_that_touch_each_other_and_the_outline_are_cut() {
+        // The case that the review shrank: a corner of the hole on a straight corner of the
+        // outline.
+        let mut uv = vec![
+            [0.0, 0.0],
+            [30.25, 0.0],
+            [100.0, 0.0],
+            [100.0, 40.75],
+            [100.0, 100.0],
+            [0.0, 100.0],
+        ];
+        let mut loops = vec![(0..6).collect::<Vec<usize>>()];
+        let base = uv.len();
+        uv.extend([[90.96, 36.23], [90.96, 45.27], [100.0, 40.75]]);
+        loops.push((base..base + 3).collect());
+        let want = 10_000.0 - 0.5 * 9.04 * 9.04;
+        let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops).expect("the shrunk case");
+        assert_area_once(&uv, want, &t);
+        // Rows of diamonds.
+        for (nx, ny, r, gap, skip) in [
+            (1, 1, 1.0, 1.0, 0),
+            (3, 2, 1.0, 1.0, 0),
+            (6, 4, 0.5, 0.7, 0),
+            (10, 10, 2.0, 1.0, 0),
+            (8, 6, 1.0, 0.5, 3),
+        ] {
+            let (uv, loops, want) = touching_rows(nx, ny, r, gap, skip);
+            let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops)
+                .unwrap_or_else(|| panic!("diamonds {nx}x{ny}"));
+            assert_area_once(&uv, want, &t);
+        }
+    }
+
+    #[test]
+    fn a_row_of_holes_is_cut() {
+        for n in [2usize, 3, 5, 10, 50, 300] {
+            let mut uv = vec![
+                [0.0, 0.0],
+                [n as f64 * 0.1, 0.0],
+                [n as f64 * 0.1, 1.0],
+                [0.0, 1.0],
+            ];
+            let mut loops = vec![vec![0, 1, 2, 3]];
+            let mut want = n as f64 * 0.1;
+            for i in 0..n {
+                let (x, y, s) = (i as f64 * 0.1 + 0.025, 0.5, 0.05);
+                let base = uv.len();
+                uv.extend([[x, y], [x, y + s], [x + s, y + s], [x + s, y]]);
+                want -= s * s;
+                loops.push((base..base + 4).collect());
+            }
+            let t = clip_polygon(&uv, &flat3(&uv), [1.0, 1.0], &loops)
+                .unwrap_or_else(|| panic!("row of {n}"));
+            assert_covers(&uv, &loops, want, &t);
+        }
+    }
+
+    /// Measures the steps and the time of the cutting. In a release build the shapes are the
+    /// big ones of the reviews (`cargo test --release -p kadakas-step --lib measure_cutting --
+    /// --nocapture` prints the table of `docs/interop.md`). Elsewhere they are small.
+    #[test]
+    fn measure_cutting() {
+        for (name, uv, loops) in shapes(!cfg!(debug_assertions)) {
+            let start = std::time::Instant::now();
+            let r = ear_clip(&uv, &flat3(&uv), [1.0, 1.0], &loops, u64::MAX);
+            let t = start.elapsed();
+            let pts: usize = loops.iter().map(Vec::len).sum();
+            let (tris, ops) = r.unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert!(ops > 0, "{name}");
+            println!(
+                "{name}: {pts} points, {} holes: {t:?}, {ops} steps, {} triangles, {:.1} ns/step",
+                loops.len() - 1,
+                tris.len(),
+                t.as_nanos() as f64 / ops as f64
+            );
+        }
     }
 
     proptest::proptest! {

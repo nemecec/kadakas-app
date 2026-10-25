@@ -461,7 +461,13 @@ pub struct TessParams {
     pub max_face_triangles: usize,
     /// The triangles that the whole job may still make.
     pub triangles_left: usize,
+    /// The steps that the cutting of a polygon may take: this many, and this many times the
+    /// price. A face that needs more is left out (see [`CUT_FUEL`]).
+    pub cut_fuel: (u64, u64),
 }
+
+/// The usual limit for the cutting of a polygon: two million steps and four times the price.
+pub const CUT_FUEL: (u64, u64) = (2_000_000, 4);
 
 /// What a step of the job costs: output that is kept, or work that is done.
 #[derive(Clone, Copy, Debug)]
@@ -473,6 +479,11 @@ pub enum Cost {
 }
 
 /// The most points of the boundary of one face.
+/// Steps of the cutting of a polygon that one unit of work is worth, and the price of a hole.
+const OPS_PER_UNIT: u64 = 10;
+const CUT_PER_HOLE: u64 = 1_200;
+const CUT_PER_POINT: u64 = 260;
+
 pub const MAX_FACE_POINTS: usize = crate::mesh2d::MAX_POLYGON_POINTS;
 
 /// The result of cutting a solid.
@@ -937,14 +948,14 @@ impl Tessellator<'_> {
         let n_bound = points.uv.len();
         points.scale = metric(surface, &points);
         let max_tris = self.p.max_face_triangles.min(self.left_triangles() + 1);
-        // The joining of the holes takes steps for each hole (cells around its bridge) and a few
-        // for the size of the polygon. It is paid for before it is done, and stops at four
-        // times the price.
+        // The cutting of the polygon (the joining of the holes and the ear clipping) counts its
+        // steps, and they are paid for when they are known. The price below is for a polygon
+        // of the usual kind, measured on holes in rows, on diagonals and in grids, and on
+        // circles, stars, combs and zigzags. The cutting stops at four times the price: a
+        // face that needs more is left out, with a note, and what it took counts.
         let holes = loop_ix.len().saturating_sub(1) as u64;
-        let lg = u64::from(64 - (points.uv.len() as u64).leading_zeros());
-        let est_ops = holes * (40 + 4 * lg) + points.uv.len() as u64 * 4;
-        let fuel = 200_000 + 4 * est_ops;
-        self.work(est_ops / 3)?;
+        let est_ops = holes * CUT_PER_HOLE + points.uv.len() as u64 * CUT_PER_POINT;
+        let fuel = self.p.cut_fuel.0 + self.p.cut_fuel.1 * est_ops;
         let refine = Refine {
             surface,
             tol: self.p.tol,
@@ -962,24 +973,22 @@ impl Tessellator<'_> {
         } else {
             seed / 256
         };
-        let n = points.uv.len() as u64;
-        // Ear clipping is quadratic in the worst case.
-        let lg = u64::from(64 - n.leading_zeros());
-        self.work(n * (lg + 1) / 2)?;
-        self.work(n * n / 4096)?;
         self.work(seed_units)?;
-        let (tris, truncated, _ops) = match mesh_face(&mut points, &loop_ix, &refine) {
+        let (tris, truncated, ops) = match mesh_face(&mut points, &loop_ix, &refine) {
             Ok(r) => r,
             Err(crate::mesh2d::Cut::Cannot) => {
                 return skip("the outline of the face cannot be cut into triangles");
             }
             Err(crate::mesh2d::Cut::Fuel(ops)) => {
-                return Err(TErr::Abort(MeshError::TooMuchWork {
-                    units: ops,
-                    limit: fuel,
-                }));
+                // The face is left out. What it took counts against the whole job, which stops
+                // when that is more than the job may take.
+                self.work(ops / OPS_PER_UNIT)?;
+                return skip(format!(
+                    "the face needs more than {fuel} steps to be cut into triangles"
+                ));
             }
         };
+        self.work(ops / OPS_PER_UNIT)?;
         self.work(
             tris.len() as u64
                 * if matches!(surface, Surface::Plane { .. }) {
@@ -1023,5 +1032,44 @@ impl Tessellator<'_> {
         k.0 += 1;
         k.1 += count;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{StepOptions, read};
+
+    #[test]
+    fn a_face_that_needs_more_steps_than_its_fuel_is_left_out_with_a_reason() {
+        let bytes = include_bytes!("../../../tests/data/step/plate_hole.step");
+        let imp = read(bytes, &StepOptions::default()).unwrap();
+        let solid = imp.exact[0].as_ref().unwrap();
+        let mut params = TessParams {
+            tol: 0.1,
+            angle: 0.3,
+            max_face_triangles: 100_000,
+            triangles_left: 1_000_000,
+            cut_fuel: CUT_FUEL,
+        };
+        let mut work = 0u64;
+        let mut spend = |c: Cost| -> Result<(), MeshError> {
+            if let Cost::Work(n) = c {
+                work += n;
+            }
+            Ok(())
+        };
+        let whole = tessellate(solid, &params, &mut spend).unwrap();
+        assert!(whole.skipped.is_empty());
+        // With no fuel at all every face is left out, and each says why.
+        params.cut_fuel = (0, 0);
+        let none = tessellate(solid, &params, &mut spend).unwrap();
+        assert_eq!(none.skipped.len(), solid.faces.len());
+        assert!(
+            none.skipped
+                .iter()
+                .all(|(_, why)| why.contains("needs more than"))
+        );
+        assert!(work > 0);
     }
 }

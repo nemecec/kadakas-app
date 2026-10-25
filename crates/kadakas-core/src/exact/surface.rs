@@ -258,6 +258,11 @@ impl Surface {
                 if h.length() * size < 1e-4 {
                     return None;
                 }
+                // A patch that is tiny against its distance from the origin has second
+                // differences of rounding only: the numbers cannot tell its side.
+                if size <= 1e-7 * p0.abs().max_element().max(1.0) {
+                    return None;
+                }
                 let d = n.dot(h);
                 if d.abs() <= 1e-6 * n.length() * h.length() {
                     return None;
@@ -800,6 +805,25 @@ mod tests {
             mirror_x(),
         ] {
             assert_eq!(far(&mm).natural_outward(), None);
+        }
+        // A small flat patch far from the origin (0.01 mm at 10 km, 1 mm at 1,000 km): rounding
+        // noise has no side.
+        for (size, offset) in [(0.01, 1e7), (1.0, 1e9), (0.001, 1e8)] {
+            let tiny = |m: &crate::exact::Similarity| match patch(0.0, false) {
+                Surface::Spline(mut s) => {
+                    for p in &mut s.points {
+                        *p = m.point(*p * (size / 2.0) + DVec3::new(offset, offset * 0.37, 250.0));
+                    }
+                    Surface::Spline(s)
+                }
+                _ => unreachable!(),
+            };
+            for mm in [
+                crate::exact::Similarity::of(&DAffine3::from_rotation_z(0.5)).unwrap(),
+                mirror_x(),
+            ] {
+                assert_eq!(tiny(&mm).natural_outward(), None, "{size} mm at {offset}");
+            }
         }
         // A flat revolution (a disc) the same.
         let disc = Surface::Revolution {

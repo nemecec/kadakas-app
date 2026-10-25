@@ -337,9 +337,17 @@ impl<'a> Ctx<'a> {
             .map(|(p, _)| *p)
             .collect();
         // A usage whose parent has a mapped item of a representation of the child is placed by
-        // that mapped item. The usage is not placed a second time. A usage of the same product
-        // by another parent, with a placement of its own, is a use as always.
-        let mut maps_of: HashMap<u64, HashSet<u64>> = HashMap::new();
+        // that mapped item, when the usage has no placement of its own or when its placement is
+        // that of a mapped item. A usage with another placement is one more use, as always. A
+        // usage of the same product by another parent is a use as always too.
+        let rep_mm = |ctx: &mut Ctx<'a>, rep: u64| -> f64 {
+            let Ok((_, c)) = ctx.rep_parts(rep) else {
+                return 1.0;
+            };
+            let (l, _) = ctx.context_units(c);
+            ctx.opts.unit.map_or(l.unwrap_or(1.0), |u| u.mm())
+        };
+        let mut maps_of: HashMap<u64, Vec<(u64, DAffine3)>> = HashMap::new();
         for e in &file.entities {
             if !is_rep(e) {
                 continue;
@@ -350,28 +358,65 @@ impl<'a> Ctx<'a> {
                 _ => e.attrs.get(1).map(refs),
             };
             for it in items.unwrap_or_default() {
-                if let Some(m) = self.peek(it).filter(|m| m.name == "MAPPED_ITEM")
-                    && let Some(map) = m
-                        .attrs
-                        .get(1)
-                        .and_then(reference)
-                        .and_then(|x| self.peek(x))
-                    && map.name == "REPRESENTATION_MAP"
-                    && let Some(target) = map.attrs.get(1).and_then(reference)
-                {
-                    maps_of.entry(rep).or_default().insert(target);
-                }
+                let Some(m) = self.peek(it).filter(|m| m.name == "MAPPED_ITEM") else {
+                    continue;
+                };
+                let Some(map) = m
+                    .attrs
+                    .get(1)
+                    .and_then(reference)
+                    .and_then(|x| self.peek(x))
+                    .filter(|x| x.name == "REPRESENTATION_MAP")
+                else {
+                    continue;
+                };
+                let Some(target) = map.attrs.get(1).and_then(reference) else {
+                    continue;
+                };
+                // Where the mapped item puts the representation, in the frame of its owner.
+                let frame = (|| {
+                    let origin = self.axis2(map.attrs.first().and_then(reference)?).ok()?;
+                    let at = self.axis2(m.attrs.get(2).and_then(reference)?).ok()?;
+                    let (outer, inner) = (rep_mm(self, rep), rep_mm(self, target));
+                    Some(mm_frame(at, outer) * mm_frame(origin, inner).inverse())
+                })();
+                maps_of
+                    .entry(rep)
+                    .or_default()
+                    .push((target, frame.unwrap_or(DAffine3::IDENTITY)));
             }
         }
+        // The placement of each usage, when the file gives one.
+        let mut placed: HashMap<u64, Option<DAffine3>> = HashMap::new();
+        for u in &usages {
+            if let Some(pl) = pds_of_nauo.get(&u.nauo).and_then(|pds| places.get(pds)) {
+                let child_reps = pd_reps.get(&u.child).cloned().unwrap_or_default();
+                placed.insert(u.nauo, self.place_matrix(pl, &child_reps));
+            }
+        }
+        let close = |a: &DAffine3, b: &DAffine3| {
+            let scale = 1.0
+                + a.translation
+                    .abs()
+                    .max_element()
+                    .max(b.translation.abs().max_element());
+            (a.translation - b.translation).abs().max_element() <= 1e-6 * scale
+                && (a.matrix3.x_axis - b.matrix3.x_axis).abs().max_element() <= 1e-6
+                && (a.matrix3.y_axis - b.matrix3.y_axis).abs().max_element() <= 1e-6
+                && (a.matrix3.z_axis - b.matrix3.z_axis).abs().max_element() <= 1e-6
+        };
         let carried: HashSet<u64> = usages
             .iter()
             .filter(|u| {
                 let kids: Vec<u64> = pd_reps.get(&u.child).cloned().unwrap_or_default();
+                let own = placed.get(&u.nauo).copied().flatten();
                 pd_reps.get(&u.parent).is_some_and(|rs| {
                     rs.iter().any(|r| {
-                        maps_of
-                            .get(r)
-                            .is_some_and(|m| kids.iter().any(|k| m.contains(k)))
+                        maps_of.get(r).is_some_and(|m| {
+                            m.iter()
+                                .filter(|(t, _)| kids.contains(t))
+                                .any(|(_, frame)| own.as_ref().is_none_or(|o| close(o, frame)))
+                        })
                     })
                 })
             })
@@ -384,15 +429,12 @@ impl<'a> Ctx<'a> {
             if carried.contains(&u.nauo) {
                 continue;
             }
-            let Some(pl) = pds_of_nauo.get(&u.nauo).and_then(|pds| places.get(pds)) else {
-                missing += 1;
-                continue;
-            };
-            let child_reps = pd_reps.get(&u.child).cloned().unwrap_or_default();
-            if let Some(m) = self.place_matrix(pl, &child_reps) {
-                tf.insert(u.nauo, m);
-            } else {
-                unreadable += 1;
+            match placed.get(&u.nauo) {
+                None => missing += 1,
+                Some(None) => unreadable += 1,
+                Some(Some(m)) => {
+                    tf.insert(u.nauo, *m);
+                }
             }
         }
         if missing > 0 {

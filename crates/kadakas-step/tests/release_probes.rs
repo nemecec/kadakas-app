@@ -416,3 +416,163 @@ fn holes_all_in_one_corner_of_a_huge_face_end_at_the_fuel_fast() {
         ),
     }
 }
+
+/// One planar face (faceted) from an outline and holes, as lists of points.
+fn faceted_face(outline: &[(f64, f64)], holes: &[Vec<(f64, f64)>]) -> String {
+    let mut s = String::from(HEAD);
+    let mut id = 10usize;
+    let mut loop_text = |s: &mut String, pts: &[(f64, f64)], loop_id: usize| -> String {
+        let ids: Vec<String> = pts
+            .iter()
+            .map(|p| {
+                id += 1;
+                s.push_str(&format!(
+                    "#{id}=CARTESIAN_POINT('',({:?},{:?},0.));\n",
+                    p.0, p.1
+                ));
+                format!("#{id}")
+            })
+            .collect();
+        s.push_str(&format!("#{loop_id}=POLY_LOOP('',({}));\n", ids.join(",")));
+        format!("#{loop_id}")
+    };
+    let outer = loop_text(&mut s, outline, 1);
+    s.push_str(&format!("#2=FACE_OUTER_BOUND('',{outer},.T.);\n"));
+    let mut bounds = vec!["#2".to_string()];
+    for (k, h) in holes.iter().enumerate() {
+        let lid = 10_000_000 + 2 * k;
+        let l = loop_text(&mut s, h, lid);
+        s.push_str(&format!("#{}=FACE_BOUND('',{l},.T.);\n", lid + 1));
+        bounds.push(format!("#{}", lid + 1));
+    }
+    s.push_str(&format!(
+        "#3=FACE('',({}));\n#4=CLOSED_SHELL('',(#3));\n#5=FACETED_BREP('plate',#4);\n{TAIL}",
+        bounds.join(",")
+    ));
+    s
+}
+
+/// Square holes (clockwise) at the given places.
+fn squares(places: impl Iterator<Item = (f64, f64, f64)>) -> Vec<Vec<(f64, f64)>> {
+    places
+        .map(|(x, y, s)| vec![(x, y), (x, y + s), (x + s, y + s), (x + s, y)])
+        .collect()
+}
+
+#[test]
+#[ignore = "release probe"]
+fn holes_on_a_diagonal_are_cut_in_a_second_up_to_ninety_thousand() {
+    // Small square holes on the diagonal of a face of 1,002 mm: the corners of the holes are
+    // all in the triangle of every ray, and in the boxes of the ears. It was 4.0 s for 10,000
+    // holes, 23.7 s for 30,000 and 157 s for 90,000, with nothing charged.
+    for (n, secs) in [(1_000usize, 1), (10_000, 2), (90_000, 5)] {
+        let s = 1000.0 / n as f64;
+        let outline = [
+            (-1.0, -1.0),
+            (1001.0, -1.0),
+            (1001.0, 1001.0),
+            (-1.0, 1001.0),
+        ];
+        let holes = squares((0..n).map(|i| (i as f64 * s, i as f64 * s, s / 2.0)));
+        let text = faceted_face(&outline, &holes);
+        let (r, t) = timed(&text);
+        println!(
+            "{n} holes on a diagonal ({} MB): {t:?}",
+            text.len() / 1_000_000
+        );
+        match r {
+            Ok(i) => println!(
+                "  read, {} triangles, work {}",
+                i.set.totals.triangles, i.report.work_units
+            ),
+            Err(e) => {
+                println!("  refused: {e}");
+                assert!(n > 1_000 && e.is_limit(), "{e}");
+            }
+        }
+        assert!(t < Duration::from_secs(secs), "{n} holes: {t:?}");
+    }
+}
+
+#[test]
+#[ignore = "release probe"]
+fn ten_thousand_holes_in_one_row_of_a_plate_are_read() {
+    // A plate of 1 m by 10 mm with 10,000 holes in a row. The cost of the cutting was four
+    // to six times the price and the face was refused.
+    let outline = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 10.0), (0.0, 10.0)];
+    let holes = squares((0..10_000).map(|i| (i as f64 * 0.1 + 0.025, 5.0, 0.05)));
+    let (r, t) = timed(&faceted_face(&outline, &holes));
+    println!("10,000 holes in a row: {t:?}");
+    let r = r.expect("a plate with a row of holes is read");
+    assert_eq!(r.set.totals.triangles, 60_002);
+    assert!(t < Duration::from_secs(2), "{t:?}");
+}
+
+#[test]
+#[ignore = "release probe"]
+fn big_polygons_of_every_shape_are_cut_fast() {
+    use std::f64::consts::TAU;
+    let n = 390_000usize;
+    let circle: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            (
+                100.0 * (TAU * i as f64 / n as f64).cos(),
+                100.0 * (TAU * i as f64 / n as f64).sin(),
+            )
+        })
+        .collect();
+    let star: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            let a = TAU * i as f64 / n as f64;
+            let r = if i % 2 == 0 { 100.0 } else { 60.0 };
+            (r * a.cos(), r * a.sin())
+        })
+        .collect();
+    // Teeth up from a base: 196,000 points.
+    let teeth = 32_000usize;
+    let mut comb = vec![(0.0, 0.0), (teeth as f64 * 2.0, 0.0)];
+    for t in (0..teeth).rev() {
+        let x = t as f64 * 2.0;
+        comb.extend([
+            (x + 2.0, 10.0),
+            (x + 1.0, 10.0),
+            (x + 1.0, 1.0),
+            (x + 0.5, 1.0),
+            (x + 0.5, 10.0),
+            (x, 10.0),
+        ]);
+    }
+    for (name, pts) in [("circle", circle), ("star", star), ("comb", comb)] {
+        let (r, t) = timed(&faceted_face(&pts, &[]));
+        println!("{name} of {} points: {t:?}", pts.len());
+        let r = r.unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(r.set.totals.triangles > 100_000);
+        assert!(t < Duration::from_secs(3), "{name}: {t:?}");
+    }
+}
+
+#[test]
+#[ignore = "release probe"]
+fn five_comb_faces_that_cost_too_much_are_left_out_or_read_fast() {
+    // Teeth that make every ear a long thin one. Whatever the answer is, it comes fast, and a
+    // face that is left out is in a note.
+    let teeth = 20_000usize;
+    let mut comb = vec![(0.0, 0.0), (teeth as f64 * 2.0, 0.0)];
+    for t in (0..teeth).rev() {
+        let x = t as f64 * 2.0;
+        comb.extend([
+            (x + 2.0, 100.0),
+            (x + 1.0, 100.0),
+            (x + 1.0, 1.0),
+            (x + 0.5, 1.0),
+            (x + 0.5, 100.0),
+            (x, 100.0),
+        ]);
+    }
+    let (r, t) = timed(&faceted_face(&comb, &[]));
+    println!("deep comb: {t:?}");
+    assert!(t < Duration::from_secs(5), "{t:?}");
+    if let Ok(i) = r {
+        assert!(i.set.totals.triangles > 0);
+    }
+}

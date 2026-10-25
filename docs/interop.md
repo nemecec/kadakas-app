@@ -139,7 +139,7 @@ The reader is the crate `kadakas-step`. It uses the public knowledge of the form
 | LINE, CIRCLE, ELLIPSE, B_SPLINE_CURVE_WITH_KNOTS (also rational), BEZIER, QUASI_UNIFORM and UNIFORM curves, POLYLINE, TRIMMED_CURVE, COMPOSITE_CURVE, SURFACE_CURVE, SEAM_CURVE | edge curves |
 | FACE_BOUND, FACE_OUTER_BOUND, ORIENTED_EDGE, ORIENTED_FACE, ORIENTED_CLOSED_SHELL, POLY_LOOP | holes and orientation flags are used |
 | PRODUCT, PRODUCT_DEFINITION, SHAPE_DEFINITION_REPRESENTATION | the product name is the name of the mesh |
-| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances. A usage with no placement sits at the origin and a note counts it. A product that only mapped items use shows where they place it, not at the origin |
+| NEXT_ASSEMBLY_USAGE_OCCURRENCE with CONTEXT_DEPENDENT_SHAPE_REPRESENTATION and ITEM_DEFINED_TRANSFORMATION | the placement of each instance, to depth 32 and 20,000 instances. A usage with no placement sits at the origin and a note counts it. A product that only mapped items use shows where they place it, not at the origin. A usage whose parent maps the product is that mapped item, unless the usage has a transformation that no mapped item has: then it is one more use |
 | MAPPED_ITEM with REPRESENTATION_MAP | an instance of a representation |
 | LENGTH_UNIT as SI_UNIT or CONVERSION_BASED_UNIT, PLANE_ANGLE_UNIT | millimeters, meters, inches and so on, for each representation |
 | STYLED_ITEM with COLOUR_RGB or a predefined colour, SURFACE_STYLE_TRANSPARENT | colour of a solid, a shell or a face. A part gets one mesh for each colour |
@@ -212,17 +212,22 @@ Measured on a release build (`tests/release_probes.rs` and the `probe` example, 
 | the same at a tolerance of 0.005 mm, 1.2 million triangles | 4.7 s | read, 92 million steps (it was refused after 3.8 s) |
 | the same at 0.002 mm, 1.9 million triangles | 8.8 s | read, 182 million steps |
 | 360 KB with 200 faces of 4,800 points on one loop | 0.8 s | read, 33 million steps |
-| a face with 100 x 100 square holes (2.8 MB) | 0.15 s (was 4.0 s) | read, 60,000 triangles |
+| a face with 100 x 100 square holes (2.8 MB) | 0.14 s (was 4.0 s) | read, 60,000 triangles |
 | a face with 140 x 140 square holes (5.6 MB) | 0.27 s (was 15.7 s) | read, 117,600 triangles |
 | a face with 30,000 triangular holes (7 MB) | 0.4 s (was 30 s) | read, 150,000 triangles |
-| a face with 100,000 triangular holes (24 MB) | 1.4 s, 487 MB (was 530 s, 1.2 GB) | read, 500,000 triangles |
-| 30,000 holes in one cell of the grid, in a face of 1,000 km | 0.15 s | cut or refused |
+| a face with 100,000 triangular holes (24 MB) | 1.9 s, 487 MB (was 530 s, 1.2 GB) | read, 500,000 triangles |
+| small holes on the diagonal of a face, 1,000 / 10,000 / 90,000 holes (34 MB) | 0.02 s / 0.2 s / 2.0 s (was 0.13 s / 4.0 s / 157 s) | read, 540,000 triangles for 90,000 |
+| 10,000 holes in one row of a plate of 1 m (the price was too low) | 0.2 s (was refused) | read, 60,002 triangles |
+| 30,000 holes in one cell of the first grid, in a face of 1,000 km | 0.4 s | read |
+| a comb of 192,000 points / a circle and a star of 390,000 points | 0.5 s (was 2.9 s) / 1.0 s | read |
 | 32 MB with 6 mapped copies of a mesh of a million triangles, then 60,000 faces that give nothing | 4.6 s (was 54 s) | `mesh_too_much_work` |
 | 1.4 MB with 30,000 faces on a revolution of a line, none cut | 0.5 s | `mesh_too_much_work` |
 | 3,000 faces on a revolution of a spline with 2,000 control points | 4.4 s | `mesh_too_much_work` |
 | the same, with no counter | 60 s | `mesh_too_much_time` |
 
-The holes of a face are joined to its outline with a grid of all the segments. A hole costs the cells around its bridge, not the size of the polygon. The cost is counted before it is spent and the joining stops at four times the count.
+The holes of a face are joined to its outline, and the polygon is cut by ear clipping, with quadtrees: one of all the segments (the outline, the holes and the bridges) and one of the corners that bend inward. A hole costs the boxes around its bridge, not the size of the polygon, also when the holes are packed in a band. The bridge goes to the nearest corner that the hole can see. A hole that touches the polygon at a corner, or with a corner on an edge, is joined at that point with no bridge. A hole that touches in two places is not supported.
+
+Every step of the cutting is counted. The price of a polygon is 1,200 steps for each hole and 260 for each point, as measured on holes in rows, on diagonals and in grids, and on circles, stars, combs and zigzags (2 to 8 ns for a step). The cutting stops at 2 million steps and four times the price. A face that needs more is left out, with a note and the reason, and the steps count against the work of the whole job, which stops when that is over its limit. Ten steps are one unit of work.
 
 One step is about 50 ns on curved faces (10 to 19 thousand steps for each millisecond on a sphere, a torus, a revolved solid and a B-spline patch, at three tolerances) and 20 to 40 thousand steps for each millisecond on planes and on the plates. So 60 million steps are about 4 seconds of work with no output. The 100 steps for each triangle are about 5 microseconds, which is about what a triangle takes (3 to 7 microseconds on a curved face, under 1 on a plane).
 
