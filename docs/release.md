@@ -73,6 +73,8 @@ small problems at the first run (for example the runner image names).
 
 The workflow has read-only rights, except the publish job (`contents: write`). All actions are pinned to commit SHAs, and `cargo-packager` to version 0.11.8 (`CARGO_PACKAGER_VERSION`). Update them on purpose, not by accident.
 
+The workflow does not depend on the nightly workflow (`nightly.yml`: coverage, perf, fuzz). Check the last nightly run before you tag. The cargo-packager build is cached by version. The package jobs restore the Rust cache of `main`: start the workflow by hand on `main` to fill it.
+
 Steps for a release: change `version` in `packager.toml` and in the crates, commit, tag (`git tag v0.1.0`), push the tag, check the draft release, publish it.
 
 ## Launcher and updates

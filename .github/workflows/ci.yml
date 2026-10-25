@@ -1,6 +1,25 @@
 name: CI
 # Actions are pinned to commit SHAs, as in release.yml. To update one, look up the new SHA of its tag
 # and change the comment.
+#
+# Jobs of this workflow (every push and pull request). Slow checks run in nightly.yml.
+#
+#   job          what it checks                                             when
+#   test         fmt, clippy, Rust tests (nextest, doctests), Python tests   every run, 3 systems
+#   wasm         the portable crates build for wasm32                       every run
+#   web          trunk build of the web version                             every run
+#   test-hooks   no test-only feature in a shipped program                  every run
+#   deny         licenses, advisories, sources of dependencies              every run
+#   attribution  every asset and dependency has an attribution row          every run
+#   notices      THIRD_PARTY_NOTICES.txt is up to date                      every run
+#
+# Moved to .github/workflows/nightly.yml (daily when main has a new commit, on tags v*, and by
+# hand with `gh workflow run nightly.yml`): coverage (4 shards), perf (release timing tests), fuzz.
+#
+# Caches: Swatinem/rust-cache keeps the compiled dependencies (not our own crates). Only runs on
+# main write caches, all other refs restore the cache of main. GitHub allows 10 GB per repository
+# and removes the least recently used caches first, so every cache must stay small. Expected sizes
+# (compressed): test 0.7 to 1.2 GB per system, wasm 0.3 GB, web 0.4 GB. See docs/dev-guide.md.
 on:
   push:
   pull_request:
@@ -17,9 +36,18 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Faster builds: a CI run compiles once, so incremental data only costs time and disk.
+  CARGO_INCREMENTAL: "0"
+  # No debug info for tests: smaller files, faster links. Panic messages and `RUST_BACKTRACE=short`
+  # still show the file and line of our code through the symbol table.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_NET_RETRY: "10"
+  RUST_BACKTRACE: short
 
 jobs:
   test:
+    timeout-minutes: 60
     strategy:
       # One failing system must not hide the results of the others.
       fail-fast: false
@@ -27,95 +55,104 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
       - uses: ./.github/actions/wasi-sdk
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libgtk-3-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libxkbcommon-dev libgtk-3-dev
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: nextest
       - run: cargo fmt --all --check
       - run: cargo clippy --keep-going --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace --no-fail-fast
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      # nextest runs every test in its own process (settings: .config/nextest.toml). It does not
+      # run doctests, so they follow.
+      - run: cargo nextest run --workspace --no-fail-fast
+      - run: cargo test --workspace --doc
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+      # The release-like program for the Python tests. It is built here, and not taken from the
+      # test build, because the tests of the workspace turn on test-only features of the crates.
       - run: cargo build -p kadakas-cli
       # UTF-8 mode: files and pipes are UTF-8 on Windows too, not the code page of the system.
-      - run: uv run --with pytest --with ezdxf --with ifcopenshell pytest tests/behavior python/tests -q
+      # -n auto: one worker per CPU. The binary is built above, so the workers skip the build.
+      - run: uv run --with pytest --with pytest-xdist --with ezdxf --with ifcopenshell pytest -n auto tests/behavior python/tests -q
         env:
           PYTHONUTF8: "1"
-  # Timing tests (`#[ignore]`, see docs/dev-guide.md). They need a release build, so they do not run in `test`.
-  perf:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - uses: ./.github/actions/wasi-sdk
-      - run: PERF_SIZES=10000 cargo test --release -p kadakas-core -p kadakas-container -p kadakas-site -p kadakas-api -p kadakas-io -- --ignored
-  # A short run of the fuzzer of the container reader (crates/kadakas-container/tests/fuzz_open.rs):
-  # changed containers must be errors, never panics. The seed is printed; KADAKAS_FUZZ_SEED repeats a run.
-  fuzz:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - run: KADAKAS_FUZZ_SECS=60 cargo test --release -p kadakas-container --test fuzz_open -- --nocapture
+          KADAKAS_SKIP_BUILD: "1"
   wasm:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
       - uses: ./.github/actions/wasi-sdk
       - run: cargo check -p kadakas-units -p kadakas-l10n -p kadakas-core -p kadakas-container -p kadakas-file -p kadakas-props -p kadakas-review -p kadakas-collab -p kadakas-collab-ws -p kadakas-render -p kadakas-api -p kadakas-site -p kadakas-annot -p kadakas-x3d -p kadakas-meshio -p kadakas-step -p kadakas-ui-core -p kadakas-view3d -p kadakas-plugin-abi -p kadakas-plugin -p kadakas-script-js -p kadakas-feedback -p kadakas-crash -p kadakas-app --target wasm32-unknown-unknown
-  # Test-only features (fault-injection) must not be in a program that we ship.
+  # Test-only features (fault-injection) must not be in a program that we ship. It only reads the
+  # feature tree, nothing is compiled, so there is no cache.
   test-hooks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       - run: scripts/check-test-hook.sh
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: web
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
       - uses: ./.github/actions/wasi-sdk
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: trunk
       - run: trunk build
-  # The rule of docs/dev-guide.md: every library crate keeps 95% of its lines or more. The command
-  # line crate has a bar of 90%. The app crate is left out (window code). See scripts/coverage.sh.
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          components: llvm-tools-preview
-      - uses: ./.github/actions/wasi-sdk
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
-        with:
-          tool: cargo-llvm-cov
-      - run: scripts/coverage.sh
-  # Licenses, known security problems and sources of all dependencies. See deny.toml.
+  # Licenses, known security problems and sources of all dependencies. See deny.toml. No build.
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-deny
       - run: cargo deny check
   # Every shipped asset, dataset, vendored file and Cargo dependency needs a row (PLAT-21).
   attribution:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       # The script reads Cargo data offline. Fetch the sources first.
       - run: cargo fetch --locked
@@ -124,12 +161,11 @@ jobs:
   # THIRD_PARTY_NOTICES.txt must match the dependencies. The installers ship it (packager.toml).
   notices:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
-        with:
-          tool: cargo-about
+      - uses: ./.github/actions/cargo-about
       - run: scripts/notices.sh
       - name: THIRD_PARTY_NOTICES.txt is up to date
         run: |
