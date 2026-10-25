@@ -209,9 +209,37 @@ impl Session {
         self.tainted
     }
 
+    /// Records a panic that a library caught on its own (the IFC import turns a panic into an
+    /// error): the message and the place go to the log and the failure of the session, which is
+    /// marked `tainted`, as for a panic that `guarded` catches.
+    pub(crate) fn note_handled_panic(&mut self, method: &str, detail: &str) {
+        let detail = scrub::harsh(detail);
+        self.tainted = true;
+        let method = scrub::text(method, 80);
+        let error = scrub::cut(&format!("internal error: {detail}"), MAX_ERROR);
+        self.feedback.log(&format!("{method}: {error}"));
+        self.feedback.failure = Some(Failure {
+            method,
+            error,
+            ids: Vec::new(),
+        });
+    }
+
     pub(crate) fn guarded<T>(
         &mut self,
         method: &str,
+        f: impl FnOnce(&mut Session) -> Result<T, RpcError>,
+    ) -> Result<T, RpcError> {
+        self.guarded_with(method, None, f)
+    }
+
+    /// Like [`Session::guarded`], with the sentence of the error for a panic (the default names the
+    /// method). A caught panic is recorded (message and place in the log and the failure of the
+    /// session), marks the session `tainted` and writes no crash file.
+    pub(crate) fn guarded_with<T>(
+        &mut self,
+        method: &str,
+        friendly: Option<&str>,
         f: impl FnOnce(&mut Session) -> Result<T, RpcError>,
     ) -> Result<T, RpcError> {
         install_panic_hook();
@@ -249,7 +277,10 @@ impl Session {
                     error,
                     ids: Vec::new(),
                 });
-                Err(RpcError::internal(format!("internal error in {method}")))
+                Err(RpcError::internal(friendly.map_or_else(
+                    || format!("internal error in {method}"),
+                    str::to_string,
+                )))
             }
         }
     }

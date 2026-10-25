@@ -92,6 +92,11 @@ fn import_describe() -> Value {
 fn import_rpc(e: IfcImportError) -> RpcError {
     match e {
         IfcImportError::Option(_) => RpcError::invalid_params(e),
+        // A panic that the IFC import caught (see `kadakas_crash::ring::catch`): the same answer
+        // as for a panic that `guarded` catches.
+        IfcImportError::Internal(_) => {
+            RpcError::internal("the import failed on a damaged file (internal error)")
+        }
         e => RpcError::app(e),
     }
 }
@@ -152,8 +157,15 @@ impl Session {
         } else {
             path
         };
-        let result =
-            kadakas_ifc::import_file(&path, self.editor.doc(), &opts).map_err(import_rpc)?;
+        let result = match kadakas_ifc::import_file(&path, self.editor.doc(), &opts) {
+            Ok(r) => r,
+            Err(e) => {
+                if let IfcImportError::Internal(detail) = &e {
+                    self.note_handled_panic("import.file", detail);
+                }
+                return Err(import_rpc(e));
+            }
+        };
         let mut summary = None;
         self.editor
             .execute_stepwise(|step| {

@@ -94,6 +94,57 @@ impl Drop for CatchGuard {
     }
 }
 
+thread_local! {
+    static LAST_PANIC: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+static DETAIL_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// Keeps the message and the place of the last panic of this thread for [`catch`], then calls the
+/// hook that was there before (so a crash hook that was installed first still sees the panic, and
+/// stays quiet because a guard lives).
+fn install_detail_hook() {
+    DETAIL_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            let place = info
+                .location()
+                .map(|l| format!(" at {}:{}", l.file(), l.line()))
+                .unwrap_or_default();
+            let _ = LAST_PANIC.try_with(|p| *p.borrow_mut() = Some(format!("{msg}{place}")));
+            previous(info);
+        }));
+    });
+}
+
+/// Runs `f` and turns a panic into `Err(message and place)`. The panic is handled on purpose, so it
+/// is no crash: no crash file is written and the "first panic" mark of the crash capture stays
+/// unset, so a real crash later is still written. Use it for work that a damaged file can break.
+pub fn catch<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    install_detail_hook();
+    let _guard = CatchGuard::new();
+    let _ = LAST_PANIC.try_with(|p| p.borrow_mut().take());
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|payload| {
+        LAST_PANIC
+            .try_with(|p| p.borrow_mut().take())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into())
+            })
+    })
+}
+
 /// True while a [`CatchGuard`] lives on this thread.
 pub fn catching() -> bool {
     CATCHING.try_with(|c| c.get() > 0).unwrap_or(false)
@@ -194,6 +245,16 @@ mod tests {
         // A guard is per thread.
         let _g = CatchGuard::new();
         assert!(!std::thread::spawn(catching).join().unwrap());
+    }
+
+    #[test]
+    fn a_caught_panic_gives_its_message_and_place() {
+        let r: Result<(), String> = catch(|| panic!("a crafted file"));
+        let detail = r.unwrap_err();
+        assert!(detail.starts_with("a crafted file at "), "{detail}");
+        assert!(detail.contains("ring.rs"), "{detail}");
+        assert!(!catching(), "the guard ends with the call");
+        assert_eq!(catch(|| 7), Ok(7));
     }
 
     #[test]

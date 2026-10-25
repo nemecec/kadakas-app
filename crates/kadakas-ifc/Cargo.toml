@@ -12,6 +12,7 @@ kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
 kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-step = { version = "0.1.0", path = "../kadakas-step" }
 kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
+kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
 kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
 kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
 i_overlay = "9.0.1"
@@ -23,3 +24,5 @@ zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2
 
 [dev-dependencies]
 proptest = "1.11.0"
+# The test of a caught panic installs the crash capture.
+kadakas-crash = { path = "../kadakas-crash", features = ["capture"] }

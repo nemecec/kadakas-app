@@ -67,7 +67,7 @@ use kadakas_site::SiteCache;
 
 pub use import::{
     IfcImportError, IfcImportOptions, import_bytes, import_bytes_unguarded, import_file,
-    import_file_unguarded,
+    import_file_unguarded, run_guarded,
 };
 pub use options::IfcOptions;
 
