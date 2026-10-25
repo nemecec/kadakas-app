@@ -15,7 +15,9 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use super::ctx::Ctx;
+use glam::DVec3;
+
+use super::ctx::{Ctx, attr, items, numbers};
 use crate::step::{COMPLEX, Entity, Value};
 
 /// The most entities that one solid may reach.
@@ -167,6 +169,166 @@ fn emit(out: &mut Vec<u8>, e: &Entity, angle: Option<f64>) -> bool {
     }
 }
 
+/// A new entity number for the entities that one IFC entity becomes (an indexed poly curve has no
+/// single counterpart). They are far above the numbers of a file.
+const EXTRA_BASE: u64 = 1 << 40;
+
+fn point_line(out: &mut Vec<u8>, id: u64, p: DVec3) {
+    line(
+        out,
+        id,
+        "CARTESIAN_POINT",
+        &[Value::Str(String::new()), Value::reals(&[p.x, p.y, p.z])],
+    );
+}
+
+/// `IfcIndexedPolyCurve` as STEP curves: line segments are polylines, an arc through three points is a
+/// trimmed circle, and several segments are a composite curve. `false` when the points are not 3D.
+fn emit_indexed(cx: &Ctx, out: &mut Vec<u8>, e: &Entity, next: &mut u64) -> bool {
+    let Some(list) = cx
+        .get(attr(e, 0))
+        .filter(|l| l.name == "IFCCARTESIANPOINTLIST3D")
+    else {
+        return false;
+    };
+    let pts: Vec<DVec3> = items(attr(&list, 0))
+        .iter()
+        .filter_map(|r| {
+            let n = numbers(r);
+            (n.len() >= 3).then(|| DVec3::new(n[0], n[1], n[2]))
+        })
+        .collect();
+    if pts.len() < 2 {
+        return false;
+    }
+    let mut take = || {
+        *next += 1;
+        *next
+    };
+    let mut made: std::collections::HashMap<usize, u64> = std::collections::HashMap::new();
+    let mut point = |out: &mut Vec<u8>, i: usize, take: &mut dyn FnMut() -> u64| -> u64 {
+        *made.entry(i).or_insert_with(|| {
+            let id = take();
+            point_line(out, id, pts[i]);
+            id
+        })
+    };
+    let s = |v: &str| Value::Str(v.into());
+    // The segments: indices (1-based) of a line or of an arc. No segments: one line through all points.
+    let mut segments: Vec<(bool, Vec<usize>)> = Vec::new();
+    for seg in items(attr(e, 1)) {
+        if let Value::Typed(name, inner) = seg {
+            let idx: Vec<usize> = items(inner)
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Int(i) if *i >= 1 && (*i as usize) <= pts.len() => Some(*i as usize - 1),
+                    _ => None,
+                })
+                .collect();
+            let arc = name == "IFCARCINDEX";
+            if (arc && idx.len() == 3) || (!arc && idx.len() >= 2) {
+                segments.push((arc, idx));
+            }
+        }
+    }
+    if segments.is_empty() {
+        segments.push((false, (0..pts.len()).collect()));
+    }
+    let mut parents: Vec<u64> = Vec::new();
+    // One segment is the curve itself and keeps the number of the IFC curve.
+    let single = segments.len() == 1;
+    for (arc, idx) in &segments {
+        let (a, b, c) = (
+            pts[idx[0]],
+            *idx.get(1).map_or(&pts[idx[0]], |i| &pts[*i]),
+            *idx.last().map_or(&pts[0], |i| &pts[*i]),
+        );
+        let normal = (b - a).cross(c - a);
+        if *arc && normal.length() > 1e-12 * (b - a).length().max(1.0) * (c - a).length().max(1.0) {
+            let (ab, ac) = (b - a, c - a);
+            let centre = a
+                + (ac.length_squared() * normal.cross(ab) + ab.length_squared() * ac.cross(normal))
+                    / (2.0 * normal.length_squared());
+            let n = normal.normalize();
+            let x = (a - centre).normalize();
+            let radius = (a - centre).length();
+            let y = n.cross(x);
+            let end = (c - centre).dot(y).atan2((c - centre).dot(x));
+            let end = if end <= 0.0 {
+                end + std::f64::consts::TAU
+            } else {
+                end
+            };
+            let (cp, np, xp, ap, ci) = (take(), take(), take(), take(), take());
+            let tr = if single { e.id } else { take() };
+            point_line(out, cp, centre);
+            line(
+                out,
+                np,
+                "DIRECTION",
+                &[s(""), Value::reals(&[n.x, n.y, n.z])],
+            );
+            line(
+                out,
+                xp,
+                "DIRECTION",
+                &[s(""), Value::reals(&[x.x, x.y, x.z])],
+            );
+            line(
+                out,
+                ap,
+                "AXIS2_PLACEMENT_3D",
+                &[s(""), Value::Ref(cp), Value::Ref(np), Value::Ref(xp)],
+            );
+            line(
+                out,
+                ci,
+                "CIRCLE",
+                &[s(""), Value::Ref(ap), Value::Real(radius)],
+            );
+            line(
+                out,
+                tr,
+                "TRIMMED_CURVE",
+                &[
+                    s(""),
+                    Value::Ref(ci),
+                    Value::List(vec![Value::typed("PARAMETER_VALUE", Value::Real(0.0))]),
+                    Value::List(vec![Value::typed("PARAMETER_VALUE", Value::Real(end))]),
+                    Value::Bool(true),
+                    Value::e("PARAMETER"),
+                ],
+            );
+            parents.push(tr);
+        } else {
+            let ids: Vec<u64> = idx.iter().map(|i| point(out, *i, &mut take)).collect();
+            let pl = if single { e.id } else { take() };
+            line(out, pl, "POLYLINE", &[s(""), Value::refs(ids)]);
+            parents.push(pl);
+        }
+    }
+    if !single {
+        let mut refs = Vec::new();
+        for p in &parents {
+            let sg = take();
+            line(
+                out,
+                sg,
+                "COMPOSITE_CURVE_SEGMENT",
+                &[Value::e("CONTINUOUS"), Value::Bool(true), Value::Ref(*p)],
+            );
+            refs.push(sg);
+        }
+        line(
+            out,
+            e.id,
+            "COMPOSITE_CURVE",
+            &[s(""), Value::refs(refs), Value::Bool(false)],
+        );
+    }
+    true
+}
+
 /// A STEP file with the solid `root` and everything it reaches. The numbers of the entities stay.
 /// `Err` when the solid reaches more than [`MAX_ENTITIES`] entities. Entities with no counterpart
 /// are written under their IFC name: the STEP reader names them in its report.
@@ -175,6 +337,7 @@ pub fn to_step(cx: &Ctx, root: &Entity) -> Result<Vec<u8>, String> {
     out.extend_from_slice(
         b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('IfcAdvancedBrep'),'2;1');\nFILE_NAME('brep','',(''),(''),'Kadakas','Kadakas','');\nFILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;\nDATA;\n",
     );
+    let mut extra = EXTRA_BASE;
     let mut seen: HashSet<u64> = HashSet::new();
     let mut stack = vec![root.id];
     while let Some(id) = stack.pop() {
@@ -194,7 +357,9 @@ pub fn to_step(cx: &Ctx, root: &Entity) -> Result<Vec<u8>, String> {
                 .get(super::ctx::attr(&e, 0))
                 .is_some_and(|b| matches!(b.name.as_str(), "IFCCIRCLE" | "IFCELLIPSE")))
         .then_some(cx.units.angle_rad);
-        if !emit(&mut out, &e, angle) && e.name != COMPLEX {
+        if e.name == "IFCINDEXEDPOLYCURVE" && emit_indexed(cx, &mut out, &e, &mut extra) {
+            // Written as STEP curves.
+        } else if !emit(&mut out, &e, angle) && e.name != COMPLEX {
             // No counterpart: written as it is, so that the reader can report its name.
             line(&mut out, e.id, &e.name, &e.attrs);
         }
@@ -208,4 +373,58 @@ pub fn to_step(cx: &Ctx, root: &Entity) -> Result<Vec<u8>, String> {
     }
     out.extend_from_slice(b"ENDSEC;\nEND-ISO-10303-21;\n");
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reader::{Limits, StepIndex};
+
+    fn step_of(data: &str, root: u64) -> String {
+        let text = format!(
+            "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n{data}\nENDSEC;\nEND-ISO-10303-21;\n"
+        );
+        let x = StepIndex::from_bytes(text.into_bytes(), Limits::default()).unwrap();
+        let cx = Ctx::new(&x);
+        let root = cx.ent(root).unwrap();
+        String::from_utf8(to_step(&cx, &root).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn an_indexed_poly_curve_of_two_arcs_becomes_a_circle_in_two_pieces() {
+        let s = step_of(
+            "#1=IFCCARTESIANPOINTLIST3D(((1.,0.,0.),(0.,1.,0.),(-1.,0.,0.),(0.,-1.,0.)));\n#2=IFCINDEXEDPOLYCURVE(#1,(IFCARCINDEX((1,2,3)),IFCARCINDEX((3,4,1))),.F.);",
+            2,
+        );
+        assert!(s.contains("#2=COMPOSITE_CURVE("), "{s}");
+        assert_eq!(s.matches("TRIMMED_CURVE").count(), 2, "{s}");
+        // Both circles have the radius 1 and a half turn as their parameter range.
+        assert_eq!(s.matches("CIRCLE('',").count(), 2);
+        assert!(s.contains("3.14159"), "{s}");
+    }
+
+    #[test]
+    fn lines_without_segments_and_a_single_arc_keep_their_number() {
+        let s = step_of(
+            "#1=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(1.,1.,0.)));\n#2=IFCINDEXEDPOLYCURVE(#1,$,.F.);\n#3=IFCINDEXEDPOLYCURVE(#1,(IFCARCINDEX((1,2,3))),.F.);",
+            2,
+        );
+        assert!(s.contains("#2=POLYLINE("), "{s}");
+        let s = step_of(
+            "#1=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(1.,1.,0.)));\n#3=IFCINDEXEDPOLYCURVE(#1,(IFCARCINDEX((1,2,3))),.F.);",
+            3,
+        );
+        assert!(s.contains("#3=TRIMMED_CURVE("), "{s}");
+        // Three points on a line are no arc: a polyline instead. A 2D list is left alone.
+        let s = step_of(
+            "#1=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(2.,0.,0.)));\n#3=IFCINDEXEDPOLYCURVE(#1,(IFCARCINDEX((1,2,3))),.F.);",
+            3,
+        );
+        assert!(s.contains("#3=POLYLINE("), "{s}");
+        let s = step_of(
+            "#1=IFCCARTESIANPOINTLIST2D(((0.,0.),(1.,0.)));\n#3=IFCINDEXEDPOLYCURVE(#1,$,.F.);",
+            3,
+        );
+        assert!(s.contains("#3=IFCINDEXEDPOLYCURVE("), "{s}");
+    }
 }
