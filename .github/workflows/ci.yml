@@ -49,6 +49,8 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
   CARGO_NET_RETRY: "10"
   RUST_BACKTRACE: short
+  # No welcome dialog in tests: no window opens and nothing waits for a button (PLAT-26).
+  KADAKAS_SKIP_WELCOME: "1"
 
 jobs:
   test:

@@ -291,6 +291,9 @@ impl eframe::App for LauncherApp {
                 {
                     self.model.start(Task::Rollback, wake);
                 }
+                if ui.button(tr!("launcher-show-welcome")).clicked() {
+                    crate::welcome::show_again();
+                }
             });
         });
     }

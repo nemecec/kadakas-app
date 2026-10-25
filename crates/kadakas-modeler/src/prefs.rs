@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use kadakas_l10n::tr;
+use kadakas_ui_core::nav3d::NavStyle;
 use serde::{Deserialize, Serialize};
 
 /// What the person chose for the colors of the window.
@@ -59,6 +60,22 @@ pub struct Prefs {
     /// Units and formats of the app (`prefs.json`). Never written here.
     #[serde(skip)]
     pub units: kadakas_units::Settings,
+    /// What the wheel and the two-finger scroll do (mouse or trackpad). `None`: the choice of the
+    /// app in `prefs.json` counts (`app_navigation`), set once in the welcome dialog (PLAT-26).
+    #[serde(
+        deserialize_with = "nav_or_none",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub navigation: Option<NavStyle>,
+    /// The choice of the app (`prefs.json`). Never written here.
+    #[serde(skip)]
+    pub app_navigation: NavStyle,
+}
+
+/// A navigation style that is not known gives `None`; the rest of the file still counts.
+fn nav_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<NavStyle>, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).ok())
 }
 
 impl Default for Prefs {
@@ -70,11 +87,18 @@ impl Default for Prefs {
             animate_scenes: true,
             import_soften: kadakas_ui_core::mesh_import::SoftenPref::default(),
             units: kadakas_units::Settings::default(),
+            navigation: None,
+            app_navigation: NavStyle::Mouse,
         }
     }
 }
 
 impl Prefs {
+    /// The navigation style in force: the modeler's own choice, else the app's, else the mouse.
+    pub fn nav_style(&self) -> NavStyle {
+        self.navigation.unwrap_or(self.app_navigation)
+    }
+
     /// The language to use when the system asks for `system`: the chosen one, or the best match.
     pub fn language_tag(&self, system: &[String]) -> &'static str {
         match self.language.as_deref().and_then(|t| {
@@ -136,6 +160,7 @@ pub fn load_from(dir: &Path) -> (Prefs, Option<String>) {
         ),
     };
     prefs.units = app_units(dir);
+    prefs.app_navigation = app_navigation(dir);
     (prefs, warning)
 }
 
@@ -146,6 +171,15 @@ fn app_units(dir: &Path) -> kadakas_units::Settings {
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v.get("units").cloned())
         .and_then(|u| serde_json::from_value(u).ok())
+        .unwrap_or_default()
+}
+
+/// The navigation style that the person set in the app. A missing value gives the mouse.
+fn app_navigation(dir: &Path) -> NavStyle {
+    std::fs::read_to_string(dir.join("prefs.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("navigation").map(NavStyle::from_value))
         .unwrap_or_default()
 }
 
@@ -230,6 +264,50 @@ mod tests {
             "et",
             "falls back to the system"
         );
+    }
+
+    #[test]
+    fn the_navigation_style_comes_from_the_app_until_the_modeler_has_its_own() {
+        let d = temp("nav");
+        std::fs::write(d.join("prefs.json"), r#"{"navigation": "trackpad"}"#).unwrap();
+        let (p, w) = load_from(&d);
+        assert_eq!(
+            (w, p.navigation, p.nav_style()),
+            (None, None, NavStyle::Trackpad)
+        );
+        std::fs::write(d.join("modeler.json"), r#"{"navigation": "mouse"}"#).unwrap();
+        let (p, _) = load_from(&d);
+        assert_eq!(
+            (p.navigation, p.nav_style()),
+            (Some(NavStyle::Mouse), NavStyle::Mouse)
+        );
+        // An unknown value in either file gives the default and keeps the rest.
+        std::fs::write(
+            d.join("modeler.json"),
+            r#"{"navigation": "pen", "tray": false}"#,
+        )
+        .unwrap();
+        std::fs::write(d.join("prefs.json"), r#"{"navigation": 3}"#).unwrap();
+        let (p, w) = load_from(&d);
+        assert_eq!((w, p.tray, p.nav_style()), (None, false, NavStyle::Mouse));
+        // A choice of the modeler is written; the default is not.
+        let own = Prefs {
+            navigation: Some(NavStyle::Trackpad),
+            ..Prefs::default()
+        };
+        save_to(&d, &own).unwrap();
+        assert!(
+            std::fs::read_to_string(d.join("modeler.json"))
+                .unwrap()
+                .contains("trackpad")
+        );
+        save_to(&d, &Prefs::default()).unwrap();
+        assert!(
+            !std::fs::read_to_string(d.join("modeler.json"))
+                .unwrap()
+                .contains("navigation")
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

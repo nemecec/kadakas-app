@@ -115,6 +115,55 @@ pub fn wheel_factor(scroll: f32, pinch: f32) -> f32 {
     (scroll * WHEEL_PER_POINT).exp() * pinch
 }
 
+/// How the wheel and the two-finger scroll of the pointer device move the 3D view (PLAT-26). The
+/// choice is stored as `navigation` in `prefs.json`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavStyle {
+    /// A mouse with a wheel: the wheel zooms to the pointer.
+    #[default]
+    Mouse,
+    /// A trackpad: a two-finger scroll pans, with Shift it orbits, a pinch zooms.
+    Trackpad,
+}
+
+impl NavStyle {
+    pub const ALL: [NavStyle; 2] = [NavStyle::Mouse, NavStyle::Trackpad];
+
+    /// A stored value that is not known gives the mouse, and the rest of the file still counts.
+    pub fn from_value(v: &serde_json::Value) -> NavStyle {
+        serde_json::from_value(v.clone()).unwrap_or_default()
+    }
+}
+
+/// What one frame of scroll and pinch does to the view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollMotion {
+    /// The factor to zoom to the pointer by (1: none).
+    pub zoom: f32,
+    /// A pan, in points.
+    pub pan: Vec2,
+    /// An orbit, in points.
+    pub orbit: Vec2,
+}
+
+/// The motion that `scroll` (points, as egui gives it: up is positive on y) and `pinch` (a factor,
+/// 1 is none) make in the style `style`. `shift` is the Shift key.
+pub fn scroll_motion(style: NavStyle, shift: bool, scroll: Vec2, pinch: f32) -> ScrollMotion {
+    match style {
+        NavStyle::Mouse => ScrollMotion {
+            zoom: wheel_factor(scroll.y, pinch),
+            pan: Vec2::ZERO,
+            orbit: Vec2::ZERO,
+        },
+        NavStyle::Trackpad => ScrollMotion {
+            zoom: pinch,
+            pan: if shift { Vec2::ZERO } else { scroll },
+            orbit: if shift { scroll } else { Vec2::ZERO },
+        },
+    }
+}
+
 /// A key that navigates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NavAction {
@@ -457,6 +506,45 @@ impl Nav3d {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mouse_wheel_zooms_and_the_trackpad_scroll_pans_or_orbits() {
+        let scroll = Vec2::new(3.0, 40.0);
+        let m = scroll_motion(NavStyle::Mouse, false, scroll, 1.0);
+        assert!((m.zoom - wheel_factor(40.0, 1.0)).abs() < 1e-6);
+        assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::ZERO));
+        // Shift does not change the mouse.
+        assert_eq!(m, scroll_motion(NavStyle::Mouse, true, scroll, 1.0));
+        let t = scroll_motion(NavStyle::Trackpad, false, scroll, 1.1);
+        assert_eq!((t.zoom, t.pan, t.orbit), (1.1, scroll, Vec2::ZERO));
+        let t = scroll_motion(NavStyle::Trackpad, true, scroll, 1.0);
+        assert_eq!((t.zoom, t.pan, t.orbit), (1.0, Vec2::ZERO, scroll));
+        // The pinch zooms the mouse too.
+        let m = scroll_motion(NavStyle::Mouse, false, Vec2::ZERO, 1.5);
+        assert!((m.zoom - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_style_is_stored_as_text_and_an_unknown_value_gives_the_mouse() {
+        assert_eq!(
+            serde_json::to_string(&NavStyle::Trackpad).unwrap(),
+            "\"trackpad\""
+        );
+        assert_eq!(
+            serde_json::to_string(&NavStyle::Mouse).unwrap(),
+            "\"mouse\""
+        );
+        for (v, want) in [
+            (serde_json::json!("trackpad"), NavStyle::Trackpad),
+            (serde_json::json!("mouse"), NavStyle::Mouse),
+            (serde_json::json!("pen"), NavStyle::Mouse),
+            (serde_json::json!(3), NavStyle::Mouse),
+        ] {
+            assert_eq!(NavStyle::from_value(&v), want);
+        }
+        assert_eq!(NavStyle::ALL.len(), 2);
+    }
+
     use crate::view_history::SETTLE;
 
     const SIZE: Vec2 = Vec2::new(800.0, 600.0);

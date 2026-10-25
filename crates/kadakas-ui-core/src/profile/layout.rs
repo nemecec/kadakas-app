@@ -107,6 +107,8 @@ commands! {
     ReportBug => "help.report_bug", msg!("panels-report-a-bug"), false;
     RequestFeature => "help.request_feature", msg!("panels-request-a-feature"), false;
     Feedback => "help.feedback", msg!("panels-feedback"), false;
+    // Help > Show welcome: the welcome dialog of the launcher again (PLAT-26).
+    ShowWelcome => "help.show_welcome", msg!("panels-show-welcome"), true;
 }
 
 impl Cmd {
@@ -414,6 +416,7 @@ pub fn default_menus() -> Vec<Menu> {
                 "help.report_bug",
                 "help.request_feature",
                 "help.feedback",
+                "help.show_welcome",
                 "-",
                 "help.about",
             ],

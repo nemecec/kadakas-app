@@ -1,0 +1,17 @@
+[package]
+name = "kadakas-welcome"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The logic of the first-run welcome dialog (PLAT-26): the choices, the defaults from the system language and region, when the dialog is due, and where each choice is stored. No window code. Native only."
+
+[dependencies]
+kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
+kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
+kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
+kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
+serde = "1.0.229"
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

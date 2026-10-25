@@ -126,6 +126,8 @@ pub struct MenuExtras<'a> {
 pub enum MenuRequest {
     /// Help > About.
     About,
+    /// Help > Show welcome: the launcher shows its welcome dialog again (PLAT-26).
+    ShowWelcome,
     /// Help > Report a Bug..., Request a Feature... and Feedback... (see `feedback_ui`).
     Feedback(crate::feedback_ui::Open),
     ShowTab(crate::layout::Tab),
@@ -225,6 +227,7 @@ pub fn menu_action(c: Cmd) -> Option<MenuAction> {
         | Cmd::ReportBug
         | Cmd::RequestFeature
         | Cmd::Feedback
+        | Cmd::ShowWelcome
         | Cmd::About => return None,
     })
 }
@@ -453,6 +456,10 @@ fn command_item(
         }
         Cmd::About if ui.button(c.label()).clicked() => {
             extras.requests.push(MenuRequest::About);
+            ui.close();
+        }
+        Cmd::ShowWelcome if ui.button(c.label()).clicked() => {
+            extras.requests.push(MenuRequest::ShowWelcome);
             ui.close();
         }
         Cmd::ReportBug | Cmd::RequestFeature | Cmd::Feedback if ui.button(c.label()).clicked() => {

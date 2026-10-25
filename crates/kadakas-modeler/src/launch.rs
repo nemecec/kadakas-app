@@ -170,6 +170,14 @@ impl Launch {
         link.take_open()
     }
 
+    /// Asks the launcher to show its welcome dialog again (Help > Show welcome). False when the
+    /// launcher did not start this run, or the request could not be written.
+    pub fn request_welcome(&self) -> bool {
+        self.link
+            .as_ref()
+            .is_some_and(|l| l.request_welcome().is_ok())
+    }
+
     /// True when the launcher started this run.
     pub fn is_launched(&self) -> bool {
         self.link.is_some()

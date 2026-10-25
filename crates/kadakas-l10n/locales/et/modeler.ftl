@@ -223,3 +223,7 @@ modeler-import-title = Faili import
 modeler-import-button = Impordi
 modeler-import-cancel = Loobu
 modeler-export-title = Faili eksport
+modeler-view-navigation = Hiir või puuteplaat
+modeler-nav-mouse = Hiir (ratas suumib)
+modeler-nav-trackpad = Puuteplaat (kerimine liigutab, näpistus suumib)
+modeler-help-show-welcome = Näita tervitust

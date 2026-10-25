@@ -37,6 +37,8 @@ pub struct Canvas3d<'a> {
     /// The changes of the agent that the person has not seen (AGR-05): boxes with a pattern and a
     /// mark for each status. `None`: off.
     pub review: Option<std::sync::Arc<kadakas_ui_core::agent_activity::Review>>,
+    /// What the wheel and the two-finger scroll do (Preferences > Mouse or trackpad).
+    pub nav_style: kadakas_ui_core::nav3d::NavStyle,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -54,6 +56,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         nav,
         agent,
         review,
+        nav_style,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -95,7 +98,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             i.pointer.hover_pos(),
             i.modifiers,
             crate::keymap::held(keys, Action::PanHold, i),
-            i.smooth_scroll_delta.y,
+            i.smooth_scroll_delta,
             i.zoom_delta(),
         )
     });
@@ -126,9 +129,22 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         nav.dragging = true;
     }
     if let (true, Some(h)) = (resp.hovered(), hover) {
-        let factor = ((scroll as f64 * 0.0025).exp() * pinch as f64) as f32;
-        if (factor - 1.0).abs() > 1e-6 {
-            view3d.zoom_at(factor, local(h), size);
+        let m = kadakas_ui_core::nav3d::scroll_motion(
+            nav_style,
+            mods.shift,
+            glam::Vec2::new(scroll.x, scroll.y),
+            pinch,
+        );
+        if (m.zoom - 1.0).abs() > 1e-6 {
+            view3d.zoom_at(m.zoom, local(h), size);
+            nav.moved = true;
+        }
+        if m.pan != glam::Vec2::ZERO {
+            view3d.pan(m.pan, size.y);
+            nav.moved = true;
+        }
+        if m.orbit != glam::Vec2::ZERO {
+            view3d.orbit(m.orbit);
             nav.moved = true;
         }
     }
@@ -288,6 +304,7 @@ mod tests {
         pending_pan: egui::Vec2,
         ctx: egui::Context,
         issues: crate::issues_ui::IssuesUi,
+        nav_style: kadakas_ui_core::nav3d::NavStyle,
     }
 
     impl Harness {
@@ -301,6 +318,7 @@ mod tests {
                 pending_pan: egui::Vec2::ZERO,
                 ctx: egui::Context::default(),
                 issues: Default::default(),
+                nav_style: Default::default(),
             }
         }
 
@@ -368,6 +386,7 @@ mod tests {
                             nav: &mut Default::default(),
                             agent: None,
                             review: None,
+                            nav_style: self.nav_style,
                         },
                     );
                 });
@@ -655,6 +674,49 @@ mod tests {
     }
 
     #[test]
+    fn the_trackpad_style_pans_and_orbits_with_the_scroll_and_zooms_with_the_pinch() {
+        let mut h = Harness::new();
+        h.nav_style = kadakas_ui_core::nav3d::NavStyle::Trackpad;
+        h.add_slab();
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        let center = egui::pos2(400.0, 300.0);
+        let scroll = |mods| {
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(30.0, 60.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: mods,
+                },
+            ]
+        };
+        // A scroll pans: the distance and the angles stay.
+        let (c0, t0) = (h.view3d.camera, h.view3d.camera.target);
+        h.frame(scroll(egui::Modifiers::NONE));
+        h.frame(vec![]);
+        let c = h.view3d.camera;
+        assert!((c.target - t0).length() > 1.0, "the scroll pans");
+        assert_eq!(
+            (c.distance, c.yaw, c.pitch),
+            (c0.distance, c0.yaw, c0.pitch)
+        );
+        // Shift with the scroll orbits: the angles change.
+        let angles = (c.yaw, c.pitch);
+        h.frame_with(scroll(egui::Modifiers::SHIFT), egui::Modifiers::SHIFT);
+        h.frame(vec![]);
+        assert_ne!((h.view3d.camera.yaw, h.view3d.camera.pitch), angles);
+        // A pinch zooms in.
+        let d = h.view3d.camera.distance;
+        h.frame(vec![
+            egui::Event::PointerMoved(center),
+            egui::Event::Zoom(1.5),
+        ]);
+        assert!(h.view3d.camera.distance < d, "the pinch zooms in");
+    }
+
+    #[test]
     fn a_pin_is_drawn_in_3d_and_a_click_on_it_opens_the_issue_instead_of_selecting() {
         let mut h = Harness::new();
         let slab = h.add_slab();
@@ -757,6 +819,7 @@ mod tests {
                     nav: &mut Default::default(),
                     agent: None,
                     review: None,
+                    nav_style: Default::default(),
                 },
             );
         });

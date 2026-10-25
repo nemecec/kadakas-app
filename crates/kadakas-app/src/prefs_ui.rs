@@ -9,6 +9,14 @@ use kadakas_units::{
     AngleFormat, AreaUnit, Date, DateFormat, Decimal, Grouping, LengthUnit, Settings,
 };
 
+/// The name of a navigation style.
+pub fn nav_style_label(n: kadakas_ui_core::nav3d::NavStyle) -> String {
+    match n {
+        kadakas_ui_core::nav3d::NavStyle::Mouse => tr!("prefs-ui-nav-mouse"),
+        kadakas_ui_core::nav3d::NavStyle::Trackpad => tr!("prefs-ui-nav-trackpad"),
+    }
+}
+
 /// The state of the Preferences dialog.
 #[derive(Default)]
 pub struct PrefsDialog {
@@ -31,6 +39,8 @@ pub struct PrefsEdit<'a> {
     pub max_version_mib: &'a mut u32,
     /// Animate the view when an agent moves it.
     pub animate_agent_view: &'a mut bool,
+    /// Mouse or trackpad: what the wheel and the scroll do in the 3D view (PLAT-26).
+    pub navigation: &'a mut kadakas_ui_core::nav3d::NavStyle,
     /// Preferences > Privacy (PLAT-20): crash reports and the installation ID. The settings are
     /// in the feedback hub.
     pub privacy: &'a mut kadakas_feedback::Hub,
@@ -73,6 +83,13 @@ impl PrefsDialog {
                     }
                 });
                 ui.checkbox(edit.animate_agent_view, tr!("prefs-ui-animate-agent-view"));
+                ui.horizontal(|ui| {
+                    ui.label(tr!("prefs-ui-navigation"));
+                    for n in kadakas_ui_core::nav3d::NavStyle::ALL {
+                        ui.selectable_value(edit.navigation, n, nav_style_label(n));
+                    }
+                });
+                ui.small(tr!("prefs-ui-navigation-hint"));
                 ui.add_space(6.0);
                 ui.heading(tr!("prefs-ui-versions"));
                 ui.horizontal(|ui| {
@@ -312,6 +329,7 @@ mod tests {
             max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
             max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
             animate_agent_view: Box::leak(Box::new(true)),
+            navigation: Box::leak(Box::default()),
             privacy: Box::leak(Box::new(kadakas_feedback::Hub::in_memory())),
             updates: Box::leak(Box::new(crate::app_updates::Updates::new(None, None))),
         }
@@ -348,6 +366,17 @@ mod tests {
         assert_eq!(size, IconSize::Medium);
         assert_eq!(lang, LanguageChoice::SYSTEM);
         assert_eq!(units, Settings::default());
+    }
+
+    #[test]
+    fn the_navigation_styles_have_names_in_both_languages() {
+        for tag in ["en-US", "et"] {
+            kadakas_l10n::with_language(tag, || {
+                let a = nav_style_label(kadakas_ui_core::nav3d::NavStyle::Mouse);
+                let b = nav_style_label(kadakas_ui_core::nav3d::NavStyle::Trackpad);
+                assert!(!a.is_empty() && a != b, "{a} / {b}");
+            });
+        }
     }
 
     #[test]

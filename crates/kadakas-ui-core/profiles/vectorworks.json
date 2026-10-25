@@ -463,6 +463,7 @@
         "help.report_bug",
         "help.request_feature",
         "help.feedback",
+        "help.show_welcome",
         "-",
         "help.about"
       ]

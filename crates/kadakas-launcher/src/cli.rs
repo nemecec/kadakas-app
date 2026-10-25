@@ -3,6 +3,7 @@
 //! ```text
 //! kadakas-launcher [--site URL] [FILE...]    start Kadakas (the default; shortcuts and .kad files)
 //! kadakas-launcher manage                    open the window with the versions
+//! kadakas-launcher welcome                   show the welcome dialog again (PLAT-26)
 //! kadakas-launcher add PATH [--version X.Y.Z]   put a local build in the store (PLAT-17)
 //! ```
 
@@ -20,6 +21,11 @@ pub enum Command {
     },
     /// Open the window.
     Manage,
+    /// Open the welcome dialog (PLAT-26). The launcher runs it before the first start; the
+    /// person can ask for it again (`--manual`, the default).
+    Welcome {
+        kind: kadakas_welcome::Kind,
+    },
     /// Put a build in the store.
     Add {
         path: PathBuf,
@@ -32,6 +38,7 @@ pub enum Command {
 pub const USAGE: &str = "Usage:
   kadakas-launcher [--site file:///FOLDER] [FILE...]   start Kadakas
   kadakas-launcher manage                              show the versions
+  kadakas-launcher welcome                             show the welcome dialog
   kadakas-launcher add PATH [--version X.Y.Z]          add a local build (a folder with kadakas-app)";
 
 /// Reads the arguments (without the program name).
@@ -40,6 +47,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     match args.first().map(text).as_deref() {
         Some("manage" | "window") if args.len() == 1 => return Ok(Command::Manage),
         Some("manage" | "window") => return Err("manage takes no arguments".into()),
+        Some("welcome") => return parse_welcome(&args[1..]),
         Some("add") => return parse_add(&args[1..]),
         Some("-h" | "--help" | "help") => return Ok(Command::Help),
         _ => {}
@@ -69,6 +77,18 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         return Err("--site needs a file:// address".into());
     }
     Ok(Command::Start { files, site })
+}
+
+fn parse_welcome(args: &[OsString]) -> Result<Command, String> {
+    match args {
+        [] => Ok(Command::Welcome {
+            kind: kadakas_welcome::Kind::Manual,
+        }),
+        [a] => crate::welcome::kind_from_arg(&a.to_string_lossy())
+            .map(|kind| Command::Welcome { kind })
+            .ok_or_else(|| format!("unknown option {}", a.to_string_lossy())),
+        _ => Err("welcome takes one option at most".into()),
+    }
 }
 
 fn parse_add(args: &[OsString]) -> Result<Command, String> {
@@ -161,6 +181,28 @@ mod tests {
             assert_eq!(p(&[h]).unwrap(), Command::Help);
         }
         assert!(USAGE.contains("add PATH"));
+    }
+
+    #[test]
+    fn welcome_takes_the_reason_of_the_dialog() {
+        use kadakas_welcome::Kind;
+        assert_eq!(
+            p(&["welcome"]).unwrap(),
+            Command::Welcome { kind: Kind::Manual }
+        );
+        assert_eq!(
+            p(&["welcome", "--first-run"]).unwrap(),
+            Command::Welcome {
+                kind: Kind::FirstRun
+            }
+        );
+        assert_eq!(
+            p(&["welcome", "--update"]).unwrap(),
+            Command::Welcome { kind: Kind::Update }
+        );
+        assert!(p(&["welcome", "--nope"]).is_err());
+        assert!(p(&["welcome", "--manual", "x"]).is_err());
+        assert!(USAGE.contains("welcome"));
     }
 
     #[test]

@@ -212,6 +212,21 @@ impl Updates {
         }
     }
 
+    /// Asks the launcher to show the welcome dialog (Help > Show welcome). False when the launcher
+    /// did not start this program, or the request could not be written.
+    pub fn request_welcome(&mut self) -> bool {
+        let Some(link) = &self.link else {
+            return false;
+        };
+        match link.request_welcome() {
+            Ok(()) => true,
+            Err(e) => {
+                self.error = Some(tr!("app-updates-request-failed", error = e.to_string()));
+                false
+            }
+        }
+    }
+
     pub fn restart(&self) -> Restart {
         self.restart
     }
@@ -553,10 +568,21 @@ mod tests {
         assert_eq!(u.restart(), Restart::None);
         u.request_download();
         assert!(u.take_error().is_none());
+        assert!(!u.request_welcome(), "no launcher, no request");
         // The settings still work: they are read when the launcher starts the app.
         u.settings.keep_older = 3;
         u.save_if_changed();
         assert_eq!(Settings::load(&d).keep_older, 3);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_welcome_request_reaches_the_launcher() {
+        let d = tmp("welcome-request");
+        let mut u = Updates::from_env(&env_of(&d));
+        assert!(u.request_welcome(), "the launcher gets the request");
+        assert!(kadakas_update::handshake::take_welcome_request(&d, "1a-2b"));
+        assert!(u.take_error().is_none());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

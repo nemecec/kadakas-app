@@ -1,0 +1,31 @@
+## welcome: the first-run welcome dialog of the launcher (PLAT-26)
+
+welcome-title = Tere tulemast Kadakasse
+welcome-intro = Vali, kuidas soovid alustada.
+welcome-later = Seda kõike saad hiljem seadetes muuta.
+welcome-applies-later = Osa muudatusi jõustub järgmisel Kadaka käivitamisel.
+welcome-work-heading = Kuidas soovid töötada?
+welcome-mode-modeler = 3D-modelleerija
+welcome-mode-modeler-hint = Lihtne kujundite lükkamise ja tõmbamise modelleerimine.
+welcome-mode-landscape = Maastiku-CAD
+welcome-mode-landscape-hint = Plaanid, lehed ja taimed.
+welcome-not-installed = Pole paigaldatud
+welcome-language = Keel
+welcome-units = Ühikud
+welcome-units-metric = Meetersüsteem (mm, m)
+welcome-units-imperial = Jalad ja tollid (ft, in)
+welcome-number-format = Arvuvorming
+welcome-example = Näide: { $length } ja { $number }
+welcome-more = Rohkem valikuid
+welcome-theme = Teema
+welcome-navigation = Hiir või puuteplaat
+welcome-nav-mouse = Hiir: ratas suumib
+welcome-nav-trackpad = Puuteplaat: kaks sõrme liigutavad vaadet, näpistus suumib
+welcome-crash = Jooksutuse aruanded
+welcome-crash-hint = Aruandes pole kunagi sinu jooniseid, failinimesid ega nime.
+welcome-updates = Uuendused
+welcome-start = Alusta
+welcome-use-defaults = Kasuta vaikeväärtusi
+welcome-save = Salvesta
+welcome-cancel = Katkesta
+welcome-failed = Mõnda seadet ei saanud salvestada: { $problems }

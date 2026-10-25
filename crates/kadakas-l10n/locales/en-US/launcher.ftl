@@ -70,3 +70,4 @@ launcher-done-rolled-back = Rolled back to { $version }.
 launcher-done-failed = Failed: { $error }
 launcher-status-run-problems = { $count } problems with the runs of earlier starts. See the launcher log.
 launcher-run-problems = { $count } problems with earlier runs (hover for the list)
+launcher-show-welcome = Show welcome

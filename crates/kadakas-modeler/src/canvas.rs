@@ -75,6 +75,8 @@ pub struct Canvas<'a> {
     pub edges: bool,
     /// Whether Hide and Unhide are enabled (the context menu).
     pub hide: [bool; 2],
+    /// What the wheel and the two-finger scroll do (mouse or trackpad).
+    pub nav_style: nav3d::NavStyle,
 }
 
 /// What the canvas tells the program.
@@ -152,6 +154,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         intersect,
         edges,
         hide,
+        nav_style,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let mut shown = Shown {
@@ -190,7 +193,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         (
             i.pointer.hover_pos(),
             modifiers(i.modifiers),
-            i.smooth_scroll_delta.y,
+            Vec2::new(i.smooth_scroll_delta.x, i.smooth_scroll_delta.y),
             i.zoom_delta(),
         )
     });
@@ -200,7 +203,16 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
     // the pointer stays under it (the zoom goes toward that point), with no stop at a fixed
     // distance.
     if let (true, Some(h)) = (resp.hovered(), hover) {
-        let factor = nav3d::wheel_factor(scroll, pinch);
+        let motion = nav3d::scroll_motion(nav_style, mods.shift, scroll, pinch);
+        let factor = motion.zoom;
+        if motion.pan != Vec2::ZERO {
+            nav.pan(motion.pan, size.y);
+            shown.navigated = true;
+        }
+        if motion.orbit != Vec2::ZERO {
+            nav.orbit(motion.orbit);
+            shown.navigated = true;
+        }
         if (factor - 1.0).abs() > 1e-6 {
             let focus = if nav.is_perspective() {
                 nav3d::point_under(&scene, &nav.camera, local(h), size)

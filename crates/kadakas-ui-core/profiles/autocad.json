@@ -292,6 +292,6 @@
       ]
     },
     { "id": "window", "items": ["window.panels", "-", "window.layouts"] },
-    { "id": "help", "items": ["help.report_bug", "help.request_feature", "help.feedback", "-", "help.about"] }
+    { "id": "help", "items": ["help.report_bug", "help.request_feature", "help.feedback", "help.show_welcome", "-", "help.about"] }
   ]
 }

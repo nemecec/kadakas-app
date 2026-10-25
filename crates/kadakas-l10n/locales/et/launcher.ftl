@@ -70,3 +70,4 @@ launcher-done-rolled-back = Pööratud tagasi versioonile { $version }.
 launcher-done-failed = Ebaõnnestus: { $error }
 launcher-status-run-problems = { $count } probleemi varasemate käivituste kontrollimisel. Vaata käivitaja logi.
 launcher-run-problems = { $count } probleemi varasemate käivitustega (loend kursoriga)
+launcher-show-welcome = Näita tervitust
