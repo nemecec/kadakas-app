@@ -9,7 +9,7 @@ use kadakas_io::Report;
 use super::*;
 
 /// A file with millimeters and degrees, a Z direction (#4), a placement at the origin (#5, #7) and the data you give.
-fn file(schema: &str, data: &str) -> Vec<u8> {
+pub(super) fn file(schema: &str, data: &str) -> Vec<u8> {
     format!(
         "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('{schema}'));\nENDSEC;\nDATA;\n\
 #1=IFCPROJECT('p',$,'t',$,$,$,$,$,#2);\n#2=IFCUNITASSIGNMENT((#3,#8));\n#3=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n\
@@ -23,7 +23,7 @@ fn file(schema: &str, data: &str) -> Vec<u8> {
 
 /// A product with a body made of the given items. `n` and `n+1`, `n+2` are used. In `tail`, `@` stands for the
 /// placement and the representation.
-fn product(n: u64, class: &str, items: &str, tail: &str) -> String {
+pub(super) fn product(n: u64, class: &str, items: &str, tail: &str) -> String {
     let tail = tail.replace('@', &format!("#7,#{}", n + 2));
     format!(
         "#{a}=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',({items}));\n#{b}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{a}));\n#{n}={class}('g{n}',$,'N{n}',$,{tail});\n",
@@ -33,18 +33,23 @@ fn product(n: u64, class: &str, items: &str, tail: &str) -> String {
 }
 
 /// An extruded solid of a profile (`#n` is the profile) with height `h`; the solid is `#n+1`.
-fn extr(n: u64, profile: &str, h: f64) -> String {
+pub(super) fn extr(n: u64, profile: &str, h: f64) -> String {
     format!(
         "#{n}={profile};\n#{m}=IFCEXTRUDEDAREASOLID(#{n},#5,#4,{h});\n",
         m = n + 1
     )
 }
 
-fn run(data: &str, opts: &IfcImportOptions) -> (Editor, Report) {
+pub(super) fn run(data: &str, opts: &IfcImportOptions) -> (Editor, Report) {
     run_in(Document::with_sequential_ids(), "IFC4", data, opts)
 }
 
-fn run_in(doc: Document, schema: &str, data: &str, opts: &IfcImportOptions) -> (Editor, Report) {
+pub(super) fn run_in(
+    doc: Document,
+    schema: &str,
+    data: &str,
+    opts: &IfcImportOptions,
+) -> (Editor, Report) {
     let r = import_bytes(file(schema, data), &doc, opts).unwrap();
     let mut ed = Editor::new(doc);
     ed.execute(&r.command)
@@ -52,22 +57,22 @@ fn run_in(doc: Document, schema: &str, data: &str, opts: &IfcImportOptions) -> (
     (ed, r.report)
 }
 
-fn objs(ed: &Editor) -> Vec<&Object> {
+pub(super) fn objs(ed: &Editor) -> Vec<&Object> {
     ed.doc().objects.values().collect()
 }
 
-fn volume_of(o: &Object) -> f64 {
+pub(super) fn volume_of(o: &Object) -> f64 {
     match &o.shape {
         Shape::Mesh3d(m) => m.volume(),
         other => panic!("not a mesh: {}", other.kind()),
     }
 }
 
-fn slab(n: u64, items: &str) -> String {
+pub(super) fn slab(n: u64, items: &str) -> String {
     product(n, "IFCSLAB", items, "$,@,$,.FLOOR.")
 }
 
-fn one_volume(data: &str) -> f64 {
+pub(super) fn one_volume(data: &str) -> f64 {
     let (ed, r) = run(data, &IfcImportOptions::default());
     assert_eq!(objs(&ed).len(), 1, "{r:?}");
     volume_of(objs(&ed)[0])

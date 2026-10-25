@@ -29,6 +29,8 @@ mod props;
 mod tests;
 #[cfg(test)]
 mod tests_more;
+#[cfg(test)]
+mod tests_real;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -312,11 +314,19 @@ impl<'a> Importer<'a> {
             }
         }
         let mut seen_classes: BTreeMap<String, usize> = BTreeMap::new();
+        let mut global_ids: HashSet<String> = HashSet::new();
+        let mut repeated_ids = 0usize;
         for id in cands {
             if self.b.is_full() {
                 break;
             }
             let Some(e) = self.cx.ent(id) else { continue };
+            // Some exporters repeat a GlobalId. Both objects are kept; the count goes in the report.
+            if let Some(g) = text(attr(&e, 0)).filter(|g| !g.is_empty())
+                && !global_ids.insert(g.to_string())
+            {
+                repeated_ids += 1;
+            }
             // A product has a placement (5) and a representation (6).
             let Some(rep) = self.cx.get(attr(&e, 6)) else {
                 continue;
@@ -332,6 +342,11 @@ impl<'a> Importer<'a> {
             }
         }
         self.finish_records();
+        if repeated_ids > 0 {
+            self.b.report.note(&format!(
+                "{repeated_ids} products repeat the GlobalId of another product: all are imported"
+            ));
+        }
         if self.model.voids > 0 {
             self.b.report.note(&format!(
                 "{} openings (IfcRelVoidsElement) were not cut from their walls and slabs",

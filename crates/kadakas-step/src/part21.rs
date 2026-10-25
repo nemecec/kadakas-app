@@ -7,6 +7,8 @@
 
 use std::io::{self, Write};
 
+use crate::codepages;
+
 /// An attribute value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -194,11 +196,14 @@ pub fn encode_string(s: &str) -> String {
 }
 
 /// Reads the text of a STEP string (without the quotes). It understands `''`, `\\`, `\X\hh`,
-/// `\X2\...\X0\` and `\X4\...\X0\`. Other escapes stay as they are.
+/// `\S\c` (a character of the upper half of the code page), `\P<letter>\` (selects the ISO 8859
+/// part A to I, part 1 at first), `\X2\...\X0\` (UTF-16) and `\X4\...\X0\` (UTF-32). An escape
+/// that is not complete or not valid stays as it is, so no text is lost.
 pub fn decode_string(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::new();
     let mut i = 0;
+    let mut page = 0usize;
     let hex =
         |digits: &[u8]| u32::from_str_radix(std::str::from_utf8(digits).unwrap_or("zz"), 16).ok();
     while i < b.len() {
@@ -212,9 +217,9 @@ pub fn decode_string(s: &str) -> String {
                 i += 2;
             }
             b'\\' if b[i..].starts_with(b"\\X\\") && i + 5 <= b.len() => {
-                match hex(&b[i + 3..i + 5]).and_then(char::from_u32) {
+                match hex(&b[i + 3..i + 5]) {
                     Some(c) => {
-                        out.push(c);
+                        out.push(codepages::char_of(page, c as u8));
                         i += 5;
                     }
                     None => {
@@ -222,6 +227,21 @@ pub fn decode_string(s: &str) -> String {
                         i += 1;
                     }
                 }
+            }
+            b'\\'
+                if b[i..].starts_with(b"\\S\\")
+                    && b.get(i + 3).is_some_and(|c| (0x20..0x7F).contains(c)) =>
+            {
+                out.push(codepages::char_of(page, b[i + 3] | 0x80));
+                i += 4;
+            }
+            b'\\'
+                if b.get(i + 1) == Some(&b'P')
+                    && b.get(i + 3) == Some(&b'\\')
+                    && b.get(i + 2).and_then(|l| codepages::page_of(*l)).is_some() =>
+            {
+                page = codepages::page_of(b[i + 2]).unwrap_or(0);
+                i += 4;
             }
             b'\\' if b[i..].starts_with(b"\\X2\\") || b[i..].starts_with(b"\\X4\\") => {
                 let width = if b[i + 2] == b'2' { 4 } else { 8 };
@@ -234,14 +254,18 @@ pub fn decode_string(s: &str) -> String {
                 let digits = &b[i + 4..end];
                 if width == 4 {
                     let units: Vec<u16> = digits
-                        .chunks(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .filter_map(|d| hex(d).map(|u| u as u16))
                         .collect();
                     out.extend(char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')));
                 } else {
                     out.extend(
                         digits
-                            .chunks(8)
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
                             .filter_map(|d| hex(d).and_then(char::from_u32)),
                     );
                 }
@@ -470,6 +494,12 @@ impl Parser<'_> {
         &self.s[start..self.i]
     }
 
+    /// A name in upper case: STEP names are not case sensitive, and some exporters write them
+    /// in lower case.
+    fn name(&mut self) -> String {
+        self.word().to_ascii_uppercase()
+    }
+
     /// The attributes after the opening bracket of an entity, up to the closing bracket.
     fn attr_list(&mut self, id: u64) -> Result<Vec<Value>, String> {
         let mut attrs = Vec::new();
@@ -548,7 +578,7 @@ impl Parser<'_> {
             }
             b'.' => {
                 self.i += 1;
-                let w = self.word().to_string();
+                let w = self.name();
                 self.eat(b'.')?;
                 Ok(match w.as_str() {
                     "T" => Value::Bool(true),
@@ -597,7 +627,7 @@ impl Parser<'_> {
                 }
             }
             c if c.is_ascii_alphabetic() => {
-                let name = self.word().to_string();
+                let name = self.name();
                 self.skip_space();
                 self.eat(b'(')?;
                 let inner = self.value()?;
@@ -613,9 +643,17 @@ impl Parser<'_> {
 
 /// The offset just after the `DATA;` of the first data section. Edition 3 files name the
 /// section: `DATA('name',('schema'));`.
+/// The first place of `needle` (upper case) in `s`, whatever the case of `s`.
+fn find_ci(s: &str, needle: &str) -> Option<usize> {
+    let n = needle.as_bytes();
+    s.as_bytes()
+        .windows(n.len())
+        .position(|w| w.eq_ignore_ascii_case(n))
+}
+
 fn find_data(s: &str) -> Option<usize> {
     let mut from = 0;
-    while let Some(at) = s[from..].find("DATA") {
+    while let Some(at) = find_ci(&s[from..], "DATA") {
         let start = from + at;
         let before_ok = s[..start]
             .chars()
@@ -691,11 +729,9 @@ pub fn parse_limited(
     max_entities: usize,
     max_memory: u64,
 ) -> Result<StepFile, ParseError> {
-    let header_start = text.find("HEADER;").ok_or("no HEADER section")? + "HEADER;".len();
-    let header_end = text[header_start..]
-        .find("ENDSEC;")
-        .ok_or("HEADER is not closed")?
-        + header_start;
+    let header_start = find_ci(text, "HEADER;").ok_or("no HEADER section")? + "HEADER;".len();
+    let header_end =
+        find_ci(&text[header_start..], "ENDSEC;").ok_or("HEADER is not closed")? + header_start;
     let data_start = find_data(&text[header_end..]).ok_or("no DATA section")? + header_end;
     let mut p = Parser {
         s: text,
@@ -706,7 +742,9 @@ pub fn parse_limited(
     let mut entities = Vec::new();
     loop {
         p.skip_space();
-        if p.s[p.i..].starts_with("ENDSEC;") {
+        if p.s.as_bytes()[p.i..].len() >= 7
+            && p.s.as_bytes()[p.i..p.i + 7].eq_ignore_ascii_case(b"ENDSEC;")
+        {
             break;
         }
         if p.i >= p.s.len() {
@@ -740,7 +778,7 @@ pub fn parse_limited(
                     p.i += 1;
                     break;
                 }
-                let part = p.word().to_string();
+                let part = p.name();
                 if part.is_empty() {
                     return Err(format!("entity #{id}: a part has no name at byte {}", p.i).into());
                 }
@@ -753,7 +791,7 @@ pub fn parse_limited(
             }
             (COMPLEX.to_string(), parts)
         } else {
-            let name = p.word().to_string();
+            let name = p.name();
             if name.is_empty() {
                 return Err(format!("entity #{id} has no name").into());
             }
@@ -832,6 +870,67 @@ mod tests {
         assert_eq!(decode_string("\\X2\\00E4"), "\\X2\\00E4");
         assert_eq!(decode_string("\\X\\zz"), "\\X\\zz");
         assert_eq!(decode_string("\\Q"), "\\Q");
+    }
+
+    #[test]
+    fn all_string_escapes_are_decoded() {
+        // \X\hh: the apostrophe of the buildingSMART landscaping scene, and a code of the upper half.
+        assert_eq!(decode_string("earth\\X\\27s"), "earth's");
+        assert_eq!(decode_string("\\X\\41\\X\\E4"), "A\u{E4}");
+        // \S\c adds 128 to the code of c.
+        assert_eq!(decode_string("\\S\\d\\S\\|"), "\u{E4}\u{FC}");
+        // \P<letter>\ selects the part of ISO 8859: part 2 (B) has a-ogonek at 0xB1.
+        assert_eq!(decode_string("\\PB\\\\S\\1"), "\u{105}");
+        assert_eq!(decode_string("\\PB\\\\X\\B1"), "\u{105}");
+        assert_eq!(decode_string("\\PE\\\\S\\0"), "\u{410}");
+        // The page stays until the next \P...\.
+        assert_eq!(decode_string("\\PB\\\\S\\1\\PA\\\\S\\q"), "\u{105}\u{F1}");
+        // Unfinished or unknown escapes stay as they are; nothing panics.
+        for s in [
+            "\\S\\",
+            "\\S\\\u{E4}",
+            "\\PZ\\",
+            "\\P",
+            "\\X\\4",
+            "\\X\\+1",
+            "\\X2\\00E",
+            "\\X4\\0000",
+        ] {
+            let _ = decode_string(s);
+        }
+        assert_eq!(decode_string("\\S\\"), "\\S\\");
+        assert_eq!(decode_string("\\PZ\\"), "\\PZ\\");
+        // A partial unit inside \X2\ is dropped, not read as a number.
+        assert_eq!(decode_string("\\X2\\00E4F\\X0\\"), "\u{E4}");
+        assert_eq!(decode_string("\\X4\\00000041\\X0\\"), "A");
+    }
+
+    #[test]
+    fn encoded_text_decodes_to_the_same_text() {
+        for s in [
+            "",
+            "plain",
+            "o'k \\ x",
+            "\u{D8}ya \u{E4}\u{F6}",
+            "tree \u{1F333} end",
+            "a\r\nb\tc",
+            "\u{104}\u{416}\u{3A9}\u{20AC}",
+        ] {
+            assert_eq!(decode_string(&encode_string(s)), s, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn lower_case_keywords_are_read() {
+        let f = parse("header;\nfile_schema(('IFC4'));\nendsec;\ndata;\n#1= ifcactorrole(.architect.,$,$);\n#2=(a() b(1));\n#3=ifcx(ifclabel('x'));\nendsec;").unwrap();
+        assert_eq!(f.entities.len(), 3);
+        assert_eq!(f.entities[0].name, "IFCACTORROLE");
+        assert_eq!(f.entities[0].attrs[0], Value::Enum("ARCHITECT".into()));
+        assert!(f.entities[1].is("A") && f.entities[1].is("B"));
+        assert_eq!(
+            f.entities[2].attrs[0],
+            Value::Typed("IFCLABEL".into(), Box::new(Value::Str("x".into())))
+        );
     }
 
     #[test]
