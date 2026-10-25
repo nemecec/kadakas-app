@@ -28,7 +28,8 @@ IfcReinforcedSoil IfcReinforcingBar IfcReinforcingMesh IfcRoof IfcSanitaryTermin
 IfcSite IfcSlab IfcSlabElementedCase IfcSlabStandardCase IfcSolarDevice IfcSpace IfcSpaceHeater IfcStackTerminal IfcStair \
 IfcStairFlight IfcSurfaceFeature IfcSwitchingDevice IfcSystemFurnitureElement IfcTank IfcTendon IfcTendonAnchor IfcTendonConduit \
 IfcTrackElement IfcTransformer IfcTransportElement IfcTubeBundle IfcUnitaryControlElement IfcUnitaryEquipment IfcValve IfcVehicle \
-IfcVibrationIsolator IfcVirtualElement IfcWall IfcWallElementedCase IfcWallStandardCase IfcWasteTerminal IfcWindow IfcWindowStandardCase";
+IfcVibrationIsolator IfcVirtualElement IfcWall IfcWallElementedCase IfcWallStandardCase IfcWasteTerminal IfcWindow IfcWindowStandardCase IfcOpeningStandardCase IfcSolidStratum IfcVoidStratum IfcWaterStratum \
+IfcBuiltElement IfcBuildingElement IfcGeotechnicalElement IfcFacility IfcFacilityPart";
 
 /// Spatial structure classes (they contain elements and are not elements themselves).
 pub fn is_spatial(upper: &str) -> bool {
@@ -101,6 +102,8 @@ pub struct Model {
     pub map_uses: HashMap<u64, usize>,
     /// Number of `IfcRelVoidsElement`.
     pub voids: usize,
+    /// The openings of each host element (`IfcRelVoidsElement`).
+    pub openings_of: HashMap<u64, Vec<u64>>,
 }
 
 impl Model {
@@ -173,7 +176,18 @@ impl Model {
                         }
                     }
                 }
-                "IFCRELVOIDSELEMENT" => m.voids += 1,
+                "IFCRELVOIDSELEMENT" => {
+                    m.voids += 1;
+                    if let (Some(host), Some(opening)) =
+                        (attr(&e, 4).as_ref_id(), attr(&e, 5).as_ref_id())
+                    {
+                        let list = m.openings_of.entry(host).or_default();
+                        if !list.contains(&opening) {
+                            list.push(opening);
+                        }
+                        m.related.insert(opening);
+                    }
+                }
                 "IFCPRESENTATIONLAYERASSIGNMENT" | "IFCPRESENTATIONLAYERWITHSTYLE" => {
                     let Some(n) = text(attr(&e, 0)).map(str::trim).filter(|n| !n.is_empty()) else {
                         continue;

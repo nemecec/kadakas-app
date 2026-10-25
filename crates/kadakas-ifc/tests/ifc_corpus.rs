@@ -270,3 +270,59 @@ fn xml_and_json_twins_are_refused_by_name() {
         "{e}"
     );
 }
+
+#[test]
+fn the_wall_with_an_opening_and_a_window_is_cut() {
+    let Some(file) = corpus::reference_view("wall-with-opening-and-window") else {
+        return;
+    };
+    let (ed, rep) = load(&file);
+    // The wall is 3000 x 300 x 2000. The opening is 1000 x 300 x 1000 and goes through the wall.
+    // The window (1000 x 200 x 1000) sits in the opening and is an object of its own.
+    let gross = 3000.0 * 300.0 * 2000.0;
+    let opening = 1000.0 * 300.0 * 1000.0;
+    let mut volumes: Vec<f64> = objects(&ed).iter().map(|o| mesh_volume(o)).collect();
+    volumes.sort_by(f64::total_cmp);
+    assert_eq!(volumes.len(), 2, "{rep:?}");
+    assert!(
+        (volumes[0] - 1000.0 * 200.0 * 1000.0).abs() < 1.0,
+        "{volumes:?}"
+    );
+    assert!((volumes[1] - (gross - opening)).abs() < 1.0, "{volumes:?}");
+    assert!(
+        rep.notes
+            .iter()
+            .any(|n| n == "1 openings (IfcRelVoidsElement) were cut from their walls and slabs"),
+        "{:?}",
+        rep.notes
+    );
+    assert_eq!(rep.entities_read, 3);
+}
+
+#[test]
+fn the_slab_with_a_round_hole_and_a_recess_has_the_analytic_volume() {
+    let Some(file) = corpus::iso("slab-openings.ifc") else {
+        return;
+    };
+    let (ed, rep) = load(&file);
+    let o = objects(&ed);
+    assert_eq!(o.len(), 1, "{rep:?}");
+    // The slab is 200 thick. Its outline: a 1000 x 4000 rectangle with two circular segments
+    // (chord 4000, rise 400) on the long sides. A round hole of radius 50 goes through it and a
+    // recess of 1000 x 500 x 50 is cut from the top.
+    let (chord, rise) = (4000.0f64, 400.0f64);
+    let r = (chord * chord / 4.0 + rise * rise) / (2.0 * rise);
+    let segment =
+        r * r * ((r - rise) / r).acos() - (r - rise) * (2.0 * r * rise - rise * rise).sqrt();
+    let area = 1000.0 * 4000.0 + 2.0 * segment;
+    let want = area * 200.0 - std::f64::consts::PI * 50.0 * 50.0 * 200.0 - 1000.0 * 500.0 * 50.0;
+    let got = mesh_volume(o[0]);
+    // The arcs and the circle are cut into short lines (2 mm), so the volume is a little less.
+    assert!((got - want).abs() < want * 0.003, "{got} {want}");
+    assert!(got < want, "{got} {want}");
+    assert!(
+        rep.notes.iter().any(|n| n.starts_with("2 openings")),
+        "{:?}",
+        rep.notes
+    );
+}
