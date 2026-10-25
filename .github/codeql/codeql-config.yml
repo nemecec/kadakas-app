@@ -1,13 +1,15 @@
 # CodeQL settings (used by .github/workflows/codeql.yml).
-# The first run found 257 alerts. A person read all of them: every one was a false positive.
+# The first run found 257 alerts. A person read all of them: every one was a false positive,
+# and they are dismissed in the Security tab (a dismissed alert stays dismissed).
 # - rust/cleartext-logging: the query treats an object id (`uid`) as private data. The alerts sat in
 #   `assert!` messages of tests and in a benchmark that prints counts.
 # - rust/hard-coded-cryptographic-value: the query treats the name of a UI widget id
-#   (`ComboBox::from_id_salt("group_by")`) as a cryptographic salt. Public keys that the updater
-#   trusts are hard-coded on purpose (they are not secrets).
+#   (`ComboBox::from_id_salt("group_by")`) as a cryptographic salt. The public keys that the updater
+#   trusts are hard-coded on purpose (they are not secrets). Dismiss a hit on them with that reason.
+#   The rule stays ON: the app has remote connections and signatures, and a real hard-coded key,
+#   salt or password must show up.
 # - Tests that crash on purpose (crates/kadakas-crash/tests) trigger rust/access-invalid-pointer.
-# Tests, benchmarks and examples are left out. The two noisy rules are off for production code too.
-# A real problem in production code will still show up under the other rules.
+# Tests, benchmarks and examples are left out of the scan.
 paths-ignore:
   - "**/tests/**"
   - "tests/**"
@@ -15,6 +17,3 @@ paths-ignore:
   - "**/*_tests.rs"
   - "**/tests.rs"
   - "**/tests_*.rs"
-query-filters:
-  - exclude:
-      id: rust/hard-coded-cryptographic-value
