@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-gis"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,9 +9,9 @@ repository.workspace = true
 description = "GIS services for Kadakas: WMS and WMTS map backgrounds, WFS import, geoimages and coordinate conversion. Native only."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
-kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-crs = { path = "../kadakas-crs" }
+kadakas-io = { path = "../kadakas-io" }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }

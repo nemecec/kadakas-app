@@ -406,7 +406,10 @@ mod tests {
             text.contains("label local, commit 0123456789abcdef"),
             "{text}"
         );
-        assert!(text.contains(&format!("{}-local.g0123456789", env!("CARGO_PKG_VERSION"))));
+        // A local build takes the numbers of the base version, without its pre-release part
+        // (0.1.0-beta.1 gives 0.1.0-local.g...).
+        let core = env!("CARGO_PKG_VERSION").split('-').next().unwrap();
+        assert!(text.contains(&format!("{core}-local.g0123456789")));
         // Another base version, and no git.
         let mut out = Vec::new();
         run_add(

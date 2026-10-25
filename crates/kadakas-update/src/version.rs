@@ -68,6 +68,14 @@ impl Version {
             pre: pre.map(str::to_string),
         })
     }
+
+    /// A development version (`0.1.1-dev`, or `0.1.1-dev.3`) is what `main` carries between two
+    /// releases. It is never tagged and never in a manifest.
+    pub fn is_dev(&self) -> bool {
+        self.pre
+            .as_deref()
+            .is_some_and(|p| p.split('.').next() == Some("dev"))
+    }
 }
 
 fn cmp_pre(a: &str, b: &str) -> Ordering {
@@ -195,6 +203,21 @@ mod tests {
         assert!(v("1.0.0-a.1") > v("1.0.0-a"));
         assert_eq!(v("1.0.0").cmp(&v("1.0.0")), Ordering::Equal);
         assert_eq!(v("1.0.0").partial_cmp(&v("1.0.1")), Some(Ordering::Less));
+    }
+
+    #[test]
+    fn rehearsal_and_development_versions() {
+        // The first rehearsal release, the next beta, the development version after it, and the release.
+        assert!(v("0.1.0-beta.1") < v("0.1.0-beta.2"));
+        assert!(v("0.1.0-beta.2") < v("0.1.0-dev"));
+        assert!(v("0.1.0-dev") < v("0.1.0"));
+        assert!(v("0.1.0") < v("0.1.1-dev"));
+        assert!(v("0.1.1-dev") < v("0.1.1"));
+        // After a release candidate, "dev" sorts below "rc" (letters compare as text).
+        assert!(v("0.1.0-dev") < v("0.1.0-rc.1"));
+        assert_eq!(v("0.1.0-beta.1").to_string(), "0.1.0-beta.1");
+        assert!(v("0.1.1-dev").is_dev() && v("0.1.1-dev.2").is_dev());
+        assert!(!v("0.1.0-beta.1").is_dev() && !v("0.1.0").is_dev() && !v("0.1.0-devel").is_dev());
     }
 
     #[test]

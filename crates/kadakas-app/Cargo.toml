@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-app"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,27 +18,27 @@ test-hook = []
 [dependencies]
 base64 = "0.22.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
-kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
-kadakas-api = { version = "0.1.0", path = "../kadakas-api", default-features = false }
-kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
-kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws" }
-kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
-kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
-kadakas-script-js = { version = "0.1.0", path = "../kadakas-script-js" }
-kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
-kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
-kadakas-ui-core = { version = "0.1.0", path = "../kadakas-ui-core" }
-kadakas-view3d = { version = "0.1.0", path = "../kadakas-view3d" }
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
-kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
-kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
-kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
-kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
-kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
-kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
-kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+kadakas-annot = { path = "../kadakas-annot" }
+kadakas-api = { path = "../kadakas-api", default-features = false }
+kadakas-irrigation = { path = "../kadakas-irrigation" }
+kadakas-collab-ws = { path = "../kadakas-collab-ws" }
+kadakas-print = { path = "../kadakas-print" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-plants = { path = "../kadakas-plants" }
+kadakas-plugin = { path = "../kadakas-plugin" }
+kadakas-script-js = { path = "../kadakas-script-js" }
+kadakas-l10n = { path = "../kadakas-l10n" }
+kadakas-units = { path = "../kadakas-units" }
+kadakas-ui-core = { path = "../kadakas-ui-core" }
+kadakas-view3d = { path = "../kadakas-view3d" }
+kadakas-sys = { path = "../kadakas-sys" }
+kadakas-render = { path = "../kadakas-render" }
+kadakas-review = { path = "../kadakas-review" }
+kadakas-feedback = { path = "../kadakas-feedback" }
+kadakas-crash = { path = "../kadakas-crash" }
+kadakas-file = { path = "../kadakas-file" }
+kadakas-sheet = { path = "../kadakas-sheet" }
+kadakas-site = { path = "../kadakas-site" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.35.0"
 egui_dock = { version = "0.20.1", features = ["serde"] }
@@ -49,11 +50,11 @@ resvg = { version = "0.48.1", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4.3"
-kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
-kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
-kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
+kadakas-gis = { path = "../kadakas-gis" }
+kadakas-script = { path = "../kadakas-script" }
+kadakas-update = { path = "../kadakas-update" }
 # The panic hook and the native crash handler (PLAT-20).
-kadakas-crash = { version = "0.1.0", path = "../kadakas-crash", features = ["capture"] }
+kadakas-crash = { path = "../kadakas-crash", features = ["capture"] }
 sys-locale = "0.3.2"
 
 # The web build: WebGPU first, WebGL2 as the fallback (eframe picks at start).
@@ -67,5 +68,5 @@ js-sys = "0.3"
 [dev-dependencies]
 pollster = "1.0.1"
 zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
-kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
-kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
+kadakas-collab-ws = { path = "../kadakas-collab-ws", features = ["test-server"] }
+kadakas-collab = { path = "../kadakas-collab", features = ["testkit"] }

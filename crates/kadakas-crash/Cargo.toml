@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-crash"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,13 +13,13 @@ description = "Crash reports of Kadakas (PLAT-20): the crash file, the scrubbing
 capture = ["dep:crash-handler", "dep:libc"]
 
 [dependencies]
-kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
+kadakas-feedback = { path = "../kadakas-feedback" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 sha2 = "0.10.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
+kadakas-sys = { path = "../kadakas-sys" }
 crash-handler = { version = "0.8.1", optional = true }
 libc = { version = "0.2", optional = true }
 

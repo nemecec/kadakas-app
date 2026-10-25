@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-api"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,22 +16,22 @@ script-js = ["kadakas-script-js/engine"]
 
 [dependencies]
 base64 = "0.22.1"
-kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
-kadakas-collab = { version = "0.1.0", path = "../kadakas-collab" }
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
-kadakas-crs = { version = "0.1.0", path = "../kadakas-crs" }
-kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
-kadakas-crash = { version = "0.1.0", path = "../kadakas-crash" }
-kadakas-file = { version = "0.1.0", path = "../kadakas-file" }
-kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
-kadakas-plugin = { version = "0.1.0", path = "../kadakas-plugin" }
-kadakas-plugin-abi = { version = "0.1.0", path = "../kadakas-plugin-abi" }
-kadakas-script-js = { version = "0.1.0", path = "../kadakas-script-js" }
-kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
-kadakas-review = { version = "0.1.0", path = "../kadakas-review" }
-kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
-kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+kadakas-annot = { path = "../kadakas-annot" }
+kadakas-collab = { path = "../kadakas-collab" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-plants = { path = "../kadakas-plants" }
+kadakas-crs = { path = "../kadakas-crs" }
+kadakas-feedback = { path = "../kadakas-feedback" }
+kadakas-crash = { path = "../kadakas-crash" }
+kadakas-file = { path = "../kadakas-file" }
+kadakas-irrigation = { path = "../kadakas-irrigation" }
+kadakas-plugin = { path = "../kadakas-plugin" }
+kadakas-plugin-abi = { path = "../kadakas-plugin-abi" }
+kadakas-script-js = { path = "../kadakas-script-js" }
+kadakas-render = { path = "../kadakas-render" }
+kadakas-review = { path = "../kadakas-review" }
+kadakas-sheet = { path = "../kadakas-sheet" }
+kadakas-site = { path = "../kadakas-site" }
 glam = { version = "0.34.1", features = ["serde"] }
 sha2 = "0.10.9"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -40,29 +41,29 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 schemars = "1"
 serde_path_to_error = "0.1.20"
 
-kadakas-meshio = { version = "0.1.0", path = "../kadakas-meshio" }
-kadakas-step = { version = "0.1.0", path = "../kadakas-step" }
+kadakas-meshio = { path = "../kadakas-meshio" }
+kadakas-step = { path = "../kadakas-step" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The clock of a script run in the browser.
 js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
-kadakas-print = { version = "0.1.0", path = "../kadakas-print" }
-kadakas-io = { version = "0.1.0", path = "../kadakas-io" }
-kadakas-ifc = { version = "0.1.0", path = "../kadakas-ifc" }
-kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
-kadakas-gis = { version = "0.1.0", path = "../kadakas-gis" }
-kadakas-script = { version = "0.1.0", path = "../kadakas-script" }
+kadakas-sys = { path = "../kadakas-sys" }
+kadakas-print = { path = "../kadakas-print" }
+kadakas-io = { path = "../kadakas-io" }
+kadakas-ifc = { path = "../kadakas-ifc" }
+kadakas-x3d = { path = "../kadakas-x3d" }
+kadakas-gis = { path = "../kadakas-gis" }
+kadakas-script = { path = "../kadakas-script" }
 tempfile = "3"
 # The consent secret comes from the operating system (the same crate that tempfile uses).
 getrandom = "0.4"
 
 [dev-dependencies]
-kadakas-container = { version = "0.1.0", path = "../kadakas-container" }
+kadakas-container = { path = "../kadakas-container" }
 # The tests make a command panic (`kadakas_core::fault`). Not shipped.
-kadakas-core = { version = "0.1.0", path = "../kadakas-core", features = ["fault-injection"] }
+kadakas-core = { path = "../kadakas-core", features = ["fault-injection"] }
 png = "0.18"
 # Encodes JPEG in the snapshot benchmark only (to compare sizes).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
@@ -71,8 +72,8 @@ resvg = { version = "0.48.1", default-features = false }
 proptest = "1.11.0"
 # Makes hostile BCF archives in the tests. Not shipped here (kadakas-review reads them).
 zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
-kadakas-collab = { version = "0.1.0", path = "../kadakas-collab", features = ["testkit"] }
+kadakas-collab = { path = "../kadakas-collab", features = ["testkit"] }
 # The in-process WebSocket server for tests of `collab.connect {url}`. Not shipped.
-kadakas-collab-ws = { version = "0.1.0", path = "../kadakas-collab-ws", features = ["test-server"] }
+kadakas-collab-ws = { path = "../kadakas-collab-ws", features = ["test-server"] }
 # Test modules for the limits are written as text. Not shipped.
 wat = "1"

@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-print"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,13 +11,13 @@ description = "Sheet composition and output: PDF, SVG and PNG. Native only."
 [dependencies]
 ab_glyph = "0.2.32"
 base64 = "0.22.1"
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
-kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
-kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
-kadakas-sheet = { version = "0.1.0", path = "../kadakas-sheet" }
-kadakas-x3d = { version = "0.1.0", path = "../kadakas-x3d" }
-kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-sys = { path = "../kadakas-sys" }
+kadakas-render = { path = "../kadakas-render" }
+kadakas-annot = { path = "../kadakas-annot" }
+kadakas-sheet = { path = "../kadakas-sheet" }
+kadakas-x3d = { path = "../kadakas-x3d" }
+kadakas-site = { path = "../kadakas-site" }
 epaint_default_fonts = "0.35.0"
 glam = { version = "0.34.1" }
 miniz_oxide = "0.8.9"

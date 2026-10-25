@@ -1,0 +1,69 @@
+name: Delete release
+# Deletes a bad (rehearsal) release: the GitHub release (draft or published), its tag, and the
+# signed manifest in the release "update-manifests" when that manifest names this version.
+# Start it from the Actions tab. The environment "release" can ask a reviewer first.
+# It does not touch main: the commit "Release <version>" stays. Change it with a new commit.
+# It refuses the latest stable release unless `force` is true.
+# Actions are pinned to commit SHAs, as in ci.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to delete, for example v0.1.0-beta.1"
+        type: string
+        required: true
+      force:
+        description: "Also delete the latest stable release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write # delete the release, the tag and a manifest asset
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - name: Delete
+        run: |
+          set -euo pipefail
+          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          [[ "$TAG" =~ $re ]] || { echo "::error::bad tag: $TAG"; exit 1; }
+          version="${TAG#v}"
+          latest=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ "$latest" = "$TAG" ] && [ "$FORCE" != "true" ]; then
+            echo "::error::$TAG is the latest stable release. Tick force to delete it."; exit 1
+          fi
+          # The signed manifest of a channel names one version. If it names this one, remove it:
+          # the launcher then finds no manifest (no update) instead of one for a deleted release.
+          # The next release signs a new one. Its "never go back" rule then has nothing to compare with.
+          for c in stable beta; do
+            if gh release download update-manifests --repo "$GITHUB_REPOSITORY" --pattern "manifest-$c.json" --dir m --clobber 2>/dev/null; then
+              v=$(jq -r '.payload | fromjson | .version' "m/manifest-$c.json" 2>/dev/null || true)
+              if [ "$v" = "$version" ]; then
+                gh release delete-asset update-manifests "manifest-$c.json" --repo "$GITHUB_REPOSITORY" --yes
+                echo "Removed manifest-$c.json (it named $version)."
+              fi
+            fi
+          done
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            echo "Deleted the release and the tag $TAG."
+          elif git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG"
+            echo "There was no release. Deleted the tag $TAG."
+          else
+            echo "::error::No release and no tag $TAG."; exit 1
+          fi

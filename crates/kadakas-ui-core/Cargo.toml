@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-ui-core"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,16 +9,16 @@ repository.workspace = true
 description = "What every Kadakas UI program needs, without egui: tool state machines, picking, snapping glue, view state and keymaps. Pure and wasm-compatible."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
-kadakas-annot = { version = "0.1.0", path = "../kadakas-annot" }
-kadakas-l10n = { version = "0.1.0", path = "../kadakas-l10n" }
-kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
-kadakas-feedback = { version = "0.1.0", path = "../kadakas-feedback" }
-kadakas-irrigation = { version = "0.1.0", path = "../kadakas-irrigation" }
-kadakas-plants = { version = "0.1.0", path = "../kadakas-plants" }
-kadakas-render = { version = "0.1.0", path = "../kadakas-render" }
-kadakas-site = { version = "0.1.0", path = "../kadakas-site" }
-kadakas-review = { version = "0.1.0", path = "../kadakas-review", default-features = false }
+kadakas-core = { path = "../kadakas-core" }
+kadakas-annot = { path = "../kadakas-annot" }
+kadakas-l10n = { path = "../kadakas-l10n" }
+kadakas-units = { path = "../kadakas-units" }
+kadakas-feedback = { path = "../kadakas-feedback" }
+kadakas-irrigation = { path = "../kadakas-irrigation" }
+kadakas-plants = { path = "../kadakas-plants" }
+kadakas-render = { path = "../kadakas-render" }
+kadakas-site = { path = "../kadakas-site" }
+kadakas-review = { path = "../kadakas-review", default-features = false }
 glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

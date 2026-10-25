@@ -1,6 +1,7 @@
 [package]
 name = "kadakas-props"
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,7 +9,7 @@ repository.workspace = true
 description = "The property model of a Kadakas document: things by Uid with properties, operations on them, the merge rules and a total build of a document. Shared by collaboration and review. Pure and wasm-compatible."
 
 [dependencies]
-kadakas-core = { version = "0.1.0", path = "../kadakas-core" }
+kadakas-core = { path = "../kadakas-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.10.9"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }

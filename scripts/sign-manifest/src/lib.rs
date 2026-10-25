@@ -463,6 +463,16 @@ mod tests {
             go(&v, &[])
         };
         assert!(base(&["--version", "x", "--channel", "stable"]).is_err());
+        // A development version is never released.
+        let dev = base(&[
+            "--version",
+            "0.1.1-dev",
+            "--channel",
+            "beta",
+            "--platform",
+            &format!("linux-x86_64={}=https://example.org/a", s(&a)),
+        ]);
+        assert!(dev.unwrap_err().contains("development"));
         assert!(base(&["--version", "1.0.0", "--channel", "nightly"]).is_err());
         assert!(base(&["--version", "1.0.0", "--channel", "stable"]).is_err()); // no platform
         assert!(

@@ -53,6 +53,7 @@ jobs:
           re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           if [ -n "$EVENT_TAG" ]; then
             [[ "$EVENT_TAG" =~ $re ]] || { echo "bad tag: $EVENT_TAG"; exit 1; }
+            case "$EVENT_TAG" in *-dev|*-dev.*) echo "a development version is never released: $EVENT_TAG"; exit 1 ;; esac
             echo "tags=[\"$EVENT_TAG\"]" >> "$GITHUB_OUTPUT"
             echo "strict=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -119,6 +120,7 @@ jobs:
           chmod +x tool/sign-manifest
           re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           [[ "$TAG" =~ $re ]] || { echo "bad tag: $TAG"; exit 1; }
+          case "$TAG" in *-dev|*-dev.*) echo "a development version is never released: $TAG"; exit 1 ;; esac
           # The version in the tag must be the version in the workspace at that tag.
           ws=$(git show "refs/tags/$TAG:Cargo.toml" | awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}')
           [ "v$ws" = "$TAG" ] || { echo "tag $TAG does not match the workspace version $ws"; exit 1; }
