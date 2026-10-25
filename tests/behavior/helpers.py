@@ -291,6 +291,13 @@ def pdftotext(path, *options) -> str:
     tool = shutil.which("pdftotext")
     if tool is None:
         pytest.skip("pdftotext (poppler) is not installed")
+    if "-bbox" in options:
+        # Xpdf's pdftotext (the one on the Windows runner) has no -bbox; poppler's has.
+        help_text = subprocess.run(
+            [tool, "-h"], capture_output=True, text=True, encoding="utf-8", errors="replace"
+        )
+        if "-bbox" not in help_text.stdout + help_text.stderr:
+            pytest.skip("this pdftotext (Xpdf) has no -bbox; poppler's pdftotext is needed")
     out = Path(tempfile.mkdtemp(prefix="kadakas-pdftotext-")) / "out.txt"
     run = subprocess.run(
         [tool, "-enc", "UTF-8", *options, str(path), str(out)],
