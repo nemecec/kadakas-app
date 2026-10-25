@@ -38,10 +38,11 @@ env:
   CARGO_TERM_COLOR: always
   # Faster builds: a CI run compiles once, so incremental data only costs time and disk.
   CARGO_INCREMENTAL: "0"
-  # No debug info for tests: smaller files, faster links. Panic messages and `RUST_BACKTRACE=short`
-  # still show the file and line of our code through the symbol table.
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
+  # Line tables only (no variable info): much smaller and faster to link than full debug info. The
+  # crash handler tests need function names in backtraces, and on Windows those come from the
+  # PDB file, which exists only with some debug info. `0` made two kadakas-crash tests fail there.
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
   CARGO_NET_RETRY: "10"
   RUST_BACKTRACE: short
 
