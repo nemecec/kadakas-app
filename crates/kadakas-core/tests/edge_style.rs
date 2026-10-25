@@ -444,6 +444,7 @@ fn a_mirrored_model_keeps_its_smooth_normals_outward() {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         },
     );
     let f = model(&ed, id).faces().next().unwrap().0;

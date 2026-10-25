@@ -135,6 +135,7 @@ use std::collections::BTreeMap;
 use glam::{DAffine3, DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 
+pub mod analytic;
 mod arrange;
 mod check;
 mod clash;
@@ -155,6 +156,8 @@ mod topo;
 mod tests;
 #[cfg(test)]
 mod tests_absorb;
+#[cfg(test)]
+mod tests_analytic;
 #[cfg(test)]
 mod tests_followme;
 #[cfg(test)]
@@ -180,6 +183,7 @@ mod tests_style;
 #[cfg(test)]
 mod tests_transform;
 
+pub use analytic::{Analytic, CurveError};
 pub use check::{At, Problem, Report};
 pub use edit::style::{
     ATTR_FACETED, ATTR_SMOOTH, ATTR_SOFT, SoftSurfaces, dihedral_of, flagged, soften_plan,
@@ -392,6 +396,9 @@ pub enum SurfaceError {
     /// A solid operation (MOD-09) was refused, see [`SolidError`].
     #[error("{0}")]
     Solid(SolidError),
+    /// A curve edit (MOD-15) was refused, see [`CurveError`].
+    #[error("{0}")]
+    Curve(CurveError),
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.
@@ -411,6 +418,9 @@ pub struct SurfaceModel {
     /// Curves: chains of edges that stay one arc or circle after they are cut (MOD-08). An edge is
     /// in one curve at most; a split keeps both parts in the curve, a heal joins them again.
     curves: BTreeMap<CurveId, Vec<EdgeId>>,
+    /// The exact circle of some curves (MOD-15, see [`analytic`]): never for a curve whose points
+    /// are not on it.
+    analytic: BTreeMap<CurveId, Analytic>,
     /// The number of edits so far (each edit adds one).
     rev: u64,
     /// The recent edits as replayable intents (see [`sync`]).
@@ -462,6 +472,7 @@ impl SurfaceModel {
             next_id: 1,
             edge_attrs: BTreeMap::new(),
             curves: BTreeMap::new(),
+            analytic: BTreeMap::new(),
             rev: 0,
             log: Vec::new(),
             extra: serde_json::Map::new(),
@@ -498,6 +509,7 @@ impl SurfaceModel {
             && self.faces == o.faces
             && self.edge_attrs == o.edge_attrs
             && self.curves == o.curves
+            && self.analytic == o.analytic
     }
 
     /// The number of edits so far.
@@ -580,15 +592,7 @@ impl SurfaceModel {
     /// and circles (MOD-08). Fails when an edge does not exist, is in a curve already, or the
     /// edges are not a chain.
     pub fn add_curve(&mut self, edges: Vec<EdgeId>) -> Result<CurveId, SurfaceError> {
-        let mut work = self.clone();
-        let id = CurveId(work.alloc());
-        work.curves.insert(id, edges);
-        if let Some(p) = check::curves(&work) {
-            return Err(SurfaceError::Unsolved(p.to_string()));
-        }
-        sync::record(&mut work, self, sync::Intent::Unlogged);
-        *self = work;
-        Ok(id)
+        self.add_curve_shaped(edges, None)
     }
 
     pub fn vertex(&self, id: VertexId) -> Option<DVec3> {
@@ -877,6 +881,7 @@ impl SurfaceModel {
             next_id,
             edge_attrs: BTreeMap::new(),
             curves: BTreeMap::new(),
+            analytic: BTreeMap::new(),
             rev: 0,
             log: Vec::new(),
             extra: serde_json::Map::new(),

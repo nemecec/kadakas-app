@@ -466,7 +466,7 @@ pub(super) fn follow_me(
     }
 
     // Curves: a curve of the profile at each copy, a curve of the path along each point.
-    let mut new_curves: Vec<(Vec<EdgeId>, bool)> = Vec::new();
+    let mut new_curves: Vec<(Vec<EdgeId>, bool, Option<CurveId>)> = Vec::new();
     for (cid, es) in m_curves_of_profile(&w, &loops, &curve_of) {
         let fac = faceted.contains(&cid);
         for (j, ring) in ring_edges.iter().enumerate() {
@@ -475,26 +475,24 @@ pub(super) fn follow_me(
             }
             let c: Option<Vec<EdgeId>> = es.iter().map(|&(li, i)| ring[li][i]).collect();
             if let Some(c) = c {
-                new_curves.push((c, fac));
+                new_curves.push((c, fac, Some(cid)));
             }
         }
     }
     for run in runs_of(&path_curve, closed) {
-        let fac = run
-            .first()
-            .and_then(|j| path_curve[*j])
-            .is_some_and(|c| faceted.contains(&c));
+        let from = run.first().and_then(|j| path_curve[*j]);
+        let fac = from.is_some_and(|c| faceted.contains(&c));
         for (li, l) in ids[0].iter().enumerate() {
             for (i, _) in l.iter().enumerate() {
                 let c: Option<Vec<EdgeId>> = run.iter().map(|&j| long[j][li][i]).collect();
                 if let Some(c) = c.filter(|c| !c.is_empty()) {
-                    new_curves.push((c, fac));
+                    new_curves.push((c, fac, from));
                 }
             }
         }
     }
     let mut used: BTreeSet<EdgeId> = w.m.curves.values().flatten().copied().collect();
-    for (c, fac) in new_curves {
+    for (c, fac, from) in new_curves {
         let unique: BTreeSet<EdgeId> = c.iter().copied().collect();
         if unique.len() == c.len() && c.iter().all(|e| !used.contains(e)) {
             used.extend(c.iter().copied());
@@ -503,6 +501,11 @@ pub(super) fn follow_me(
             }
             let id = CurveId(w.m.alloc());
             w.m.curves.insert(id, c);
+            // A copy of a circle (or a curve along a circular path) is a circle again, when its
+            // points lie on one.
+            if let Some(a) = from.and_then(|f| w.m.analytic.get(&f).cloned()) {
+                super::super::analytic::derive(w.m, id, &a);
+            }
         }
     }
     w.check_limits()?;

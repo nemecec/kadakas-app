@@ -437,6 +437,7 @@ fn a_curve_that_moves_whole_stays_a_curve_and_a_stretched_one_too() {
         points: pts,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     assert_eq!(m.curves().count(), 1);
@@ -1244,6 +1245,7 @@ fn a_landing_within_the_tolerance_lands_exactly() {
         points: circle,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = face_with(&m, &[[2600.0, 0.0, 0.0]]);
@@ -1972,6 +1974,7 @@ fn a_circle_and_a_face_with_holes_unfold_into_the_face_they_were() {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         })
         .unwrap();
     let mut holes = pinched();

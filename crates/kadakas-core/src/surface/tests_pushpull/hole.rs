@@ -224,6 +224,7 @@ fn a_round_hole_keeps_its_curves_and_smooth_walls() {
         points: points.clone(),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = face_inside(&m, &points);

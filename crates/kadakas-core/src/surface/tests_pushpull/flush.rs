@@ -16,6 +16,7 @@ fn box_with_circle() -> (SurfaceModel, FaceId, FaceId) {
         points,
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m

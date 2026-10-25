@@ -247,6 +247,7 @@ fn the_offset_of_a_circle_is_one_curve() {
         points: circle(24, 500.0, 0.0, 0.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let f = m.faces().next().unwrap().0;
@@ -260,6 +261,7 @@ fn the_offset_of_a_circle_is_one_curve() {
         points: circle(24, 500.0, 0.0, 0.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let f = m.faces().next().unwrap().0;
@@ -282,6 +284,7 @@ fn an_arc_in_the_outline_offsets_as_one_curve_and_the_straight_sides_stay_lines(
         points: arc.iter().rev().copied().collect(),
         closed: false,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     m.apply(&Edit::AddEdges {
@@ -524,6 +527,7 @@ fn an_arc_offsets_as_one_curve() {
         points: arc,
         closed: false,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let es = edges_of(&m);

@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
+use super::analytic::Shape;
 use super::edit::Session;
 use super::geom::tol;
 use super::sync::{self, Intent};
@@ -110,6 +111,12 @@ impl SurfaceModel {
             .iter()
             .filter(|(_, es)| es.iter().all(|e| sel.edges.contains(e)))
             .map(|(c, es)| (*c, es.clone()))
+            .collect();
+        m.analytic = self
+            .analytic
+            .iter()
+            .filter(|(c, _)| m.curves.contains_key(c))
+            .map(|(c, a)| (*c, a.clone()))
             .collect();
         m
     }
@@ -256,11 +263,12 @@ impl SurfaceModel {
         if changed {
             sync::record(&mut work, &before, Intent::Unlogged);
         }
-        for es in other.curves.values() {
+        for (c, es) in &other.curves {
             let mapped: Option<Vec<EdgeId>> = es.iter().map(|e| find(&work, *e)).collect();
             if let Some(list) = mapped {
-                // A chain that is not a chain any more (the edge was cut) is not a curve.
-                let _ = work.add_curve(list);
+                // A chain that is not a chain any more (the edge was cut) is not a curve. The
+                // circle of the curve is fitted again where the chain landed.
+                let _ = work.add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
             }
         }
         *self = work;
@@ -394,11 +402,14 @@ impl Absorber {
         if changed {
             sync::record_in_place(self.s.model_mut(), base.as_ref(), Intent::Unlogged);
         }
-        for es in other.curves.values() {
+        for (c, es) in &other.curves {
             let mapped: Option<Vec<EdgeId>> = es.iter().map(|e| find(&self.s, *e)).collect();
             if let Some(list) = mapped {
                 // A chain that is not a chain any more (the edge was cut) is not a curve.
-                let _ = self.s.model_mut().add_curve(list);
+                let _ = self
+                    .s
+                    .model_mut()
+                    .add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
             }
         }
         Ok(())

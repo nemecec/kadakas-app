@@ -708,19 +708,19 @@ fn run(
     rechain(w.m, &recheck);
 
     // Curves of the wall edges go up to the cap.
-    let curves: Vec<Vec<EdgeId>> =
+    let curves: Vec<(CurveId, Vec<EdgeId>)> =
         w.m.curves
-            .values()
-            .filter(|es| {
+            .iter()
+            .filter(|(_, es)| {
                 es.iter().all(|e| {
                     edges_of
                         .get(e)
                         .is_some_and(|(a, b)| ring.contains_key(&key(*a, *b)))
                 })
             })
-            .cloned()
+            .map(|(c, es)| (*c, es.clone()))
             .collect();
-    for es in curves {
+    for (src, es) in curves {
         let up: Vec<EdgeId> = es
             .iter()
             .filter_map(|e| {
@@ -754,6 +754,11 @@ fn run(
         if up.len() == es.len() && !taken {
             let id = CurveId(w.m.alloc());
             w.m.curves.insert(id, up);
+            // The copy on the cap is a circle at its new place (none if its points are not on
+            // one circle: a curve without the field makes no claim).
+            if let Some(a) = w.m.analytic.get(&src).cloned() {
+                super::super::analytic::derive(w.m, id, &a);
+            }
         }
     }
     check_limits(w.m)?;
@@ -1249,6 +1254,7 @@ mod tests {
             points,
             closed: true,
             faceted: false,
+            analytic: None,
         })
         .unwrap();
         let disc = *m.faces.iter().find(|(_, f)| f.outer.len() == 12).unwrap().0;

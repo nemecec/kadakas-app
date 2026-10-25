@@ -321,6 +321,7 @@ fn plan(s: &Session, op: &str, p: Value) -> Result<Planned, RpcError> {
                     points: q.points,
                     closed: q.closed.unwrap_or(false),
                     faceted: q.faceted.unwrap_or(false),
+                    analytic: None,
                 },
             ));
         }

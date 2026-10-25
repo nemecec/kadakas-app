@@ -36,6 +36,7 @@ fn cylinder(n: usize) -> SurfaceModel {
             .collect(),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let f = m.faces().next().unwrap().0;

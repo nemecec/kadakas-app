@@ -176,6 +176,7 @@ fn run(m: &mut SurfaceModel, op: &Op, pl: &Place) -> Vec<Result<(), SurfaceError
                 points: points.iter().map(|p| p.at(pl)).collect(),
                 closed: *closed,
                 faceted: false,
+                analytic: None,
             },
         ),
         Op::Erase(ks) => {
@@ -303,6 +304,7 @@ fn large_edits_give_the_results_of_the_scans() {
                 .collect(),
             closed: true,
             faceted: false,
+            analytic: None,
         },
     ];
     let mut fast = SurfaceModel::new();

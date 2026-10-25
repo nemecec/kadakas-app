@@ -65,7 +65,11 @@ pub enum Intent {
         closed: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         faceted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        analytic: Option<super::Analytic>,
     },
+    /// A curve rebuilt with another number of segments (MOD-15), by the middle of its first edge.
+    SegmentsAt { edge: [f64; 3], segments: u32 },
     /// A face pushed or pulled along its normal, by a point inside it.
     PushPullAt { point: [f64; 3], distance: f64 },
     /// Intersect Faces on the whole model.
@@ -181,11 +185,27 @@ impl Intent {
                 points,
                 closed,
                 faceted,
+                analytic,
             } => Intent::AddCurve {
                 points: points.clone(),
                 closed: *closed,
                 faceted: *faceted,
+                analytic: analytic.clone(),
             },
+            Edit::SetCurveSegments { curve, segments } => {
+                match m
+                    .curves
+                    .get(curve)
+                    .and_then(|es| es.first())
+                    .and_then(|e| m.edges.get(e))
+                {
+                    Some(e) => Intent::SegmentsAt {
+                        edge: ((m.vertices[&e.v[0]] + m.vertices[&e.v[1]]) / 2.0).to_array(),
+                        segments: *segments,
+                    },
+                    None => Intent::Unlogged,
+                }
+            }
             Edit::TransformVertices {
                 vertices,
                 faces: fs,
@@ -300,6 +320,7 @@ impl Intent {
             | Intent::ReverseFacesAt { points }
             | Intent::PaintAt { points, .. } => points.len(),
             Intent::AddCurve { points, .. } => points.len(),
+            Intent::SegmentsAt { .. } => 1,
             Intent::TransformAt { vertices, .. } => vertices.len().max(1),
             Intent::CopyAt { faces, edges, .. } => (faces.len() + edges.len()).max(1),
             Intent::IntersectAt { faces, edges } | Intent::HiddenAt { faces, edges, .. } => {
@@ -535,11 +556,21 @@ pub fn replay_intent(m: &mut SurfaceModel, intent: &Intent) -> Result<(), Surfac
             points,
             closed,
             faceted,
+            analytic,
         } => m.apply(&Edit::AddCurve {
             points: points.clone(),
             closed: *closed,
             faceted: *faceted,
+            analytic: analytic.clone(),
         }),
+        Intent::SegmentsAt { edge, segments } => {
+            let e = edge_at(m, DVec3::from(*edge)).ok_or_else(|| gone("edge", edge))?;
+            let curve = m.curve_of(e).ok_or_else(|| gone("curve", edge))?;
+            m.apply(&Edit::SetCurveSegments {
+                curve,
+                segments: *segments,
+            })
+        }
         Intent::PushPullAt { point, distance } => {
             let face = face_at(m, DVec3::from(*point)).ok_or_else(|| gone("face", point))?;
             m.apply(&Edit::PushPull {

@@ -92,6 +92,7 @@ fn a_pulled_hexagon_keeps_its_side_lines_and_a_circle_still_shades_round() {
         points: regular(6, 500.0, 0.0),
         closed: true,
         faceted: true,
+        analytic: None,
     })
     .unwrap();
     let f = m.faces().next().unwrap().0;
@@ -114,6 +115,7 @@ fn a_pulled_hexagon_keeps_its_side_lines_and_a_circle_still_shades_round() {
         points: regular(6, 500.0, 0.0),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let f = c.faces().next().unwrap().0;
@@ -133,6 +135,7 @@ fn follow_me_along_a_hexagon_keeps_its_corners() {
         points: path.clone(),
         closed: true,
         faceted: true,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;
@@ -275,6 +278,7 @@ fn a_lathe_profile_across_the_axis_is_refused() {
         points: path.clone(),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let disc = m.faces().next().unwrap().0;
@@ -771,6 +775,7 @@ fn cylinder(n: usize, faceted: bool) -> SurfaceModel {
         points: regular(n, 300.0, 0.0),
         closed: true,
         faceted,
+        analytic: None,
     })
     .unwrap();
     let f = m.faces().next().unwrap().0;

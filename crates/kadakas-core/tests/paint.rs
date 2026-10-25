@@ -1117,6 +1117,7 @@ fn every_kind_of_edit_replays_from_the_log_to_the_same_model() {
             .collect(),
         closed: true,
         faceted: false,
+        analytic: None,
     })
     .unwrap();
     let circle = m
