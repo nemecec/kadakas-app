@@ -425,6 +425,28 @@ fn nurbs_samples_of_bentley_match_their_facet_twins_or_say_what_is_missing() {
         assert!((va - vb).abs() < vb * 0.01, "{nurbs}: {va} {vb}");
         assert!(ra.skipped.is_empty(), "{nurbs}: {ra:?}");
     }
+    // The cylinders whose circles are written as indexed poly curves (two arcs each) and whose side
+    // face has the two circles as its bounds, without a seam. Facet.ifc is the tessellated twin.
+    if let Some(twin) = corpus::bentley("Cylinder/Facet.ifc") {
+        let (et, _) = load(&twin);
+        let vt = mesh_volume(objects(&et)[0]);
+        for name in [
+            "Cylinder/Plane.Cyllinder.PolyCurve.ifc",
+            "Cylinder/Plane.Cyllinder.Ellipse.PolyCurve.ifc",
+        ] {
+            let Some(f) = corpus::bentley(name) else {
+                continue;
+            };
+            let (ea, ra) = load(&f);
+            let va = mesh_volume(objects(&ea)[0]);
+            // The twin has few facets (it is smaller than the true cylinder).
+            assert!((va - vt).abs() < vt * 0.04 && va > vt, "{name}: {va} {vt}");
+            assert!(
+                ra.skipped.is_empty() && ra.notes.is_empty(),
+                "{name}: {ra:?}"
+            );
+        }
+    }
     // Faces that the STEP reader cannot cut (a cone or a torus without seam edges) are named. The
     // product is still there, as its bounding box.
     if let Some(a) = corpus::bentley("Faces/5.Cone.ifc") {

@@ -213,3 +213,12 @@ fn an_advanced_brep_used_by_many_products_is_read_once() {
         "41 products, one reading of the solid"
     );
 }
+
+#[test]
+fn an_advanced_brep_cylinder_without_a_seam_edge() {
+    let (ed, r) = load("advanced_brep_cylinder_no_seam.ifc");
+    assert_eq!(objs(&ed).len(), 1, "{r:?}");
+    let v = volume_of(objs(&ed)[0]);
+    assert!(close(v, PI * 100.0 * 100.0 * 300.0, 0.04), "{v} {r:?}");
+    assert!(r.skipped.is_empty() && r.notes.is_empty(), "{r:?}");
+}
