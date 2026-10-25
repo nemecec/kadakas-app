@@ -4,7 +4,7 @@
 //! time is replaced by a bad value (a missing reference, a wrong kind, a huge number, a wrong list).
 //! The import must return, with a result or an error, never a panic.
 //!
-//! The default run damages a sample (a few seconds). The full run damages everything:
+//! The default run damages a sample (about 15 s in a build with optimisation, under a minute without). The full run damages everything:
 //! `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored`.
 
 mod support;
@@ -191,7 +191,7 @@ fn damaged_fixtures_never_panic() {
 }
 
 #[test]
-#[ignore = "the full run takes minutes: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
+#[ignore = "the full run takes about 20 minutes in a release build: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
 fn damaged_fixtures_never_panic_full() {
     let runs = fixture_runs(1, true);
     assert!(runs > 10_000, "{runs}");
@@ -238,7 +238,7 @@ fn damaged_public_files_never_panic() {
 }
 
 #[test]
-#[ignore = "the full run takes minutes: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
+#[ignore = "the full run takes about 20 minutes in a release build: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
 fn damaged_public_files_never_panic_full() {
     public(40, true);
 }

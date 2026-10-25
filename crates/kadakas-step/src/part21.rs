@@ -443,10 +443,7 @@ pub fn find_keyword(header: &str, keyword: &str) -> Option<usize> {
             quote = !quote;
         } else if !quote && b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
             // A comment: skip to its end (an unfinished comment hides the rest).
-            match header[i + 2..].find("*/") {
-                Some(end) => i += end + 3,
-                None => return None,
-            }
+            i += header[i + 2..].find("*/")? + 3;
         } else if !quote
             && b[i..].len() >= k.len()
             && b[i..i + k.len()].eq_ignore_ascii_case(k)
