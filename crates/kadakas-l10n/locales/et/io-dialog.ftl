@@ -63,3 +63,4 @@ io-dialog-paper-space = Impordi paberiruumi küljendused lehekihtidena
 io-dialog-paper-space-hint = Iga sisuga paberiruumi küljendus muutub lehekihiks koos vaateakende, märkuste ja tiitliplokiga. Väljas: paberiruum jäetakse vahele ja aruanne loendab selle.
 io-dialog-sheets = Kirjuta lehekihid küljendustena
 io-dialog-sheets-hint = Iga lehekiht muutub paberiruumi küljenduseks koos vaateakende ja märkustega. Väljas: lehekihid jäetakse failist välja.
+io-dialog-ifczip-filter = IFC pakitud (ifcZIP)

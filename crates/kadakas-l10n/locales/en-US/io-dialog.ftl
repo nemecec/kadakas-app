@@ -63,3 +63,4 @@ io-dialog-paper-space = Import paper space layouts as sheet layers
 io-dialog-paper-space-hint = Each layout of paper space with content becomes a sheet layer with its viewports, annotations and title block. Off: paper space is skipped and counted in the report.
 io-dialog-sheets = Write sheet layers as layouts
 io-dialog-sheets-hint = Each sheet layer becomes a layout of paper space with its viewports and annotations. Off: sheet layers are left out of the file.
+io-dialog-ifczip-filter = IFC zipped (ifcZIP)
