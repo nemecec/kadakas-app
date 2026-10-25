@@ -308,10 +308,10 @@ fn import_index(
     }
     let ctx = Context::of(doc);
     let schema = schemas.first().cloned().unwrap_or_default();
-    let make = |probe: bool| {
+    let make = || {
         let cx = Ctx::new(&index);
         let multi_site = cx.x.ids_of("IFCSITE").len() > 1;
-        let mut imp = Importer {
+        Importer {
             b: Builder::new(&ctx, "ifc", opts.max_objects),
             model: Model::load(&cx),
             cx,
@@ -336,52 +336,24 @@ fn import_index(
             cut: HashSet::new(),
             uncut: HashSet::new(),
             bodyless: HashSet::new(),
-        };
-        if probe {
-            imp.b.set_probe();
         }
-        imp
     };
-    let mut imp = make(false);
-    // Geometry far from the origin (projected coordinates used as model coordinates) is moved to the
-    // origin. A first pass finds where it is; the shift goes into the georeference of the document.
-    if opts.georef && doc.georef.is_none() && far_from_origin(&imp.cx) {
-        let mut probe = make(true);
-        probe.run();
-        if let Some((lo, hi)) = probe.b.bounds() {
-            let c = (lo + hi) / 2.0;
-            if c.is_finite() && c.abs().max_element() < 1.0e12 {
-                imp.shift = (c / 1000.0).round() * 1000.0;
-            }
-        }
+    let mut imp = make();
+    // Geometry far from the origin (projected coordinates used as model coordinates) is moved to
+    // the origin when the document has no georeference of its own; the shift goes into the
+    // georeference. The place is found from the placements and a bounded sample of points, with no
+    // geometry made, so a file that is not far costs nothing more.
+    if opts.georef && doc.georef.is_none() {
+        imp.shift = imp.far_shift().unwrap_or(DVec2::ZERO);
+        // The sample read placements; the counts of the import start again.
+        imp.cx.bad_placements.set(0);
+        imp.cx.other_placements.set(0);
     }
     for n in notes.iter().chain(&imp.cx.x.notes) {
         imp.b.report.note(n);
     }
     imp.run();
     Ok(imp.b.finish())
-}
-
-/// True if sampled points of the file are more than 100 km from the origin.
-fn far_from_origin(cx: &Ctx) -> bool {
-    const FAR_MM: f64 = 1.0e8;
-    let mm = cx.units.length_mm;
-    let mut far = false;
-    for id in cx.x.ids_of("IFCCARTESIANPOINTLIST3D").into_iter().take(8) {
-        if let Some(e) = cx.ent(id) {
-            for row in items(attr(&e, 0)).iter().take(4) {
-                far |= ctx::numbers(row).iter().any(|v| v.abs() * mm > FAR_MM);
-            }
-        }
-    }
-    for id in cx.x.ids_of("IFCCARTESIANPOINT").into_iter().take(200) {
-        if let Some(e) = cx.ent(id) {
-            far |= ctx::numbers(attr(&e, 0))
-                .iter()
-                .any(|v| v.abs() * mm > FAR_MM);
-        }
-    }
-    far
 }
 
 /// Hosts with openings that were not all cut, for one reason.
@@ -459,6 +431,83 @@ fn clean_text(s: &str, max: usize) -> String {
 }
 
 impl<'a> Importer<'a> {
+    /// The shift (mm, whole meters) that brings the file to the origin, if it is more than 100 km
+    /// away. Samples: the placements of the sites, buildings and the first products, the first
+    /// points of the first point lists, and the first points of the file.
+    fn far_shift(&self) -> Option<DVec2> {
+        const FAR_MM: f64 = 1.0e8;
+        const MAX_PRODUCTS: usize = 3000;
+        let mm = self.cx.units.length_mm;
+        // Two kinds of sample: where the products are placed, and the coordinates of point lists.
+        // They are in different frames (a point list is in the frame of its product), so the
+        // place comes from the placements when they are far, else from the points.
+        struct Spread {
+            lo: DVec2,
+            hi: DVec2,
+            far: bool,
+        }
+        impl Spread {
+            fn new() -> Spread {
+                Spread {
+                    lo: DVec2::splat(f64::INFINITY),
+                    hi: DVec2::splat(f64::NEG_INFINITY),
+                    far: false,
+                }
+            }
+            fn add(&mut self, p: DVec2) {
+                if p.is_finite() {
+                    self.far |= p.abs().max_element() > FAR_MM;
+                    self.lo = self.lo.min(p);
+                    self.hi = self.hi.max(p);
+                }
+            }
+        }
+        let (mut placed, mut points) = (Spread::new(), Spread::new());
+        let products: HashSet<String> = model::product_names().collect();
+        let mut seen = 0usize;
+        for (id, n) in self.cx.x.iter() {
+            let spatial = model::is_spatial(n);
+            if !(spatial || products.contains(n)) {
+                continue;
+            }
+            seen += 1;
+            if seen > MAX_PRODUCTS && !spatial {
+                continue;
+            }
+            if let Some(e) = self.cx.ent(id)
+                && let Some(p) = attr(&e, 5).as_ref_id()
+            {
+                let t = self.cx.placement(p).translation;
+                placed.add(DVec2::new(t.x, t.y) * mm);
+            }
+        }
+        for id in self
+            .cx
+            .x
+            .ids_of("IFCCARTESIANPOINTLIST3D")
+            .into_iter()
+            .take(8)
+        {
+            if let Some(e) = self.cx.ent(id) {
+                for row in items(attr(&e, 0)).iter().take(4) {
+                    let v = ctx::numbers(row);
+                    if v.len() >= 2 {
+                        points.add(DVec2::new(v[0], v[1]) * mm);
+                    }
+                }
+            }
+        }
+        let s = if placed.far {
+            placed
+        } else if points.far {
+            points
+        } else {
+            return None;
+        };
+        let c = (s.lo + s.hi) / 2.0;
+        (c.is_finite() && c.abs().max_element() < 1.0e12).then(|| (c / 1000.0).round() * 1000.0)
+    }
+
     fn run(&mut self) {
         self.place_file();
         let mut cands: BTreeSet<u64> = BTreeSet::new();
