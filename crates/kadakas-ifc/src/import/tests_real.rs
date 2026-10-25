@@ -351,3 +351,108 @@ fn a_far_site_placement_deep_in_the_file_is_found() {
     );
     assert!(ed.doc().objects.len() >= 7);
 }
+
+/// Points far from the origin in a surface model of polyloops and in an annotation, with every
+/// placement at the origin (only the points say where the file is).
+fn far_points_file(x: f64, y: f64, b: u64) -> String {
+    let p = |i: u64, dx: f64, dy: f64, z: f64| {
+        format!(
+            "#{}=IFCCARTESIANPOINT(({}.,{}.,{}.));\n",
+            b + i,
+            x + dx,
+            y + dy,
+            z
+        )
+    };
+    let mut s = String::new();
+    s.push_str(&p(0, 0.0, 0.0, 1.0));
+    s.push_str(&p(1, 2000.0, 0.0, 2.0));
+    s.push_str(&p(2, 2000.0, 2000.0, 3.0));
+    s.push_str(&p(3, 0.0, 2000.0, 2.0));
+    let r = |n: u64| b + n;
+    s.push_str(&format!(
+        "#{l1}=IFCPOLYLOOP((#{p0},#{p1},#{p2}));\n#{b1}=IFCFACEOUTERBOUND(#{l1},.T.);\n#{f1}=IFCFACE((#{b1}));\n\
+#{l2}=IFCPOLYLOOP((#{p0},#{p2},#{p3}));\n#{b2}=IFCFACEOUTERBOUND(#{l2},.T.);\n#{f2}=IFCFACE((#{b2}));\n\
+#{sh}=IFCOPENSHELL((#{f1},#{f2}));\n#{sm}=IFCSHELLBASEDSURFACEMODEL((#{sh}));\n",
+        p0 = r(0), p1 = r(1), p2 = r(2), p3 = r(3),
+        l1 = r(10), b1 = r(11), f1 = r(12), l2 = r(13), b2 = r(14), f2 = r(15), sh = r(16), sm = r(17)
+    ));
+    // The products: ids of their own, the surface model and the polyline are items.
+    let item = r(17);
+    s.push_str(&product(
+        b + 20,
+        "IFCGEOGRAPHICELEMENT",
+        &format!("#{item}"),
+        "$,@,$,.TERRAIN.",
+    ));
+    s.push_str(&format!(
+        "#{pl}=IFCPOLYLINE((#{p0},#{p2}));\n#{sr}=IFCSHAPEREPRESENTATION($,'Annotation','Curve2D',(#{pl}));\n#{pd}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{sr}));\n#{an}=IFCANNOTATION('ga',$,'Line',$,$,#7,#{pd});\n",
+        pl = r(30), sr = r(31), pd = r(32), an = r(33), p0 = r(0), p2 = r(2)
+    ));
+    s
+}
+
+#[test]
+fn points_far_from_the_origin_find_the_file_when_every_placement_is_at_the_origin() {
+    // Millimeters: (6.5e8, 6.5e9) is 6,500 km from the origin; meters: (650000, 6500000).
+    for (x, y, metres) in [(6.5e8, 6.5e9, false), (650_000.0, 6_500_000.0, true)] {
+        let bytes = super::tests_more::file("IFC4", &far_points_file(x, y, 300));
+        let mut text = String::from_utf8(bytes).unwrap();
+        if metres {
+            text = text.replace(".LENGTHUNIT.,.MILLI.,.METRE.", ".LENGTHUNIT.,$,.METRE.");
+        }
+        let doc = Document::with_sequential_ids();
+        let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+        let mut ed = Editor::new(doc);
+        ed.execute(&r.command)
+            .unwrap_or_else(|e| panic!("{e} {:?}", r.report));
+        let kinds: std::collections::BTreeSet<&str> =
+            ed.doc().objects.values().map(|o| o.shape.kind()).collect();
+        assert!(
+            kinds.contains("site_model") && kinds.contains("polyline3d"),
+            "metres={metres}: {kinds:?} {:?}",
+            r.report
+        );
+        let g = ed.doc().georef.as_ref().expect("a georeference");
+        assert!(
+            (g.origin.y - 6_500_000.0).abs() < 5_000.0,
+            "metres={metres}: {:?}",
+            g.origin
+        );
+        for o in ed.doc().objects.values() {
+            let (lo, hi) = o.shape.bounds();
+            assert!(
+                lo.abs().max_element() < 1.0e7 && hi.abs().max_element() < 1.0e7,
+                "{} {lo} {hi}",
+                o.shape.kind()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_file_that_the_samples_did_not_show_is_found_by_a_second_pass() {
+    // The far points are in lists that the stride sample skips: 500,000 near points come first and
+    // the far points have the highest numbers, and the stride of the sample (5) skips them. The second pass, which only measures, finds the file.
+    let mut s = String::new();
+    for i in 0..500_000u64 {
+        s.push_str(&format!(
+            "#{}=IFCCARTESIANPOINT((1.,1.,1.));\n",
+            1_000_000 + i
+        ));
+    }
+    s.push_str(&far_points_file(650_000.0, 6_500_000.0, 5_000_000));
+    let bytes = super::tests_more::file("IFC4", &s);
+    let text = String::from_utf8(bytes)
+        .unwrap()
+        .replace(".LENGTHUNIT.,.MILLI.,.METRE.", ".LENGTHUNIT.,$,.METRE.");
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    assert!(
+        ed.doc().georef.is_some() && !ed.doc().objects.is_empty(),
+        "{:?}",
+        r.report
+    );
+}
