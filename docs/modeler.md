@@ -118,11 +118,11 @@ The Circle, Arc and Polygon tools give the curve its exact circle: center, norma
 The field is optional and sits next to the chain of edges. The number of segments is the number of edges. The core is `kadakas_core::surface::analytic`.
 
 **Entity Info.** Select one edge of a curve, or all edges of it. The panel shows the shape (circle, arc or regular polygon), the true radius and the center in the drawing.
-For an arc it also shows the start and end angle. It shows the length or the circumference. The field Segments takes a number from 3 to 1,000.
+For an arc it also shows the sweep angle. It shows the circumference of a circle and the length of the chain for an arc or a polygon. The field Segments takes a number from 3 to 1,000.
 The button Set segments rebuilds the chain on the same circle, in one undo step. The status line says what happened or why it was refused.
 
 **Set segments** (`edit_surface` with `set_curve_segments {curve, segments}`). The ends of an arc and the first vertex of a circle stay.
-The other vertices are new, at equal angles. The first edges keep their ids. The edges keep the flags of the first edge.
+The other vertices are new, at equal angles. The first edges keep their ids and their flags. New edges take the flags of the first edge.
 Faces in the plane of the circle keep their loops with the new vertices. A loose circle, a disc, a ring, a D shape and an arc are supported.
 The edit is refused, with a reason in the language of the window, in these cases.
 - The curve has no exact circle.
@@ -131,7 +131,7 @@ The edit is refused, with a reason in the language of the window, in these cases
 - The new edges are shorter than the length tolerance, or the result is an invalid model.
 
 **What the other edits do.** The model keeps one rule: if a curve has the field, all its vertices lie on the circle within the length tolerance.
-A vertex that another edge cut into the chain lies on a chord and is allowed. The rule is kept after every edit.
+A vertex that another edge meets and that lies on a chord between two vertices on the circle is allowed. A vertex with only the two chain edges is never excused, so a fine circle cannot follow its points off the circle. The rule is kept after every edit.
 
 | Edit | The field |
 |---|---|
@@ -141,7 +141,7 @@ A vertex that another edge cut into the chain lies on a chord and is allowed. Th
 | Erase at the end of an arc | the arc is shorter, the angles are updated, the note says so |
 | Push/Pull, Follow Me, copy | the copy gets its own circle at the new place |
 | Offset | the new curve gets the circle of its corners, with another radius |
-| Group, component, explode | follows the chain |
+| Group, component, explode, copy | fitted again where the chain lands. A group scaled unequally loses it, with a note |
 
 The offset of a circle by a distance `d` has the radius `r - d / cos(pi / n)`, because the sides of the polygon move by `d`.
 An arc offset has no field, because its ends move at right angles to the end edges and leave the circle.

@@ -8,17 +8,24 @@
 //! is optional. A curve without it works as before.
 //!
 //! **The invariant.** If a curve has the field, all vertices of its chain lie on the circle within
-//! the length tolerance. The only exception is a vertex on a straight piece between two others
-//! (a chain edge that another edge cut), which lies on the chord. The invariant is kept in one
-//! place: [`reconcile`] runs after every edit (`edit::run`) and compares each curve with the
-//! model before the edit.
+//! the length tolerance. The only exception is a vertex that another edge meets (three or more
+//! edges at it) and that lies on the straight piece between the two vertices on the circle at
+//! its sides: a chain edge that another edge cut, so the vertex lies on the chord. A vertex with
+//! only the two chain edges is never excused, so a fine circle (a thousand segments) cannot
+//! follow its points off the circle. The invariant is kept in one place: [`reconcile`] runs after
+//! every edit (`edit::run`) and compares each curve with the model before the edit.
 //!
-//! - The chain still lies on the circle: the field stays. The kind and the angles follow the
-//!   chain: a circle that lost an edge is an arc, and an arc that lost edges at its ends has new
-//!   start and end angles (the centre and the radius stay).
-//! - The vertices moved and the chain is a similar copy of the old one (same ratios of all
-//!   lengths, which is move, rotate, mirror and uniform scale): the circle is fitted again.
+//! - Chain vertices moved (more than the tolerance) and the chain is a similar copy of the old
+//!   one (same ratios of all lengths, which is move, rotate, mirror and uniform scale): the
+//!   circle is fitted again, on the vertices that are on the circle. This is checked first.
+//! - The chain did not move and all vertices are on the circle: the field stays. The kind and the
+//!   angles follow the chain: a circle that lost an edge is an arc, and an arc that lost edges at
+//!   its ends has new start and end angles (the centre and the radius stay).
 //! - Else the field is dropped, with a note in the result.
+//!
+//! A description with a kind that this version does not know (a file of a newer program) is read
+//! only: it stays while its chain is untouched and is dropped, with a note, by any change of the
+//! chain. A set of segments is refused for it.
 //!
 //! New curves that come from a curve with the field (the copy at the top of a Push/Pull, the
 //! profile copies of Follow Me, the Offset of a circle) get the field from their own points
@@ -28,6 +35,8 @@
 //! axis, radius, start?, end?}]` in id order. An older program keeps the field it does not know.
 //! A file without the field loads as before. Entries whose curve is gone or whose points are not on
 //! the circle (an older program edited the chain) are dropped on load.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
@@ -42,6 +51,11 @@ pub const KIND_CIRCLE: &str = "circle";
 pub const KIND_ARC: &str = "arc";
 /// The kind of a regular polygon: the corners lie on the circle and stay corners.
 pub const KIND_POLYGON: &str = "polygon";
+
+/// True for the kinds that this version edits.
+pub fn is_known_kind(kind: &str) -> bool {
+    matches!(kind, KIND_CIRCLE | KIND_ARC | KIND_POLYGON)
+}
 
 const TAU: f64 = std::f64::consts::TAU;
 
@@ -195,9 +209,9 @@ impl Analytic {
         self.start.is_none()
     }
 
-    /// The arc length of the chain's circle part, or the circumference of a full circle.
-    pub fn length(&self) -> f64 {
-        self.radius * self.sweep().unwrap_or(TAU)
+    /// The circumference of the circle.
+    pub fn circumference(&self) -> f64 {
+        self.radius * TAU
     }
 }
 
@@ -225,6 +239,9 @@ pub enum CurveError {
     /// The result would be invalid (too short edges, crossings and the like).
     #[error("the new chain would make the model invalid: {reason}")]
     Invalid { reason: String },
+    /// The description has a kind that this version does not know, so it is read only.
+    #[error("curve {0} has a kind of circle that this program does not know and does not change")]
+    UnknownKind(CurveId),
 }
 
 impl CurveError {
@@ -238,6 +255,7 @@ impl CurveError {
             CurveError::BordersOtherPlane { .. } => "curve_borders_other_plane",
             CurveError::LoopUnclear { .. } => "curve_loop_unclear",
             CurveError::Invalid { .. } => "curve_result_invalid",
+            CurveError::UnknownKind(_) => "curve_unknown_kind",
         }
     }
 }
@@ -283,62 +301,149 @@ fn tolerance(a: &Analytic, pts: &[DVec3]) -> f64 {
     geom::tolerance_at(s.max(geom::size(a.center())))
 }
 
-/// True if every vertex lies on the circle, or on the straight piece between its two neighbours.
-/// `pts` of a closed chain ends with its first point.
-pub(super) fn holds(a: &Analytic, pts: &[DVec3]) -> bool {
-    classify(a, pts).is_some()
-}
-
-/// The indices of the vertices that are not on the circle but on the straight piece between
-/// their neighbours, or `None` if one vertex is on neither.
-fn classify(a: &Analytic, pts: &[DVec3]) -> Option<Vec<usize>> {
-    let n = pts.len();
-    let tol = tolerance(a, pts);
-    let closed = n >= 4 && pts[0].distance(pts[n - 1]) <= tol;
-    let last = if closed { n - 1 } else { n };
-    let mut out = Vec::new();
-    for i in 0..last {
-        if a.deviation(pts[i]) <= tol {
-            continue;
-        }
-        let prev = match i {
-            0 if closed => Some(pts[n - 2]),
-            0 => None,
-            _ => Some(pts[i - 1]),
-        };
-        let next = if i + 1 < last {
-            Some(pts[i + 1])
-        } else if closed {
-            Some(pts[1])
-        } else {
-            None
-        };
-        match (prev, next) {
-            (Some(p), Some(q)) if geom::point_segment(pts[i], p, q).0 <= tol => out.push(i),
-            _ => return None,
+/// The number of edges at each of the vertices `of`.
+pub(super) fn degrees_of(m: &SurfaceModel, of: &BTreeSet<VertexId>) -> BTreeMap<VertexId, u32> {
+    let mut out: BTreeMap<VertexId, u32> = of.iter().map(|v| (*v, 0)).collect();
+    for e in m.edges.values() {
+        for v in e.v {
+            if let Some(d) = out.get_mut(&v) {
+                *d += 1;
+            }
         }
     }
-    Some(out)
+    out
 }
 
-/// The circle through the points of a chain, fitted on three of them and checked on all.
-/// `pts` of a closed chain ends with its first point. The angle 0 is the direction to the first
-/// point. `None` if the points are on a line or not all on one circle.
-pub(super) fn fit(pts: &[DVec3], kind: &str) -> Option<Analytic> {
+/// For each vertex of a chain: another edge meets it (three or more edges). Only such a vertex
+/// may lie off the circle, on a chord.
+fn shared_flags(vs: &[VertexId], deg: &BTreeMap<VertexId, u32>) -> Vec<bool> {
+    vs.iter()
+        .map(|v| deg.get(v).copied().unwrap_or(0) >= 3)
+        .collect()
+}
+
+/// The rule of the module: every vertex is on the circle, except a run of vertices that other
+/// edges meet (`shared`) between two vertices on the circle, on the straight piece between them.
+/// `pts` of a closed chain ends with its first point.
+pub(super) fn holds(a: &Analytic, pts: &[DVec3], shared: &[bool]) -> bool {
+    let n = pts.len();
+    if n == 0 {
+        return false;
+    }
+    let tol = tolerance(a, pts);
+    if !goes_one_way(a, pts) {
+        return false;
+    }
+    let closed = n >= 4 && pts[0].distance(pts[n - 1]) <= tol;
+    let last = if closed { n - 1 } else { n };
+    let on: Vec<bool> = (0..last).map(|i| a.deviation(pts[i]) <= tol).collect();
+    if on.iter().all(|b| *b) {
+        return true;
+    }
+    // The order of the scan starts at a vertex on the circle (a closed chain may start on a
+    // chord vertex).
+    let Some(s) = on.iter().position(|b| *b) else {
+        return false;
+    };
+    let order: Vec<usize> = if closed {
+        (0..last).map(|k| (s + k) % last).collect()
+    } else if s == 0 && on[last - 1] {
+        (0..last).collect()
+    } else {
+        return false;
+    };
+    let mut p = 0;
+    while p < order.len() {
+        if on[order[p]] {
+            p += 1;
+            continue;
+        }
+        let mut q = p;
+        while q < order.len() && !on[order[q]] {
+            q += 1;
+        }
+        let prev = pts[order[p - 1]];
+        let next = match order.get(q) {
+            Some(i) => pts[*i],
+            None => pts[order[0]],
+        };
+        for k in p..q {
+            let i = order[k];
+            if !shared.get(i).copied().unwrap_or(false)
+                || geom::point_segment(pts[i], prev, next).0 > tol
+            {
+                return false;
+            }
+        }
+        p = q;
+    }
+    true
+}
+
+/// The centre and the radius of the least squares circle of the points in the plane through `c0`
+/// with the normal `n` (Kasa). `None` if the points do not fix a circle.
+fn least_squares(pts: &[DVec3], c0: DVec3, n: DVec3, r0: f64) -> Option<(DVec3, f64)> {
+    let u = n.any_orthonormal_vector();
+    let v = n.cross(u);
+    let mut mm = [[0.0f64; 3]; 3];
+    let mut rhs = [0.0f64; 3];
+    // Lengths in units of the radius, so that the system is well conditioned.
+    for p in pts {
+        let d = (*p - c0) / r0;
+        let (x, y) = (d.dot(u), d.dot(v));
+        let row = [2.0 * x, 2.0 * y, 1.0];
+        let z = x * x + y * y;
+        for r in 0..3 {
+            rhs[r] += row[r] * z;
+            for c in 0..3 {
+                mm[r][c] += row[r] * row[c];
+            }
+        }
+    }
+    let m = glam::DMat3::from_cols_array_2d(&mm);
+    let det = m.determinant();
+    if !det.is_finite() || det.abs() < 1e-18 {
+        return None;
+    }
+    let sol = m.inverse() * DVec3::from(rhs);
+    let r2 = sol.z + sol.x * sol.x + sol.y * sol.y;
+    if !r2.is_finite() || r2 <= 0.0 {
+        return None;
+    }
+    let (c, r) = (c0 + (u * sol.x + v * sol.y) * r0, r2.sqrt() * r0);
+    // A circle that is far from the first guess is not a refinement.
+    (r.is_finite() && (r - r0).abs() <= 0.05 * r0 && c.distance(c0) <= 0.05 * r0).then_some((c, r))
+}
+
+/// The circle through the points of a chain: three points that are not `skip` give the circle,
+/// and all the other points that are not `skip` refine it (least squares). The result must hold
+/// the rule of the module (`shared` marks the vertices that other edges meet). `pts` of a closed
+/// chain ends with its first point. The angle 0 is the direction to the first point that is not
+/// skipped. `None` if the points are on a line or not on one circle.
+pub(super) fn fit(pts: &[DVec3], kind: &str, skip: &[bool], shared: &[bool]) -> Option<Analytic> {
     let n = pts.len();
     if n < 3 {
         return None;
     }
     let closed = n >= 4 && pts[0].distance(pts[n - 1]) <= geom::tol(pts);
-    let (i, j, k) = if closed {
-        let d = n - 1;
-        (0, d / 3, 2 * d / 3)
-    } else {
-        (0, (n - 1) / 2, n - 1)
-    };
-    if i == j || j == k {
+    let last = if closed { n - 1 } else { n };
+    let skipped = |i: &usize| skip.get(*i).copied().unwrap_or(false);
+    let met = |i: &usize| shared.get(*i).copied().unwrap_or(false);
+    // Vertices that other edges meet may lie on a chord, so they do not fix the circle (while
+    // enough others do).
+    let mut idx: Vec<usize> = (0..last).filter(|i| !skipped(i) && !met(i)).collect();
+    if idx.len() < 3 {
+        idx = (0..last).filter(|i| !skipped(i)).collect();
+    }
+    let m = idx.len();
+    if m < 3 {
         return None;
     }
+    let (i, j, k) = if closed {
+        (idx[0], idx[m / 3], idx[2 * m / 3])
+    } else {
+        (idx[0], idx[(m - 1) / 2], idx[m - 1])
+    };
     let (a, b, c) = (pts[i], pts[j], pts[k]);
     let (ab, ac) = (b - a, c - a);
     let w = ab.cross(ac);
@@ -347,16 +452,20 @@ pub(super) fn fit(pts: &[DVec3], kind: &str) -> Option<Analytic> {
     if !w2.is_finite() || w2 <= 1e-12 * scale * scale {
         return None;
     }
-    let center =
+    let mut center =
         a + (ac.length_squared() * w.cross(ab) + ab.length_squared() * ac.cross(w)) / (2.0 * w2);
-    let radius = center.distance(a);
+    let mut radius = center.distance(a);
     let normal = w.normalize();
-    let axis = (pts[0] - center).normalize_or_zero();
+    let on: Vec<DVec3> = idx.iter().map(|i| pts[*i]).collect();
+    if let Some((c2, r2)) = least_squares(&on, center, normal, radius) {
+        (center, radius) = (c2, r2);
+    }
+    let axis = (pts[idx[0]] - center).normalize_or_zero();
     if radius <= 0.0 || !radius.is_finite() || axis == DVec3::ZERO {
         return None;
     }
     let mut out = Analytic::new(kind, center, normal, axis, radius, None);
-    if !holds(&out, pts) {
+    if !holds(&out, pts, shared) {
         return None;
     }
     let was = out.kind.clone();
@@ -377,23 +486,52 @@ fn fix_kind(a: &mut Analytic, closed: bool) {
     }
 }
 
+/// The turns (radians, in `(-pi, pi]`) from each vertex of the chain to the next, about the
+/// circle.
+fn turns(a: &Analytic, pts: &[DVec3]) -> Vec<f64> {
+    pts.windows(2)
+        .map(|w| {
+            let mut d = (a.angle_of(w[1]) - a.angle_of(w[0])).rem_euclid(TAU);
+            if d > std::f64::consts::PI {
+                d -= TAU;
+            }
+            d
+        })
+        .collect()
+}
+
+/// A chain of two edges or more goes one way round the circle and each edge turns less than half
+/// a turn (a chain of one edge cannot tell, see [`follow_chain`]).
+fn goes_one_way(a: &Analytic, pts: &[DVec3]) -> bool {
+    if pts.len() < 3 {
+        return true;
+    }
+    let t = turns(a, pts);
+    let limit = std::f64::consts::PI - 1e-9;
+    (t.iter().all(|d| *d >= -1e-9) || t.iter().all(|d| *d <= 1e-9))
+        && t.iter().all(|d| d.abs() < limit)
+}
+
+/// The direction of the chain about the normal of the circle: +1 counterclockwise, -1 clockwise.
+pub(super) fn chain_direction(a: &Analytic, pts: &[DVec3]) -> f64 {
+    if turns(a, pts).iter().sum::<f64>() < 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
 /// Sets the angles: none for a closed chain, else from the two ends of the chain (the direction
-/// of the chain decides which end is the start).
+/// of the chain decides which end is the start; each edge of the chain is taken to sweep less
+/// than half a turn).
 fn set_shape(a: &mut Analytic, pts: &[DVec3], closed: bool) {
     if closed {
         a.start = None;
         a.end = None;
         return;
     }
-    let (first, last) = (pts[0], pts[pts.len() - 1]);
-    let second = pts[1];
-    let (a0, a1) = (a.angle_of(first), a.angle_of(second));
-    let mut d = (a1 - a0).rem_euclid(TAU);
-    if d > std::f64::consts::PI {
-        d -= TAU;
-    }
-    let (s, e) = (a0, a.angle_of(last));
-    if d >= 0.0 {
+    let (s, e) = (a.angle_of(pts[0]), a.angle_of(pts[pts.len() - 1]));
+    if chain_direction(a, pts) >= 0.0 {
         a.start = Some(s);
         a.end = Some(e);
     } else {
@@ -403,7 +541,8 @@ fn set_shape(a: &mut Analytic, pts: &[DVec3], closed: bool) {
 }
 
 /// Keeps the kind and the angles in step with the chain. Angles that still fit the two ends of
-/// the chain stay as they are (no rounding noise).
+/// the chain stay as they are (no rounding noise, and an arc of one edge that sweeps more than
+/// half a turn keeps its direction).
 fn follow_chain(a: &mut Analytic, pts: &[DVec3], closed: bool) {
     fix_kind(a, closed);
     if closed {
@@ -483,6 +622,18 @@ impl SurfaceModel {
         self.curve_vertices(id).is_some_and(|v| is_closed(&v))
     }
 
+    /// The length of a curve in local mm: the circumference for a circle, else the length of the
+    /// chain (an arc, and the true perimeter of a polygon).
+    pub fn curve_length(&self, id: CurveId) -> Option<f64> {
+        if let Some(a) = self.analytic.get(&id)
+            && a.kind == KIND_CIRCLE
+        {
+            return Some(a.circumference());
+        }
+        let pts = positions(self, &self.curve_vertices(id)?)?;
+        Some(pts.windows(2).map(|w| w[0].distance(w[1])).sum())
+    }
+
     /// Makes a curve like [`SurfaceModel::add_curve`] and gives it a description. A description
     /// that does not fit the points (see the module documentation) is not stored.
     pub fn add_curve_with(
@@ -490,35 +641,47 @@ impl SurfaceModel {
         edges: Vec<EdgeId>,
         analytic: Option<Analytic>,
     ) -> Result<CurveId, super::SurfaceError> {
-        self.add_curve_shaped(edges, analytic.map(Shape::Given))
+        let shape = match analytic {
+            Some(a) => Some(Shape::Given(sanitize(&a)?)),
+            None => None,
+        };
+        self.add_curve_shaped(edges, shape).map(|(id, _)| id)
     }
 
-    /// Makes a curve and gives it a description (see [`Shape`]).
+    /// Makes a curve and gives it a description (see [`Shape`]). The second value is a note when
+    /// the description was not kept.
     pub(super) fn add_curve_shaped(
         &mut self,
         edges: Vec<EdgeId>,
         shape: Option<Shape<'_>>,
-    ) -> Result<CurveId, super::SurfaceError> {
+    ) -> Result<(CurveId, Option<String>), super::SurfaceError> {
         let mut work = self.clone();
         let id = super::CurveId(work.alloc());
         work.curves.insert(id, edges);
         if let Some(p) = super::check::curves(&work) {
             return Err(super::SurfaceError::Unsolved(p.to_string()));
         }
+        let mut note = None;
         match shape {
             Some(Shape::Given(a)) => {
                 let before = work.clone();
-                work.analytic.insert(id, a.normalised());
-                reconcile(&mut work, &before, &mut Vec::new());
+                work.analytic.insert(id, a);
+                let mut notes = Vec::new();
+                reconcile(&mut work, &before, &mut notes);
+                note = notes.into_iter().next();
             }
             Some(Shape::Like(a)) => {
-                derive(&mut work, id, a);
+                if !derive(&mut work, id, a) {
+                    note = Some(format!(
+                        "curve {id} lost its circle description: its points are not on one circle after the change"
+                    ));
+                }
             }
             None => {}
         }
         super::sync::record(&mut work, self, super::sync::Intent::Unlogged);
         *self = work;
-        Ok(id)
+        Ok((id, note))
     }
 }
 
@@ -530,27 +693,52 @@ pub(super) enum Shape<'a> {
     Like(&'a Analytic),
 }
 
-/// Checks a description that a tool gives with a new curve.
+/// Checks a description that a tool or the API gives with a new curve: valid numbers, a kind that
+/// this version knows, and no unknown fields (a typo must not go into the file).
 pub(super) fn sanitize(a: &Analytic) -> Result<Analytic, super::SurfaceError> {
+    let refuse = |s: String| super::SurfaceError::Refused(s);
     if !a.is_valid() {
-        return Err(super::SurfaceError::Refused(
+        return Err(refuse(
             "the circle description of the curve is not valid (a finite centre, a radius above 0, a normal and an axis)"
                 .into(),
         ));
+    }
+    if !is_known_kind(&a.kind) {
+        return Err(refuse(format!(
+            "the kind of the circle description must be circle, arc or polygon, not {}",
+            a.kind
+        )));
+    }
+    if !a.extra.is_empty() {
+        let names: Vec<&str> = a.extra.keys().map(String::as_str).collect();
+        return Err(refuse(format!(
+            "the circle description has unknown fields: {}",
+            names.join(", ")
+        )));
     }
     Ok(a.clone().normalised())
 }
 
 /// Gives the new curve `id` the description that its own points fit, of the same kind as `from`.
-/// Returns false if the points are not on one circle (the curve has no description then).
+/// Returns false if the points are not on one circle (the curve has no description then) or the
+/// kind is not known.
 pub(super) fn derive(m: &mut SurfaceModel, id: CurveId, from: &Analytic) -> bool {
+    if !is_known_kind(&from.kind) {
+        return false;
+    }
     let Some(vs) = m.curves.get(&id).and_then(|es| chain_vertices(m, es)) else {
         return false;
     };
     let Some(pts) = positions(m, &vs) else {
         return false;
     };
-    match fit(&pts, &from.kind) {
+    let deg = degrees_of(m, &vs.iter().copied().collect());
+    let shared = shared_flags(&vs, &deg);
+    // First on all points. If a vertex that another edge meets is off the circle, again without
+    // such vertices.
+    let none = vec![false; pts.len()];
+    match fit(&pts, &from.kind, &none, &shared).or_else(|| fit(&pts, &from.kind, &shared, &shared))
+    {
         Some(a) => {
             m.analytic.insert(id, a);
             true
@@ -565,61 +753,96 @@ pub(super) fn reconcile(m: &mut SurfaceModel, before: &SurfaceModel, notes: &mut
     if m.analytic.is_empty() {
         return;
     }
+    struct Chain {
+        id: CurveId,
+        vs: Vec<VertexId>,
+        pts: Vec<DVec3>,
+    }
     let ids: Vec<CurveId> = m.analytic.keys().copied().collect();
+    let mut chains: Vec<Chain> = Vec::new();
     for id in ids {
         let Some(es) = m.curves.get(&id) else {
             m.analytic.remove(&id);
             continue;
         };
-        let a = m.analytic[&id].clone();
-        let chain = chain_vertices(m, es).and_then(|vs| positions(m, &vs).map(|p| (vs, p)));
-        let Some((vs, pts)) = chain else {
-            m.analytic.remove(&id);
-            notes.push(format!(
-                "curve {id} lost its circle description: the chain is broken"
-            ));
-            continue;
-        };
-        let closed = is_closed(&vs);
-        let mut kept = None;
-        if holds(&a, &pts) {
-            let mut k = a.clone();
-            follow_chain(&mut k, &pts, closed);
-            if k.kind != a.kind {
-                let article = if k.kind == KIND_ARC { "an" } else { "a" };
+        match chain_vertices(m, es)
+            .and_then(|vs| positions(m, &vs).map(|pts| Chain { id, vs, pts }))
+        {
+            Some(c) => chains.push(c),
+            None => {
+                m.analytic.remove(&id);
                 notes.push(format!(
-                    "curve {id} is now {article} {}: its centre and radius stay",
-                    k.kind
+                    "curve {id} lost its circle description: the chain is broken"
                 ));
-            } else if (k.start, k.end) != (a.start, a.end) {
-                notes.push(format!("curve {id}: its start and end angle are updated"));
             }
-            kept = Some(k);
+        }
+    }
+    let all: BTreeSet<VertexId> = chains.iter().flat_map(|c| c.vs.iter().copied()).collect();
+    let deg = degrees_of(m, &all);
+    for c in chains {
+        let a = m.analytic[&c.id].clone();
+        let shared = shared_flags(&c.vs, &deg);
+        let closed = is_closed(&c.vs);
+        let tol = tolerance(&a, &c.pts);
+        // A vertex of the chain that was in the model before and is now somewhere else.
+        let moved =
+            c.vs.iter()
+                .zip(&c.pts)
+                .any(|(v, p)| before.vertices.get(v).is_some_and(|q| q.distance(*p) > tol));
+        let old = before
+            .curves
+            .get(&c.id)
+            .filter(|_| before.analytic.contains_key(&c.id))
+            .and_then(|es| chain_vertices(before, es))
+            .and_then(|vs| positions(before, &vs));
+        let mut kept: Option<Analytic> = None;
+        let mut reason = "its points are not on one circle any more";
+        if !is_known_kind(&a.kind) {
+            // Read only: it stays while nothing in its chain changed.
+            if !moved && before.curves.get(&c.id) == m.curves.get(&c.id) {
+                kept = Some(a.clone());
+            } else {
+                reason = "its kind is not known to this program, so it cannot follow the change";
+            }
         } else {
-            let old = before
-                .curves
-                .get(&id)
-                .filter(|_| before.analytic.contains_key(&id))
-                .and_then(|es| chain_vertices(before, es))
-                .and_then(|vs| positions(before, &vs));
-            if let Some(old) = old
-                && similar(&old, &pts)
-                && let Some(mut k) = fit(&pts, &a.kind)
+            if moved
+                && let Some(old) = &old
+                && similar(old, &c.pts)
             {
-                k.extra = a.extra.clone();
+                // The chain moved as a similar copy: fit the circle again on the vertices that
+                // were on the circle.
+                let skip: Vec<bool> = old.iter().map(|p| a.deviation(*p) > tol).collect();
+                kept = fit(&c.pts, &a.kind, &skip, &shared);
+            }
+            if kept.is_none() && holds(&a, &c.pts, &shared) {
+                let mut k = a.clone();
+                follow_chain(&mut k, &c.pts, closed);
+                if k.kind != a.kind {
+                    let article = if k.kind == KIND_ARC { "an" } else { "a" };
+                    notes.push(format!(
+                        "curve {} is now {article} {}: its centre and radius stay",
+                        c.id, k.kind
+                    ));
+                } else if (k.start, k.end) != (a.start, a.end) {
+                    notes.push(format!(
+                        "curve {}: its start and end angle are updated",
+                        c.id
+                    ));
+                }
                 kept = Some(k);
             }
         }
         match kept {
             Some(k) => {
-                if m.analytic[&id] != k {
-                    m.analytic.insert(id, k);
+                if m.analytic[&c.id] != k {
+                    m.analytic.insert(c.id, k);
                 }
             }
             None => {
-                m.analytic.remove(&id);
+                m.analytic.remove(&c.id);
                 notes.push(format!(
-                    "curve {id} lost its circle description: its points are not on one circle any more"
+                    "curve {} lost its circle description: {reason}",
+                    c.id
                 ));
             }
         }
@@ -635,18 +858,34 @@ pub(super) fn copy_to(m: &mut SurfaceModel, from: CurveId, to: CurveId) {
 }
 
 /// Drops the descriptions of curves that do not exist or whose points are off the circle (a file
-/// that an older program changed).
+/// that an older program changed), and brings the kind and the angles in step with the chain (an
+/// older program may have erased an edge of a circle). This is quiet: a load has no notes.
 pub(super) fn validate_loaded(m: &mut SurfaceModel) {
     let ids: Vec<CurveId> = m.analytic.keys().copied().collect();
+    let mut chains: Vec<(CurveId, Vec<VertexId>, Vec<DVec3>)> = Vec::new();
     for id in ids {
-        let ok = m
+        let chain = m
             .curves
             .get(&id)
             .and_then(|es| chain_vertices(m, es))
-            .and_then(|vs| positions(m, &vs))
-            .is_some_and(|pts| m.analytic[&id].is_valid() && holds(&m.analytic[&id], &pts));
-        if !ok {
+            .and_then(|vs| positions(m, &vs).map(|p| (vs, p)));
+        match chain {
+            Some((vs, p)) if m.analytic[&id].is_valid() => chains.push((id, vs, p)),
+            _ => {
+                m.analytic.remove(&id);
+            }
+        }
+    }
+    let all: BTreeSet<VertexId> = chains.iter().flat_map(|c| c.1.iter().copied()).collect();
+    let deg = degrees_of(m, &all);
+    for (id, vs, pts) in chains {
+        let shared = shared_flags(&vs, &deg);
+        if !holds(&m.analytic[&id], &pts, &shared) {
             m.analytic.remove(&id);
+        } else if let Some(a) = m.analytic.get_mut(&id)
+            && is_known_kind(&a.kind)
+        {
+            follow_chain(a, &pts, is_closed(&vs));
         }
     }
 }

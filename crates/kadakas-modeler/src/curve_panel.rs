@@ -37,16 +37,12 @@ pub fn rows(ui: &mut egui::Ui, shape: &CurveShape, out: &mut Vec<TrayAction>) {
             u.length_text(shape.center[2])
         ),
     );
-    if let Some([s, e]) = shape.arc_deg {
-        row(
-            ui,
-            tr!("modeler-curve-arc-angles"),
-            format!("{s:.1}°, {e:.1}°"),
-        );
+    if let Some(sweep) = shape.sweep_deg {
+        row(ui, tr!("modeler-curve-sweep"), u.angle_text_d(sweep, 1));
     }
     row(
         ui,
-        if shape.arc_deg.is_some() {
+        if shape.sweep_deg.is_some() {
             tr!("modeler-curve-length")
         } else {
             tr!("modeler-curve-circumference")

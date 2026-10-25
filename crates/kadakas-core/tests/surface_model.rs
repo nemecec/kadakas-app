@@ -510,3 +510,73 @@ fn analytic_curves_follow_each_command_and_undo_restores_them_exactly() {
         assert_eq!(model(&ed, id), want);
     }
 }
+
+#[test]
+fn exploding_a_group_with_a_member_scaled_unequally_says_which_circles_were_lost() {
+    use kadakas_core::surface::Analytic;
+    let mut ed = Editor::with_sequential_ids();
+    let mut ids = Vec::new();
+    for x in [0.0, 3000.0] {
+        let id = add_model(&mut ed);
+        let points = (0..12)
+            .map(|i| {
+                let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+                [x + 300.0 * a.cos(), 300.0 * a.sin(), 0.0]
+            })
+            .collect();
+        edit(
+            &mut ed,
+            id,
+            Edit::AddCurve {
+                points,
+                closed: true,
+                faceted: false,
+                analytic: Some(Analytic::circle(
+                    DVec3::new(x, 0.0, 0.0),
+                    DVec3::Z,
+                    DVec3::X,
+                    300.0,
+                )),
+            },
+        )
+        .unwrap();
+        ids.push(id);
+    }
+    // The second model is scaled on its own, so that its circle lands as an ellipse in the first.
+    ed.execute(&Command::TransformObjects3d {
+        ids: vec![ids[1]],
+        matrix: glam::DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)).to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    let g = ObjectId(
+        ed.execute(&Command::MakeGroup {
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: ids.clone(),
+            name: None,
+        })
+        .unwrap()
+        .created[0],
+    );
+    let out = ed.execute(&Command::Explode { ids: vec![g] }).unwrap();
+    let kept: usize = ed
+        .doc()
+        .objects
+        .values()
+        .filter_map(|o| match &o.shape {
+            Shape::SurfaceModel(m) => Some(m.curve_geometries().count()),
+            _ => None,
+        })
+        .sum();
+    let lost = out
+        .notes
+        .iter()
+        .filter(|n| n.contains("lost its circle description"))
+        .count();
+    // Every circle is either kept or named in the notes.
+    assert_eq!(kept + lost, 2, "{kept} kept, notes {:?}", out.notes);
+    assert!(lost >= 1, "{:?}", out.notes);
+}

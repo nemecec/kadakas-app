@@ -26,10 +26,10 @@ pub struct CurveShape {
     pub radius: f64,
     /// The number of edges of the chain.
     pub segments: usize,
-    /// For an arc, the start and the end angle in degrees about the normal, from the axis of the
-    /// circle.
-    pub arc_deg: Option<[f64; 2]>,
-    /// The length of the arc, or the circumference of a circle.
+    /// For an arc, the angle it sweeps, in degrees.
+    pub sweep_deg: Option<f64>,
+    /// The circumference of a circle, else the length of the chain (an arc, the true perimeter of
+    /// a polygon).
     pub length: f64,
 }
 
@@ -49,11 +49,8 @@ pub fn curve_shape(doc: &Document, model: ObjectId, curve: CurveId) -> Option<Cu
         center,
         radius: a.radius * scale,
         segments: m.curve_segments(curve)?,
-        arc_deg: a
-            .start
-            .zip(a.end)
-            .map(|(s, e)| [s.to_degrees(), e.to_degrees()]),
-        length: a.length() * scale,
+        sweep_deg: a.sweep().map(f64::to_degrees),
+        length: m.curve_length(curve)? * scale,
     })
 }
 

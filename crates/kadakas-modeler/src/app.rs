@@ -1754,6 +1754,18 @@ impl ModelerApp {
                 curve,
                 segments,
             } => {
+                use kadakas_ui_core::modeling::{Item, model_of};
+                let id = kadakas_core::surface::CurveId(curve);
+                // The edges of the chain that are selected now: the whole new chain is selected
+                // after the change (the edges of the old chain may be gone).
+                let old: Vec<kadakas_core::surface::EdgeId> =
+                    model_of(self.session.editor.doc(), model)
+                        .and_then(|m| m.curve_edges(id).map(<[_]>::to_vec))
+                        .unwrap_or_default();
+                let chosen: Vec<Item> = self.edit.sub.items().collect();
+                let had = chosen
+                    .iter()
+                    .any(|i| matches!(i, Item::Edge(m, e) if *m == model && old.contains(e)));
                 self.status = match kadakas_ui_core::modeling::curve::set_segments(
                     &mut self.session.editor,
                     model,
@@ -1761,6 +1773,19 @@ impl ModelerApp {
                     segments,
                 ) {
                     Ok(notes) => {
+                        if had && let Some(m) = model_of(self.session.editor.doc(), model) {
+                            let mut keep: Vec<Item> = chosen
+                                .into_iter()
+                                .filter(|i| !matches!(i, Item::Edge(mm, e) if *mm == model && old.contains(e)))
+                                .collect();
+                            keep.extend(
+                                m.curve_edges(id)
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|e| Item::Edge(model, *e)),
+                            );
+                            self.edit.sub.set(keep);
+                        }
                         let done = tr!("modeler-curve-segments-set", segments = segments);
                         std::iter::once(done)
                             .chain(notes)

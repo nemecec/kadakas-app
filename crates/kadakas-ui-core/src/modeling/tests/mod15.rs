@@ -176,7 +176,7 @@ fn entity_info_shows_the_circle_for_an_edge_and_for_the_whole_curve() {
             assert!((s.radius - 300.0).abs() < 1e-9);
             assert_eq!(s.segments, 12);
             assert_eq!(s.center, [100.0, 200.0, 0.0]);
-            assert!(s.arc_deg.is_none());
+            assert!(s.sweep_deg.is_none());
             assert!((s.length - 300.0 * std::f64::consts::TAU).abs() < 1e-6);
         }
         other => panic!("{other:?}"),
@@ -270,4 +270,45 @@ fn the_notes_of_the_description_are_told_in_words_without_ids() {
         assert!(!t.chars().any(|c| c.is_ascii_digit()), "{t}");
     }
     assert!(messages::localize("curve 5 is now an arc: x").contains("arc"));
+}
+
+#[test]
+fn an_arc_drawn_on_a_mirrored_model_keeps_its_angles_true_and_says_nothing() {
+    let mut r = circle_rig(12);
+    let id = r.model_id();
+    r.ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: glam::DAffine3::from_scale(DVec3::new(-1.0, 1.0, 1.0)).to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    let plane = Plane3::ground(0.0);
+    let center = v(-900.0, 100.0, 0.0);
+    let (a, b, h) = (v(-1200.0, 100.0, 0.0), v(-600.0, 100.0, 0.0), 150.0);
+    let arc = arc_circle(a, b, h, &plane).unwrap();
+    let ran = run_actions_full(
+        &mut r.ed,
+        &[Action::AddCurve {
+            target: Target::Model(id),
+            points: arc_points(a, b, h, &plane, 8),
+            closed: false,
+            faceted: false,
+            analytic: Some(arc.analytic(&plane)),
+        }],
+        false,
+    )
+    .unwrap();
+    let _ = center;
+    assert!(ran.notes.is_empty(), "{:?}", ran.notes);
+    let drawn = only_curve_of_len(&r, 8);
+    let g = r.model().curve_geometry(drawn).unwrap();
+    assert_eq!(g.kind, "arc");
+    // The sweep is the same in the model as in the drawing.
+    assert!(
+        (g.sweep().unwrap() - arc.sweep.abs()).abs() < 1e-9,
+        "{} {}",
+        g.sweep().unwrap(),
+        arc.sweep
+    );
 }

@@ -2079,7 +2079,7 @@ fn curve_info_reads_the_exact_circle_and_the_segments() {
     assert_eq!(g["kind"], "circle");
     assert_eq!(g["radius"], 300.0);
     assert_eq!(g["center"], json!([0.0, 0.0, 0.0]));
-    assert!((g["length_mm"].as_f64().unwrap() - 300.0 * std::f64::consts::TAU).abs() < 1e-6);
+    assert!((item["length_mm"].as_f64().unwrap() - 300.0 * std::f64::consts::TAU).abs() < 1e-6);
     assert!(g.get("start_deg").is_none());
     // The summary and the shape of the object carry the field too.
     let obj = ok(&mut s, "objects.get", json!({"id": id}));
@@ -2269,4 +2269,37 @@ fn set_segments_works_in_a_batch_and_a_non_uniform_scale_drops_the_field() {
     let info = ok(&mut s, "mesh.curve_info", json!({"id": id}));
     assert!(info["items"][0]["geometry"].is_null());
     assert_eq!(info["items"][0]["segments"], 20);
+}
+
+#[test]
+fn the_length_of_a_polygon_is_its_perimeter_and_input_is_checked_for_kind_and_fields() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    let pts = circle_points([0.0; 3], 100.0, 6);
+    ok(
+        &mut s,
+        "mesh.add_curve",
+        json!({"id": id, "points": pts, "closed": true, "faceted": true,
+               "analytic": {"kind": "polygon", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 100}}),
+    );
+    let item = ok(&mut s, "mesh.curve_info", json!({"id": id}))["items"][0].clone();
+    assert!(
+        (item["length_mm"].as_f64().unwrap() - 600.0).abs() < 1e-6,
+        "{item}"
+    );
+    // An unknown kind and a field that is not in the description are refused, not stored.
+    let other = new_model(&mut s);
+    for bad in [
+        json!({"kind": "wobble", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 100}),
+        json!({"kind": "polygon", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0], "radius": 100, "sweep_deg": 90}),
+    ] {
+        let e = err(
+            &mut s,
+            "mesh.add_curve",
+            json!({"id": other, "points": circle_points([0.0; 3], 100.0, 6), "closed": true, "analytic": bad}),
+        );
+        assert_eq!(error_id(&e), "edit_refused");
+    }
+    let info = ok(&mut s, "mesh.curve_info", json!({"id": other}));
+    assert_eq!(info["total"], 0);
 }

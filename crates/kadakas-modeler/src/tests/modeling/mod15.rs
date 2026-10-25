@@ -137,7 +137,7 @@ fn an_arc_shows_its_angles_and_length() {
     let _ = frame(&ctx, &mut app, vec![], 0.0);
     let shown = texts(&frame(&ctx, &mut app, vec![], 0.1)).join("\n");
     assert!(shown.contains(&tr!("modeler-curve-kind-arc")), "{shown}");
-    assert!(shown.contains(&tr!("modeler-curve-arc-angles")), "{shown}");
+    assert!(shown.contains(&tr!("modeler-curve-sweep")), "{shown}");
     assert!(shown.contains(&tr!("modeler-curve-length")), "{shown}");
 }
 
@@ -167,4 +167,28 @@ fn the_segments_action_rebuilds_the_curve_and_a_refusal_goes_to_the_status_line(
     );
     assert!(app.session.editor.undo());
     assert_eq!(surface(&app).curve_segments(curve), Some(12));
+}
+
+#[test]
+fn the_whole_new_chain_stays_selected_after_the_segments_change() {
+    let mut app = app();
+    let (id, curve) = circle_model(&mut app, 12);
+    let edges: Vec<Item> = surface(&app)
+        .curve_edges(curve)
+        .unwrap()
+        .iter()
+        .map(|e| Item::Edge(id, *e))
+        .collect();
+    app.edit.sub.set(edges);
+    for n in [30, 8] {
+        app.tray_action(TrayAction::CurveSegments {
+            model: id,
+            curve: curve.0,
+            segments: n,
+        });
+        let chosen: Vec<Item> = app.edit.sub.items().collect();
+        let now = surface(&app).curve_edges(curve).unwrap().to_vec();
+        assert_eq!(chosen.len(), n as usize);
+        assert!(now.iter().all(|e| chosen.contains(&Item::Edge(id, *e))));
+    }
 }

@@ -39,7 +39,6 @@ fn geometry_json(a: &Analytic) -> Value {
         "normal": a.normal,
         "axis": a.axis,
         "radius": a.radius,
-        "length_mm": a.length(),
     });
     if let (Some(s), Some(e)) = (a.start, a.end) {
         v["start_deg"] = json!(s.to_degrees());
@@ -56,6 +55,7 @@ fn curve_json(m: &SurfaceModel, id: CurveId) -> Value {
         "segments": m.curve_segments(id).unwrap_or(0),
         "closed": m.curve_closed(id),
         "geometry": m.curve_geometry(id).map(geometry_json),
+        "length_mm": m.curve_length(id),
     })
 }
 

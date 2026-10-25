@@ -232,6 +232,7 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `curve_borders_other_plane` | A face on another plane uses the curve, for example the wall of a pushed circle. | `face` |
 | `curve_loop_unclear` | A loop of a face does not run once along the whole chain. | `face` |
 | `curve_result_invalid` | The new chain makes the model invalid, for example edges that are too short. | `reason` |
+| `curve_unknown_kind` | The circle has a kind from a newer program. It is read only. | `curve` |
 | `exact_stale` | `mesh3d.retessellate`: the triangles were edited after the import, so the exact data no longer fits. | `object` |
 
 `operand` is `first` or `second`. `open_kind` is `border`, `non_manifold` or `reversed`. In a batch the data also has `step`.
@@ -243,22 +244,24 @@ The circle has a kind (`circle`, `arc` or `polygon`), a center, a normal, an axi
 The axis is the direction of the angle 0. Angles run counterclockwise about the normal. The number of segments is the number of edges.
 Coordinates are local, in millimeters and radians.
 
-`mesh.add_curve` takes the circle as `analytic`. The core keeps it only when every point lies on the circle within the length tolerance.
+`mesh.add_curve` takes the circle as `analytic`. The kind must be `circle`, `arc` or `polygon`. Unknown fields are refused. The core keeps it only when every point lies on the circle within the length tolerance.
 Else the curve is drawn without it and the notes say so.
 
-`mesh.curve_info` reads the curves of a model, or one curve with `curve`. Each item has `edges`, `segments`, `closed` and `geometry`.
+`mesh.curve_info` reads the curves of a model, or one curve with `curve`. Each item has `edges`, `segments`, `closed`, `length_mm` and `geometry`.
+`length_mm` is the circumference for a circle and the length of the chain for an arc or a polygon.
 `geometry` is null for an old curve. An arc also has `start_deg`, `end_deg` and `radians`.
 
 ```json
 {"method": "mesh.curve_info", "params": {"id": "<model>", "curve": 20}}
 {"total": 1, "offset": 0, "items": [{"curve": 20, "edges": [21, 22], "segments": 24, "closed": true,
+  "length_mm": 1884.96,
   "geometry": {"kind": "circle", "center": [0, 0, 0], "normal": [0, 0, 1], "axis": [1, 0, 0],
-               "radius": 300, "length_mm": 1884.96}}]}
+               "radius": 300}}]}
 ```
 
 `mesh.set_segments {id, curve, segments}` rebuilds the chain with 3 to 1000 edges on the same circle. It is one undo step.
 The ends of an arc stay. The first vertex of a circle stays. Faces in the plane of the circle follow, with the new vertices.
-The edges keep the flags of the first edge of the chain (soft, smooth, faceted).
+Edges that stay keep their own flags (soft, smooth, faceted). New edges take the flags of the first edge of the chain.
 
 The call is refused, with an `error_id`, in these cases.
 - The curve has no circle: `curve_without_description`.
@@ -277,7 +280,7 @@ What the other edits do with the circle.
 | Edge across the curve | The chain gets a vertex on the chord. The circle stays. |
 | Push/Pull, Follow Me, copy | The copy gets its own circle, at the new place. |
 | Offset | The new curve gets a circle with the radius of its corners. |
-| Group, component, explode | The circle follows the chain. It is fitted again where the chain lands. |
+| Group, component, explode, copy | The circle is fitted again where the chain lands. If the points are not on a circle (a group scaled unequally), the circle is dropped and the notes say so. |
 
 The file keeps the circles in the model field `curve_geometry`, a list of `[curve id, {description}]`. A file without it loads as before.
 An older program keeps the field it does not know. A row whose curve is gone or whose points are off the circle is left out on load.
