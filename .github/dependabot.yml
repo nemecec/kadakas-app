@@ -1,0 +1,49 @@
+# Dependabot version updates. Security updates are on in the repository settings and work
+# without this file. These rules make the routine updates small and quiet:
+# one pull request for all minor and patch updates of a group, one for each major update.
+# Each pull request runs the CI, so keep the number low.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Tallinn
+    open-pull-requests-limit: 4
+    commit-message:
+      prefix: "deps"
+    groups:
+      rust-minor-and-patch:
+        update-types: [minor, patch]
+    # The UI and graphics stack moves together. A major update of one of them needs a person.
+    ignore:
+      - dependency-name: "wgpu*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "egui*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eframe"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "wasmtime*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Tallinn
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /python
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps"
