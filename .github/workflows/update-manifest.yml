@@ -54,6 +54,8 @@ jobs:
           if [ -n "$EVENT_TAG" ]; then
             [[ "$EVENT_TAG" =~ $re ]] || { echo "bad tag: $EVENT_TAG"; exit 1; }
             case "$EVENT_TAG" in *-dev|*-dev.*) echo "a development version is never released: $EVENT_TAG"; exit 1 ;; esac
+            [ "${#EVENT_TAG}" -le 41 ] || { echo "tag longer than 40 characters after the v: $EVENT_TAG"; exit 1; }
+            if [[ "$EVENT_TAG" == *-* ]] && [[ ".${EVENT_TAG#*-}" =~ \.0[0-9]+(\.|$) ]]; then echo "leading zero in a number of the pre-release part: $EVENT_TAG"; exit 1; fi
             echo "tags=[\"$EVENT_TAG\"]" >> "$GITHUB_OUTPUT"
             echo "strict=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -121,6 +123,8 @@ jobs:
           re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           [[ "$TAG" =~ $re ]] || { echo "bad tag: $TAG"; exit 1; }
           case "$TAG" in *-dev|*-dev.*) echo "a development version is never released: $TAG"; exit 1 ;; esac
+          [ "${#TAG}" -le 41 ] || { echo "tag longer than 40 characters after the v: $TAG"; exit 1; }
+          if [[ "$TAG" == *-* ]] && [[ ".${TAG#*-}" =~ \.0[0-9]+(\.|$) ]]; then echo "leading zero in a number of the pre-release part: $TAG"; exit 1; fi
           # The version in the tag must be the version in the workspace at that tag.
           ws=$(git show "refs/tags/$TAG:Cargo.toml" | awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}')
           [ "v$ws" = "$TAG" ] || { echo "tag $TAG does not match the workspace version $ws"; exit 1; }
@@ -153,7 +157,19 @@ jobs:
             --title "Update manifests" --prerelease --latest=false \
             --notes "Signed manifests for the Kadakas launcher. Made by CI. Do not edit."
           mkdir -p existing out
+          # The record of the highest version ever published (scripts/published_guard.py). It only
+          # goes up, and Delete release does not touch it: a published number is never reused.
+          gh release download update-manifests --pattern highest-published.json --dir existing --clobber 2>/dev/null || true
           for c in $channels; do
+            if ! python3 -I scripts/published_guard.py check existing/highest-published.json "$version" --channel "$c" --allow-equal; then
+              if [ "$STRICT" = "true" ] && [ "$c" = "beta" ] && [ "$channels" != "beta" ]; then
+                echo "The beta channel has a higher version than $version. Left as it is."
+                continue
+              fi
+              if [ "$STRICT" = "true" ]; then echo "::error::Refusing to publish $version on the $c channel: it is lower than a version that was published before."; exit 1; fi
+              echo "A higher $c version was published before. Skipping."
+              continue
+            fi
             gh release download update-manifests --pattern "manifest-$c.json" --dir existing --clobber 2>/dev/null || true
             $tool build --version "$version" --channel "$c" --valid-days "$VALID_DAYS" "${platforms[@]}" --out "out/unsigned-$c.json"
             # Never go back: the new version must be higher than the published one. A scheduled
@@ -173,4 +189,6 @@ jobs:
             $tool sign --manifest "out/unsigned-$c.json" --key-env KADAKAS_UPDATE_SIGNING_KEY --out "out/manifest-$c.json"
             $tool verify --signed "out/manifest-$c.json" "${keys[@]}"
             gh release upload update-manifests "out/manifest-$c.json" --clobber
+            python3 -I scripts/published_guard.py record existing/highest-published.json "$version" "$c"
+            gh release upload update-manifests existing/highest-published.json --clobber
           done

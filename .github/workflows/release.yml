@@ -119,7 +119,7 @@ jobs:
         if: runner.os == 'macOS'
         run: scripts/macos-app.sh target/release dist-app
       # WiX (MSI) takes only numbers and Debian sorts 0.1.0-beta.1 after 0.1.0, so these two formats get
-      # their own form of the version (scripts/packager-version.sh): 0.1.0.10001 and 0.1.0~beta.1.
+      # their own form of the version (scripts/packager-version.sh): 0.1.0-10001 and 0.1.0~beta.1.
       # The app, the manifest, the other installers and the tag keep 0.1.0-beta.1. A copy of the
       # packager config with the mapped version is used for that one format.
       - name: Package

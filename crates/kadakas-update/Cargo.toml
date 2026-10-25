@@ -26,3 +26,5 @@ ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] 
 
 [dev-dependencies]
 proptest = "1.11.0"
+# The test of the package versions (tests/package_versions.rs) runs the semver parser of cargo-packager.
+semver = "1"
