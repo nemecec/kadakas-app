@@ -511,10 +511,16 @@ impl Builder {
     /// of objects (a rollback below the limit lets the import go on). Layers that were made since
     /// stay for now, and `finish` deletes those that have no object. Returns how many objects went.
     ///
+    /// Only layers that [`Builder::layer`] made are taken back in this way. The layers of
+    /// `source_layer` and `sheet` stay (the importers that use them make no rollbacks).
+    ///
     /// A checkpoint is good until the next rollback. After one, an older or newer checkpoint is
-    /// stale: using it does nothing and returns 0 (take a new one).
+    /// stale: using it does nothing and returns 0 (take a new one). The debug build panics, since
+    /// a stale checkpoint is a bug of the caller.
     pub fn rollback(&mut self, cp: Checkpoint) -> usize {
         if cp.generation != self.generation {
+            // A bug of the caller; the release build does nothing, the debug build says so.
+            debug_assert!(false, "a stale checkpoint was used for a rollback");
             return 0;
         }
         self.generation += 1;
@@ -540,6 +546,7 @@ impl Builder {
         for (name, id) in std::mem::take(&mut self.rolled_layers) {
             if !self.added.iter().any(|(_, l)| *l == id) {
                 self.cmds.push(Command::DeleteLayer { id });
+                self.names.remove(&name);
                 if let Some(i) = self.report.layers_created.iter().position(|n| *n == name) {
                     self.report.layers_created.remove(i);
                 }
@@ -820,7 +827,8 @@ mod tests {
             Attributes::default(),
             BTreeMap::new()
         ));
-        // Back to the outer point, then the inner one (older than the rollback): no effect.
+        // Back to the outer point, then the inner one (older than the rollback): no effect, and a
+        // panic in the debug build.
         assert_eq!(b.rollback(outer), 2);
         assert!(b.add(
             "LINE",
@@ -830,7 +838,12 @@ mod tests {
             Attributes::default(),
             BTreeMap::new()
         ));
-        assert_eq!(b.rollback(inner), 0);
+        if cfg!(debug_assertions) {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.rollback(inner)));
+            assert!(r.is_err());
+        } else {
+            assert_eq!(b.rollback(inner), 0);
+        }
         assert_eq!(b.report.total(), 1);
     }
 
