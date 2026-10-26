@@ -20,7 +20,7 @@
 use crate::welcome_ui::{self, WelcomeState};
 use kadakas_l10n::tr;
 use kadakas_welcome::gate::{self, Button, ENV_TIMEOUT, Gate, Kind};
-use kadakas_welcome::{Dirs, ENV_SKIP, stores, sysloc};
+use kadakas_welcome::{Dirs, ENV_SKIP, smoke, stores, sysloc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -129,9 +129,41 @@ struct WelcomeApp {
     mark_failed: Arc<AtomicBool>,
     /// The language of the window title, to change the title when the language changes.
     title_language: &'static str,
+    /// The test mode of the smoke test (PLAT-28). `None` in every normal run.
+    smoke: Option<smoke::Auto>,
 }
 
 impl WelcomeApp {
+    /// The test mode: writes the state file, waits, and answers with the second button.
+    /// Returns true when the window can close.
+    fn smoke_step(&mut self, ctx: &egui::Context) -> bool {
+        let Some(auto) = self.smoke.as_mut() else {
+            return false;
+        };
+        ctx.request_repaint_after(Duration::from_millis(100));
+        match auto.step(Instant::now()) {
+            smoke::Step::Wait => false,
+            smoke::Step::Write => {
+                let state = smoke::state_json(
+                    env!("CARGO_PKG_VERSION"),
+                    self.state.kind,
+                    &self.state.choices,
+                    self.title_language,
+                    self.state.modeler_installed,
+                );
+                match smoke::write_state(auto.path(), &state) {
+                    Ok(()) => auto.written(Instant::now()),
+                    Err(e) => eprintln!(
+                        "kadakas-launcher: the smoke state {} was not written: {e}",
+                        auto.path().display()
+                    ),
+                }
+                false
+            }
+            smoke::Step::Answer => self.finish(Button::Secondary),
+        }
+    }
+
     /// Stores what the button says. Returns true when the window can close.
     ///
     /// When something could not be written, the problem is shown in the dialog and the window
@@ -188,6 +220,8 @@ impl eframe::App for WelcomeApp {
             && self.finish(button)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if self.smoke_step(&ctx) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }
@@ -216,6 +250,7 @@ pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe:
         attempts: 0,
         mark_failed: mark_failed.clone(),
         title_language: language,
+        smoke: smoke::Auto::from_env(|k| std::env::var(k).ok()),
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -394,6 +429,7 @@ mod tests {
             attempts: 0,
             mark_failed: failed.clone(),
             title_language: "en-US",
+            smoke: None,
         };
         assert!(!app.finish(Button::Primary), "the window stays open");
         let shown = app.state.problem.clone().unwrap();
@@ -421,6 +457,7 @@ mod tests {
             attempts: 0,
             mark_failed: ok_flag.clone(),
             title_language: "en-US",
+            smoke: None,
         };
         assert!(!again.finish(Button::Primary));
         assert!(ok_flag.load(Ordering::SeqCst));
@@ -444,6 +481,7 @@ mod tests {
             attempts: 0,
             mark_failed: Arc::new(AtomicBool::new(false)),
             title_language: "en-US",
+            smoke: None,
         };
         assert!(fine.finish(Button::Secondary));
         assert!(fine.state.problem.is_none());
@@ -452,6 +490,59 @@ mod tests {
 
     fn dirs_for(root: &Path) -> Dirs {
         dirs(root)
+    }
+
+    #[test]
+    fn the_test_mode_writes_the_state_and_answers_use_defaults_on_its_own() {
+        let base = tmp("smoke");
+        let state_path = base.join("out").join("state.json");
+        let env = |k: &str| match k {
+            smoke::ENV_STATE => Some(state_path.to_string_lossy().into_owned()),
+            smoke::ENV_HOLD => Some("0".to_string()),
+            _ => None,
+        };
+        let c = detect(&kadakas_welcome::SystemLocale::default(), true);
+        let d = dirs(&base);
+        let mut app = WelcomeApp {
+            state: WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true),
+            dirs: d.clone(),
+            attempts: 0,
+            mark_failed: Arc::new(AtomicBool::new(false)),
+            title_language: "en-US",
+            smoke: smoke::Auto::from_env(env),
+        };
+        let ctx = egui::Context::default();
+        let mut closed = false;
+        for _ in 0..20 {
+            if app.smoke_step(&ctx) {
+                closed = true;
+                break;
+            }
+        }
+        assert!(closed, "the dialog answered by itself");
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(v["kind"], "first_run");
+        assert_eq!(v["shown"]["mode"], "kadakas-modeler");
+        // "Use defaults" marked the dialog as seen and wrote the settings.
+        assert_eq!(kadakas_update::welcome::done_version(&d.launcher), 1);
+        assert!(d.launcher.join("welcome.json").is_file());
+        // Without the variable nothing happens.
+        let c = detect(&kadakas_welcome::SystemLocale::default(), true);
+        let mut off = WelcomeApp {
+            state: WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true),
+            dirs: dirs(&base.join("off")),
+            attempts: 0,
+            mark_failed: Arc::new(AtomicBool::new(false)),
+            title_language: "en-US",
+            smoke: smoke::Auto::from_env(|_| None),
+        };
+        for _ in 0..20 {
+            assert!(!off.smoke_step(&ctx));
+        }
+        assert!(!base.join("off").exists());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -6,12 +6,14 @@
 //!   formats, not the language of the interface), per operating system;
 //! - [`gate`]: when the dialog is due (first start, a newer dialog, never in tests or without a
 //!   display), and what each button does;
-//! - [`stores`]: where each choice is stored, and how it is read back.
+//! - [`stores`]: where each choice is stored, and how it is read back;
+//! - [`smoke`]: the test mode for the smoke test of the installers (PLAT-28).
 //!
 //! Every file is changed key by key: a key that this version does not know stays.
 
 pub mod choices;
 pub mod gate;
+pub mod smoke;
 pub mod stores;
 pub mod sysloc;
 

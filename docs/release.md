@@ -67,7 +67,7 @@ An MCP client config on macOS looks like this.
 ## Release workflow
 
 `.github/workflows/release.yml` runs when you push a tag that starts with `v` (for example `v0.1.0` or `v0.1.0-beta.1`). It builds the
-installers on macOS (`macos-14` for arm64, `macos-15-intel` for Intel), Windows and Linux, builds the web version, and makes a draft GitHub release
+installers on macOS (`macos-14` for arm64, `macos-15-intel` for Intel), Windows and Linux, builds the web version and tests the installers (see below). Then it makes a draft GitHub release
 with all files. You can also start it by hand from the Actions page. Nobody has run it on GitHub yet. Expect to fix
 small problems at the first run (for example the runner image names).
 
@@ -152,6 +152,38 @@ The numbers of the MSI keep the order: alpha is N, beta is 10000+N, dev is 20000
 `release.yml` builds the MSI and the `.deb` with a copy of the packager config that has the mapped version. `crates/kadakas-update/tests/package_versions.rs` runs the same semver conversion as cargo-packager 0.11.8 on every mapped value. `python/tests/test_version_forms.py` checks the PEP 440 order. Only CI confirms the real MSI and `.deb` builds. The MSI file name has `0.1.0.10001`. Windows Installer ignores the fourth number when it compares versions, so `0.1.0-beta.1` and `0.1.0` look the same to it. Beta users update through the launcher, not through the MSI.
 
 GitHub renames some uploaded assets. A character such as `~` in the name of the `.deb` becomes a dot. The package inside keeps its version.
+
+## Smoke test of the installers (PLAT-28)
+
+After the build, the job `smoke` of `release.yml` installs every package on a clean runner of its own system. It starts the program the first time, and it checks the result. The job `publish` needs it: a failed smoke test blocks the release. The same job runs on a manual start, so a branch can rehearse it. The nightly pre-release is a tag with a dash (`v0.1.0-beta.1`). It goes through the same workflow and the same test. `nightly.yml` builds no installers.
+
+| Package | Runner | How it is installed |
+|---|---|---|
+| MSI | `windows-latest` | `msiexec /i /qn` |
+| NSIS `.exe` | `windows-latest` | `/S` |
+| `.dmg` (arm64) | `macos-14` | mount, copy the app to `/Applications` |
+| `.dmg` (Intel) | `macos-15-intel` | the same |
+| `.deb` | `ubuntu-22.04` | `apt-get install ./file.deb` |
+| AppImage | `ubuntu-22.04` | extracted into a work folder, then run without FUSE |
+
+The logic is in `scripts/smoke/`, not in the YAML. A platform script (`linux.sh`, `macos.sh`, `windows.ps1`) installs the package and checks the files and the menu entry. At the end it removes the package. The shared Python helper `smoke_run.py` does the three starts.
+
+1. **Files and menu entry.** The launcher, the app, the modeler and the `kadakas` tool exist. The license texts are in the package. The menu entry (`.desktop` file, Start menu shortcut, `Info.plist` with name, icon and the `.kad` type) starts the launcher.
+2. **First start.** The launcher opens the welcome dialog. The test mode (`KADAKAS_SMOKE_STATE`, see `docs/welcome.md`) writes a state file. It holds the version, the kind of the dialog and the shown values. After a short hold the dialog answers "Use defaults" and ends. The test checks the state file, `welcome.json` and the settings files (`launcher.json`, `prefs.json`, the feedback `settings.json`). A screenshot is taken while the dialog waits.
+3. **Second start.** No dialog opens. The launcher starts the default program (the 3D modeler) and writes its run record. The program stays up for 12 seconds.
+4. **Third start.** The test sets the flavor to `kadakas-app` in `launcher.json` and starts the launcher with `KADAKAS_AGENT_PORT=0`. The app writes `agent.json`. The test sends `auth` and `describe` over TCP and checks that `describe` names the version of the package.
+5. **Uninstall.** The uninstaller removes the programs and the menu entry. For the dmg the app is deleted. For the AppImage the extracted files are deleted.
+
+Details.
+
+- The test uses its own folders (`KADAKAS_LAUNCHER_ROOT`, `KADAKAS_PREFS_DIR`, `KADAKAS_FEEDBACK_DIR`, a private `HOME` and runtime folder). It never touches the settings of the person who runs it.
+- Linux runs under `xvfb-run` with Mesa software rendering (lavapipe and llvmpipe). Windows uses the WARP renderer of Windows. macOS uses the virtual GPU of the runner. No variable forces the fallback adapter of `wgpu`. If a runner image needs one, add it to the app first and document it.
+- Screenshots and logs are artifacts named `smoke-<system>-<kind>`. A failed screenshot is a warning. It never fails the job. macOS needs the screen recording right for `screencapture`. Without it the screenshot fails and the job goes on.
+- A failure message names the step. The logs of the three starts (`first.log`, `second.log`, `third.log`) are in the artifact.
+- Both Debian and MSI versions differ from the app version (`0.1.0~beta.1`, `0.1.0-10001`). The scripts get the app version from the workspace `Cargo.toml`.
+- The `describe` method of the JSON-RPC API returns `version`. This is what the ping reads.
+
+A person still checks some points on a real machine. They stay on the human checklist in `docs/welcome.md` ("Check in a real window"). They are real GPU rendering, the double click and the Dock flow, the Gatekeeper and SmartScreen warnings, high DPI scaling and trackpads.
 
 ## Launcher and updates
 
