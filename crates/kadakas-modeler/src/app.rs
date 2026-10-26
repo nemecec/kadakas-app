@@ -327,6 +327,12 @@ impl ModelerApp {
 
     /// A launcher link for the tests (the run lock, the alive stamp and the open requests).
     #[cfg(test)]
+    /// Where the settings are written (the tests use a temporary folder).
+    #[cfg(test)]
+    pub fn set_prefs_dir(&mut self, dir: Option<PathBuf>) {
+        self.prefs_dir = dir;
+    }
+
     pub fn set_launch(&mut self, launch: Launch) {
         self.launch = launch;
     }
@@ -1593,8 +1599,28 @@ impl ModelerApp {
 
     // ---- settings ----------------------------------------------------------------------------
 
+    /// Reads `modeler.json` and `prefs.json` again (the welcome dialog stored choices). The
+    /// language, the theme and the rest apply in the next frame.
+    fn reload_prefs(&mut self, ctx: &egui::Context) {
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let (prefs, warning) = prefs::load_from(&dir);
+        self.prefs = prefs.clone();
+        self.prefs_saved = prefs;
+        self.language_applied = None;
+        self.theme_applied = None;
+        if let Some(w) = warning {
+            self.status = w;
+        }
+        ctx.request_repaint();
+    }
+
     /// Makes the theme and the language of the settings current, and writes a change to disk.
     fn apply_prefs(&mut self, ctx: &egui::Context) {
+        if self.launch.take_welcome_applied(ctx.input(|i| i.time)) {
+            self.reload_prefs(ctx);
+        }
         if self.language_applied.as_ref() != Some(&self.prefs.language) {
             self.prefs.apply_language(&prefs::system_languages());
             self.language_applied = Some(self.prefs.language.clone());
@@ -1606,7 +1632,7 @@ impl ModelerApp {
         }
         if self.prefs != self.prefs_saved {
             if let Some(dir) = &self.prefs_dir
-                && let Err(e) = prefs::save_to(dir, &self.prefs)
+                && let Err(e) = prefs::save_changes_to(dir, &self.prefs_saved, &self.prefs)
             {
                 self.status = e;
             }

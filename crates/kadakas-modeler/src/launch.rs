@@ -139,6 +139,9 @@ pub struct Launch {
     /// window loop waits (a file dialog is open, a big file loads). Dropped with the program.
     _heartbeat: Option<kadakas_update::handshake::Heartbeat>,
     next_open_poll: f64,
+    /// The stamp of the welcome dialog that this run has seen (`kadakas_update::welcome`).
+    welcome_seen: String,
+    next_welcome_poll: f64,
 }
 
 impl Launch {
@@ -151,9 +154,32 @@ impl Launch {
         Launch {
             _lock: link.as_ref().and_then(AppLink::hold_run_lock),
             _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
+            welcome_seen: link
+                .as_ref()
+                .map(|l| kadakas_update::welcome::applied_stamp(l.root()))
+                .unwrap_or_default(),
             link,
             next_open_poll: 0.0,
+            next_welcome_poll: 0.0,
         }
+    }
+
+    /// True once when the welcome dialog stored choices since this run last looked. Looks twice a
+    /// second at most.
+    pub fn take_welcome_applied(&mut self, now: f64) -> bool {
+        let Some(link) = &self.link else {
+            return false;
+        };
+        if now < self.next_welcome_poll {
+            return false;
+        }
+        self.next_welcome_poll = now + OPEN_POLL_SECONDS;
+        let stamp = kadakas_update::welcome::applied_stamp(link.root());
+        if stamp == self.welcome_seen {
+            return false;
+        }
+        self.welcome_seen = stamp;
+        true
     }
 
     /// The documents that the launcher sent (a double click on a `.kad` file while this program

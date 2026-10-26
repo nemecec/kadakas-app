@@ -51,6 +51,8 @@ pub enum Grouping {
     Point,
     /// 1 234 (a no-break space)
     Space,
+    /// 1’234 (Swiss German and Swiss Italian)
+    Apostrophe,
 }
 
 impl Grouping {
@@ -61,13 +63,14 @@ impl Grouping {
             Grouping::Comma => Some(','),
             Grouping::Point => Some('.'),
             Grouping::Space => Some('\u{a0}'),
+            Grouping::Apostrophe => Some('\u{2019}'),
         }
     }
 }
 
 /// True for the spaces that people and programs use between groups of digits.
 pub(crate) fn is_group_space(c: char) -> bool {
-    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}')
+    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}' | '\u{2019}')
 }
 
 /// How numbers look: the decimal separator and the digit grouping.
@@ -178,6 +181,15 @@ impl NumberFormat {
             let v = mantissa * 10f64.powi(exp.clamp(-400, 400));
             return v.is_finite().then_some(v);
         }
+        // The Swiss grouping is often typed with the plain apostrophe. (In other formats `'` is
+        // the foot mark and is not a number.)
+        let swiss;
+        let body = if self.grouping == Grouping::Apostrophe && body.contains('\'') {
+            swiss = body.replace('\'', "\u{2019}");
+            swiss.as_str()
+        } else {
+            body
+        };
         // Spaces between groups of digits.
         let joined;
         let body = if body.chars().any(is_group_space) {
@@ -298,6 +310,19 @@ mod tests {
         decimal: Decimal::Comma,
         grouping: Grouping::Point,
     };
+
+    #[test]
+    fn the_swiss_apostrophe_groups_and_reads_back() {
+        let ch = NumberFormat {
+            decimal: Decimal::Point,
+            grouping: Grouping::Apostrophe,
+        };
+        assert_eq!(ch.format(1234567.891, 2), "1\u{2019}234\u{2019}567.89");
+        assert_eq!(ch.format(-1234.5, 1), "-1\u{2019}234.5");
+        assert_eq!(ch.parse("1\u{2019}234.56"), Some(1234.56));
+        assert_eq!(ch.parse("1'234'567"), Some(1234567.0));
+        assert_eq!(ch.parse("12'34"), None);
+    }
 
     #[test]
     fn rounding_goes_away_from_zero() {

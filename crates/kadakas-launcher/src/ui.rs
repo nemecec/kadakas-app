@@ -97,6 +97,11 @@ fn tags(row: &kadakas_update::Installed, skipped: Option<SkipReason>) -> String 
 impl eframe::App for LauncherApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // The welcome dialog ended: it may have changed the flavor and the update mode.
+        if crate::welcome::take_finished() {
+            self.model.reload_settings();
+            self.profile_text = self.model.settings.profile.clone();
+        }
         if self.model.poll() {
             self.profile_text = self.model.settings.profile.clone();
         }

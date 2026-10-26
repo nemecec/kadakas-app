@@ -100,12 +100,10 @@ impl Default for Prefs {
     }
 }
 
-/// The folder of the files. `None` if there is no home folder.
+/// The folder of the files. `None` if there is no home folder. `KADAKAS_PREFS_DIR` or the folder of
+/// `KADAKAS_KEYMAP` replace the config folder (`kadakas_sys::dirs::prefs_dir`).
 pub fn dir() -> Option<PathBuf> {
-    if let Some(d) = std::env::var_os("KADAKAS_PREFS_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(d));
-    }
-    crate::keymap::user_file().and_then(|p| p.parent().map(PathBuf::from))
+    kadakas_sys::dirs::prefs_dir()
 }
 
 /// The prefs in `dir`, or the defaults if the file is missing or damaged. The second value is a
@@ -160,6 +158,24 @@ pub fn save_to(dir: &std::path::Path, prefs: &Prefs) -> Result<(), String> {
     write_file(dir, "prefs.json", &text)
 }
 
+/// Writes the keys that differ between `saved` (the prefs as they were read or written last) and
+/// `now`, into the file as it is on disk. A key that this program did not change (the welcome
+/// dialog changed it in the meantime) and a key that it does not know stay as they are.
+pub fn save_changes_to(dir: &std::path::Path, saved: &Prefs, now: &Prefs) -> Result<(), String> {
+    let value = |p: &Prefs| serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+    let changes = kadakas_sys::jsonfile::diff(&value(saved), &value(now));
+    let path = dir.join("prefs.json");
+    kadakas_sys::jsonfile::write_changes(&path, &changes)
+        .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
+}
+
+pub fn save_changes(saved: &Prefs, now: &Prefs) -> Result<(), String> {
+    match dir() {
+        Some(d) => save_changes_to(&d, saved, now),
+        None => Ok(()),
+    }
+}
+
 pub fn save(prefs: &Prefs) -> Result<(), String> {
     match dir() {
         Some(d) => save_to(&d, prefs),
@@ -196,6 +212,59 @@ mod tests {
         .unwrap();
         let (p, _) = load_from(&d);
         assert_eq!((p.max_versions, p.max_version_mib), (7, 9));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_save_writes_only_what_changed_and_keeps_what_another_program_wrote() {
+        use kadakas_ui_core::nav3d::NavStyle;
+        let d = temp("save-changes");
+        let saved = Prefs::default();
+        save_to(&d, &saved).unwrap();
+        // The welcome dialog stores a theme, a language and an unknown key.
+        let mut text: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("prefs.json")).unwrap()).unwrap();
+        text["theme"] = "dark".into();
+        text["language"] = "et".into();
+        text["units"]["length"] = "ft_in".into();
+        text["from_the_future"] = serde_json::json!({"a": 1});
+        std::fs::write(d.join("prefs.json"), text.to_string()).unwrap();
+        // This program still holds the old copy; the person toggles a cue and picks a style.
+        let now = Prefs {
+            cues: !saved.cues,
+            navigation: NavStyle::Trackpad,
+            ..saved
+        };
+        save_changes_to(&d, &saved, &now).unwrap();
+        let (back, warning) = load_from(&d);
+        assert_eq!(warning, None);
+        assert_eq!(
+            back.theme,
+            ThemeChoice::Dark,
+            "the welcome dialog's theme stays"
+        );
+        assert_eq!(back.language.tag(), Some("et"));
+        assert_eq!(back.units.length, kadakas_units::LengthUnit::FtIn);
+        assert_eq!(
+            (back.cues, back.navigation),
+            (!saved.cues, NavStyle::Trackpad)
+        );
+        let text: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("prefs.json")).unwrap()).unwrap();
+        assert_eq!(text["from_the_future"]["a"], 1, "unknown keys survive");
+        // No change, no write.
+        let before = std::fs::metadata(d.join("prefs.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        save_changes_to(&d, &now, &now).unwrap();
+        assert_eq!(
+            std::fs::metadata(d.join("prefs.json"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

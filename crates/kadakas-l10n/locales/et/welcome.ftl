@@ -2,7 +2,8 @@
 
 welcome-title = Tere tulemast Kadakasse
 welcome-intro = Vali, kuidas soovid alustada.
-welcome-later = Seda kõike saad hiljem seadetes muuta.
+welcome-later = Seda kõike saad hiljem muuta eelistustes (3D-modelleerijas: menüüs Vaade).
+welcome-later-help = Abi > Näita tervitust avab selle akna uuesti.
 welcome-applies-later = Osa muudatusi jõustub järgmisel Kadaka käivitamisel.
 welcome-work-heading = Kuidas soovid töötada?
 welcome-mode-modeler = 3D-modelleerija

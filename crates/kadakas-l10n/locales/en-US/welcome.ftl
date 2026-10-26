@@ -2,7 +2,8 @@
 
 welcome-title = Welcome to Kadakas
 welcome-intro = Pick how you want to start.
-welcome-later = You can change all of this later in Settings.
+welcome-later = You can change all of this later in Preferences (in the 3D modeler: the View menu).
+welcome-later-help = Help > Show welcome opens this window again.
 welcome-applies-later = Some changes apply the next time Kadakas starts.
 welcome-work-heading = How do you want to work?
 welcome-mode-modeler = 3D Modeler

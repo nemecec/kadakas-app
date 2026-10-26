@@ -18,6 +18,9 @@ pub struct Model {
     updater: Arc<Updater>,
     starter: Starter,
     pub settings: Settings,
+    /// The settings as they were read or written last. A save writes the fields that differ
+    /// from these, into the file as it is now.
+    saved: Settings,
     pub installed: Vec<Installed>,
     pub flavors: Vec<Flavor>,
     /// Versions that Auto-update skips, and why.
@@ -73,6 +76,7 @@ impl Model {
         let mut m = Model {
             updater,
             starter,
+            saved: settings.clone(),
             settings,
             installed: Vec::new(),
             flavors: Vec::new(),
@@ -180,10 +184,46 @@ impl Model {
         self.selected = Some(slot);
     }
 
+    /// Writes the fields that this window changed (channel, flavor, profile), into the file as
+    /// it is now: the welcome dialog or the app may have changed other fields (flavor, mode) in
+    /// the meantime, and those stay.
     fn save(&mut self) {
-        if let Err(e) = self.settings.save(self.updater.store().root()) {
-            self.status = tr!("launcher-status-save-failed", error = e.to_string());
+        let (old, new) = (self.saved.clone(), self.settings.clone());
+        match Settings::update(self.updater.store().root(), |s| {
+            if new.channel != old.channel {
+                s.channel = new.channel;
+            }
+            if new.flavor != old.flavor {
+                s.flavor = new.flavor.clone();
+            }
+            if new.profile != old.profile {
+                s.profile = new.profile.clone();
+            }
+            if new.mode != old.mode {
+                s.mode = new.mode;
+            }
+            if new.keep_older != old.keep_older {
+                s.keep_older = new.keep_older;
+            }
+            if new.site != old.site {
+                s.site = new.site.clone();
+            }
+        }) {
+            Ok(now) => {
+                self.settings = now.clone();
+                self.saved = now;
+            }
+            Err(e) => {
+                self.status = tr!("launcher-status-save-failed", error = e.to_string());
+                self.saved = self.settings.clone();
+            }
         }
+    }
+
+    /// Reads the settings again (the welcome dialog stored choices).
+    pub fn reload_settings(&mut self) {
+        self.settings = Settings::load(self.updater.store().root());
+        self.saved = self.settings.clone();
     }
 
     pub fn set_channel(&mut self, channel: Channel) {
@@ -454,6 +494,46 @@ mod tests {
         // The channel local is a choice too.
         m.set_channel(Channel::Local);
         assert_eq!(Settings::load(&root.join("data")).channel, Channel::Local);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_stale_window_does_not_overwrite_what_the_welcome_dialog_stored() {
+        let root = tmp("stale");
+        let mut m = model(&root, true);
+        // The window is open with the settings as they were.
+        assert_eq!(m.settings.flavor, "kadakas-app");
+        // The welcome dialog stores a flavor and a mode, and a key from the future is there.
+        let data = root.join("data");
+        let mut file: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(Settings::path(&data)).unwrap_or_else(|_| b"{}".to_vec()),
+        )
+        .unwrap();
+        file["flavor"] = "kadakas-modeler".into();
+        file["mode"] = "notify-only".into();
+        file["from_the_future"] = serde_json::json!({"a": 1});
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(Settings::path(&data), file.to_string()).unwrap();
+        // The person changes the channel in the stale window.
+        m.set_channel(Channel::Beta);
+        let text = std::fs::read_to_string(Settings::path(&data)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["channel"], "beta");
+        assert_eq!(v["flavor"], "kadakas-modeler", "the dialog's flavor stays");
+        assert_eq!(v["mode"], "notify-only", "the dialog's mode stays");
+        assert_eq!(v["from_the_future"]["a"], 1, "unknown keys stay");
+        assert_eq!(
+            m.settings.flavor, "kadakas-modeler",
+            "the window shows the file now"
+        );
+        // A reload after the dialog shows the new values.
+        file["mode"] = "auto-download".into();
+        std::fs::write(Settings::path(&data), file.to_string()).unwrap();
+        m.reload_settings();
+        assert_eq!(
+            m.settings.mode,
+            kadakas_update::settings::UpdateMode::AutoDownload
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

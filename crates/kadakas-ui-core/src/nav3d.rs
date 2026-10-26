@@ -143,24 +143,93 @@ pub struct ScrollMotion {
     pub zoom: f32,
     /// A pan, in points.
     pub pan: Vec2,
-    /// An orbit, in points.
+    /// An orbit, in points: x turns about the vertical axis (yaw), y tilts (pitch).
     pub orbit: Vec2,
 }
 
-/// The motion that `scroll` (points, as egui gives it: up is positive on y) and `pinch` (a factor,
-/// 1 is none) make in the style `style`. `shift` is the Shift key.
-pub fn scroll_motion(style: NavStyle, shift: bool, scroll: Vec2, pinch: f32) -> ScrollMotion {
+/// The phase of a wheel or scroll gesture, as the window system reports it. A system that does
+/// not report phases (a mouse wheel, some touchpads) sends `Move` only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WheelPhase {
+    Start,
+    Move,
+    End,
+}
+
+/// One wheel event as the window system sent it, before the UI library changes it: egui turns a
+/// vertical scroll with Shift into a horizontal one, so the trackpad style reads the raw events.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WheelEvent {
+    /// The scroll in points: the content follows the fingers.
+    pub delta: Vec2,
+    /// Shift was held for this event.
+    pub shift: bool,
+    pub phase: WheelPhase,
+}
+
+/// Whether Shift counts for the gesture that is going on. A gesture keeps the choice that it
+/// started with: letting go of Shift in the middle (or during the momentum after the fingers
+/// left) does not turn an orbit into a pan; pressing Shift in the middle does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollLatch {
+    shift: bool,
+    in_gesture: bool,
+}
+
+/// The pan and the orbit of the trackpad style for these events (in order).
+fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent]) -> (Vec2, Vec2) {
+    let (mut pan, mut orbit) = (Vec2::ZERO, Vec2::ZERO);
+    for e in events {
+        match e.phase {
+            WheelPhase::Start => {
+                latch.in_gesture = true;
+                latch.shift = e.shift;
+            }
+            WheelPhase::Move if latch.in_gesture => latch.shift |= e.shift,
+            WheelPhase::Move => latch.shift = e.shift,
+            WheelPhase::End => {}
+        }
+        if latch.shift {
+            orbit += e.delta;
+        } else {
+            pan += e.delta;
+        }
+        if e.phase == WheelPhase::End {
+            *latch = ScrollLatch::default();
+        }
+    }
+    (pan, orbit)
+}
+
+/// The motion that one frame of input makes in the style `style`.
+///
+/// - `Mouse`: the wheel zooms to the pointer. `smooth_scroll` is the scroll of the UI library
+///   (points, up is positive on y), `pinch` the factor of the pinch gesture (1 is none). This is
+///   the behavior before the style existed, unchanged.
+/// - `Trackpad`: the scroll events pan the view; with Shift they orbit it (a vertical scroll
+///   tilts, a horizontal one turns); the pinch zooms. The events are the raw wheel events of the
+///   frame, and `latch` keeps the Shift choice of a gesture from frame to frame.
+pub fn scroll_motion(
+    style: NavStyle,
+    latch: &mut ScrollLatch,
+    events: &[WheelEvent],
+    smooth_scroll: Vec2,
+    pinch: f32,
+) -> ScrollMotion {
     match style {
         NavStyle::Mouse => ScrollMotion {
-            zoom: wheel_factor(scroll.y, pinch),
+            zoom: wheel_factor(smooth_scroll.y, pinch),
             pan: Vec2::ZERO,
             orbit: Vec2::ZERO,
         },
-        NavStyle::Trackpad => ScrollMotion {
-            zoom: pinch,
-            pan: if shift { Vec2::ZERO } else { scroll },
-            orbit: if shift { scroll } else { Vec2::ZERO },
-        },
+        NavStyle::Trackpad => {
+            let (pan, orbit) = trackpad_scroll(latch, events);
+            ScrollMotion {
+                zoom: pinch,
+                pan,
+                orbit,
+            }
+        }
     }
 }
 
@@ -507,21 +576,119 @@ impl Nav3d {
 mod tests {
     use super::*;
 
+    fn ev(x: f32, y: f32, shift: bool, phase: WheelPhase) -> WheelEvent {
+        WheelEvent {
+            delta: Vec2::new(x, y),
+            shift,
+            phase,
+        }
+    }
+
     #[test]
-    fn the_mouse_wheel_zooms_and_the_trackpad_scroll_pans_or_orbits() {
-        let scroll = Vec2::new(3.0, 40.0);
-        let m = scroll_motion(NavStyle::Mouse, false, scroll, 1.0);
+    fn the_mouse_wheel_zooms_and_is_not_changed_by_the_style_code() {
+        let mut latch = ScrollLatch::default();
+        let events = [ev(3.0, 40.0, false, WheelPhase::Move)];
+        let m = scroll_motion(
+            NavStyle::Mouse,
+            &mut latch,
+            &events,
+            Vec2::new(3.0, 40.0),
+            1.0,
+        );
         assert!((m.zoom - wheel_factor(40.0, 1.0)).abs() < 1e-6);
         assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::ZERO));
-        // Shift does not change the mouse.
-        assert_eq!(m, scroll_motion(NavStyle::Mouse, true, scroll, 1.0));
-        let t = scroll_motion(NavStyle::Trackpad, false, scroll, 1.1);
-        assert_eq!((t.zoom, t.pan, t.orbit), (1.1, scroll, Vec2::ZERO));
-        let t = scroll_motion(NavStyle::Trackpad, true, scroll, 1.0);
-        assert_eq!((t.zoom, t.pan, t.orbit), (1.0, Vec2::ZERO, scroll));
+        // Shift and the raw events do not change the mouse: only the library's scroll counts.
+        let shifted = [ev(0.0, 40.0, true, WheelPhase::Move)];
+        let m2 = scroll_motion(
+            NavStyle::Mouse,
+            &mut latch,
+            &shifted,
+            Vec2::new(3.0, 40.0),
+            1.0,
+        );
+        assert_eq!(m, m2);
+        assert_eq!(latch, ScrollLatch::default());
         // The pinch zooms the mouse too.
-        let m = scroll_motion(NavStyle::Mouse, false, Vec2::ZERO, 1.5);
+        let m = scroll_motion(NavStyle::Mouse, &mut latch, &[], Vec2::ZERO, 1.5);
         assert!((m.zoom - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_trackpad_scroll_pans_and_with_shift_orbits_in_both_directions() {
+        let mut latch = ScrollLatch::default();
+        // A vertical scroll pans.
+        let m = scroll_motion(
+            NavStyle::Trackpad,
+            &mut latch,
+            &[ev(0.0, 60.0, false, WheelPhase::Move)],
+            Vec2::ZERO,
+            1.1,
+        );
+        assert_eq!(
+            (m.zoom, m.pan, m.orbit),
+            (1.1, Vec2::new(0.0, 60.0), Vec2::ZERO)
+        );
+        // Shift with a vertical scroll tilts (pitch): the orbit has a y part.
+        let m = scroll_motion(
+            NavStyle::Trackpad,
+            &mut latch,
+            &[ev(0.0, 60.0, true, WheelPhase::Move)],
+            Vec2::ZERO,
+            1.0,
+        );
+        assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::new(0.0, 60.0)));
+        // Shift with a horizontal scroll turns (yaw).
+        let m = scroll_motion(
+            NavStyle::Trackpad,
+            &mut latch,
+            &[ev(60.0, 0.0, true, WheelPhase::Move)],
+            Vec2::ZERO,
+            1.0,
+        );
+        assert_eq!(m.orbit, Vec2::new(60.0, 0.0));
+        // Several events in a frame add up.
+        let m = scroll_motion(
+            NavStyle::Trackpad,
+            &mut latch,
+            &[
+                ev(1.0, 2.0, false, WheelPhase::Move),
+                ev(3.0, 4.0, false, WheelPhase::Move),
+            ],
+            Vec2::ZERO,
+            1.0,
+        );
+        assert_eq!(m.pan, Vec2::new(4.0, 6.0));
+    }
+
+    #[test]
+    fn a_gesture_keeps_its_shift_choice_until_it_ends() {
+        let mut latch = ScrollLatch::default();
+        let run = |latch: &mut ScrollLatch, e: WheelEvent| {
+            scroll_motion(NavStyle::Trackpad, latch, &[e], Vec2::ZERO, 1.0)
+        };
+        // The fingers touch with Shift held: an orbit.
+        let m = run(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start));
+        assert_eq!(m.orbit, Vec2::ZERO);
+        // Shift is let go in the middle and in the momentum: still an orbit.
+        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::new(0.0, 10.0)));
+        let m = run(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move));
+        assert_eq!(m.orbit, Vec2::new(0.0, 5.0));
+        // The gesture ends; the next one starts without Shift: a pan.
+        run(&mut latch, ev(0.0, 0.0, false, WheelPhase::End));
+        run(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start));
+        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        assert_eq!((m.pan, m.orbit), (Vec2::new(0.0, 10.0), Vec2::ZERO));
+        // Pressing Shift in the middle of a pan turns the rest into an orbit.
+        let m = run(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move));
+        assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
+        run(&mut latch, ev(0.0, 0.0, true, WheelPhase::End));
+        // Without phases (a wheel or a touchpad that sends none) the current Shift counts.
+        let mut latch = ScrollLatch::default();
+        let m = run(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move));
+        assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
+        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        assert_eq!(m.pan, Vec2::new(0.0, 10.0));
     }
 
     #[test]

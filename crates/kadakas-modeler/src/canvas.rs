@@ -189,21 +189,15 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         shown.navigated = true;
     }
 
-    let (hover, mods, scroll, pinch) = ui.input(|i| {
-        (
-            i.pointer.hover_pos(),
-            modifiers(i.modifiers),
-            Vec2::new(i.smooth_scroll_delta.x, i.smooth_scroll_delta.y),
-            i.zoom_delta(),
-        )
-    });
+    let (hover, mods) = ui.input(|i| (i.pointer.hover_pos(), modifiers(i.modifiers)));
     let local = |p: Pos2| Vec2::new(p.x - rect.min.x, p.y - rect.min.y);
 
     // The wheel zooms to the pointer. In the perspective projection the point of the model under
     // the pointer stays under it (the zoom goes toward that point), with no stop at a fixed
     // distance.
     if let (true, Some(h)) = (resp.hovered(), hover) {
-        let motion = nav3d::scroll_motion(nav_style, mods.shift, scroll, pinch);
+        let motion =
+            kadakas_view3d::scroll::frame_motion(ui.ctx(), egui::Id::new("scroll"), nav_style);
         let factor = motion.zoom;
         if motion.pan != Vec2::ZERO {
             nav.pan(motion.pan, size.y);

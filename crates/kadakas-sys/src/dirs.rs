@@ -53,6 +53,27 @@ pub fn config_dir_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Optio
     Some(base.join(APP))
 }
 
+/// The folder of `prefs.json` and `modeler.json`: `KADAKAS_PREFS_DIR` if it is set; else the
+/// folder of the file `KADAKAS_KEYMAP` if that is set (the app keeps its files next to the
+/// keymap); else the config folder. The app, the modeler and the welcome dialog all use this one
+/// function.
+pub fn prefs_dir() -> Option<PathBuf> {
+    prefs_dir_for(std::env::consts::OS, real_env)
+}
+
+pub fn prefs_dir_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    if let Some(d) = var(&env, "KADAKAS_PREFS_DIR") {
+        return Some(d);
+    }
+    if let Some(k) = var(&env, "KADAKAS_KEYMAP") {
+        return k
+            .parent()
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty());
+    }
+    config_dir_for(os, env)
+}
+
 /// Data that the user installs or collects and wants to keep, such as plug-in modules.
 /// Windows `%APPDATA%\kadakas`, macOS `~/Library/Application Support/kadakas`,
 /// elsewhere `$XDG_DATA_HOME/kadakas` or `~/.local/share/kadakas`.
@@ -138,6 +159,24 @@ mod tests {
                 .find(|(n, _)| *n == k)
                 .map(|(_, v)| OsString::from(*v))
         }
+    }
+
+    #[test]
+    fn the_prefs_folder_follows_the_variables_in_order() {
+        let both = env(&[
+            ("KADAKAS_PREFS_DIR", "/p"),
+            ("KADAKAS_KEYMAP", "/k/keymap.json"),
+        ]);
+        assert_eq!(prefs_dir_for("linux", both), Some(PathBuf::from("/p")));
+        let keymap = env(&[("KADAKAS_KEYMAP", "/k/keymap.json"), ("HOME", "/h")]);
+        assert_eq!(prefs_dir_for("linux", keymap), Some(PathBuf::from("/k")));
+        let none = env(&[("KADAKAS_PREFS_DIR", ""), ("HOME", "/h")]);
+        assert_eq!(
+            prefs_dir_for("linux", none),
+            Some(PathBuf::from("/h/.config/kadakas"))
+        );
+        assert_eq!(prefs_dir_for("linux", env(&[])), None);
+        let _ = prefs_dir();
     }
 
     fn tail(p: Option<PathBuf>) -> Option<String> {

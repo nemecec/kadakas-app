@@ -14,4 +14,8 @@ kadakas-sys = { version = "0.1.0", path = "../kadakas-sys" }
 kadakas-units = { version = "0.1.0", path = "../kadakas-units" }
 kadakas-update = { version = "0.1.0", path = "../kadakas-update" }
 serde = "1.0.229"
+sys-locale = "0.3.2"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSLocale", "NSString", "NSObject"] }

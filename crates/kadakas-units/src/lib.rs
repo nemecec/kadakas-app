@@ -73,24 +73,12 @@ impl Units {
     /// The number and date conventions of a language (`en-US`, `et`). An unknown language gets
     /// the conventions of en-US.
     pub fn conventions(language: &str) -> (NumberFormat, DateFormat) {
-        match language.split(['-', '_']).next().unwrap_or_default() {
-            // Estonian: 1 234,5 and 11.10.2026.
-            "et" => (
-                NumberFormat {
-                    decimal: Decimal::Comma,
-                    grouping: Grouping::Space,
-                },
-                DateFormat::Dmy,
-            ),
-            // English (United States): 1,234.5 and 10/11/2026.
-            _ => (
-                NumberFormat {
-                    decimal: Decimal::Point,
-                    grouping: Grouping::Comma,
-                },
-                DateFormat::Mdy,
-            ),
-        }
+        let date = match language.split(['-', '_']).next().unwrap_or_default() {
+            // Estonian: 11.10.2026. English (United States): 10/11/2026.
+            "et" => DateFormat::Dmy,
+            _ => DateFormat::Mdy,
+        };
+        (number_convention(language), date)
     }
 
     /// The decimals that lengths get when the caller has no better idea.
@@ -341,6 +329,75 @@ impl Default for Units {
     }
 }
 
+/// The way numbers are written where a locale is used: the one table of the program. `locale` is
+/// a BCP 47 tag or a POSIX name (`de-CH`, `de_CH.UTF-8`); a region refines the language.
+/// An unknown language gets `1,234.56`.
+///
+/// - comma groups, point decimal: English (all regions), Japanese, Chinese, Korean, Hebrew, Thai,
+///   Hindi (the Indian lakh grouping `12,34,567.89` is not supported: it is written `1,234,567.89`),
+///   Spanish in Mexico, the United States and most of Latin America;
+/// - point groups, comma decimal: German, Dutch, Spanish, Italian, Portuguese (Brazil), Indonesian,
+///   Turkish, Danish, Greek, Romanian, Croatian, Slovenian;
+/// - space groups, comma decimal: Estonian, Finnish, French, Swedish, Norwegian, Polish, Czech,
+///   Slovak, Russian, Ukrainian, Bulgarian, Hungarian, Lithuanian, Latvian, German in Austria,
+///   Portuguese in Portugal, French in Switzerland, English in South Africa;
+/// - apostrophe groups, point decimal: German and Italian in Switzerland.
+pub fn number_convention(locale: &str) -> NumberFormat {
+    use Decimal::{Comma, Point};
+    use Grouping::{Apostrophe, Comma as GComma, Point as GPoint, Space};
+    let tag = locale
+        .split(['.', '@'])
+        .next()
+        .unwrap_or_default()
+        .replace('_', "-");
+    let mut parts = tag.split('-');
+    let lang = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let region = region_of(&tag).unwrap_or_default();
+    let (decimal, grouping) = match (lang.as_str(), region.as_str()) {
+        ("de" | "it", "CH") => (Point, Apostrophe),
+        ("fr", "CH") => (Comma, Space),
+        ("de", "AT") => (Comma, Space),
+        ("pt", "PT") => (Comma, Space),
+        ("en", "ZA") => (Comma, Space),
+        ("es", "MX" | "US" | "419" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO") => {
+            (Point, GComma)
+        }
+        ("de" | "nl" | "es" | "it" | "pt" | "id" | "tr" | "da" | "el" | "ro" | "hr" | "sl", _) => {
+            (Comma, GPoint)
+        }
+        (
+            "et" | "fi" | "fr" | "sv" | "nb" | "no" | "nn" | "pl" | "cs" | "sk" | "ru" | "uk"
+            | "bg" | "hu" | "lt" | "lv",
+            _,
+        ) => (Comma, Space),
+        _ => (Point, GComma),
+    };
+    NumberFormat { decimal, grouping }
+}
+
+/// The region of a locale tag (`en-US` gives `US`, `zh-Hant-TW` gives `TW`, `es-419` gives `419`,
+/// `en` gives nothing). A POSIX name (`en_US.UTF-8`) works too.
+pub fn region_of(locale: &str) -> Option<String> {
+    let tag = locale
+        .split(['.', '@'])
+        .next()
+        .unwrap_or_default()
+        .replace('_', "-");
+    tag.split('-')
+        .skip(1)
+        .find(|p| {
+            (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic()))
+                || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(str::to_ascii_uppercase)
+}
+
+/// True for the regions that measure in feet and inches in daily life: the United States,
+/// Liberia and Myanmar. The United Kingdom is metric here (a decision of the project).
+pub fn imperial_region(region: &str) -> bool {
+    matches!(region.to_ascii_uppercase().as_str(), "US" | "LR" | "MM")
+}
+
 /// What a person chooses in the preferences. A choice of `None` means "from the language".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -411,12 +468,94 @@ pub fn with_units<R>(units: Units, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+// ---- numbers in the UI ---------------------------------------------------------------------
+//
+// One set of helpers for every number that the UI shows or reads: they follow the number format
+// of the person (`current().number`). Files, the JSON-RPC API, the command line and exports never
+// call them: they use the plain format (a point, no grouping).
+
+/// A number for people to read, with `decimals` decimals and digit grouping: `1 234,50`.
+pub fn num(v: f64, decimals: usize) -> String {
+    current().number_text(v, decimals)
+}
+
+/// Like [`num`], without trailing zeros.
+pub fn num_trim(v: f64, max_decimals: usize) -> String {
+    current().number_text_trim(v, max_decimals)
+}
+
+/// A number for a text field that a person edits: no digit grouping, so it reads back exactly.
+pub fn num_plain(v: f64, decimals: usize) -> String {
+    current().number.plain().format(v, decimals)
+}
+
+/// Like [`num_plain`], without trailing zeros.
+pub fn num_plain_trim(v: f64, max_decimals: usize) -> String {
+    current().number.plain().format_trim(v, max_decimals)
+}
+
+/// A whole number for people to read, with digit grouping: `1 234 567`.
+pub fn int(n: i64) -> String {
+    current().number.format(n as f64, 0)
+}
+
+/// Reads a number that a person typed. Both `.` and `,` work as the decimal separator where the
+/// symbol cannot be a digit group (`1,5`); `1,234` follows the active format (see
+/// [`NumberFormat::is_ambiguous`]).
+pub fn parse_num(text: &str) -> Option<f64> {
+    current().parse_number(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn et() -> Units {
         Settings::default().resolve("et")
+    }
+
+    #[test]
+    fn the_ui_helpers_follow_the_current_format() {
+        let comma = Settings {
+            decimal: Some(Decimal::Comma),
+            grouping: Some(Grouping::Space),
+            ..Settings::default()
+        }
+        .resolve("en-US");
+        with_units(comma, || {
+            assert_eq!(num(1234.5, 2), "1\u{a0}234,50");
+            assert_eq!(num(-1234567.891, 1), "-1\u{a0}234\u{a0}567,9");
+            assert_eq!(num(0.5, 3), "0,500");
+            assert_eq!(num(999.0, 0), "999");
+            assert_eq!(num_trim(2.5, 3), "2,5");
+            assert_eq!(num_plain(1234.5, 2), "1234,50");
+            assert_eq!(num_plain_trim(-0.25, 4), "-0,25");
+            assert_eq!(int(1234567), "1\u{a0}234\u{a0}567");
+            assert_eq!(int(-12345), "-12\u{a0}345");
+            assert_eq!(int(1000), "1\u{a0}000");
+            assert_eq!(parse_num("1,5"), Some(1.5));
+            assert_eq!(parse_num("1.5"), Some(1.5));
+            assert_eq!(parse_num("1,234"), Some(1.234));
+            assert_eq!(parse_num("1 234,5"), Some(1234.5));
+            assert_eq!(parse_num("abc"), None);
+            // Typed text reads back exactly.
+            for v in [0.0, 7.25, -1234.56, 12345.67] {
+                assert_eq!(parse_num(&num_plain(v, 2)), Some(v));
+                assert_eq!(parse_num(&num(v, 2)), Some(v));
+            }
+        });
+        with_units(Units::METRIC, || {
+            assert_eq!(num(1234.5, 2), "1234.50");
+            assert_eq!(parse_num("1,234"), Some(1.234));
+            assert_eq!(int(12345), "12345");
+        });
+        let en = Settings::default().resolve("en-US");
+        with_units(en, || {
+            assert_eq!(num(1234.5, 2), "1,234.50");
+            assert_eq!(parse_num("1,234"), Some(1234.0));
+            assert_eq!(parse_num("1,5"), Some(1.5));
+            assert_eq!(int(12345), "12,345");
+        });
     }
 
     #[test]
@@ -430,6 +569,55 @@ mod tests {
         assert_eq!(en.date, DateFormat::Mdy);
         assert_eq!(Units::conventions("xx_YY").0.decimal, Decimal::Point);
         assert_eq!(Units::conventions("et_EE").0.decimal, Decimal::Comma);
+    }
+
+    #[test]
+    fn the_one_table_covers_languages_and_regions() {
+        let n = |l: &str| {
+            let f = number_convention(l);
+            (f.decimal, f.grouping)
+        };
+        use Decimal::{Comma, Point};
+        assert_eq!(n("en-US"), (Point, Grouping::Comma));
+        assert_eq!(n("en-GB"), (Point, Grouping::Comma));
+        assert_eq!(n("en-AU"), (Point, Grouping::Comma));
+        assert_eq!(n("en-IN"), (Point, Grouping::Comma));
+        assert_eq!(n("en_ZA.UTF-8"), (Comma, Grouping::Space));
+        assert_eq!(n("de-DE"), (Comma, Grouping::Point));
+        assert_eq!(n("de-AT"), (Comma, Grouping::Space));
+        assert_eq!(n("de-CH"), (Point, Grouping::Apostrophe));
+        assert_eq!(n("it-CH"), (Point, Grouping::Apostrophe));
+        assert_eq!(n("fr-CH"), (Comma, Grouping::Space));
+        assert_eq!(n("fr-FR"), (Comma, Grouping::Space));
+        assert_eq!(n("pt-PT"), (Comma, Grouping::Space));
+        assert_eq!(n("pt-BR"), (Comma, Grouping::Point));
+        assert_eq!(n("es-ES"), (Comma, Grouping::Point));
+        assert_eq!(n("es-MX"), (Point, Grouping::Comma));
+        assert_eq!(n("es-419"), (Point, Grouping::Comma));
+        assert_eq!(n("et"), (Comma, Grouping::Space));
+        assert_eq!(n("ru_RU.UTF-8"), (Comma, Grouping::Space));
+        assert_eq!(n("ja-JP"), (Point, Grouping::Comma));
+        assert_eq!(n("xx"), (Point, Grouping::Comma));
+        assert_eq!(n(""), (Point, Grouping::Comma));
+        // Units::conventions uses the same table.
+        assert_eq!(Units::conventions("de-CH").0, number_convention("de-CH"));
+    }
+
+    #[test]
+    fn regions_and_the_imperial_regions() {
+        for (tag, want) in [
+            ("en-US", Some("US")),
+            ("en_US.UTF-8", Some("US")),
+            ("zh-Hant-TW", Some("TW")),
+            ("es-419", Some("419")),
+            ("en", None),
+            ("C", None),
+            ("", None),
+        ] {
+            assert_eq!(region_of(tag).as_deref(), want, "{tag}");
+        }
+        assert!(imperial_region("US") && imperial_region("lr") && imperial_region("MM"));
+        assert!(!imperial_region("GB") && !imperial_region("CA") && !imperial_region(""));
     }
 
     #[test]

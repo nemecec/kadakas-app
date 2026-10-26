@@ -44,6 +44,7 @@ pub mod supervisor;
 pub mod tasks;
 pub mod updater;
 pub mod version;
+pub mod welcome;
 
 pub use error::{Result, UpdateError};
 pub use flavors::Flavor;

@@ -1,7 +1,8 @@
 //! The choices of the welcome dialog, and the defaults from the system.
 
+use crate::sysloc::SystemLocale;
 use kadakas_feedback::CrashPolicy;
-use kadakas_units::{AreaUnit, Decimal, Grouping, LengthUnit, Settings};
+use kadakas_units::{AreaUnit, Decimal, Grouping, LengthUnit, NumberFormat, Settings};
 use kadakas_update::settings::{MAIN_FLAVOR, UpdateMode};
 
 /// The id of the flavor of the 3D modeler.
@@ -82,6 +83,8 @@ pub enum NumberStyle {
     DotComma,
     /// 1 234,56 (Estonian, French)
     SpaceComma,
+    /// 1’234.56 (Swiss)
+    ApostropheDot,
     /// 1234.56
     PlainDot,
     /// 1234,56
@@ -89,17 +92,20 @@ pub enum NumberStyle {
 }
 
 impl NumberStyle {
-    pub const ALL: [NumberStyle; 5] = [
+    pub const ALL: [NumberStyle; 6] = [
         NumberStyle::CommaDot,
         NumberStyle::DotComma,
         NumberStyle::SpaceComma,
+        NumberStyle::ApostropheDot,
         NumberStyle::PlainDot,
         NumberStyle::PlainComma,
     ];
 
     pub fn decimal(self) -> Decimal {
         match self {
-            NumberStyle::CommaDot | NumberStyle::PlainDot => Decimal::Point,
+            NumberStyle::CommaDot | NumberStyle::PlainDot | NumberStyle::ApostropheDot => {
+                Decimal::Point
+            }
             _ => Decimal::Comma,
         }
     }
@@ -109,6 +115,7 @@ impl NumberStyle {
             NumberStyle::CommaDot => Grouping::Comma,
             NumberStyle::DotComma => Grouping::Point,
             NumberStyle::SpaceComma => Grouping::Space,
+            NumberStyle::ApostropheDot => Grouping::Apostrophe,
             NumberStyle::PlainDot | NumberStyle::PlainComma => Grouping::None,
         }
     }
@@ -120,9 +127,40 @@ impl NumberStyle {
             .find(|s| s.decimal() == decimal && s.grouping() == grouping)
     }
 
+    /// The style that is nearest to a format: the pair itself if the dialog offers it, else the
+    /// style with the same decimal separator.
+    pub fn nearest(f: NumberFormat) -> NumberStyle {
+        NumberStyle::from_pair(f.decimal, f.grouping).unwrap_or(match (f.decimal, f.grouping) {
+            (Decimal::Point, Grouping::None) => NumberStyle::PlainDot,
+            (Decimal::Point, _) => NumberStyle::CommaDot,
+            (Decimal::Comma, Grouping::None) => NumberStyle::PlainComma,
+            (Decimal::Comma, Grouping::Point) => NumberStyle::DotComma,
+            (Decimal::Comma, _) => NumberStyle::SpaceComma,
+        })
+    }
+
+    /// The style for the separators that the system reports (the decimal symbol and the grouping
+    /// symbol, `None` for no grouping). `None` when the pair is not one of ours.
+    pub fn from_symbols(decimal: char, grouping: Option<char>) -> Option<NumberStyle> {
+        let decimal = match decimal {
+            '.' => Decimal::Point,
+            ',' => Decimal::Comma,
+            _ => return None,
+        };
+        let grouping = match grouping {
+            None => Grouping::None,
+            Some(',') => Grouping::Comma,
+            Some('.') => Grouping::Point,
+            Some(' ' | '\u{a0}' | '\u{202f}' | '\u{2009}') => Grouping::Space,
+            Some('\'' | '\u{2019}') => Grouping::Apostrophe,
+            Some(_) => return None,
+        };
+        NumberStyle::from_pair(decimal, grouping)
+    }
+
     /// The format of the style, for the example line.
-    pub fn format(self) -> kadakas_units::NumberFormat {
-        kadakas_units::NumberFormat {
+    pub fn format(self) -> NumberFormat {
+        NumberFormat {
             decimal: self.decimal(),
             grouping: self.grouping(),
         }
@@ -232,54 +270,8 @@ impl Choices {
     }
 }
 
-/// The region of a locale tag (`en-US` gives `US`, `zh-Hant-TW` gives `TW`, `en` gives nothing).
-/// A POSIX name (`en_US.UTF-8`) works too.
-pub fn region_of(tag: &str) -> Option<String> {
-    let tag = kadakas_l10n::normalize_tag(tag);
-    tag.split('-')
-        .skip(1)
-        .find(|p| {
-            (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic()))
-                || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit()))
-        })
-        .map(str::to_ascii_uppercase)
-}
-
-/// The regions that use feet and inches in daily life.
-const IMPERIAL_REGIONS: [&str; 3] = ["US", "LR", "MM"];
-
-/// Units from the region of the first locale of the system. No region: metric.
-pub fn detect_units(system: &[String]) -> UnitSystem {
-    match system.first().and_then(|t| region_of(t)) {
-        Some(r) if IMPERIAL_REGIONS.contains(&r.as_str()) => UnitSystem::Imperial,
-        _ => UnitSystem::Metric,
-    }
-}
-
-/// The number style from the language of the first locale of the system. The system's own
-/// separators are not read: no library of ours gives them on every system.
-pub fn detect_number_style(system: &[String]) -> NumberStyle {
-    let Some(first) = system.first() else {
-        return NumberStyle::CommaDot;
-    };
-    let tag = kadakas_l10n::normalize_tag(first);
-    let lang = tag
-        .split('-')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match lang.as_str() {
-        "de" | "nl" | "es" | "it" | "pt" | "id" | "tr" | "da" | "el" | "ro" | "hr" | "sl" => {
-            NumberStyle::DotComma
-        }
-        "et" | "fi" | "fr" | "sv" | "nb" | "no" | "nn" | "pl" | "cs" | "sk" | "ru" | "uk"
-        | "bg" | "hu" | "lt" | "lv" => NumberStyle::SpaceComma,
-        _ => NumberStyle::CommaDot,
-    }
-}
-
-/// The defaults of a first start, from the locales of the system (the most wanted first).
-pub fn detect(system: &[String], modeler_installed: bool) -> Choices {
+/// The defaults of a first start, from what the system reports (the most wanted language first).
+pub fn detect(system: &SystemLocale, modeler_installed: bool) -> Choices {
     Choices {
         mode: if modeler_installed {
             Mode::Modeler
@@ -287,8 +279,8 @@ pub fn detect(system: &[String], modeler_installed: bool) -> Choices {
             Mode::Landscape
         },
         language: None,
-        units: detect_units(system),
-        number: detect_number_style(system),
+        units: system.units(),
+        number: system.number_style(),
         theme: Theme::System,
         navigation: Navigation::Mouse,
         crash: CrashPolicy::Ask,
@@ -300,69 +292,8 @@ pub fn detect(system: &[String], modeler_installed: bool) -> Choices {
 mod tests {
     use super::*;
 
-    fn sys(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn regions_are_found_in_tags_and_posix_names() {
-        for (tag, want) in [
-            ("en-US", Some("US")),
-            ("en_US.UTF-8", Some("US")),
-            ("zh-Hant-TW", Some("TW")),
-            ("es-419", Some("419")),
-            ("en", None),
-            ("et", None),
-            ("C", None),
-            ("", None),
-        ] {
-            assert_eq!(region_of(tag).as_deref(), want, "{tag}");
-        }
-    }
-
-    #[test]
-    fn imperial_units_for_the_united_states_liberia_and_myanmar_only() {
-        for (list, want) in [
-            (&["en-US"][..], UnitSystem::Imperial),
-            (&["en_US.UTF-8"][..], UnitSystem::Imperial),
-            (&["en-LR"][..], UnitSystem::Imperial),
-            (&["my-MM"][..], UnitSystem::Imperial),
-            (&["es-US", "en-GB"][..], UnitSystem::Imperial),
-            (&["en-GB"][..], UnitSystem::Metric),
-            (&["et-EE", "en-US"][..], UnitSystem::Metric),
-            (&["en"][..], UnitSystem::Metric),
-            (&[][..], UnitSystem::Metric),
-        ] {
-            assert_eq!(detect_units(&sys(list)), want, "{list:?}");
-        }
-    }
-
-    #[test]
-    fn the_number_style_follows_the_language() {
-        for (tag, want) in [
-            ("en-US", NumberStyle::CommaDot),
-            ("en-GB", NumberStyle::CommaDot),
-            ("en-AU", NumberStyle::CommaDot),
-            ("ja-JP", NumberStyle::CommaDot),
-            ("de-DE", NumberStyle::DotComma),
-            ("nl-NL", NumberStyle::DotComma),
-            ("es-ES", NumberStyle::DotComma),
-            ("it-IT", NumberStyle::DotComma),
-            ("pt-BR", NumberStyle::DotComma),
-            ("et-EE", NumberStyle::SpaceComma),
-            ("et", NumberStyle::SpaceComma),
-            ("fi-FI", NumberStyle::SpaceComma),
-            ("fr_FR.UTF-8", NumberStyle::SpaceComma),
-            ("sv-SE", NumberStyle::SpaceComma),
-            ("nb-NO", NumberStyle::SpaceComma),
-            ("pl-PL", NumberStyle::SpaceComma),
-            ("cs-CZ", NumberStyle::SpaceComma),
-            ("ru-RU", NumberStyle::SpaceComma),
-            ("xx", NumberStyle::CommaDot),
-        ] {
-            assert_eq!(detect_number_style(&sys(&[tag])), want, "{tag}");
-        }
-        assert_eq!(detect_number_style(&[]), NumberStyle::CommaDot);
+    fn sys(list: &[&str]) -> SystemLocale {
+        SystemLocale::from_languages(list.iter().map(|s| s.to_string()).collect())
     }
 
     #[test]
@@ -383,13 +314,16 @@ mod tests {
         assert_eq!(c.updates, UpdateMode::AutoUpdate);
         let c = detect(&sys(&["en-US"]), false);
         assert_eq!((c.mode, c.units), (Mode::Landscape, UnitSystem::Imperial));
-        assert_eq!(c.language_tag(&sys(&["et_EE.UTF-8"])), "et");
-        assert_eq!(c.language_tag(&sys(&["fi"])), "en-US");
+        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(c.language_tag(&list(&["et_EE.UTF-8"])), "et");
+        assert_eq!(c.language_tag(&list(&["fi"])), "en-US");
         let fixed = Choices {
             language: Some("et".into()),
             ..c
         };
-        assert_eq!(fixed.language_tag(&sys(&["en-US"])), "et");
+        assert_eq!(fixed.language_tag(&list(&["en-US"])), "et");
+        // The United Kingdom is metric.
+        assert_eq!(detect(&sys(&["en-GB"]), true).units, UnitSystem::Metric);
     }
 
     #[test]
@@ -412,10 +346,24 @@ mod tests {
         assert_eq!(UnitSystem::Metric.area(), AreaUnit::M2);
         for s in NumberStyle::ALL {
             assert_eq!(NumberStyle::from_pair(s.decimal(), s.grouping()), Some(s));
+            assert_eq!(NumberStyle::nearest(s.format()), s);
         }
         assert_eq!(
             NumberStyle::from_pair(Decimal::Point, Grouping::Point),
             None
+        );
+        // A pair that is not offered gets the style with the same decimal separator.
+        let n = |d, g| {
+            NumberStyle::nearest(NumberFormat {
+                decimal: d,
+                grouping: g,
+            })
+        };
+        assert_eq!(n(Decimal::Point, Grouping::Space), NumberStyle::CommaDot);
+        assert_eq!(n(Decimal::Comma, Grouping::Comma), NumberStyle::SpaceComma);
+        assert_eq!(
+            n(Decimal::Comma, Grouping::Apostrophe),
+            NumberStyle::SpaceComma
         );
         for t in Theme::ALL {
             assert_eq!(Theme::from_key(t.key()), t);
@@ -433,13 +381,14 @@ mod tests {
             "1,234.56",
             "1.234,56",
             "1\u{a0}234,56",
+            "1\u{2019}234.56",
             "1234.56",
             "1234,56",
         ];
         for (s, w) in NumberStyle::ALL.into_iter().zip(want) {
             assert_eq!(s.example(), w);
         }
-        let mut c = detect(&[], true);
+        let mut c = detect(&sys(&[]), true);
         c.number = NumberStyle::PlainDot;
         assert_eq!(c.length_example("en-US"), "3048 mm");
         c.units = UnitSystem::Imperial;
@@ -454,6 +403,10 @@ mod tests {
         assert_eq!(NumberStyle::CommaDot.format().format(1234.0, 0), "1,234");
         assert_eq!(NumberStyle::CommaDot.format().format(999.0, 0), "999");
         assert_eq!(NumberStyle::DotComma.format().format(12345.0, 0), "12.345");
+        assert_eq!(
+            NumberStyle::ApostropheDot.format().format(-12345.5, 1),
+            "-12\u{2019}345.5"
+        );
     }
 
     #[test]

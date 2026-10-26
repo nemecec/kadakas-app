@@ -93,13 +93,11 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         view3d.fit(Some(b), aspect);
     }
 
-    let (hover, mods, space, scroll, pinch) = ui.input(|i| {
+    let (hover, mods, space) = ui.input(|i| {
         (
             i.pointer.hover_pos(),
             i.modifiers,
             crate::keymap::held(keys, Action::PanHold, i),
-            i.smooth_scroll_delta,
-            i.zoom_delta(),
         )
     });
     let local = |p: egui::Pos2| glam::Vec2::new(p.x - rect.min.x, p.y - rect.min.y);
@@ -129,12 +127,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         nav.dragging = true;
     }
     if let (true, Some(h)) = (resp.hovered(), hover) {
-        let m = kadakas_ui_core::nav3d::scroll_motion(
-            nav_style,
-            mods.shift,
-            glam::Vec2::new(scroll.x, scroll.y),
-            pinch,
-        );
+        let m =
+            kadakas_view3d::scroll::frame_motion(ui.ctx(), egui::Id::new("scroll3d"), nav_style);
         if (m.zoom - 1.0).abs() > 1e-6 {
             view3d.zoom_at(m.zoom, local(h), size);
             nav.moved = true;
@@ -681,12 +675,12 @@ mod tests {
         h.session.view.view = StandardView::Front;
         h.frame(vec![]);
         let center = egui::pos2(400.0, 300.0);
-        let scroll = |mods| {
+        let scroll = |x: f32, y: f32, mods| {
             vec![
                 egui::Event::PointerMoved(center),
                 egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(30.0, 60.0),
+                    delta: egui::vec2(x, y),
                     phase: egui::TouchPhase::Move,
                     modifiers: mods,
                 },
@@ -694,7 +688,7 @@ mod tests {
         };
         // A scroll pans: the distance and the angles stay.
         let (c0, t0) = (h.view3d.camera, h.view3d.camera.target);
-        h.frame(scroll(egui::Modifiers::NONE));
+        h.frame(scroll(30.0, 60.0, egui::Modifiers::NONE));
         h.frame(vec![]);
         let c = h.view3d.camera;
         assert!((c.target - t0).length() > 1.0, "the scroll pans");
@@ -702,11 +696,36 @@ mod tests {
             (c.distance, c.yaw, c.pitch),
             (c0.distance, c0.yaw, c0.pitch)
         );
-        // Shift with the scroll orbits: the angles change.
-        let angles = (c.yaw, c.pitch);
-        h.frame_with(scroll(egui::Modifiers::SHIFT), egui::Modifiers::SHIFT);
+        // Shift with a VERTICAL scroll tilts the view: the pitch changes, the yaw does not.
+        let before = (h.view3d.camera.yaw, h.view3d.camera.pitch);
+        h.frame_with(
+            scroll(0.0, 60.0, egui::Modifiers::SHIFT),
+            egui::Modifiers::SHIFT,
+        );
         h.frame(vec![]);
-        assert_ne!((h.view3d.camera.yaw, h.view3d.camera.pitch), angles);
+        let after = (h.view3d.camera.yaw, h.view3d.camera.pitch);
+        assert_ne!(
+            after.1, before.1,
+            "pitch changes for a vertical Shift scroll"
+        );
+        // The yaw is kept in a turn: -90 and 270 degrees are the same.
+        let same_turn = |a: f32, b: f32| {
+            let d = (a - b).rem_euclid(std::f32::consts::TAU);
+            d < 1e-4 || std::f32::consts::TAU - d < 1e-4
+        };
+        assert!(same_turn(after.0, before.0), "yaw does not change");
+        // Shift with a HORIZONTAL scroll turns the view: the yaw changes, the pitch does not.
+        h.frame_with(
+            scroll(60.0, 0.0, egui::Modifiers::SHIFT),
+            egui::Modifiers::SHIFT,
+        );
+        h.frame(vec![]);
+        let turned = (h.view3d.camera.yaw, h.view3d.camera.pitch);
+        assert!(
+            !same_turn(turned.0, after.0),
+            "yaw changes for a horizontal Shift scroll"
+        );
+        assert_eq!(turned.1, after.1);
         // A pinch zooms in.
         let d = h.view3d.camera.distance;
         h.frame(vec![
@@ -714,6 +733,35 @@ mod tests {
             egui::Event::Zoom(1.5),
         ]);
         assert!(h.view3d.camera.distance < d, "the pinch zooms in");
+    }
+
+    #[test]
+    fn the_mouse_style_wheel_still_zooms_and_never_pans_or_orbits() {
+        let mut h = Harness::new();
+        h.add_slab();
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        let center = egui::pos2(400.0, 300.0);
+        let (c0, target) = (h.view3d.camera, h.view3d.camera.target);
+        for mods in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+            h.frame_with(
+                vec![
+                    egui::Event::PointerMoved(center),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 60.0),
+                        phase: egui::TouchPhase::Move,
+                        modifiers: mods,
+                    },
+                ],
+                mods,
+            );
+            h.frame(vec![]);
+        }
+        let c = h.view3d.camera;
+        assert!(c.distance < c0.distance, "the wheel zooms");
+        assert_eq!((c.yaw, c.pitch), (c0.yaw, c0.pitch));
+        let _ = target;
     }
 
     #[test]
