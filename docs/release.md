@@ -183,7 +183,11 @@ Details.
 - Both Debian and MSI versions differ from the app version (`0.1.0~beta.1`, `0.1.0-10001`). The scripts get the app version from the workspace `Cargo.toml`.
 - The `describe` method of the JSON-RPC API returns `version`. This is what the ping reads.
 
-**The MSI leg.** Three early runs hung on the MSI leg and kept no log. The cause is probably the Restart Manager of Windows Installer, which waits in a silent install on a runner. The script now runs `msiexec` with `MSIRESTARTMANAGERCONTROL=Disable` and `REBOOT=ReallySuppress`. With that the leg passes: the install takes 2 seconds. The script also writes the msiexec log, a transcript and (after 9 minutes) a `watchdog-msi.txt` with the process list into the artifacts, so a new hang leaves a log. To test the MSI alone, start the workflow by hand with `gh workflow run release.yml --ref BRANCH -f only_msi=true`. It builds Windows only and runs the MSI leg.
+**The MSI leg.** Three full runs hung on the MSI leg. The runner lost contact: no time limit fired and no log was kept. The cause is unknown. Four later runs of the MSI leg alone (`only_msi=true`) all passed: one with the Restart Manager off (`MSIRESTARTMANAGERCONTROL=Disable`, `REBOOT=ReallySuppress`) and three without those flags. The install takes about 2 seconds. So the data does not show that the Restart Manager is the cause. The hangs look like runner losses. The script keeps the flags on by default, as a precaution. A rehearsal can turn them off: `gh workflow run release.yml --ref BRANCH -f only_msi=true -f msi_rm_disabled=false`. The script writes the msiexec log, a transcript and, after 9 minutes, `watchdog-msi.txt` with the process list into the artifacts, so a new hang leaves a log. Run `only_msi=true` alone to build Windows only and test the MSI.
+
+An exit code 3010 (restart needed) on the fresh install is a failure. A silent upgrade over a running app is not tested yet (PLAT-29).
+
+Every start of the test ends with a kill. The app has no quit call, so the launcher sees runs without the clean-exit mark. The test does not cover that path, and it writes `health.json` to the log.
 
 A person still checks some points on a real machine. They stay on the human checklist in `docs/welcome.md` ("Check in a real window"). They are real GPU rendering, the double click and the Dock flow, the Gatekeeper and SmartScreen warnings, high DPI scaling and trackpads.
 
