@@ -18,6 +18,8 @@ First public build. Kadakas is a CAD program for landscape architects. It is not
 - Agent API over JSON-RPC and MCP (`kadakas mcp`). Every change to a drawing is an undoable command, and a person can review what an agent did.
 - Python client (`import kadakas`), JavaScript scripts and sandboxed WebAssembly plug-ins.
 - Launcher that starts the app and fetches signed updates. You can choose the stable or the beta channel.
+- Welcome dialog on the first start: how you want to work, language, units and number format, and under More options theme, mouse or trackpad, crash reports and updates. Help > Show welcome opens it again.
+- Number format setting (decimal point or comma, digit grouping) for every number field in the app and the modeler.
 - Crash reports and a feedback button. Nothing is sent without your consent.
 - Collaboration client for a shared drawing.
 - English and Estonian user interface.
