@@ -32,9 +32,34 @@ pub struct BrepCache {
 
 #[derive(Default)]
 struct BrepCacheInner {
+    /// By item: the read, its size in bytes and the tick of its last use.
     map: HashMap<u64, (BrepRead, usize, u64)>,
+    /// The items by the tick of their last use: the first one is the least recently used.
+    order: std::collections::BTreeMap<u64, u64>,
     bytes: usize,
     tick: u64,
+}
+
+impl BrepCacheInner {
+    fn remove(&mut self, id: u64) {
+        if let Some((_, size, tick)) = self.map.remove(&id) {
+            self.bytes -= size;
+            self.order.remove(&tick);
+        }
+    }
+}
+
+/// The bytes that a read takes: the triangles, the exact surfaces (their size as data) and the
+/// sentences.
+fn brep_read_bytes(read: &BrepRead) -> usize {
+    let mesh = read.0.as_ref().map_or(0, |m| {
+        m.v.len() * 24
+            + m.t.len() * 12
+            + m.exact
+                .as_ref()
+                .map_or(0, |x| serde_json::to_vec(&**x).map_or(0, |v| v.len()))
+    });
+    mesh + read.1.iter().map(|s| s.len() + 24).sum::<usize>() + 64
 }
 
 impl BrepCache {
@@ -50,21 +75,20 @@ impl BrepCache {
         let mut i = self.inner.borrow_mut();
         i.tick += 1;
         let tick = i.tick;
-        i.map.get_mut(&id).map(|(r, _, t)| {
-            *t = tick;
-            r.clone()
-        })
+        let (read, old) = {
+            let (r, _, t) = i.map.get_mut(&id)?;
+            let old = std::mem::replace(t, tick);
+            (r.clone(), old)
+        };
+        i.order.remove(&old);
+        i.order.insert(tick, id);
+        Some(read)
     }
 
     /// Keeps a read. The least recently used reads go while the total is over the limit; one
     /// read that is over the limit by itself is not kept.
     pub fn insert(&self, id: u64, read: BrepRead) {
-        let size = read
-            .0
-            .as_ref()
-            .map_or(0, |m| m.v.len() * 24 + m.t.len() * 12)
-            + read.1.iter().map(|s| s.len() + 24).sum::<usize>()
-            + 64;
+        let size = brep_read_bytes(&read);
         let limit = match self.limit.get() {
             0 => BREP_CACHE_BYTES,
             n => n,
@@ -73,24 +97,19 @@ impl BrepCache {
             return;
         }
         let mut i = self.inner.borrow_mut();
-        if let Some((_, old, _)) = i.map.remove(&id) {
-            i.bytes -= old;
-        }
+        i.remove(id);
         while i.bytes + size > limit {
-            let Some(oldest) = i
-                .map
-                .iter()
-                .min_by_key(|(_, (_, _, t))| *t)
-                .map(|(k, _)| *k)
-            else {
+            let Some((&tick, &oldest)) = i.order.iter().next() else {
                 break;
             };
+            i.order.remove(&tick);
             if let Some((_, old, _)) = i.map.remove(&oldest) {
                 i.bytes -= old;
             }
         }
         i.tick += 1;
         let tick = i.tick;
+        i.order.insert(tick, id);
         i.map.insert(id, (read, size, tick));
         i.bytes += size;
     }
@@ -346,7 +365,7 @@ impl Extrusion {
             .map(|h| h.iter().rev().copied().collect())
             .collect();
         let mut m = MeshData::default();
-        for piece in &crate::geom::split_with_holes(&rings[0], &holes) {
+        for piece in &split_counted(&rings[0], &holes) {
             let tris = kadakas_core::mesh::triangulate(piece);
             let base = m.v.len() as u32;
             m.v.extend(piece.iter().map(|p| p.extend(0.0)));
@@ -509,8 +528,6 @@ pub struct Eval<'a> {
     cache: HashMap<u64, Option<Rc<Vec<Piece>>>>,
 }
 
-/// The largest coordinate or size of a profile, in millimeters (10 km).
-const MAX_PROFILE_MM: f64 = 1.0e7;
 /// The most triangles of the two operands of an `IfcBooleanResult` (the work of the tree grows
 /// faster than the number of triangles).
 const MAX_BOOLEAN_TRIANGLES: usize = 20_000;
@@ -972,8 +989,10 @@ impl<'a> Eval<'a> {
     pub fn profile(&mut self, id: u64) -> Option<Vec<Region>> {
         let regions = self.profile_inner(id)?;
         // Every number is checked before an overlay or a mesh sees it: a profile of 1E308 would
-        // overflow the integer grid of the overlay.
-        let limit = MAX_PROFILE_MM / self.cx.units.length_mm.max(1e-9);
+        // overflow the integer grid of the overlay. The bound is the one of the overlay, in file
+        // units, so projected coordinates in a profile (with the placements at the origin) pass;
+        // the range test of the builder comes later and the file is shifted when it fails.
+        let limit = kadakas_core::geom::MAX_OVERLAY_COORD;
         let fine = |v: &Vertex| {
             v.p.is_finite()
                 && v.p.abs().max_element() <= limit
@@ -988,7 +1007,7 @@ impl<'a> Eval<'a> {
         {
             Some(regions)
         } else {
-            self.issue("a profile is out of range (more than 1e7 mm) or not a number");
+            self.issue("a profile has numbers that are too large (more than 1e12) or not a number");
             None
         }
     }
@@ -1598,6 +1617,27 @@ impl<'a> Eval<'a> {
     }
 }
 
+thread_local! {
+    /// Faces whose numbers were beyond the range of the overlay since the last `take_range_drops`.
+    static RANGE_DROPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// [`kadakas_core::geom::split_with_holes`] that counts a face with numbers out of range (the
+/// overlay refuses them): the product reports it (see `take_range_drops`), the face is not lost
+/// without a word.
+pub(crate) fn split_counted(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DVec2>> {
+    if !kadakas_core::geom::rings_in_range(outer, holes) {
+        RANGE_DROPS.with(|c| c.set(c.get() + 1));
+        return Vec::new();
+    }
+    crate::geom::split_with_holes(outer, holes)
+}
+
+/// The number of faces that `split_counted` refused since the last call; it starts again at zero.
+pub(crate) fn take_range_drops() -> usize {
+    RANGE_DROPS.with(|c| c.replace(0))
+}
+
 /// The coordinates of an `IfcCartesianPointList2D` or `3D`.
 fn point_list(e: &crate::step::Entity) -> Vec<DVec3> {
     items(attr(e, 0))
@@ -1652,7 +1692,7 @@ pub fn add_polygon(m: &mut MeshData, rings: &[Vec<DVec3>]) {
     if outer2.len() < 3 {
         return;
     }
-    for piece in crate::geom::split_with_holes(&outer2, &holes) {
+    for piece in split_counted(&outer2, &holes) {
         let base = m.v.len() as u32;
         m.v.extend(piece.iter().map(|p| o + u * p.x + w * p.y));
         for [a, b, c] in kadakas_core::mesh::triangulate(&piece) {
@@ -1849,7 +1889,7 @@ fn cap(out: &mut MeshData, cut: &[(DVec3, DVec3)], _origin: DVec3, keep: DVec3) 
         }
     }
     for (outer, holes) in groups {
-        for piece in crate::geom::split_with_holes(&outer, &holes) {
+        for piece in split_counted(&outer, &holes) {
             let base = out.v.len() as u32;
             out.v.extend(piece.iter().map(|p| o + u * p.x + w * p.y));
             for [a, b, c] in kadakas_core::mesh::triangulate(&piece) {

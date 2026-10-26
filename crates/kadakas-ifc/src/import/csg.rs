@@ -375,10 +375,10 @@ impl Node {
 }
 
 /// The polygons of a closed mesh, facing outward. `Err` when the mesh is open or has no volume.
-fn polygons_of(m: &MeshData) -> Result<Vec<Polygon>, CsgError> {
+fn polygons_of(m: &MeshData, fuel: &Fuel) -> Result<Vec<Polygon>, CsgError> {
     let mut mesh = m.clone();
     mesh.weld(EPS);
-    heal_t_junctions(&mut mesh);
+    heal_t_junctions(&mut mesh, fuel);
     if mesh.t.is_empty() {
         return Err(CsgError::Empty);
     }
@@ -440,7 +440,7 @@ pub fn signed_volume(m: &MeshData) -> f64 {
         .sum()
 }
 
-fn mesh_of(polys: &[Polygon]) -> MeshData {
+fn mesh_of(polys: &[Polygon], fuel: &Fuel) -> MeshData {
     let mut m = MeshData::default();
     for p in polys {
         let base = m.v.len() as u32;
@@ -455,7 +455,7 @@ fn mesh_of(polys: &[Polygon]) -> MeshData {
     }
     m.weld(EPS);
     m.compact();
-    heal_t_junctions(&mut m);
+    heal_t_junctions(&mut m, fuel);
     m
 }
 
@@ -466,13 +466,15 @@ fn mesh_of(polys: &[Polygon]) -> MeshData {
 /// The vertices are put in a grid whose cell size follows the size of the mesh in each direction
 /// (a long thin wall gets many cells along its length and one across). An edge looks only at the
 /// cells of its box, so the work follows the number of triangles and the vertices near their edges,
-/// not the product of the two. It gives up (and returns `false`, the mesh unchanged) when the cells
-/// that edges look at pass [`HEAL_CELLS`]: the budget is counted, not timed.
-fn heal_t_junctions(m: &mut MeshData) -> bool {
+/// not the product of the two. The cells that edges look at are charged to `fuel` (one unit each,
+/// the budget of the import). It gives up, with the mesh unchanged, when they pass the fuel or
+/// [`HEAL_CELLS`] for one mesh; the caller finds out with `is_closed` (a result that is not closed is
+/// marked and counted). The budget is counted, not timed.
+fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel) {
     use std::collections::HashMap;
     let n = m.v.len();
     let Some((lo, hi)) = m.bounds() else {
-        return true;
+        return;
     };
     let extent = hi - lo;
     let longest = extent.max_element().max(1e-9);
@@ -509,9 +511,11 @@ fn heal_t_junctions(m: &mut MeshData) -> bool {
             );
             let count = ((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) * (c1.2 - c0.2 + 1)).max(1) as u64;
             visited += count;
-            if visited > heal_limit() {
-                return false;
+            if visited > heal_limit() || count > fuel.left() {
+                fuel.spend(visited);
+                return;
             }
+            fuel.spend(count);
             let mut extra: Vec<(f64, u32)> = Vec::new();
             for x in c0.0..=c1.0 {
                 for y in c0.1..=c1.1 {
@@ -557,7 +561,6 @@ fn heal_t_junctions(m: &mut MeshData) -> bool {
     }
     m.v.extend(centres);
     m.t = out;
-    true
 }
 
 /// Cells that the healing of T-junctions may look at (a cell with a few vertices costs a few steps).
@@ -567,6 +570,25 @@ const HEAL_CELLS: u64 = 400_000_000;
 thread_local! {
     /// A test can lower the limit to see what an import does with a result that is not healed.
     pub(crate) static HEAL_LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(HEAL_CELLS) };
+}
+
+/// Lowers the limit until it is dropped (also when the test fails).
+#[cfg(test)]
+pub(crate) struct HealLimitGuard;
+
+#[cfg(test)]
+impl HealLimitGuard {
+    pub(crate) fn set(n: u64) -> HealLimitGuard {
+        HEAL_LIMIT.with(|c| c.set(n));
+        HealLimitGuard
+    }
+}
+
+#[cfg(test)]
+impl Drop for HealLimitGuard {
+    fn drop(&mut self) {
+        HEAL_LIMIT.with(|c| c.set(HEAL_CELLS));
+    }
 }
 
 #[cfg(test)]
@@ -652,12 +674,12 @@ fn put_back(mut m: MeshData, by: DVec3) -> MeshData {
 pub fn boolean(a: &MeshData, b: &MeshData, op: Op, fuel: &Fuel) -> Result<MeshData, CsgError> {
     let c = centre_of(a);
     let out = run(
-        polygons_of(&moved(a, c))?,
-        polygons_of(&moved(b, c))?,
+        polygons_of(&moved(a, c), fuel)?,
+        polygons_of(&moved(b, c), fuel)?,
         op,
         fuel,
     )?;
-    Ok(put_back(mesh_of(&out), c))
+    Ok(put_back(mesh_of(&out, fuel), c))
 }
 
 /// `host` less every cutter. The host and each cutter must be closed. Cutters that do not touch
@@ -669,10 +691,10 @@ pub fn subtract_all(
     fuel: &Fuel,
 ) -> Result<MeshData, CsgError> {
     let c = centre_of(host);
-    let host_polys = polygons_of(&moved(host, c))?;
+    let host_polys = polygons_of(&moved(host, c), fuel)?;
     let mut cutter_polys = Vec::with_capacity(cutters.len());
     for k in cutters {
-        cutter_polys.push(polygons_of(&moved(k, c))?);
+        cutter_polys.push(polygons_of(&moved(k, c), fuel)?);
     }
     let boxes: Vec<Aabb> = cutter_polys.iter().map(|p| Aabb::of(p)).collect();
     let apart =
@@ -716,7 +738,7 @@ pub fn subtract_all(
     if out.is_empty() {
         return Err(CsgError::Empty);
     }
-    Ok(put_back(mesh_of(&out), c))
+    Ok(put_back(mesh_of(&out, fuel), c))
 }
 
 #[cfg(test)]
@@ -938,9 +960,23 @@ mod budget_tests {
             let used = IMPORT_FUEL - fuel.left();
             println!("{n} openings used {used} units of work");
             assert!(used < PER_CALL_FUEL, "{n}: {used}");
-            // A hang guard only (about 2 s in a release build for 3,000 openings).
+            // A hang guard only (measured for 3,000 openings: 2.8 s in a debug build, 0.23 s in a release build).
             assert!(started.elapsed().as_secs() < 300);
         }
+    }
+
+    #[test]
+    fn the_cells_of_the_healing_are_charged_to_the_fuel() {
+        let (wall, _) = wall_with(3, 7000.0, DVec3::ZERO);
+        let fuel = Fuel::new(IMPORT_FUEL);
+        let mut m = wall.clone();
+        heal_t_junctions(&mut m, &fuel);
+        assert!(fuel.left() < IMPORT_FUEL, "the healing used no fuel");
+        // Without fuel it gives up and the mesh stays as it was.
+        let none = Fuel::new(0);
+        let mut m = wall.clone();
+        heal_t_junctions(&mut m, &none);
+        assert_eq!(m, wall);
     }
 
     #[test]

@@ -12,6 +12,7 @@ name: Nightly
 #   coverage  95% of lines per library crate, 90% for the CLI (4 shards)      40 min
 #   perf      #[ignore] timing tests in a release build                       40 min
 #   fuzz      changed containers are errors, never panics (300 s)             15 min
+#   ifc-damage damaged IFC fixtures are errors, never panics (about 20 min)    60 min
 #
 # Caches: Swatinem/rust-cache, written by runs on main only (a scheduled run is on main). The
 # coverage shards share one cache key and only shard 1 saves it, to stay far below the 10 GB
@@ -109,6 +110,26 @@ jobs:
           cache-bin: false
       - uses: ./.github/actions/wasi-sdk
       - run: PERF_SIZES=10000 cargo test --release -p kadakas-core -p kadakas-container -p kadakas-site -p kadakas-api -p kadakas-io -- --ignored
+
+  # Damaged IFC files (crates/kadakas-ifc/tests/ifc_damage.rs): every statement of the fixtures
+  # with every bad value. The import must return an error or a report, never panic.
+  ifc-damage:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: perf-release
+          save-if: false
+          cache-on-failure: false
+          cache-all-crates: false
+          cache-bin: false
+      - uses: ./.github/actions/wasi-sdk
+      - run: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored damaged_fixtures_never_panic_full
 
   # A run of the fuzzer of the container reader (crates/kadakas-container/tests/fuzz_open.rs):
   # changed containers must be errors, never panics. The seed is printed; KADAKAS_FUZZ_SEED repeats a run.

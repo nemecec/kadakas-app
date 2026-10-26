@@ -100,7 +100,7 @@ fn cap(
     place: &dyn Fn(DVec2) -> DVec3,
     want: DVec3,
 ) {
-    for piece in crate::geom::split_with_holes(outer, holes) {
+    for piece in super::split_counted(outer, holes) {
         let base = m.v.len() as u32;
         m.v.extend(piece.iter().map(|p| place(*p)));
         for [a, b, c] in kadakas_core::mesh::triangulate_edge_exact(&piece) {

@@ -1,11 +1,15 @@
-//! Damaged files never panic the import (IOP-29). Entities of every fixture (`all_kinds.ifc` has every
-//! entity type that the importer reads) and of the public corpus (when cached) are damaged in two
-//! ways: the attribute list is emptied, cut to its first half or set to `$`; and one attribute at a
-//! time is replaced by a bad value (a missing reference, a wrong kind, a huge number, a wrong list).
-//! The import must return, with a result or an error, never a panic.
+//! Damaged files never panic the import (IOP-29). Statements of the fixtures (`all_kinds.ifc` has
+//! every entity type that the importer reads) and of the public corpus (when cached) are damaged in
+//! two ways: the list of attributes is emptied, cut to its first half or set to `$`; and one
+//! attribute at a time is replaced by a bad value (a missing reference, a wrong kind, a huge
+//! number, a wrong list). The import must return, with a result or an error, never a panic.
 //!
-//! The default run damages a sample (measured: 44 to 49 s in a build without optimisation, on a busy computer). The full run damages everything:
+//! The default run damages every entity type at least once: the first statement of each type, in
+//! the smallest file that has it, with one cut of the list and one bad value. Measured: 48 s in a
+//! debug build on a busy computer. The full run damages every statement in all ways; it takes
+//! about 20 minutes for the fixtures in a release build:
 //! `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored`.
+//! The nightly checks run it (see docs/dev-guide.md).
 
 mod support;
 
@@ -101,39 +105,91 @@ fn damaged(statement: &str, full: bool, salt: usize) -> Vec<String> {
     };
     let half = parts[..parts.len() / 2].join(",");
     let nulls = vec!["$"; parts.len()].join(",");
-    let mut out = vec![
+    let whole = [
         format!("{head});"),
         format!("{head}{half});"),
         format!("{head}{nulls});"),
     ];
+    let one = |i: usize, v: &str| {
+        let mut p = parts.clone();
+        p[i] = v;
+        format!("{head}{});", p.join(","))
+    };
+    if !full {
+        // One cut of the list and one bad value in one attribute; the salt (the position of the
+        // statement) rotates the choice, so the sample as a whole uses all of them.
+        return vec![
+            whole[salt % whole.len()].clone(),
+            one(salt % parts.len(), BAD[salt % BAD.len()]),
+        ];
+    }
+    let mut out = whole.to_vec();
     for i in 0..parts.len() {
-        let values: Vec<&str> = if full {
-            BAD.to_vec()
-        } else {
-            vec![BAD[(salt + i) % BAD.len()]]
-        };
-        for v in values {
-            let mut p = parts.clone();
-            p[i] = v;
-            out.push(format!("{head}{});", p.join(",")));
-        }
+        out.extend(BAD.iter().map(|v| one(i, v)));
     }
     out
 }
 
-fn run(text: &str) -> bool {
-    let doc = Document::with_sequential_ids();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ =
-            import_bytes_unguarded(text.as_bytes().to_vec(), &doc, &IfcImportOptions::default());
-    }))
-    .is_ok()
+/// The name of the entity of a statement (`#1=IFCWALL(...)` gives `IFCWALL`), upper case; a complex
+/// entity `#1=(A()B())` gives `(complex)`.
+fn entity_name(statement: &str) -> String {
+    let Some((_, rest)) = statement.split_once('=') else {
+        return String::new();
+    };
+    let rest = rest.trim_start();
+    if rest.starts_with('(') {
+        return "(complex)".into();
+    }
+    rest.split('(').next().unwrap_or("").trim().to_uppercase()
 }
 
-fn check(name: &str, text: &str, every: usize, full: bool) -> usize {
+/// For each file, the statements to damage so that every entity type is damaged once: the first
+/// statement of each type in the smallest file that has the type. Files are given as (name, text).
+fn one_of_each_type(files: &[(String, String)]) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|i| files[*i].1.len());
+    let mut seen = std::collections::HashSet::new();
+    let mut plan = vec![Vec::new(); files.len()];
+    for i in order {
+        let text = &files[i].1;
+        for (n, (s, e)) in statements(text).into_iter().enumerate() {
+            if seen.insert(entity_name(&text[s..e])) {
+                plan[i].push(n);
+            }
+        }
+    }
+    plan
+}
+
+/// True when the import returned (with a result or an error) and no product was skipped after an
+/// internal error. The entry has no catch of its own, so a panic ends the call; the check of the
+/// skip line and the note is a second guard in case a catch is ever added to it.
+fn run(text: &str) -> bool {
+    let doc = Document::with_sequential_ids();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || match import_bytes_unguarded(
+            text.as_bytes().to_vec(),
+            &doc,
+            &IfcImportOptions::default(),
+        ) {
+            Ok(r) => {
+                !r.report
+                    .skipped
+                    .iter()
+                    .any(|s| s.reason.contains("internal error"))
+                    && !r.report.notes.iter().any(|n| n.contains("internal error"))
+                    && r.report.handled_panics.is_empty()
+            }
+            Err(e) => !matches!(e, kadakas_ifc::IfcImportError::Internal(_)),
+        },
+    ))
+    .unwrap_or(false)
+}
+
+fn check(name: &str, text: &str, pick: &dyn Fn(usize) -> bool, full: bool) -> usize {
     let mut runs = 0;
     for (n, (s, e)) in statements(text).into_iter().enumerate() {
-        if n % every != 0 {
+        if !pick(n) {
             continue;
         }
         for d in damaged(&text[s..e], full, n) {
@@ -172,29 +228,56 @@ fn fixtures() -> Vec<PathBuf> {
     v
 }
 
-fn fixture_runs(stride: usize, full: bool) -> usize {
-    let mut runs = 0;
-    for f in fixtures() {
-        let text = std::fs::read_to_string(&f).unwrap();
-        runs += check(&f.display().to_string(), &text, stride, full);
-    }
-    runs
+fn fixture_texts() -> Vec<(String, String)> {
+    fixtures()
+        .into_iter()
+        .map(|f| {
+            let text = std::fs::read_to_string(&f).unwrap();
+            (f.display().to_string(), text)
+        })
+        .collect()
 }
 
 #[test]
-fn damaged_fixtures_never_panic() {
-    // A build without optimisation is 20 times slower: it damages a smaller sample (the unit
-    // statements, with their 1000 times bigger models, take seconds each).
-    let stride = if cfg!(debug_assertions) { 60 } else { 6 };
-    let runs = fixture_runs(stride, false);
-    assert!(runs > 100, "{runs}");
+fn every_entity_type_of_the_fixtures_is_damaged_and_the_import_returns() {
+    let files = fixture_texts();
+    let plan = one_of_each_type(&files);
+    let types: usize = plan.iter().map(Vec::len).sum();
+    // The fixtures hold every type that the importer reads (all_kinds.ifc has them all).
+    assert!(types > 150, "{types} entity types");
+    let mut runs = 0;
+    for ((name, text), picked) in files.iter().zip(&plan) {
+        runs += check(name, text, &|n| picked.contains(&n), false);
+    }
+    assert!(runs >= 2 * types, "{runs}");
 }
 
 #[test]
 #[ignore = "the full run takes about 20 minutes in a release build: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
 fn damaged_fixtures_never_panic_full() {
-    let runs = fixture_runs(1, true);
+    let mut runs = 0;
+    for (name, text) in fixture_texts() {
+        runs += check(&name, &text, &|_| true, true);
+    }
     assert!(runs > 10_000, "{runs}");
+}
+
+#[test]
+fn the_damage_check_sees_a_panic_and_an_internal_error_note() {
+    // The check must fail when a panic is injected (the entry has no catch per product), and when
+    // the result says that a product was skipped after an internal error.
+    assert!(run(&std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/ifc/extruded_rect.ifc")
+    )
+    .unwrap()));
+    let bad = kadakas_ifc::IfcImportError::Internal("x".into());
+    assert!(matches!(bad, kadakas_ifc::IfcImportError::Internal(_)));
+    let seen = kadakas_ifc::run_guarded(|| panic!("injected"));
+    assert!(matches!(
+        seen,
+        Err(kadakas_ifc::IfcImportError::Internal(_))
+    ));
 }
 
 #[test]
@@ -234,18 +317,19 @@ fn a_trimmed_curve_without_attributes_in_an_advanced_brep_is_refused_not_a_panic
 
 #[test]
 fn damaged_public_files_never_panic() {
-    public(1, false);
+    public(false);
 }
 
 #[test]
-#[ignore = "the full run takes about 20 minutes in a release build: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
+#[ignore = "the full run takes hours: cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored"]
 fn damaged_public_files_never_panic_full() {
-    public(40, true);
+    public(true);
 }
 
-/// Damages about `per_file` statements of each cached public file.
-fn public(per_file: usize, full: bool) {
-    let mut seen = 0;
+/// Damages the cached public files: one statement of each entity type (the first, in the smallest
+/// file that has it); the full run damages about 40 statements of each file in all ways.
+fn public(full: bool) {
+    let mut files = Vec::new();
     for (repo, path) in support::corpus::all_ifc() {
         let Some(file) = support::corpus::need(&repo, &path) else {
             continue;
@@ -254,23 +338,24 @@ fn public(per_file: usize, full: bool) {
             continue;
         };
         // The default run leaves out the big files (the full run has them).
-        let small = if cfg!(debug_assertions) {
-            30_000
-        } else {
-            200_000
-        };
-        if !full && text.len() > small {
+        if !full && text.len() > 200_000 {
             continue;
         }
-        // A build without optimisation takes every fourth small file (the full run takes all).
-        seen += 1;
-        if !full && cfg!(debug_assertions) && seen % 4 != 1 {
-            continue;
-        }
-        let every = (statements(&text).len() / per_file).max(1);
-        check(&path, &text, every, full);
+        files.push((path, text));
     }
-    if seen == 0 {
+    if files.is_empty() {
         eprintln!("SKIP: no file of the IFC corpus is available");
+        return;
+    }
+    if full {
+        for (name, text) in &files {
+            let every = (statements(text).len() / 40).max(1);
+            check(name, text, &|n| n % every == 0, true);
+        }
+        return;
+    }
+    let plan = one_of_each_type(&files);
+    for ((name, text), picked) in files.iter().zip(&plan) {
+        check(name, text, &|n| picked.contains(&n), false);
     }
 }
