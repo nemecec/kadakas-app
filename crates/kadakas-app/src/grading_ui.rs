@@ -5,7 +5,7 @@
 use crate::units_ui::DragValueExt as _;
 use egui::epaint::{Mesh, PathShape, PathStroke, Vertex as EguiVertex};
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use std::sync::Arc;
 
 use egui::{Color32, FontId, Painter, Pos2, Stroke, Ui};

@@ -16,6 +16,7 @@ kadakas-render = { path = "../kadakas-render" }
 kadakas-review = { path = "../kadakas-review", default-features = false }
 kadakas-ui-core = { path = "../kadakas-ui-core" }
 kadakas-units = { path = "../kadakas-units" }
+kadakas-ui-number = { path = "../kadakas-ui-number" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu"] }
 egui = "0.35.0"
 glam = { version = "0.34.1", features = ["serde"] }

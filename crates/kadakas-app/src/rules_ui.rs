@@ -7,7 +7,7 @@ use egui::{DragValue, Ui};
 use kadakas_api::Session;
 use kadakas_core::viewrules::Phase;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use serde_json::json;
 
 /// What the section remembers between frames.

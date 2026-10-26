@@ -7,8 +7,8 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
+use kadakas_ui_number::UiNumber;
 use kadakas_units::DateFormat;
-use kadakas_view3d::numfmt::UiNumber;
 use std::collections::HashMap;
 
 use egui::{Color32, DragValue, Id, Ui};
@@ -376,18 +376,16 @@ fn set_default(f: &mut FieldDef, text: &str) {
             | FieldType::Dimension
             | FieldType::Area
             | FieldType::Volume
-            | FieldType::Angle => kadakas_units::parse_num(text.trim())
-                .filter(|n| n.is_finite())
-                .map_or_else(
-                    || Value::String(text.into()),
-                    |n| {
-                        if f.ty == FieldType::Integer && n.fract() == 0.0 {
-                            Value::from(n as i64)
-                        } else {
-                            Value::from(n)
-                        }
-                    },
-                ),
+            | FieldType::Angle => plain_number(text.trim()).map_or_else(
+                || Value::String(text.into()),
+                |n| {
+                    if f.ty == FieldType::Integer && n.fract() == 0.0 {
+                        Value::from(n as i64)
+                    } else {
+                        Value::from(n)
+                    }
+                },
+            ),
             _ => Value::String(text.into()),
         })
     };
@@ -1343,13 +1341,22 @@ fn criteria_fields(doc: &Document) -> Vec<String> {
 /// typed: in a formula the comma separates arguments, so its numbers are written with a point.
 pub fn cell_entry(text: &str) -> String {
     let t = text.trim();
-    if t.is_empty() || t.starts_with('=') || text.starts_with('\'') || t.parse::<f64>().is_ok() {
+    if t.is_empty() || t.starts_with('=') || text.starts_with('\'') {
         return text.to_string();
     }
-    match kadakas_units::parse_num(t).filter(|n| n.is_finite()) {
+    match plain_number(t) {
         Some(n) => n.to_string(),
         None => text.to_string(),
     }
+}
+
+/// A number that a person typed, with the rules of the number fields: the active format first
+/// (`1.500` is 1500 where the groups are points), the plain form with a point only when the
+/// format cannot read the text.
+fn plain_number(t: &str) -> Option<f64> {
+    kadakas_units::parse_num(t)
+        .or_else(|| t.parse::<f64>().ok())
+        .filter(|n| n.is_finite())
 }
 
 /// The comparison operators of the criteria builder.
@@ -1360,9 +1367,7 @@ pub fn criteria_clause(name: &str, op: &str, value: &str) -> String {
     let v = value.trim();
     // A number is written with a point in the criteria, whatever the person types (`1,5` is 1.5
     // where the decimal symbol is a comma).
-    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite) {
-        v.to_string()
-    } else if let Some(n) = kadakas_units::parse_num(v).filter(|n| n.is_finite()) {
+    let literal = if let Some(n) = plain_number(v) {
         n.to_string()
     } else if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
         v.to_string()
@@ -1888,6 +1893,34 @@ mod tests {
         });
         kadakas_units::with_units(kadakas_units::Units::METRIC, || {
             assert_eq!(criteria_clause("Area", ">", "1,5"), "Area > 1.5");
+        });
+    }
+
+    #[test]
+    fn the_format_decides_how_1_500_is_read_in_every_place_that_reads_a_number() {
+        // German format: the point groups thousands, so 1.500 is 1500 in a cell, in a criteria
+        // clause, in a field default and in a number widget alike.
+        let de = kadakas_units::Settings {
+            decimal: Some(kadakas_units::Decimal::Comma),
+            grouping: Some(kadakas_units::Grouping::Point),
+            ..Default::default()
+        }
+        .resolve("en-US");
+        kadakas_units::with_units(de, || {
+            assert_eq!(cell_entry("1.500"), "1500");
+            assert_eq!(criteria_clause("Area", ">", "1.500"), "Area > 1500");
+            let mut f = FieldDef::new("w", FieldType::Number);
+            set_default(&mut f, "1.500");
+            assert_eq!(f.default, Some(Value::from(1500.0)));
+            assert_eq!(kadakas_units::parse_num("1.500"), Some(1500.0));
+            // The point still works as a decimal point where it cannot be a group.
+            assert_eq!(cell_entry("3.5"), "3.5");
+            assert_eq!(cell_entry("1,500"), "1.5");
+        });
+        // The English format: 1.500 is one and a half.
+        kadakas_units::with_units(kadakas_units::Settings::default().resolve("en-US"), || {
+            assert_eq!(cell_entry("1.500"), "1.5");
+            assert_eq!(criteria_clause("Area", ">", "1.500"), "Area > 1.5");
         });
     }
 

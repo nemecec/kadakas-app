@@ -27,6 +27,7 @@ kadakas-ui-core = { path = "../kadakas-ui-core" }
 kadakas-units = { path = "../kadakas-units" }
 kadakas-update = { path = "../kadakas-update" }
 kadakas-view3d = { path = "../kadakas-view3d" }
+kadakas-ui-number = { path = "../kadakas-ui-number" }
 resvg = { version = "0.48.1", default-features = false }
 rfd = { version = "0.15", features = ["file-handle-inner"] }
 serde = { version = "1.0.229", features = ["derive"] }

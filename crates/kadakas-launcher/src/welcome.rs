@@ -4,8 +4,13 @@
 //! The dialog is a window of its own process (`kadakas-launcher welcome`): the same way works on
 //! every system, also on macOS, where the first process runs the system event loop on its main
 //! thread. The launcher waits for that process before it starts any version, so the first
-//! start always waits for a button, also when it came from a double click on a `.kad` file (the
-//! inbox of the launcher keeps the file; the app gets it after the dialog).
+//! start always waits for a button, also when it came from a double click on a `.kad` file.
+//!
+//! The file reaches the app after the dialog. On macOS the system sends a second double click to
+//! the one launcher, and its inbox keeps the file. On Windows and Linux a second double click
+//! starts a second launcher. It writes one line to stderr, waits for the lock of the first one
+//! (up to an hour), looks again, finds the dialog done and starts its own app with its own file.
+//! There is no hand-over of the file between the two launchers on these systems.
 //!
 //! A dialog that ends with an error (the window could not open, a crash at start) does not stop
 //! the start: the launcher logs it, writes no mark and starts the app with the settings as they
@@ -18,6 +23,7 @@ use kadakas_welcome::gate::{self, Button, ENV_TIMEOUT, Gate, Kind};
 use kadakas_welcome::{Dirs, ENV_SKIP, stores, sysloc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -117,17 +123,23 @@ pub fn show_again() {
 struct WelcomeApp {
     state: WelcomeState,
     dirs: Dirs,
-    done: bool,
+    /// The choices were handled once. A second press of a button closes the window.
+    handled: bool,
+    /// The mark could not be written: the launcher exits with an error.
+    mark_failed: Arc<AtomicBool>,
     /// The language of the window title, to change the title when the language changes.
     title_language: &'static str,
 }
 
 impl WelcomeApp {
-    fn finish(&mut self, button: Button) {
-        if self.done {
-            return;
+    /// Stores what the button says. Returns true when the window can close. When something could
+    /// not be written the problem is shown in the dialog and the window stays; the next press of
+    /// a button closes it.
+    fn finish(&mut self, button: Button) -> bool {
+        if self.handled {
+            return true;
         }
-        self.done = true;
+        self.handled = true;
         let problems = gate::finish(
             &self.dirs,
             self.state.kind,
@@ -136,12 +148,15 @@ impl WelcomeApp {
             &self.state.initial,
             &self.state.detected,
         );
-        if !problems.is_empty() {
-            eprintln!(
-                "kadakas-launcher: {}",
-                tr!("welcome-failed", problems = problems.join("; "))
-            );
+        if problems.is_empty() {
+            return true;
         }
+        let text = tr!("welcome-failed", problems = problems.join("; "));
+        eprintln!("kadakas-launcher: {text}");
+        self.mark_failed
+            .store(gate::mark_failed(&problems), Ordering::SeqCst);
+        self.state.problem = Some(text);
+        false
     }
 }
 
@@ -157,18 +172,22 @@ impl eframe::App for WelcomeApp {
         }
         // The close button of the window counts as the second button.
         if ctx.input(|i| i.viewport().close_requested()) {
-            self.finish(Button::Secondary);
+            if !self.finish(Button::Secondary) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
             return;
         }
-        if let Some(button) = welcome_ui::show(ui, &mut self.state) {
-            self.finish(button);
+        if let Some(button) = welcome_ui::show(ui, &mut self.state)
+            && self.finish(button)
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 }
 
-/// Opens the dialog window and returns when it is closed.
-pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe::Result {
+/// Opens the dialog window and returns when it is closed. `Ok(false)`: the mark could not be
+/// written, so the dialog would come again at every start.
+pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe::Result<bool> {
     let dirs = Dirs::from_env(root);
     let system = sysloc::read_system();
     let detected = kadakas_welcome::choices::detect(&system, modeler_installed);
@@ -177,14 +196,18 @@ pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe:
     } else {
         stores::current(&dirs, &system.languages, modeler_installed)
     };
-    let state = WelcomeState::new(kind, choices, detected, system.languages, modeler_installed);
+    let follows = kind != Kind::FirstRun && stores::number_follows_language(&dirs);
+    let state = WelcomeState::new(kind, choices, detected, system.languages, modeler_installed)
+        .follow_language_for_numbers(follows);
     let language = state.language_tag();
     kadakas_l10n::set_language(language);
     let title = tr!("welcome-title");
+    let mark_failed = Arc::new(AtomicBool::new(false));
     let app = WelcomeApp {
         state,
         dirs,
-        done: false,
+        handled: false,
+        mark_failed: mark_failed.clone(),
         title_language: language,
     };
     let options = eframe::NativeOptions {
@@ -200,7 +223,8 @@ pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe:
         "Kadakas welcome",
         options,
         Box::new(move |_cc| Ok(Box::new(app))),
-    )
+    )?;
+    Ok(!mark_failed.load(Ordering::SeqCst))
 }
 
 #[cfg(test)]
@@ -340,6 +364,55 @@ mod tests {
         assert_eq!(kadakas_update::welcome::done_version(&d.launcher), 0);
         assert_eq!(gate::kind_for(&d), Kind::FirstRun);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_dialog_that_cannot_store_its_choices_says_so_and_closes_on_the_second_press() {
+        let base = tmp("unwritable");
+        std::fs::create_dir_all(&base).unwrap();
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        // The install folder cannot be made: the mark cannot be written.
+        let dirs = Dirs {
+            launcher: blocker.join("l"),
+            prefs: None,
+            feedback: None,
+        };
+        let c = detect(&kadakas_welcome::SystemLocale::default(), true);
+        let state = WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true);
+        let failed = Arc::new(AtomicBool::new(false));
+        let mut app = WelcomeApp {
+            state,
+            dirs,
+            handled: false,
+            mark_failed: failed.clone(),
+            title_language: "en-US",
+        };
+        assert!(!app.finish(Button::Primary), "the window stays open");
+        let shown = app.state.problem.clone().unwrap();
+        assert!(shown.contains("welcome.json"), "{shown}");
+        assert!(
+            failed.load(Ordering::SeqCst),
+            "the exit status will be an error"
+        );
+        assert!(app.finish(Button::Primary), "the second press closes it");
+        // Files that were written do not make an error exit.
+        let ok_dirs = dirs_for(&base.join("ok"));
+        let c = detect(&kadakas_welcome::SystemLocale::default(), true);
+        let mut fine = WelcomeApp {
+            state: WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true),
+            dirs: ok_dirs,
+            handled: false,
+            mark_failed: Arc::new(AtomicBool::new(false)),
+            title_language: "en-US",
+        };
+        assert!(fine.finish(Button::Secondary));
+        assert!(fine.state.problem.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn dirs_for(root: &Path) -> Dirs {
+        dirs(root)
     }
 
     #[test]

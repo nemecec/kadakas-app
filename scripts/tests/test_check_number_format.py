@@ -49,11 +49,37 @@ class Widgets(unittest.TestCase):
         text = "fn a() {}\n#[cfg(test)]\nmod tests { fn b() { DragValue::new(v); } }\n"
         self.assertNotIn("DragValue", cnf.code_part(text))
 
-    def test_raw_float_formatting_is_found(self):
-        for bad in ['format!("{:.2}", x)', 'format!("{v:.3} m")', 'format!("{x:.1}")']:
-            self.assertTrue(cnf.RAW_FLOAT.search(bad), bad)
-        for good in ['format!("{v:.0}")', 'format!("{}", n)', 'tr!("a", x = 1)']:
-            self.assertFalse(cnf.RAW_FLOAT.search(good), good)
+    def test_raw_float_formatting_is_found_in_every_form(self):
+        bad = [
+            'format!("{:.2}", x)',
+            'format!("{v:.3} m")',
+            'format!("{x:.1}")',
+            'format!("{:>6.1}", x)',
+            'format!("{x:>8.2} mm")',
+            'format!("{:.10}", x)',
+            'format!("{:.prec$}", x, prec = 3)',
+            'format!("{:.*}", 2, x)',
+            'write!(f, "{:.1} MB", mb)',
+            'writeln!(out, "{x:<5.2}")',
+            'println!("{:.3}", v)',
+            'eprintln!("{:.3}", v)',
+            'tr!("a", x = format!("{:.3}", info.scale.x))',
+            'format!(\n    "{a} and {b:.2}",\n    a = 1,\n)',
+            'panic!("{:.1}", v)',
+        ]
+        for text in bad:
+            self.assertTrue(cnf.raw_floats(text), text)
+        good = [
+            'format!("{v:.0}")',
+            'format!("{:.0}", x)',
+            'format!("{}", n)',
+            'format!("{x:>6}")',
+            'tr!("a", x = 1)',
+            'format!("{:?}", v)',
+            'let s = "{:.2} is only text";',
+        ]
+        for text in good:
+            self.assertFalse(cnf.raw_floats(text), text)
 
     def test_the_fix_adds_the_helper_after_the_chain(self):
         text = "ui.add(DragValue::new(v).speed(1.0));\n"

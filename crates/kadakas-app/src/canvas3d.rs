@@ -142,6 +142,9 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             nav.moved = true;
         }
     }
+    if !resp.hovered() {
+        kadakas_view3d::scroll::pointer_left(ui.ctx(), egui::Id::new("scroll3d"));
+    }
     // A click on a pin opens its issue.
     let mut pin_clicked = false;
     if resp.clicked()

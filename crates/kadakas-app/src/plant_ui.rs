@@ -15,7 +15,7 @@ use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_l10n::{msg, tr, translate};
 use kadakas_plants::placement::Pattern;
 use kadakas_plants::schedule;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use serde_json::{Map, Value, json};
 
 use crate::canvas::color32;

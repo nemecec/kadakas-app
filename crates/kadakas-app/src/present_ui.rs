@@ -7,7 +7,7 @@ use kadakas_api::Session;
 use kadakas_core::present::{RenderMode, RenderStyle, SunSettings};
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use serde_json::{Value, json};
 
 /// Applies a built-in render style (`Shaded`, `Realistic`, `Hidden Line`, ...): the style becomes a

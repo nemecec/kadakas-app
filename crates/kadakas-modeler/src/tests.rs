@@ -459,6 +459,62 @@ fn the_navigation_menu_command_sets_the_style_and_the_app_choice_is_the_default(
 }
 
 #[test]
+fn a_failed_save_of_the_settings_is_tried_again() {
+    let d = std::env::temp_dir().join(format!("kadakas-modeler-retry-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("modeler.json")).unwrap();
+    let mut a = app();
+    a.set_prefs_dir(Some(d.clone()));
+    let ctx = egui::Context::default();
+    let _ = frame(&ctx, &mut a, vec![], 1.0);
+    a.run(Cmd::ToggleTray, glam::Vec2::new(900.0, 600.0));
+    let _ = frame(&ctx, &mut a, vec![], 2.0);
+    assert!(
+        a.status.contains("modeler.json"),
+        "the failure is shown: {}",
+        a.status
+    );
+    // The problem goes away; a frame inside the pause writes nothing, a later one writes.
+    std::fs::remove_dir_all(d.join("modeler.json")).unwrap();
+    a.status.clear();
+    let _ = frame(&ctx, &mut a, vec![], 2.2);
+    assert!(!d.join("modeler.json").exists());
+    let _ = frame(&ctx, &mut a, vec![], 4.0);
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(d.join("modeler.json")).unwrap()).unwrap();
+    assert_eq!(v["tray"], false);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_save_before_the_reload_writes_only_what_this_window_changed() {
+    // No launcher link: the window never sees the stamp, so it never reloads. The dialog stored
+    // a theme and a key of the future after this window read the file. A toggle of the tray
+    // must write the tray only; a write of the whole file would put the old theme back.
+    let d = std::env::temp_dir().join(format!("kadakas-modeler-stale-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let mut a = app();
+    a.set_prefs_dir(Some(d.clone()));
+    let ctx = egui::Context::default();
+    let _ = frame(&ctx, &mut a, vec![], 0.0);
+    std::fs::write(
+        d.join("modeler.json"),
+        r#"{"theme":"dark","language":"et","from_the_future":{"a":1}}"#,
+    )
+    .unwrap();
+    a.run(Cmd::ToggleTray, glam::Vec2::new(900.0, 600.0));
+    let _ = frame(&ctx, &mut a, vec![], 1.0);
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(d.join("modeler.json")).unwrap()).unwrap();
+    assert_eq!(v["tray"], false, "this window's change is there");
+    assert_eq!(v["theme"], "dark", "the dialog's theme is not undone");
+    assert_eq!(v["language"], "et");
+    assert_eq!(v["from_the_future"]["a"], 1);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn what_the_welcome_dialog_stored_is_read_again_and_a_later_save_keeps_it() {
     use kadakas_update::handshake::{AppLink, ENV_ROOT, ENV_RUN};
     let d = std::env::temp_dir().join(format!("kadakas-modeler-welcome-{}", std::process::id()));

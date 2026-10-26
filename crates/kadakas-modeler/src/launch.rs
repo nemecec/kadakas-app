@@ -156,7 +156,7 @@ impl Launch {
             _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
             welcome_seen: link
                 .as_ref()
-                .map(|l| kadakas_update::welcome::applied_stamp(l.root()))
+                .map(|l| kadakas_update::welcome::changed_stamp(l.root()))
                 .unwrap_or_default(),
             link,
             next_open_poll: 0.0,
@@ -166,7 +166,7 @@ impl Launch {
 
     /// True once when the welcome dialog stored choices since this run last looked. Looks twice a
     /// second at most.
-    pub fn take_welcome_applied(&mut self, now: f64) -> bool {
+    pub fn take_settings_changed(&mut self, now: f64) -> bool {
         let Some(link) = &self.link else {
             return false;
         };
@@ -174,7 +174,7 @@ impl Launch {
             return false;
         }
         self.next_welcome_poll = now + OPEN_POLL_SECONDS;
-        let stamp = kadakas_update::welcome::applied_stamp(link.root());
+        let stamp = kadakas_update::welcome::changed_stamp(link.root());
         if stamp == self.welcome_seen {
             return false;
         }

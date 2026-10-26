@@ -276,7 +276,10 @@ fn main() -> ExitCode {
             }
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(None));
             match welcome::run_window(root.clone(), kind, modeler_installed(&factory, &root)) {
-                Ok(()) => ExitCode::SUCCESS,
+                Ok(true) => ExitCode::SUCCESS,
+                // The mark could not be written: the exit status says so, and the launcher
+                // that waits for the dialog logs it.
+                Ok(false) => ExitCode::FAILURE,
                 Err(e) => {
                     eprintln!("kadakas-launcher: {e}");
                     ExitCode::FAILURE

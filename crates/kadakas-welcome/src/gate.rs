@@ -104,6 +104,29 @@ pub enum Gate {
     Failed,
 }
 
+/// Takes the lock of the gate. If another launcher holds it, `on_wait` runs once and the wait
+/// begins (up to `wait`).
+fn gate_lock(
+    dirs: &Dirs,
+    wait: Duration,
+    on_wait: impl FnOnce(),
+) -> Option<kadakas_sys::fsio::FileLock> {
+    use kadakas_sys::fsio::{lock_file, lock_file_or_skip};
+    let path = dirs.launcher.join("welcome.lock");
+    match lock_file(&path, Duration::ZERO) {
+        Ok(lock) => Some(lock),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            on_wait();
+            lock_file_or_skip(&path, wait).ok().flatten()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+            eprintln!("kadakas-launcher: no lock for the welcome dialog on this file system: {e}");
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 /// The step before the start. `show` runs the dialog and returns when the person is done; an
 /// error (the window could not open, the process failed) makes the gate `Failed`.
 ///
@@ -122,8 +145,13 @@ pub fn run_gate(
     if !display {
         return Gate::NoDisplay;
     }
-    // A lock that cannot be made (a read-only folder) does not stop the start.
-    let _lock = kadakas_sys::fsio::lock_file(&dirs.launcher.join("welcome.lock"), LOCK_WAIT).ok();
+    // A lock that cannot be made (a read-only folder, a file system without locks) does not stop
+    // the start. Another launcher that shows the dialog holds the others here: say so.
+    let _lock = gate_lock(dirs, LOCK_WAIT, || {
+        eprintln!(
+            "kadakas-launcher: another launcher shows the welcome dialog; waiting until it is done"
+        );
+    });
     let kind = kind_for(dirs);
     if !kind.is_due() {
         return Gate::NotDue;
@@ -135,6 +163,12 @@ pub fn run_gate(
             Gate::Failed
         }
     }
+}
+
+/// True when the problems of [`finish`] include the mark: the dialog would come again at every
+/// start, so the launcher exits with an error.
+pub fn mark_failed(problems: &[String]) -> bool {
+    problems.iter().any(|p| p.starts_with("welcome.json"))
 }
 
 /// The two buttons. The window closed with the close button counts as `Secondary`.
@@ -219,7 +253,7 @@ pub(crate) mod tests {
         assert_eq!(kind_for(&d), Kind::Manual);
         assert!(!kind_for(&d).is_due());
         // Removing the mark brings the dialog back, with the current values.
-        kadakas_update::welcome::clear_mark(&d.launcher);
+        std::fs::remove_file(kadakas_update::welcome::mark_path(&d.launcher)).unwrap();
         assert_eq!(kind_for(&d), Kind::Update, "the files are traces of use");
         cleanup(&d);
     }
@@ -383,6 +417,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_mark_that_cannot_be_written_is_told() {
+        let base = tmp("gate-mark-fails");
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let d = Dirs {
+            launcher: blocker.join("l"),
+            prefs: None,
+            feedback: None,
+        };
+        let c = defaults();
+        let problems = finish(&d, Kind::FirstRun, Button::Primary, &c, &c, &c);
+        assert!(mark_failed(&problems), "{problems:?}");
+        // A problem with only a settings file is not a failed mark.
+        assert!(!mark_failed(&["prefs.json: no".to_string()]));
+        assert!(!mark_failed(&[]));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_launcher_that_waits_for_another_says_so_once() {
+        let d = dirs("gate-waits");
+        let first = gate_lock(&d, Duration::from_millis(10), || panic!("nobody holds it")).unwrap();
+        let said = Cell::new(0);
+        // The lock is held: the notice comes once, and the wait ends with no lock.
+        let second = gate_lock(&d, Duration::from_millis(80), || said.set(said.get() + 1));
+        assert!(second.is_none());
+        assert_eq!(said.get(), 1);
+        drop(first);
+        // Free again: no notice.
+        let third = gate_lock(&d, Duration::from_millis(10), || said.set(99));
+        assert!(third.is_some());
+        assert_eq!(said.get(), 1);
+        cleanup(&d);
+    }
+
+    #[test]
     fn the_variable_accepts_the_usual_spellings_only() {
         assert!(skipped(Some("1")) && skipped(Some(" true ")) && skipped(Some("yes")));
         assert!(!skipped(Some("0")) && !skipped(Some("")) && !skipped(None));
@@ -438,7 +508,7 @@ pub(crate) mod tests {
         assert_eq!(Settings::load(&d.launcher).mode, UpdateMode::NotifyOnly);
         // Cancel when shown on request: nothing changes.
         let before = std::fs::read(Settings::path(&d.launcher)).unwrap();
-        let stamp = kadakas_update::welcome::applied_stamp(&d.launcher);
+        let stamp = kadakas_update::welcome::changed_stamp(&d.launcher);
         finish(
             &d,
             Kind::Manual,
@@ -448,9 +518,9 @@ pub(crate) mod tests {
             &detected,
         );
         assert_eq!(std::fs::read(Settings::path(&d.launcher)).unwrap(), before);
-        assert_eq!(kadakas_update::welcome::applied_stamp(&d.launcher), stamp);
+        assert_eq!(kadakas_update::welcome::changed_stamp(&d.launcher), stamp);
         // A newer dialog, Cancel: only the mark.
-        kadakas_update::welcome::clear_mark(&d.launcher);
+        std::fs::remove_file(kadakas_update::welcome::mark_path(&d.launcher)).unwrap();
         finish(
             &d,
             Kind::Update,
@@ -472,15 +542,15 @@ pub(crate) mod tests {
         let d = dirs("gate-stamp");
         let c = defaults();
         finish(&d, Kind::FirstRun, Button::Primary, &c, &c, &c);
-        let first = kadakas_update::welcome::applied_stamp(&d.launcher);
+        let first = kadakas_update::welcome::changed_stamp(&d.launcher);
         let mut shown = c.clone();
         shown.theme = crate::choices::Theme::Dark;
         finish(&d, Kind::Manual, Button::Primary, &shown, &c, &c);
-        assert_ne!(kadakas_update::welcome::applied_stamp(&d.launcher), first);
+        assert_ne!(kadakas_update::welcome::changed_stamp(&d.launcher), first);
         // Start without a change moves nothing.
-        let second = kadakas_update::welcome::applied_stamp(&d.launcher);
+        let second = kadakas_update::welcome::changed_stamp(&d.launcher);
         finish(&d, Kind::Manual, Button::Primary, &shown, &shown, &c);
-        assert_eq!(kadakas_update::welcome::applied_stamp(&d.launcher), second);
+        assert_eq!(kadakas_update::welcome::changed_stamp(&d.launcher), second);
         cleanup(&d);
     }
 }

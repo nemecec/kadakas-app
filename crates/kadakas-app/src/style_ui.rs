@@ -13,7 +13,7 @@ use kadakas_ui_core::style_edit::{
     self, Choice, Follow, StyleEditor, StyleKind, default_tolerance, dimension_samples,
     length_units, set_enabled,
 };
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 use crate::enum_names;
 use crate::panels;

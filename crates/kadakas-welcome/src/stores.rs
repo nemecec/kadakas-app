@@ -21,7 +21,7 @@
 //!   every key; "Use defaults" writes the keys that are missing and never replaces a value.
 //! - What the dialog shows as current is what the programs really use ([`current`]): the same
 //!   files, the same defaults, the same precedence (the modeler's own file wins for the modeler).
-//! - A file that cannot be parsed is kept as `<name>.bak`; a read error other than "not found"
+//! - A file that cannot be parsed is kept as `<name>.damaged-<seconds>` and then replaced; a read error other than "not found"
 //!   stops the write and is reported.
 
 use crate::choices::{Choices, Mode, Navigation, NumberStyle, Theme, UnitSystem, detect};
@@ -238,7 +238,7 @@ fn run_plan(dirs: &Dirs, p: &Plan, only_missing: bool) -> Vec<String> {
             .feedback_file()
             .is_some_and(|f| jsonfile::read_object(&f).contains_key("crash_policy"));
         if !(only_missing && has) {
-            // A damaged file is kept as `.bak`, and a read error stops the write, as for the
+            // A damaged file is kept as `.damaged-<seconds>`, and a read error stops the write, as for the
             // other files (the hub itself would read a damaged file as empty).
             let guard = dirs
                 .feedback_file()
@@ -295,6 +295,17 @@ fn known_language(tag: &str) -> Option<String> {
         .iter()
         .find(|l| l.tag.eq_ignore_ascii_case(tag))
         .map(|l| l.tag.to_string())
+}
+
+/// True when `prefs.json` stores neither the decimal symbol nor the grouping: the programs then
+/// take both from the language, so a change of the language changes the number format.
+pub fn number_follows_language(dirs: &Dirs) -> bool {
+    let Some(f) = dirs.prefs_file() else {
+        return true;
+    };
+    let o = jsonfile::read_object(&f);
+    jsonfile::get_path(&o, &["units", "decimal"]).is_none()
+        && jsonfile::get_path(&o, &["units", "grouping"]).is_none()
 }
 
 /// The choices that the programs use now. A key that is missing has the default of the program
@@ -689,17 +700,15 @@ mod tests {
         std::fs::write(prefs.join("prefs.json"), "{ nope").unwrap();
         assert!(apply(&d, &detect(&sys(&[]), true), None).is_empty());
         assert_eq!(json(&prefs.join("prefs.json"))["theme"], "system");
-        assert_eq!(
-            std::fs::read_to_string(prefs.join("prefs.json.bak")).unwrap(),
-            "{ nope"
-        );
+        let kept = kadakas_sys::jsonfile::damaged_copies(&prefs.join("prefs.json"));
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ nope");
         // A damaged launcher.json too.
         std::fs::write(Settings::path(&d.launcher), "[[").unwrap();
         assert!(apply(&d, &detect(&sys(&[]), true), None).is_empty());
-        assert_eq!(
-            std::fs::read_to_string(d.launcher.join("launcher.json.bak")).unwrap(),
-            "[["
-        );
+        let kept = kadakas_sys::jsonfile::damaged_copies(&Settings::path(&d.launcher));
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "[[");
         cleanup(&d);
     }
 
@@ -722,6 +731,29 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_crash_policy_value_does_not_reset_the_other_feedback_settings() {
+        let d = dirs("stores-feedback-unknown");
+        let fb = d.feedback.clone().unwrap();
+        std::fs::create_dir_all(&fb).unwrap();
+        std::fs::write(
+            fb.join("settings.json"),
+            r#"{"send":true,"url":"https://x.example/f","omit_installation":true,"installation":"abc","crash_policy":"ask_later","future":[1]}"#,
+        )
+        .unwrap();
+        let mut c = detect(&sys(&[]), true);
+        c.crash = CrashPolicy::Never;
+        assert!(apply(&d, &c, None).is_empty());
+        let f = json(&fb.join("settings.json"));
+        assert_eq!(f["crash_policy"], "never");
+        assert_eq!(f["send"], true);
+        assert_eq!(f["url"], "https://x.example/f");
+        assert_eq!(f["omit_installation"], true);
+        assert_eq!(f["installation"], "abc");
+        assert_eq!(f["future"][0], 1);
+        cleanup(&d);
+    }
+
+    #[test]
     fn a_damaged_feedback_file_is_kept_aside_and_a_read_error_stops_the_write() {
         let d = dirs("stores-feedback");
         let fb = d.feedback.clone().unwrap();
@@ -730,10 +762,9 @@ mod tests {
         let mut c = detect(&sys(&[]), true);
         c.crash = CrashPolicy::Always;
         assert!(apply(&d, &c, None).is_empty());
-        assert_eq!(
-            std::fs::read_to_string(fb.join("settings.json.bak")).unwrap(),
-            "{ nope"
-        );
+        let kept = kadakas_sys::jsonfile::damaged_copies(&fb.join("settings.json"));
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ nope");
         assert_eq!(json(&fb.join("settings.json"))["crash_policy"], "always");
         // A folder in place of the file: reported, nothing replaced.
         let d2 = dirs("stores-feedback-eio");

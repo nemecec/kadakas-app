@@ -252,6 +252,18 @@ impl Scanner<'_> {
         self.c.get(self.i + k).copied()
     }
 
+    /// True for a character that groups digits in this format. A plain space groups only in the
+    /// space format. The Swiss apostrophe groups only in the apostrophe format, and never in
+    /// `skip_spaces`: elsewhere `’` is the foot mark (`5’6”`).
+    fn is_group(&self, ch: char) -> bool {
+        use crate::number::Grouping;
+        match ch {
+            '\'' | '\u{2019}' => self.nf.grouping == Grouping::Apostrophe,
+            ' ' => self.nf.grouping == Grouping::Space,
+            c => is_group_space(c),
+        }
+    }
+
     fn skip_spaces(&mut self) {
         while self.peek(0).is_some_and(is_group_space) {
             self.i += 1;
@@ -292,10 +304,7 @@ impl Scanner<'_> {
         loop {
             let sep = self.peek(0);
             let three = (1..=3).all(|k| self.peek(k).is_some_and(|ch| ch.is_ascii_digit()));
-            let group = sep.is_some_and(|ch| {
-                is_group_space(ch)
-                    && (ch != ' ' || self.nf.grouping == crate::number::Grouping::Space)
-            });
+            let group = sep.is_some_and(|ch| self.is_group(ch));
             if group
                 && three
                 && !self
@@ -303,7 +312,7 @@ impl Scanner<'_> {
                     .is_some_and(|ch| ch.is_ascii_digit() || ch == '/')
                 && self.c[start..self.i]
                     .iter()
-                    .all(|ch| ch.is_ascii_digit() || is_group_space(*ch))
+                    .all(|ch| ch.is_ascii_digit() || self.is_group(*ch))
             {
                 self.i += 4;
                 while self
@@ -577,6 +586,91 @@ mod tests {
             Some(1234.5)
         );
         assert_eq!(parse_length("2 m 30 cm", LengthUnit::Mm, &ET), Some(2300.0));
+    }
+
+    /// All the number formats that the program offers.
+    fn all_formats() -> Vec<NumberFormat> {
+        use crate::number::{Decimal, Grouping};
+        [
+            (Decimal::Point, Grouping::None),
+            (Decimal::Point, Grouping::Comma),
+            (Decimal::Comma, Grouping::Point),
+            (Decimal::Comma, Grouping::Space),
+            (Decimal::Point, Grouping::Apostrophe),
+            (Decimal::Comma, Grouping::None),
+        ]
+        .into_iter()
+        .map(|(decimal, grouping)| NumberFormat { decimal, grouping })
+        .collect()
+    }
+
+    #[test]
+    fn the_typographic_apostrophe_is_the_foot_mark_in_every_format() {
+        // `5’` was 1524 mm before the Swiss grouping existed. It must stay so, in all formats.
+        let inch = 25.4;
+        for nf in all_formats() {
+            let q = |s: &str, unit| parse_length(s, unit, &nf);
+            let near = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+            assert!(near(q("5\u{2019}", LengthUnit::Mm), 1524.0), "{nf:?} 5’");
+            assert!(
+                near(q("5\u{2019}6\u{201d}", LengthUnit::Mm), 1524.0 + 6.0 * inch),
+                "{nf:?} 5’6”"
+            );
+            assert!(
+                near(
+                    q("5\u{2019}-6\u{201d}", LengthUnit::Mm),
+                    1524.0 + 6.0 * inch
+                ),
+                "{nf:?} 5’-6”"
+            );
+            assert!(
+                near(
+                    q("5\u{2019} 6\u{201d}", LengthUnit::FtIn),
+                    1524.0 + 6.0 * inch
+                ),
+                "{nf:?}"
+            );
+            assert!(
+                near(
+                    q("5\u{2019}6\u{2019}\u{2019}", LengthUnit::Mm),
+                    1524.0 + 6.0 * inch
+                ),
+                "{nf:?} 5’6’’"
+            );
+            // The plain apostrophe too.
+            assert!(near(q("5'", LengthUnit::Mm), 1524.0), "{nf:?} 5'");
+        }
+    }
+
+    #[test]
+    fn the_swiss_apostrophe_groups_digits_in_the_swiss_format_only() {
+        use crate::number::{Decimal, Grouping};
+        let swiss = NumberFormat {
+            decimal: Decimal::Point,
+            grouping: Grouping::Apostrophe,
+        };
+        assert_eq!(
+            parse_length("1\u{2019}234 mm", LengthUnit::Mm, &swiss),
+            Some(1234.0)
+        );
+        assert_eq!(
+            parse_length("1'234'567", LengthUnit::Mm, &swiss),
+            Some(1_234_567.0)
+        );
+        for nf in all_formats()
+            .into_iter()
+            .filter(|f| f.grouping != Grouping::Apostrophe)
+        {
+            // Not a number: no format but the Swiss one groups with an apostrophe.
+            assert_eq!(nf.parse("1\u{2019}234"), None, "{nf:?}");
+            assert_eq!(nf.parse("1'234"), None, "{nf:?}");
+            // In a length it is one foot and 234 inches, not 1234.
+            let v = parse_length("1\u{2019}234", LengthUnit::Mm, &nf);
+            assert!(
+                v.is_some_and(|v| (v - (304.8 + 234.0 * 25.4)).abs() < 1e-6),
+                "{nf:?} {v:?}"
+            );
+        }
     }
 
     #[test]

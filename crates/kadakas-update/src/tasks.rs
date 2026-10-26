@@ -38,9 +38,9 @@ pub fn describe(result: &Result<Outcome>) -> String {
     match result {
         Ok(Outcome::Checked(UpdateStatus::UpToDate { .. })) => "Kadakas is up to date.".into(),
         Ok(Outcome::Checked(UpdateStatus::Available(o))) => format!(
-            "Version {} is available ({:.1} MB).",
+            "Version {} is available ({} MB).",
             o.version,
-            o.size as f64 / 1_000_000.0
+            o.size.div_ceil(1_000_000)
         ),
         Ok(Outcome::Checked(UpdateStatus::Older { current, offered })) => {
             format!("The server offers {offered}, which is older than {current}. Ignored.")

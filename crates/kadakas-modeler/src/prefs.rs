@@ -47,6 +47,7 @@ impl ThemeChoice {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    #[serde(deserialize_with = "kadakas_units::lenient")]
     pub theme: ThemeChoice,
     /// The tag of a fixed language (one of `kadakas_l10n::languages()`); `None` follows the system.
     pub language: Option<String>,
@@ -282,6 +283,23 @@ mod tests {
             "et",
             "falls back to the system"
         );
+    }
+
+    #[test]
+    fn a_theme_from_a_newer_version_gives_the_default_and_the_rest_of_the_file_stays() {
+        let d = temp("newer-theme");
+        std::fs::write(
+            d.join("modeler.json"),
+            r#"{"theme":"high_contrast","tray":false,"language":"et"}"#,
+        )
+        .unwrap();
+        let (p, w) = load_from(&d);
+        assert_eq!(w, None, "the file is not ignored");
+        assert_eq!(
+            (p.theme, p.tray, p.language.as_deref()),
+            (ThemeChoice::System, false, Some("et"))
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

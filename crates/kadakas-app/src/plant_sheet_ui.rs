@@ -10,7 +10,7 @@ use kadakas_core::plants::care::WaterNeed;
 use kadakas_core::plants::style::{PlantCategory, PlantStyle};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 use crate::panels::run_command;
 

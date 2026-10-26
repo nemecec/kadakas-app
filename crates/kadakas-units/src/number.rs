@@ -70,7 +70,7 @@ impl Grouping {
 
 /// True for the spaces that people and programs use between groups of digits.
 pub(crate) fn is_group_space(c: char) -> bool {
-    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}' | '\u{2019}')
+    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}')
 }
 
 /// How numbers look: the decimal separator and the digit grouping.
@@ -181,11 +181,12 @@ impl NumberFormat {
             let v = mantissa * 10f64.powi(exp.clamp(-400, 400));
             return v.is_finite().then_some(v);
         }
-        // The Swiss grouping is often typed with the plain apostrophe. (In other formats `'` is
-        // the foot mark and is not a number.)
+        // The Swiss grouping (`1’234`, often typed with the plain apostrophe) counts as a group
+        // symbol in this format only. In every other format `'` and `’` are the foot mark and
+        // not part of a number.
         let swiss;
-        let body = if self.grouping == Grouping::Apostrophe && body.contains('\'') {
-            swiss = body.replace('\'', "\u{2019}");
+        let body = if self.grouping == Grouping::Apostrophe && body.contains(['\'', '\u{2019}']) {
+            swiss = body.replace(['\'', '\u{2019}'], "\u{a0}");
             swiss.as_str()
         } else {
             body

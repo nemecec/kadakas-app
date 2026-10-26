@@ -398,18 +398,93 @@ pub fn imperial_region(region: &str) -> bool {
     matches!(region.to_ascii_uppercase().as_str(), "US" | "LR" | "MM")
 }
 
+/// A tolerant reader for a field of a settings file: a value that this version does not know (a
+/// variant that a newer version added) gives the default of that field, and the other fields of
+/// the file stay readable. Use it as `#[serde(deserialize_with = "kadakas_units::lenient")]`.
+pub fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Known<T> {
+        Value(T),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Known::<T>::deserialize(d)? {
+        Known::Value(v) => v,
+        Known::Unknown(_) => T::default(),
+    })
+}
+
 /// What a person chooses in the preferences. A choice of `None` means "from the language".
+///
+/// A value that this version does not know (a newer version added a variant) gives the default
+/// of that field only; the other fields stay.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(deserialize_with = "lenient")]
     pub length: LengthUnit,
+    #[serde(deserialize_with = "lenient")]
     pub area: AreaUnit,
+    #[serde(deserialize_with = "lenient")]
     pub angle: AngleFormat,
+    #[serde(deserialize_with = "lenient")]
     pub decimal: Option<Decimal>,
+    #[serde(deserialize_with = "lenient")]
     pub grouping: Option<Grouping>,
+    #[serde(deserialize_with = "lenient")]
     pub date: Option<DateFormat>,
     /// The denominator of inch fractions, or 0 for decimal inches. `None` gives 1/16.
+    #[serde(deserialize_with = "lenient")]
     pub inch_fraction: Option<u32>,
+}
+
+/// The same fields as [`Settings`], read strictly: a value that this version does not know is an
+/// error. A file that people write by hand (a workspace profile) is read this way, so that the
+/// author is told about a mistake. The preferences files are read with [`Settings`], which
+/// tolerates the values of newer versions.
+#[derive(Deserialize)]
+#[serde(default)]
+struct StrictSettings {
+    length: LengthUnit,
+    area: AreaUnit,
+    angle: AngleFormat,
+    decimal: Option<Decimal>,
+    grouping: Option<Grouping>,
+    date: Option<DateFormat>,
+    inch_fraction: Option<u32>,
+}
+
+impl Default for StrictSettings {
+    fn default() -> Self {
+        let s = Settings::default();
+        StrictSettings {
+            length: s.length,
+            area: s.area,
+            angle: s.angle,
+            decimal: s.decimal,
+            grouping: s.grouping,
+            date: s.date,
+            inch_fraction: s.inch_fraction,
+        }
+    }
+}
+
+/// Reads settings and refuses a value that this version does not know (see `StrictSettings`).
+pub fn settings_strict<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Settings, D::Error> {
+    let s = StrictSettings::deserialize(d)?;
+    Ok(Settings {
+        length: s.length,
+        area: s.area,
+        angle: s.angle,
+        decimal: s.decimal,
+        grouping: s.grouping,
+        date: s.date,
+        inch_fraction: s.inch_fraction,
+    })
 }
 
 impl Settings {
@@ -533,6 +608,43 @@ mod tests {
 
     fn et() -> Units {
         Settings::default().resolve("et")
+    }
+
+    #[test]
+    fn the_strict_reader_refuses_what_the_tolerant_one_accepts() {
+        let text = r#"{"length":"cubit","area":"ha"}"#;
+        assert!(serde_json::from_str::<Settings>(text).is_ok());
+        let mut d = serde_json::Deserializer::from_str(text);
+        assert!(settings_strict(&mut d).is_err());
+        let mut d =
+            serde_json::Deserializer::from_str(r#"{"length":"ft","grouping":"apostrophe"}"#);
+        let s = settings_strict(&mut d).unwrap();
+        assert_eq!(
+            (s.length, s.grouping),
+            (LengthUnit::Ft, Some(Grouping::Apostrophe))
+        );
+    }
+
+    #[test]
+    fn a_value_from_a_newer_version_gives_the_default_of_that_field_only() {
+        let s: Settings = serde_json::from_str(
+            r#"{"length":"cubit","area":"ha","angle":"turns","decimal":"arabic","grouping":"thin_space",
+                "date":"julian","inch_fraction":"many"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.length, LengthUnit::default());
+        assert_eq!(s.area, AreaUnit::Ha, "a known value stays");
+        assert_eq!(s.angle, AngleFormat::default());
+        assert_eq!(
+            (s.decimal, s.grouping, s.date, s.inch_fraction),
+            (None, None, None, None)
+        );
+        let s: Settings =
+            serde_json::from_str(r#"{"grouping":"apostrophe","decimal":"comma","length":7}"#)
+                .unwrap();
+        assert_eq!(s.grouping, Some(Grouping::Apostrophe));
+        assert_eq!(s.decimal, Some(Decimal::Comma));
+        assert_eq!(s.length, LengthUnit::default());
     }
 
     #[test]

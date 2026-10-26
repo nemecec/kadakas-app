@@ -238,7 +238,7 @@ impl Profile {
             p.read_terms(v, &mut problems);
         }
         if let Some(v) = section(obj, "units") {
-            match serde_json::from_value::<kadakas_units::Settings>(v.clone()) {
+            match kadakas_units::settings_strict(v.clone()) {
                 Ok(u) => p.units = Some(u),
                 Err(e) => problems.push(Problem::BadUnits(e.to_string())),
             }

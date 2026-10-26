@@ -167,23 +167,48 @@ pub struct WheelEvent {
     pub phase: WheelPhase,
 }
 
+/// How long after the last wheel event a gesture is forgotten when no `End` came (seconds).
+pub const GESTURE_IDLE: f64 = 0.6;
+
+/// A `Start` that follows an `End` within this time (seconds) is the momentum of the gesture that
+/// ended: winit reports the momentum of a macOS trackpad as a new `Start`.
+pub const MOMENTUM_JOIN: f64 = 0.4;
+
 /// Whether Shift counts for the gesture that is going on. A gesture keeps the choice that it
 /// started with: letting go of Shift in the middle (or during the momentum after the fingers
 /// left) does not turn an orbit into a pan; pressing Shift in the middle does.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// The choice is forgotten when the pointer leaves the canvas ([`ScrollLatch::forget`]) and when
+/// no wheel event comes for [`GESTURE_IDLE`] seconds (a window system that sends no `End`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScrollLatch {
     shift: bool,
     in_gesture: bool,
+    last_event: f64,
+    /// The Shift choice of the gesture that ended at `ended_at`, for the momentum that follows.
+    ended_shift: bool,
+    ended_at: f64,
 }
 
-/// The pan and the orbit of the trackpad style for these events (in order).
-fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent]) -> (Vec2, Vec2) {
+impl ScrollLatch {
+    /// Forgets the gesture (the pointer left the canvas).
+    pub fn forget(&mut self) {
+        *self = ScrollLatch::default();
+    }
+}
+
+/// The pan and the orbit of the trackpad style for these events (in order), at time `now`.
+fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent], now: f64) -> (Vec2, Vec2) {
     let (mut pan, mut orbit) = (Vec2::ZERO, Vec2::ZERO);
+    if (latch.in_gesture || latch.shift) && now - latch.last_event > GESTURE_IDLE {
+        latch.forget();
+    }
     for e in events {
         match e.phase {
             WheelPhase::Start => {
+                let momentum = latch.ended_shift && now - latch.ended_at <= MOMENTUM_JOIN;
                 latch.in_gesture = true;
-                latch.shift = e.shift;
+                latch.shift = e.shift || momentum;
             }
             WheelPhase::Move if latch.in_gesture => latch.shift |= e.shift,
             WheelPhase::Move => latch.shift = e.shift,
@@ -195,13 +220,19 @@ fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent]) -> (Vec2, Vec
             pan += e.delta;
         }
         if e.phase == WheelPhase::End {
-            *latch = ScrollLatch::default();
+            let (shift, at) = (latch.shift, now);
+            latch.forget();
+            latch.ended_shift = shift;
+            latch.ended_at = at;
         }
+    }
+    if !events.is_empty() {
+        latch.last_event = now;
     }
     (pan, orbit)
 }
 
-/// The motion that one frame of input makes in the style `style`.
+/// The motion that one frame of input makes in the style `style`, at time `now` (seconds).
 ///
 /// - `Mouse`: the wheel zooms to the pointer. `smooth_scroll` is the scroll of the UI library
 ///   (points, up is positive on y), `pinch` the factor of the pinch gesture (1 is none). This is
@@ -215,6 +246,7 @@ pub fn scroll_motion(
     events: &[WheelEvent],
     smooth_scroll: Vec2,
     pinch: f32,
+    now: f64,
 ) -> ScrollMotion {
     match style {
         NavStyle::Mouse => ScrollMotion {
@@ -223,7 +255,7 @@ pub fn scroll_motion(
             orbit: Vec2::ZERO,
         },
         NavStyle::Trackpad => {
-            let (pan, orbit) = trackpad_scroll(latch, events);
+            let (pan, orbit) = trackpad_scroll(latch, events, now);
             ScrollMotion {
                 zoom: pinch,
                 pan,
@@ -584,6 +616,11 @@ mod tests {
         }
     }
 
+    /// One frame of the trackpad style at time `now`.
+    fn pad(latch: &mut ScrollLatch, e: WheelEvent, now: f64) -> ScrollMotion {
+        scroll_motion(NavStyle::Trackpad, latch, &[e], Vec2::ZERO, 1.0, now)
+    }
+
     #[test]
     fn the_mouse_wheel_zooms_and_is_not_changed_by_the_style_code() {
         let mut latch = ScrollLatch::default();
@@ -594,6 +631,7 @@ mod tests {
             &events,
             Vec2::new(3.0, 40.0),
             1.0,
+            0.0,
         );
         assert!((m.zoom - wheel_factor(40.0, 1.0)).abs() < 1e-6);
         assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::ZERO));
@@ -605,46 +643,36 @@ mod tests {
             &shifted,
             Vec2::new(3.0, 40.0),
             1.0,
+            0.0,
         );
         assert_eq!(m, m2);
         assert_eq!(latch, ScrollLatch::default());
         // The pinch zooms the mouse too.
-        let m = scroll_motion(NavStyle::Mouse, &mut latch, &[], Vec2::ZERO, 1.5);
+        let m = scroll_motion(NavStyle::Mouse, &mut latch, &[], Vec2::ZERO, 1.5, 0.0);
         assert!((m.zoom - 1.5).abs() < 1e-6);
     }
 
     #[test]
     fn the_trackpad_scroll_pans_and_with_shift_orbits_in_both_directions() {
         let mut latch = ScrollLatch::default();
-        // A vertical scroll pans.
+        // A vertical scroll pans, and the pinch goes to the zoom.
         let m = scroll_motion(
             NavStyle::Trackpad,
             &mut latch,
             &[ev(0.0, 60.0, false, WheelPhase::Move)],
             Vec2::ZERO,
             1.1,
+            0.0,
         );
         assert_eq!(
             (m.zoom, m.pan, m.orbit),
             (1.1, Vec2::new(0.0, 60.0), Vec2::ZERO)
         );
         // Shift with a vertical scroll tilts (pitch): the orbit has a y part.
-        let m = scroll_motion(
-            NavStyle::Trackpad,
-            &mut latch,
-            &[ev(0.0, 60.0, true, WheelPhase::Move)],
-            Vec2::ZERO,
-            1.0,
-        );
+        let m = pad(&mut latch, ev(0.0, 60.0, true, WheelPhase::Move), 0.1);
         assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::new(0.0, 60.0)));
         // Shift with a horizontal scroll turns (yaw).
-        let m = scroll_motion(
-            NavStyle::Trackpad,
-            &mut latch,
-            &[ev(60.0, 0.0, true, WheelPhase::Move)],
-            Vec2::ZERO,
-            1.0,
-        );
+        let m = pad(&mut latch, ev(60.0, 0.0, true, WheelPhase::Move), 0.2);
         assert_eq!(m.orbit, Vec2::new(60.0, 0.0));
         // Several events in a frame add up.
         let m = scroll_motion(
@@ -656,6 +684,7 @@ mod tests {
             ],
             Vec2::ZERO,
             1.0,
+            0.3,
         );
         assert_eq!(m.pan, Vec2::new(4.0, 6.0));
     }
@@ -663,31 +692,78 @@ mod tests {
     #[test]
     fn a_gesture_keeps_its_shift_choice_until_it_ends() {
         let mut latch = ScrollLatch::default();
-        let run = |latch: &mut ScrollLatch, e: WheelEvent| {
-            scroll_motion(NavStyle::Trackpad, latch, &[e], Vec2::ZERO, 1.0)
-        };
         // The fingers touch with Shift held: an orbit.
-        let m = run(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start));
+        let m = pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
         assert_eq!(m.orbit, Vec2::ZERO);
-        // Shift is let go in the middle and in the momentum: still an orbit.
-        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        // Shift is let go in the middle: still an orbit.
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 0.05);
         assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::new(0.0, 10.0)));
-        let m = run(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move));
+        let m = pad(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move), 0.1);
         assert_eq!(m.orbit, Vec2::new(0.0, 5.0));
-        // The gesture ends; the next one starts without Shift: a pan.
-        run(&mut latch, ev(0.0, 0.0, false, WheelPhase::End));
-        run(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start));
-        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        // The gesture ends. A new one a second later starts without Shift: a pan.
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.15);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 1.5);
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 1.55);
         assert_eq!((m.pan, m.orbit), (Vec2::new(0.0, 10.0), Vec2::ZERO));
         // Pressing Shift in the middle of a pan turns the rest into an orbit.
-        let m = run(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move));
+        let m = pad(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move), 1.6);
         assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
-        run(&mut latch, ev(0.0, 0.0, true, WheelPhase::End));
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::End), 1.65);
         // Without phases (a wheel or a touchpad that sends none) the current Shift counts.
         let mut latch = ScrollLatch::default();
-        let m = run(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move));
+        let m = pad(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move), 0.0);
         assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
-        let m = run(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move));
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 0.1);
+        assert_eq!(m.pan, Vec2::new(0.0, 10.0));
+    }
+
+    #[test]
+    fn the_momentum_of_an_orbit_stays_an_orbit_even_when_shift_is_up() {
+        // winit reports the momentum of a macOS trackpad as a new Start after the End.
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 20.0, true, WheelPhase::Move), 0.05);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.1);
+        // The momentum starts at once. Shift is up: it goes on as an orbit.
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.12);
+        let m = pad(&mut latch, ev(0.0, 8.0, false, WheelPhase::Move), 0.15);
+        assert_eq!((m.pan, m.orbit), (Vec2::ZERO, Vec2::new(0.0, 8.0)));
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.4);
+        // A new gesture after the pause is a pan again.
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 2.0);
+        let m = pad(&mut latch, ev(0.0, 8.0, false, WheelPhase::Move), 2.05);
+        assert_eq!((m.pan, m.orbit), (Vec2::new(0.0, 8.0), Vec2::ZERO));
+        // The momentum of a pan stays a pan, also when Shift is down at its start.
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 20.0, false, WheelPhase::Move), 0.05);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.1);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.12);
+        let m = pad(&mut latch, ev(0.0, 8.0, false, WheelPhase::Move), 0.15);
+        assert_eq!(m.pan, Vec2::new(0.0, 8.0));
+    }
+
+    #[test]
+    fn a_gesture_without_an_end_is_forgotten_after_a_pause_and_when_the_pointer_leaves() {
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 0.1);
+        assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
+        // No event for a while (the End was lost, for example in another window): the next
+        // Move starts from the keys of that moment.
+        let m = pad(
+            &mut latch,
+            ev(0.0, 10.0, false, WheelPhase::Move),
+            0.1 + GESTURE_IDLE + 0.1,
+        );
+        assert_eq!((m.pan, m.orbit), (Vec2::new(0.0, 10.0), Vec2::ZERO));
+        // The pointer leaves the canvas in the middle of an orbit.
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move), 0.05);
+        latch.forget();
+        assert_eq!(latch, ScrollLatch::default());
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 0.1);
         assert_eq!(m.pan, Vec2::new(0.0, 10.0));
     }
 

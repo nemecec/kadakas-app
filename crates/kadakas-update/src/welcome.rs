@@ -4,11 +4,11 @@
 //! version. This file is not written by any older program.
 //!
 //! ```json
-//! { "done": 1, "applied": "1730000000000000000" }
+//! { "done": 1, "changed": "1730000000000000000" }
 //! ```
 //!
 //! - `done`: the version of the dialog that the person has seen (0: never).
-//! - `applied`: changes when the dialog stored choices. A running program looks at it and reads
+//! - `changed`: changes when the dialog stored choices. A running program looks at it and reads
 //!   its preferences again when it changes.
 //!
 //! The key `welcome_done` of `launcher.json` (the first form of the mark) is still read.
@@ -33,9 +33,9 @@ pub fn done_version(root: &Path) -> u32 {
 }
 
 /// The stamp of the last change that the dialog stored. Empty when there was none.
-pub fn applied_stamp(root: &Path) -> String {
+pub fn changed_stamp(root: &Path) -> String {
     jsonfile::read_object(&mark_path(root))
-        .get("applied")
+        .get("changed")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
@@ -50,20 +50,15 @@ pub fn write_mark(root: &Path, version: u32, changed: bool) -> std::io::Result<(
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_nanos());
-            let old = o.get("applied").and_then(Value::as_str).unwrap_or("");
+            let old = o.get("changed").and_then(Value::as_str).unwrap_or("");
             // Strictly new, also when the clock is coarse or two changes share a tick.
             let mut stamp = nanos.to_string();
             if stamp.as_str() <= old && old.len() == stamp.len() {
                 stamp = (old.parse::<u128>().unwrap_or(nanos) + 1).to_string();
             }
-            o.insert("applied".into(), Value::from(stamp));
+            o.insert("changed".into(), Value::from(stamp));
         }
     })
-}
-
-/// Removes the mark (the dialog is due again, with the current settings).
-pub fn clear_mark(root: &Path) {
-    let _ = std::fs::remove_file(mark_path(root));
 }
 
 #[cfg(test)]
@@ -77,7 +72,7 @@ mod tests {
         assert_eq!(done_version(&root), 0);
         write_mark(&root, 1, false).unwrap();
         assert_eq!(done_version(&root), 1);
-        assert_eq!(applied_stamp(&root), "");
+        assert_eq!(changed_stamp(&root), "");
         // An older app writes launcher.json without the key it does not know.
         crate::Settings::update(&root, |s| s.keep_older = 2).unwrap();
         std::fs::write(
@@ -97,7 +92,7 @@ mod tests {
         write_mark(&root, 2, false).unwrap();
         write_mark(&root, 1, false).unwrap();
         assert_eq!(done_version(&root), 2);
-        clear_mark(&root);
+        std::fs::remove_file(mark_path(&root)).unwrap();
         assert_eq!(done_version(&root), 1, "the old key still counts");
         rm_dir(&root);
     }
@@ -106,12 +101,12 @@ mod tests {
     fn the_stamp_moves_with_every_stored_change() {
         let root = tmp("mark-stamp");
         write_mark(&root, 1, true).unwrap();
-        let a = applied_stamp(&root);
+        let a = changed_stamp(&root);
         write_mark(&root, 1, true).unwrap();
-        let b = applied_stamp(&root);
+        let b = changed_stamp(&root);
         assert!(!a.is_empty() && a != b, "{a} {b}");
         write_mark(&root, 1, false).unwrap();
-        assert_eq!(applied_stamp(&root), b, "no change, no new stamp");
+        assert_eq!(changed_stamp(&root), b, "no change, no new stamp");
         rm_dir(&root);
     }
 }
