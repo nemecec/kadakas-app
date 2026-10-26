@@ -113,6 +113,13 @@ impl eframe::App for LauncherApp {
                 if self.model.crash_reports > 0 {
                     ui.label(crash_note(self.model.crash_reports));
                 }
+                if !self.model.problems.is_empty() {
+                    ui.label(tr!(
+                        "launcher-run-problems",
+                        count = self.model.problems.len()
+                    ))
+                    .on_hover_text(self.model.problems.join("\n"));
+                }
             });
         });
 

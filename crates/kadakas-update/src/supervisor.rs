@@ -320,9 +320,7 @@ impl Supervisor {
         let settings = Settings::load(&self.root);
         let updater = (self.make_updater)(&settings);
         updater.store().recover();
-        for problem in updater.store().settle_runs() {
-            eprintln!("kadakas-launcher: {problem}");
-        }
+        let _ = updater.store().settle_runs_logged();
         let mut reports = Vec::new();
         let mut files = files;
         loop {

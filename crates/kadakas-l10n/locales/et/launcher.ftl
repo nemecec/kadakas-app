@@ -68,3 +68,5 @@ launcher-done-older = Server pakub versiooni { $offered }, mis on vanem kui { $c
 launcher-done-updated = Uuendatud versioonile { $version }.
 launcher-done-rolled-back = Pööratud tagasi versioonile { $version }.
 launcher-done-failed = Ebaõnnestus: { $error }
+launcher-status-run-problems = { $count } probleemi varasemate käivituste kontrollimisel. Vaata käivitaja logi.
+launcher-run-problems = { $count } probleemi varasemate käivitustega (loend kursoriga)

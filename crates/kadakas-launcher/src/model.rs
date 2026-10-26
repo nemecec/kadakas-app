@@ -30,6 +30,8 @@ pub struct Model {
     pub status: String,
     /// Crash reports that wait for the person (they are shown in the app).
     pub crash_reports: usize,
+    /// What went wrong when the runs of earlier starts were settled (also in the launcher log).
+    pub problems: Vec<String>,
     running: Option<Receiver<Result<Outcome>>>,
 }
 
@@ -66,9 +68,7 @@ impl Model {
         // A start after a crash: remove half-made folders and old downloads, and settle the
         // runs whose launcher is gone.
         updater.store().recover();
-        for problem in updater.store().settle_runs() {
-            eprintln!("kadakas-launcher: {problem}");
-        }
+        let problems = updater.store().settle_runs_logged();
         let settings = Settings::load(updater.store().root());
         let mut m = Model {
             updater,
@@ -81,9 +81,13 @@ impl Model {
             update: None,
             status: String::new(),
             crash_reports: 0,
+            problems,
             running: None,
         };
         m.refresh();
+        if !m.problems.is_empty() {
+            m.status = tr!("launcher-status-run-problems", count = m.problems.len());
+        }
         m
     }
 
