@@ -2032,9 +2032,7 @@ fn a_row_that_this_version_cannot_read_is_kept_and_written_back() {
     })
     .unwrap();
     assert!(serde_json::to_string(&m).unwrap().contains("spline"));
-    let sel = m
-        .select(&[], &m.curve_edges(curve).unwrap().to_vec())
-        .unwrap();
+    let sel = m.select(&[], m.curve_edges(curve).unwrap()).unwrap();
     assert!(
         serde_json::to_string(&m.extract(&sel))
             .unwrap()
