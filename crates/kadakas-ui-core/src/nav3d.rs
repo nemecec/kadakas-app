@@ -167,8 +167,10 @@ pub struct WheelEvent {
     pub phase: WheelPhase,
 }
 
-/// How long after the last wheel event a gesture is forgotten when no `End` came (seconds).
-pub const GESTURE_IDLE: f64 = 0.6;
+/// How long after the last wheel event a gesture is forgotten when no `End` came (seconds). A
+/// person who rests the fingers on the pad for a moment and goes on keeps the gesture: the time
+/// is long.
+pub const GESTURE_IDLE: f64 = 3.0;
 
 /// A `Start` that follows an `End` within this time (seconds) is the momentum of the gesture that
 /// ended: winit reports the momentum of a macOS trackpad as a new `Start`.
@@ -186,8 +188,11 @@ pub struct ScrollLatch {
     in_gesture: bool,
     last_event: f64,
     /// The Shift choice of the gesture that ended at `ended_at`, for the momentum that follows.
+    /// It is used once, and the end of a momentum does not set it again.
     ended_shift: bool,
     ended_at: f64,
+    /// The gesture that is going on began as the momentum of an orbit.
+    momentum: bool,
 }
 
 impl ScrollLatch {
@@ -200,14 +205,18 @@ impl ScrollLatch {
 /// The pan and the orbit of the trackpad style for these events (in order), at time `now`.
 fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent], now: f64) -> (Vec2, Vec2) {
     let (mut pan, mut orbit) = (Vec2::ZERO, Vec2::ZERO);
-    if (latch.in_gesture || latch.shift) && now - latch.last_event > GESTURE_IDLE {
+    // A gesture whose `End` never came (another window took the pad) is forgotten after a long
+    // pause. Without a gesture there is nothing to forget: each event brings its own Shift.
+    if latch.in_gesture && now - latch.last_event > GESTURE_IDLE {
         latch.forget();
     }
     for e in events {
         match e.phase {
             WheelPhase::Start => {
                 let momentum = latch.ended_shift && now - latch.ended_at <= MOMENTUM_JOIN;
+                latch.ended_shift = false;
                 latch.in_gesture = true;
+                latch.momentum = momentum;
                 latch.shift = e.shift || momentum;
             }
             WheelPhase::Move if latch.in_gesture => latch.shift |= e.shift,
@@ -220,7 +229,8 @@ fn trackpad_scroll(latch: &mut ScrollLatch, events: &[WheelEvent], now: f64) -> 
             pan += e.delta;
         }
         if e.phase == WheelPhase::End {
-            let (shift, at) = (latch.shift, now);
+            // The end of a momentum does not arm the next gesture to join it.
+            let (shift, at) = (latch.shift && !latch.momentum, now);
             latch.forget();
             latch.ended_shift = shift;
             latch.ended_at = at;
@@ -744,12 +754,49 @@ mod tests {
     }
 
     #[test]
-    fn a_gesture_without_an_end_is_forgotten_after_a_pause_and_when_the_pointer_leaves() {
+    fn a_new_pan_after_a_momentum_is_a_pan_and_a_short_pause_keeps_the_orbit() {
+        let mut latch = ScrollLatch::default();
+        // An orbit, its momentum (a Start within the join time), and the end of the momentum.
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 20.0, true, WheelPhase::Move), 0.05);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.1);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.12);
+        let m = pad(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move), 0.2);
+        assert_eq!(m.orbit, Vec2::new(0.0, 5.0));
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.3);
+        // A new gesture at once after the end of the momentum is not momentum: the join was
+        // used, and the end of a momentum does not arm it again.
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.35);
+        let m = pad(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move), 0.4);
+        assert_eq!((m.pan, m.orbit), (Vec2::new(0.0, 5.0), Vec2::ZERO));
+        // The join is used once: the second Start after one End is a new gesture.
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.1);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.12);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::End), 0.2);
+        pad(&mut latch, ev(0.0, 0.0, false, WheelPhase::Start), 0.25);
+        let m = pad(&mut latch, ev(0.0, 5.0, false, WheelPhase::Move), 0.3);
+        assert_eq!(m.pan, Vec2::new(0.0, 5.0));
+        // A pause of a second in the middle of an orbit (the fingers rest) keeps it.
+        let mut latch = ScrollLatch::default();
+        pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
+        pad(&mut latch, ev(0.0, 10.0, true, WheelPhase::Move), 0.1);
+        let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 1.3);
+        assert_eq!(
+            m.orbit,
+            Vec2::new(0.0, 10.0),
+            "still an orbit after a pause of a second"
+        );
+    }
+
+    #[test]
+    fn a_gesture_without_an_end_is_forgotten_after_a_long_pause_and_when_the_pointer_leaves() {
         let mut latch = ScrollLatch::default();
         pad(&mut latch, ev(0.0, 0.0, true, WheelPhase::Start), 0.0);
         let m = pad(&mut latch, ev(0.0, 10.0, false, WheelPhase::Move), 0.1);
         assert_eq!(m.orbit, Vec2::new(0.0, 10.0));
-        // No event for a while (the End was lost, for example in another window): the next
+        // No event for a long time (the End was lost, for example in another window): the next
         // Move starts from the keys of that moment.
         let m = pad(
             &mut latch,

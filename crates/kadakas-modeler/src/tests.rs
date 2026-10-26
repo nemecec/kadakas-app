@@ -487,6 +487,65 @@ fn a_failed_save_of_the_settings_is_tried_again() {
 }
 
 #[test]
+fn a_failed_save_keeps_pending_changes_over_a_reload_and_the_end_of_the_program_logs_it() {
+    use kadakas_update::handshake::{AppLink, ENV_ROOT, ENV_RUN};
+    let d = std::env::temp_dir().join(format!("kadakas-modeler-pending-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    let (root, prefs) = (d.join("launcher"), d.join("config"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(prefs.join("modeler.json")).unwrap();
+    std::fs::create_dir_all(d.join("log")).unwrap();
+    let (r, run) = (root.display().to_string(), "1a-2b".to_string());
+    let link = AppLink::from_env(&|k| match k {
+        ENV_ROOT => Some(r.clone()),
+        ENV_RUN => Some(run.clone()),
+        _ => None,
+    })
+    .unwrap();
+    let mut a = app();
+    a.set_prefs_dir(Some(prefs.clone()));
+    a.set_launch(crate::launch::Launch::new(Some(link)));
+    let ctx = egui::Context::default();
+    let _ = frame(&ctx, &mut a, vec![], 0.0);
+    a.run(Cmd::ToggleTray, glam::Vec2::new(900.0, 600.0));
+    let _ = frame(&ctx, &mut a, vec![], 1.0);
+    assert!(a.status.contains("modeler.json"), "{}", a.status);
+    assert!(!a.prefs.tray);
+    // The dialog stores a theme while the change waits, and moves the stamp.
+    std::fs::remove_dir_all(prefs.join("modeler.json")).unwrap();
+    std::fs::write(prefs.join("modeler.json"), r#"{"theme":"dark"}"#).unwrap();
+    kadakas_update::welcome::write_mark(&root, 1, true).unwrap();
+    let _ = frame(&ctx, &mut a, vec![], 2.0);
+    let _ = frame(&ctx, &mut a, vec![], 2.1);
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prefs.join("modeler.json")).unwrap()).unwrap();
+    assert_eq!(v["theme"], "dark");
+    assert_eq!(
+        v["tray"], false,
+        "the change that was not saved is written after the reload"
+    );
+    assert_eq!(a.prefs.theme, ThemeChoice::Dark);
+    assert!(!a.prefs.tray);
+    // The program ends with an unsaved change and a file that cannot be written.
+    a.run(Cmd::ToggleTray, glam::Vec2::new(900.0, 600.0));
+    std::fs::remove_file(prefs.join("modeler.json")).unwrap();
+    std::fs::create_dir_all(prefs.join("modeler.json")).unwrap();
+    let log = d.join("log");
+    a.save_prefs_last_try_to(std::time::Duration::from_millis(1), Some(&log));
+    let text = std::fs::read_to_string(log.join("save-failed.log")).unwrap();
+    assert!(
+        text.contains("the settings") && text.contains("modeler.json"),
+        "{text}"
+    );
+    std::fs::remove_dir_all(prefs.join("modeler.json")).unwrap();
+    a.save_prefs_last_try_to(std::time::Duration::from_millis(1), Some(&log));
+    let v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prefs.join("modeler.json")).unwrap()).unwrap();
+    assert_eq!(v["tray"], true);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn a_save_before_the_reload_writes_only_what_this_window_changed() {
     // No launcher link: the window never sees the stamp, so it never reloads. The dialog stored
     // a theme and a key of the future after this window read the file. A toggle of the tray
@@ -537,7 +596,7 @@ fn what_the_welcome_dialog_stored_is_read_again_and_a_later_save_keeps_it() {
     // The dialog stores a theme, a language and a key of the future, then moves the stamp.
     std::fs::write(
         prefs.join("modeler.json"),
-        r#"{"theme":"dark","language":"et","from_the_future":[1,2]}"#,
+        r#"{"theme":"dark","from_the_future":[1,2]}"#,
     )
     .unwrap();
     std::fs::write(prefs.join("prefs.json"), r#"{"navigation":"trackpad"}"#).unwrap();
@@ -545,7 +604,6 @@ fn what_the_welcome_dialog_stored_is_read_again_and_a_later_save_keeps_it() {
     let _ = frame(&ctx, &mut a, vec![], 1.0);
     let _ = frame(&ctx, &mut a, vec![], 2.0);
     assert_eq!(a.prefs.theme, ThemeChoice::Dark, "read again");
-    assert_eq!(a.prefs.language.as_deref(), Some("et"));
     assert_eq!(
         a.prefs.nav_style(),
         kadakas_ui_core::nav3d::NavStyle::Trackpad
@@ -557,7 +615,6 @@ fn what_the_welcome_dialog_stored_is_read_again_and_a_later_save_keeps_it() {
         serde_json::from_slice(&std::fs::read(prefs.join("modeler.json")).unwrap()).unwrap();
     assert_eq!(v["tray"], false);
     assert_eq!(v["theme"], "dark", "the dialog's theme is not undone");
-    assert_eq!(v["language"], "et");
     assert_eq!(v["from_the_future"][1], 2, "unknown keys survive");
     let _ = std::fs::remove_dir_all(&d);
 }

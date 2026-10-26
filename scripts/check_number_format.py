@@ -53,7 +53,7 @@ WIDGET = re.compile(r"\b(?:egui::)?(DragValue|Slider)::new\(")
 # `{:>6.1}`, `{:.prec$}`, `{:.*}`. A precision of 0 writes a whole number and is fine.
 MACRO = re.compile(r"\b(?:format|write|writeln|print|println|eprint|eprintln|panic)!\(")
 PLACEHOLDER = re.compile(
-    r"\{(?:[A-Za-z_][\w.\[\]]*)?:[^{}]*\.(?:[1-9]\d*|[A-Za-z_]\w*\$|\*)[^{}]*\}"
+    r"\{(?:[A-Za-z_][\w.\[\]]*|\d+)?:[^{}]*\.(?:[1-9]\d*|\w+\$|\*)[^{}]*\}"
 )
 
 
@@ -110,7 +110,8 @@ def raw_floats(code):
     for m in MACRO.finditer(code):
         end = skip_group(code, m.end() - 1)
         call = code[m.start() : end]
-        if PLACEHOLDER.search(call):
+        # `{{` and `}}` are braces in the text, not placeholders.
+        if PLACEHOLDER.search(call.replace("{{", "").replace("}}", "")):
             out.append((m.start(), call))
     return out
 

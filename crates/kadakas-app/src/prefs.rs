@@ -111,9 +111,20 @@ pub fn dir() -> Option<PathBuf> {
 /// warning for the status line.
 pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
     let path = dir.join("prefs.json");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<Prefs>(&text) {
-            Ok(p) if p.snap.problem().is_none() => (p.migrate(), None),
+    // An empty or damaged file gives the last good version (`prefs.json.bak`), with a warning.
+    let text = match kadakas_sys::jsonfile::read_for_load(&path) {
+        Ok(Some((bytes, from_backup))) => {
+            Ok((String::from_utf8_lossy(&bytes).into_owned(), from_backup))
+        }
+        Ok(None) => return (Prefs::default(), None),
+        Err(e) => Err(e),
+    };
+    match text {
+        Ok((text, from_backup)) => match serde_json::from_str::<Prefs>(&text) {
+            Ok(p) if p.snap.problem().is_none() => (
+                p.migrate(),
+                from_backup.then(|| tr!("prefs-restored-from-backup", path = path.display())),
+            ),
             Ok(_) => (
                 Prefs::default(),
                 Some(tr!(
@@ -126,7 +137,6 @@ pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
                 Some(tr!("prefs-is-ignored", path = path.display(), e = e)),
             ),
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Prefs::default(), None),
         Err(e) => (
             Prefs::default(),
             Some(tr!("prefs-is-ignored", path = path.display(), e = e)),
@@ -145,6 +155,22 @@ pub fn write_file(dir: &std::path::Path, name: &str, text: &str) -> Result<(), S
         .map_err(|e| tr!("prefs-cannot-write", path = tmp.display(), e = e))?;
     std::fs::rename(&tmp, &path)
         .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
+}
+
+/// The prefs after a reload: the file as it is now (`reloaded`) with the changes that this window
+/// made and could not save yet (the difference between `saved` and `now`) on top. Without
+/// pending changes this is `reloaded`.
+pub fn with_pending(reloaded: &Prefs, saved: &Prefs, now: &Prefs) -> Prefs {
+    let value = |p: &Prefs| serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+    let changes = kadakas_sys::jsonfile::diff(&value(saved), &value(now));
+    if changes.is_empty() {
+        return *reloaded;
+    }
+    let mut v = value(reloaded);
+    if let serde_json::Value::Object(o) = &mut v {
+        kadakas_sys::jsonfile::apply(o, &changes);
+    }
+    serde_json::from_value(v).unwrap_or(*reloaded)
 }
 
 /// Writes the prefs whole. The program itself writes only the keys it changed
@@ -195,6 +221,40 @@ mod tests {
         .unwrap();
         let (p, _) = load_from(&d);
         assert_eq!((p.max_versions, p.max_version_mib), (7, 9));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_damaged_or_empty_file_gives_the_last_good_version_with_a_warning() {
+        let d = temp("restore");
+        let good = Prefs {
+            cues: !Prefs::default().cues,
+            ..Prefs::default()
+        };
+        save_to(&d, &good).unwrap();
+        // The second save moves the first to .bak.
+        save_changes_to(
+            &d,
+            &good,
+            &Prefs {
+                max_versions: 7,
+                ..good
+            },
+        )
+        .unwrap();
+        let bak = std::fs::read(d.join("prefs.json.bak")).unwrap();
+        assert!(!bak.is_empty());
+        for bad in ["", "{ nope"] {
+            std::fs::write(d.join("prefs.json"), bad).unwrap();
+            let (p, warning) = load_from(&d);
+            assert_eq!(p.cues, good.cues, "{bad:?}: the settings come back");
+            assert!(warning.unwrap().contains("prefs.json"), "{bad:?}");
+        }
+        // Without a backup the defaults come with the old warning.
+        std::fs::remove_file(d.join("prefs.json.bak")).unwrap();
+        let (p, warning) = load_from(&d);
+        assert_eq!(p, Prefs::default());
+        assert!(warning.is_some());
         let _ = std::fs::remove_dir_all(&d);
     }
 

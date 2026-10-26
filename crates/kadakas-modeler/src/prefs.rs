@@ -138,9 +138,13 @@ pub fn dir() -> Option<PathBuf> {
 /// ignored.
 pub fn load_from(dir: &Path) -> (Prefs, Option<String>) {
     let path = dir.join("modeler.json");
-    let (mut prefs, warning) = match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<Prefs>(&text) {
-            Ok(p) => (p, None),
+    // An empty or damaged file gives the last good version (`modeler.json.bak`), with a warning.
+    let (mut prefs, warning) = match kadakas_sys::jsonfile::read_for_load(&path) {
+        Ok(Some((bytes, from_backup))) => match serde_json::from_slice::<Prefs>(&bytes) {
+            Ok(p) => (
+                p,
+                from_backup.then(|| tr!("modeler-prefs-restored", path = path.display())),
+            ),
             Err(e) => (
                 Prefs::default(),
                 Some(tr!(
@@ -150,7 +154,7 @@ pub fn load_from(dir: &Path) -> (Prefs, Option<String>) {
                 )),
             ),
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Prefs::default(), None),
+        Ok(None) => (Prefs::default(), None),
         Err(e) => (
             Prefs::default(),
             Some(tr!(
@@ -167,9 +171,7 @@ pub fn load_from(dir: &Path) -> (Prefs, Option<String>) {
 
 /// The units that the person set in the app. A missing or damaged file gives the defaults.
 fn app_units(dir: &Path) -> kadakas_units::Settings {
-    std::fs::read_to_string(dir.join("prefs.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    app_prefs_value(dir)
         .and_then(|v| v.get("units").cloned())
         .and_then(|u| serde_json::from_value(u).ok())
         .unwrap_or_default()
@@ -177,11 +179,17 @@ fn app_units(dir: &Path) -> kadakas_units::Settings {
 
 /// The navigation style that the person set in the app. A missing value gives the mouse.
 fn app_navigation(dir: &Path) -> NavStyle {
-    std::fs::read_to_string(dir.join("prefs.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    app_prefs_value(dir)
         .and_then(|v| v.get("navigation").map(NavStyle::from_value))
         .unwrap_or_default()
+}
+
+/// `prefs.json` of the app as JSON (the last good version if the file is damaged).
+fn app_prefs_value(dir: &Path) -> Option<serde_json::Value> {
+    let (bytes, _) = kadakas_sys::jsonfile::read_for_load(&dir.join("prefs.json"))
+        .ok()
+        .flatten()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 pub fn load() -> (Prefs, Option<String>) {
@@ -205,6 +213,33 @@ pub fn save_changes_to(dir: &Path, saved: &Prefs, now: &Prefs) -> Result<(), Str
             error = e
         )
     })
+}
+
+/// True when the language or the units differ: then the language of the program and the units
+/// are applied again (they are process wide).
+pub fn locale_differs(a: &Prefs, b: &Prefs) -> bool {
+    a.language != b.language || a.units != b.units
+}
+
+/// The settings after a reload: the files as they are now (`reloaded`) with the changes that this
+/// window made and could not save yet (the difference between `saved` and `now`) on top. Without
+/// pending changes this is `reloaded`.
+pub fn with_pending(reloaded: &Prefs, saved: &Prefs, now: &Prefs) -> Prefs {
+    let value = |p: &Prefs| serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+    let changes = kadakas_sys::jsonfile::diff(&value(saved), &value(now));
+    if changes.is_empty() {
+        return reloaded.clone();
+    }
+    let mut v = value(reloaded);
+    if let serde_json::Value::Object(o) = &mut v {
+        kadakas_sys::jsonfile::apply(o, &changes);
+    }
+    // The fields that are not in the file (the units and the navigation of the app) come from
+    // the reloaded settings.
+    let mut out: Prefs = serde_json::from_value(v).unwrap_or_else(|_| reloaded.clone());
+    out.units = reloaded.units;
+    out.app_navigation = reloaded.app_navigation;
+    out
 }
 
 /// Writes the settings whole into a temporary file first, so a crash cannot leave half a file.
@@ -283,6 +318,59 @@ mod tests {
             "et",
             "falls back to the system"
         );
+    }
+
+    #[test]
+    fn only_a_changed_language_or_units_are_applied_again_after_a_reload() {
+        let a = Prefs::default();
+        assert!(!locale_differs(&a, &a.clone()));
+        let b = Prefs {
+            language: Some("et".into()),
+            ..a.clone()
+        };
+        assert!(locale_differs(&a, &b));
+        let mut c = a.clone();
+        c.units.decimal = Some(kadakas_units::Decimal::Comma);
+        assert!(locale_differs(&a, &c));
+        // Theme, tray and the like are not part of the locale.
+        let d = Prefs {
+            tray: false,
+            theme: ThemeChoice::Dark,
+            ..a.clone()
+        };
+        assert!(!locale_differs(&a, &d));
+    }
+
+    #[test]
+    fn a_damaged_or_empty_file_gives_the_last_good_version_with_a_warning() {
+        let d = temp("restore");
+        let good = Prefs {
+            tray: false,
+            ..Prefs::default()
+        };
+        save_to(&d, &good).unwrap();
+        save_changes_to(
+            &d,
+            &good,
+            &Prefs {
+                animate_scenes: false,
+                ..good.clone()
+            },
+        )
+        .unwrap();
+        for bad in ["", "{ nope"] {
+            std::fs::write(d.join("modeler.json"), bad).unwrap();
+            let (p, warning) = load_from(&d);
+            assert!(!p.tray, "{bad:?}: the settings come back");
+            assert!(warning.unwrap().contains("modeler.json"));
+        }
+        // The units of the app come from its last good file too.
+        std::fs::write(d.join("prefs.json"), r#"{"navigation":"trackpad"}"#).unwrap();
+        std::fs::write(d.join("prefs.json.bak"), r#"{"navigation":"trackpad"}"#).unwrap();
+        std::fs::write(d.join("prefs.json"), "").unwrap();
+        let (p, _) = load_from(&d);
+        assert_eq!(p.app_navigation, NavStyle::Trackpad);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

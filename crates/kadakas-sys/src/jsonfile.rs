@@ -141,61 +141,144 @@ pub enum Before {
     Damaged,
 }
 
-/// Copies a damaged file to `<name>.damaged-<seconds>` (a name that no write ever replaces).
-fn keep_damaged(path: &Path) -> std::io::Result<()> {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    for n in 0..1000 {
-        let suffix = if n == 0 {
-            format!(".damaged-{secs}")
-        } else {
-            format!(".damaged-{secs}-{n}")
-        };
-        let to = fsio::sibling(path, "", &suffix);
-        if !to.exists() {
-            std::fs::copy(path, to)?;
-            return Ok(());
-        }
-    }
-    Ok(())
+/// How many copies of each kind are kept. The oldest go first.
+pub const KEEP_COPIES: usize = 10;
+
+fn is_object(bytes: &[u8]) -> bool {
+    matches!(serde_json::from_slice::<Value>(bytes), Ok(Value::Object(_)))
 }
 
-/// The copies that [`read_for_update`] made of damaged versions of `path`.
-pub fn damaged_copies(path: &Path) -> Vec<std::path::PathBuf> {
+/// The copies of `kind` (`damaged` or `good`) next to `path`, the oldest first. A name is
+/// `<name>.<kind>-<seconds>` or `<name>.<kind>-<seconds>-<n>`.
+fn copies(path: &Path, kind: &str) -> Vec<std::path::PathBuf> {
+    keyed_copies(path, kind)
+        .into_iter()
+        .map(|(_, _, p)| p)
+        .collect()
+}
+
+/// Like [`copies`], with the seconds and the number of each name.
+fn keyed_copies(path: &Path, kind: &str) -> Vec<(u64, u32, std::path::PathBuf)> {
     let Some(dir) = path.parent() else {
         return Vec::new();
     };
     let prefix = format!(
-        "{}.damaged-",
+        "{}.{kind}-",
         path.file_name()
             .map(|n| n.to_string_lossy())
             .unwrap_or_default()
     );
-    let mut out: Vec<_> = std::fs::read_dir(dir)
+    let mut out: Vec<(u64, u32, std::path::PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
-        .map(|e| e.path())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let rest = name.strip_prefix(&prefix)?;
+            let mut parts = rest.splitn(2, '-');
+            let secs = parts.next()?.parse().ok()?;
+            let n = parts.next().map_or(Some(0), |n| n.parse().ok())?;
+            Some((secs, n, e.path()))
+        })
         .collect();
     out.sort();
     out
 }
 
-/// Reads a settings file that is about to be written, and says what was there. A missing file is
-/// an empty object. An empty file or a file that is not a JSON object counts as empty too; a
-/// file with text is first copied to `<name>.damaged-<seconds>`. A read error other than "not
-/// found" is returned.
+/// Keeps `bytes` as a copy of `kind` next to `path`, in a name that no write replaces. Nothing is
+/// copied when the newest copy has the same bytes (a write that fails and is tried again every
+/// few seconds makes one copy, not thousands). Only the newest [`KEEP_COPIES`] stay. An error
+/// when no copy could be made: the caller does not replace the file then.
+fn keep_copy_at(path: &Path, kind: &str, bytes: &[u8], secs: u64) -> std::io::Result<()> {
+    let existing = copies(path, kind);
+    if let Some(newest) = existing.last()
+        && std::fs::read(newest).is_ok_and(|b| b == bytes)
+    {
+        return Ok(());
+    }
+    // The number goes on after the highest one of this second, so a name that an earlier prune
+    // freed does not come back as the "oldest" name for the newest copy.
+    let first = keyed_copies(path, kind)
+        .iter()
+        .filter(|(s, _, _)| *s == secs)
+        .map(|(_, n, _)| n + 1)
+        .max()
+        .unwrap_or(0);
+    for n in first..first + 1000 {
+        let suffix = if n == 0 {
+            format!(".{kind}-{secs}")
+        } else {
+            format!(".{kind}-{secs}-{n}")
+        };
+        let to = fsio::sibling(path, "", &suffix);
+        if to.exists() {
+            continue;
+        }
+        std::fs::write(&to, bytes)?;
+        let all = copies(path, kind);
+        for old in all.iter().take(all.len().saturating_sub(KEEP_COPIES)) {
+            let _ = std::fs::remove_file(old);
+        }
+        return Ok(());
+    }
+    Err(std::io::Error::other(format!(
+        "no free name for a copy of {}",
+        path.display()
+    )))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The copies that [`read_for_update`] made of damaged versions of `path`, the oldest first.
+pub fn damaged_copies(path: &Path) -> Vec<std::path::PathBuf> {
+    copies(path, "damaged")
+}
+
+/// The copies of the last good version (`<name>.good-<seconds>`) that were made before a damaged
+/// file was replaced, the oldest first.
+pub fn good_copies(path: &Path) -> Vec<std::path::PathBuf> {
+    copies(path, "good")
+}
+
+/// The content of the last good version, from `<name>.bak`, if that is a JSON object.
+fn good_backup(path: &Path) -> Option<(Vec<u8>, Map<String, Value>)> {
+    let bytes = std::fs::read(fsio::sibling(path, "", ".bak")).ok()?;
+    match serde_json::from_slice::<Value>(&bytes) {
+        Ok(Value::Object(o)) => Some((bytes, o)),
+        _ => None,
+    }
+}
+
+/// Reads a settings file that is about to be written, and says what was there.
+///
+/// - A missing file is an empty object.
+/// - An empty file, or a file that is not a JSON object, is `Damaged`. A damaged file with text
+///   is first kept as `<name>.damaged-<seconds>`. If `<name>.bak` holds a good version, the
+///   object is that version (the settings come back), and the version is also kept as
+///   `<name>.good-<seconds>`, because the next writes move `.bak` on.
+/// - A read error other than "not found" is returned. So is a failure to make a copy: the file
+///   is not replaced then.
 pub fn read_for_update_ex(path: &Path) -> std::io::Result<(Map<String, Value>, Before)> {
     match std::fs::read(path) {
         Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
             Ok(Value::Object(o)) => Ok((o, Before::Good)),
             _ => {
+                let secs = now_secs();
                 if !bytes.iter().all(u8::is_ascii_whitespace) {
-                    keep_damaged(path)?;
+                    keep_copy_at(path, "damaged", &bytes, secs)?;
                 }
-                Ok((Map::new(), Before::Damaged))
+                let restored = match good_backup(path) {
+                    Some((good, object)) => {
+                        keep_copy_at(path, "good", &good, secs)?;
+                        object
+                    }
+                    None => Map::new(),
+                };
+                Ok((restored, Before::Damaged))
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Map::new(), Before::Good)),
@@ -206,6 +289,22 @@ pub fn read_for_update_ex(path: &Path) -> std::io::Result<(Map<String, Value>, B
 /// Like [`read_for_update_ex`], for a caller that does not write the file itself.
 pub fn read_for_update(path: &Path) -> std::io::Result<Map<String, Value>> {
     read_for_update_ex(path).map(|(o, _)| o)
+}
+
+/// The bytes of a settings file for a program that loads its settings. `Ok(None)`: no file. A file
+/// that is empty or not a JSON object is replaced by the last good version (`<name>.bak`) when
+/// there is one; the flag says so, and the program tells the person. The file itself is not
+/// changed.
+pub fn read_for_load(path: &Path) -> std::io::Result<Option<(Vec<u8>, bool)>> {
+    match std::fs::read(path) {
+        Ok(bytes) if is_object(&bytes) => Ok(Some((bytes, false))),
+        Ok(bytes) => Ok(Some(match good_backup(path) {
+            Some((good, _)) => (good, true),
+            None => (bytes, false),
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// The lock of a settings file: `<name>.lock` next to it. `None` on a file system that cannot
@@ -323,36 +422,152 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_file_survives_the_next_writes_under_its_own_name() {
+    fn a_damaged_file_comes_back_from_the_backup_and_the_good_copy_is_never_rotated() {
         let d = tmp("damaged-twice");
+        let p = d.join("p.json");
+        // A good file with a good .bak behind it (the second write moves the first to .bak).
+        std::fs::write(&p, r#"{"first": 1}"#).unwrap();
+        update(&p, |o| {
+            o.insert("second".into(), json!(2));
+        })
+        .unwrap();
+        let good_bak = std::fs::read(d.join("p.json.bak")).unwrap();
+        assert_eq!(good_bak, br#"{"first": 1}"#);
+        // The file is damaged. Three writes follow.
+        std::fs::write(&p, "{ half a file").unwrap();
+        for (k, v) in [("a", 1), ("b", 2), ("c", 3)] {
+            update(&p, |o| {
+                o.insert(k.into(), json!(v));
+            })
+            .unwrap();
+        }
+        // The settings of the .bak came back, with the three changes.
+        let now = read_object(&p);
+        assert_eq!(now.len(), 4, "{now:?}");
+        assert_eq!(now["first"], 1);
+        // The damaged text is kept under its own name.
+        let damaged = damaged_copies(&p);
+        assert_eq!(damaged.len(), 1, "{damaged:?}");
+        assert_eq!(
+            std::fs::read_to_string(&damaged[0]).unwrap(),
+            "{ half a file"
+        );
+        // The last good version stays as .good-<seconds>, although .bak moved on.
+        let good = good_copies(&p);
+        assert_eq!(good.len(), 1, "{good:?}");
+        assert_eq!(std::fs::read(&good[0]).unwrap(), good_bak);
+        assert_ne!(std::fs::read(d.join("p.json.bak")).unwrap(), good_bak);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_damaged_file_without_a_backup_starts_empty_and_is_kept() {
+        let d = tmp("damaged-no-bak");
         let p = d.join("p.json");
         std::fs::write(&p, "{ half a file").unwrap();
         update(&p, |o| {
             o.insert("a".into(), json!(1));
         })
         .unwrap();
-        update(&p, |o| {
-            o.insert("b".into(), json!(2));
-        })
-        .unwrap();
-        update(&p, |o| {
-            o.insert("c".into(), json!(3));
-        })
-        .unwrap();
-        // The original text is still there after three writes.
-        let kept = damaged_copies(&p);
-        assert_eq!(kept.len(), 1, "{kept:?}");
-        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ half a file");
-        // The .bak is the last good version, never the damaged text.
-        let bak: Value =
-            serde_json::from_slice(&std::fs::read(d.join("p.json.bak")).unwrap()).unwrap();
-        assert_eq!(bak, json!({"a": 1, "b": 2}));
-        assert_eq!(read_object(&p).len(), 3);
+        assert_eq!(read_object(&p).len(), 1);
+        assert_eq!(damaged_copies(&p).len(), 1);
+        assert!(good_copies(&p).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
-    fn an_empty_file_does_not_replace_a_good_backup() {
+    fn a_load_takes_the_backup_when_the_file_is_empty_or_damaged() {
+        let d = tmp("load");
+        let p = d.join("p.json");
+        assert!(read_for_load(&p).unwrap().is_none(), "no file, nothing");
+        std::fs::write(&p, r#"{"a": 1}"#).unwrap();
+        assert_eq!(
+            read_for_load(&p).unwrap().unwrap(),
+            (br#"{"a": 1}"#.to_vec(), false)
+        );
+        std::fs::write(d.join("p.json.bak"), r#"{"old": 1}"#).unwrap();
+        for bad in ["", "  ", "{ nope", "[1]"] {
+            std::fs::write(&p, bad).unwrap();
+            let (bytes, from_backup) = read_for_load(&p).unwrap().unwrap();
+            assert_eq!(
+                (bytes.as_slice(), from_backup),
+                (br#"{"old": 1}"#.as_slice(), true),
+                "{bad:?}"
+            );
+        }
+        // Without a good backup the damaged bytes come back as they are.
+        std::fs::remove_file(d.join("p.json.bak")).unwrap();
+        let (bytes, from_backup) = read_for_load(&p).unwrap().unwrap();
+        assert_eq!((bytes.as_slice(), from_backup), (b"[1]".as_slice(), false));
+        // A deleted file is not brought back by the backup.
+        std::fs::write(d.join("p.json.bak"), r#"{"old": 1}"#).unwrap();
+        std::fs::remove_file(&p).unwrap();
+        assert!(read_for_load(&p).unwrap().is_none());
+        // Reading does not change the files.
+        assert!(!p.exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_write_that_fails_and_is_tried_again_makes_one_copy_of_the_same_damage() {
+        let d = tmp("copies-same");
+        let p = d.join("p.json");
+        std::fs::write(&p, "{ same damage").unwrap();
+        for _ in 0..50 {
+            read_for_update(&p).unwrap();
+        }
+        assert_eq!(damaged_copies(&p).len(), 1);
+        // Different damage is a new copy.
+        std::fs::write(&p, "{ other damage").unwrap();
+        read_for_update(&p).unwrap();
+        assert_eq!(damaged_copies(&p).len(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn only_the_newest_copies_stay() {
+        let d = tmp("copies-cap");
+        let p = d.join("p.json");
+        for n in 0..(KEEP_COPIES + 5) {
+            std::fs::write(&p, format!("{{ damage {n}")).unwrap();
+            // The same second and different texts: the names get a number.
+            keep_copy_at(&p, "damaged", format!("{{ damage {n}").as_bytes(), 1000).unwrap();
+        }
+        let kept = damaged_copies(&p);
+        assert_eq!(kept.len(), KEEP_COPIES);
+        // The oldest are gone, the newest is there, in the order they were made.
+        let last = std::fs::read_to_string(kept.last().unwrap()).unwrap();
+        assert_eq!(last, format!("{{ damage {}", KEEP_COPIES + 4));
+        let first = std::fs::read_to_string(&kept[0]).unwrap();
+        assert_eq!(first, "{ damage 5");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_damaged_file_is_not_replaced_when_no_copy_can_be_written() {
+        let d = tmp("copies-full");
+        let p = d.join("p.json");
+        std::fs::write(&p, "{ damage").unwrap();
+        // A copy that cannot be written is an error, and the file stays. `update` stops there.
+        let blocked = d.join("sub");
+        std::fs::write(&blocked, b"x").unwrap();
+        assert!(keep_copy_at(&blocked.join("p.json"), "damaged", b"x", 1).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), b"{ damage");
+        // Many copies of the same second get rising numbers and never reuse a pruned name.
+        for n in 0..30 {
+            keep_copy_at(&p, "damaged", format!("text {n}").as_bytes(), 5).unwrap();
+        }
+        let names: Vec<String> = damaged_copies(&p)
+            .iter()
+            .map(|c| std::fs::read_to_string(c).unwrap())
+            .collect();
+        let want: Vec<String> = (20..30).map(|n| format!("text {n}")).collect();
+        assert_eq!(names, want);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_empty_file_restores_the_backup_and_does_not_replace_it() {
         let d = tmp("empty");
         let p = d.join("p.json");
         std::fs::write(&p, r#"{"keep": "me"}"#).unwrap();
@@ -373,10 +588,16 @@ mod tests {
             good,
             ".bak is untouched"
         );
+        let now = read_object(&p);
+        assert_eq!(
+            (now.get("keep"), now.get("y")),
+            (Some(&json!("me")), Some(&json!(2)))
+        );
         assert!(
             damaged_copies(&p).is_empty(),
             "nothing to keep from an empty file"
         );
+        assert_eq!(std::fs::read(&good_copies(&p)[0]).unwrap(), good);
         // Whitespace only counts as empty too.
         std::fs::write(&p, b" \n").unwrap();
         update(&p, |_| {}).unwrap();

@@ -236,9 +236,12 @@ impl Hub {
     pub fn set_crash_policy(&mut self, p: CrashPolicy) -> Result<(), FeedbackError> {
         {
             let _guard = self.lock()?;
-            let mut s = self.settings();
-            s.crash_policy = p;
-            self.save_settings(&s)?;
+            // The person chose: the key is written even when it equals what an unknown value
+            // reads as.
+            self.write_keys(vec![(
+                "crash_policy".into(),
+                serde_json::Value::from(p.id()),
+            )])?;
         }
         if p == CrashPolicy::Never {
             let waiting: Vec<String> = self
@@ -271,22 +274,44 @@ impl Hub {
             .unwrap_or_default()
     }
 
-    /// Writes the settings. The keys of the file that this version does not know stay (a newer
-    /// version or another program wrote them): the known keys are put over the file as it is.
+    /// Writes the settings. Only the fields that differ from `settings()` (what the caller
+    /// started from) go into the file as it is. A key that this version does not know stays. A
+    /// value that this version reads as a fallback (a policy of a newer version) is not written
+    /// back unless the caller changed that field.
     fn save_settings(&mut self, s: &Settings) -> Result<(), FeedbackError> {
-        let mut object = self
-            .storage
-            .read(SETTINGS)
-            .filter(|b| b.len() < 64 << 10)
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| match v {
-                serde_json::Value::Object(o) => Some(o),
-                _ => None,
-            })
-            .unwrap_or_default();
-        if let Ok(serde_json::Value::Object(known)) = serde_json::to_value(s) {
-            object.extend(known);
+        let (old, new) = (self.settings(), s);
+        let (serde_json::Value::Object(old), Ok(serde_json::Value::Object(new))) = (
+            serde_json::to_value(old).unwrap_or_default(),
+            serde_json::to_value(new),
+        ) else {
+            return Ok(());
+        };
+        let changes: Vec<(String, serde_json::Value)> = new
+            .into_iter()
+            .filter(|(k, v)| old.get(k) != Some(v))
+            .collect();
+        self.write_keys(changes)
+    }
+
+    /// Puts these keys into the settings file as it is. A file of 64 KiB or more is not read, so
+    /// it is not replaced either: that is an error.
+    fn write_keys(&mut self, keys: Vec<(String, serde_json::Value)>) -> Result<(), FeedbackError> {
+        if keys.is_empty() {
+            return Ok(());
         }
+        let mut object = match self.storage.read(SETTINGS) {
+            Some(b) if b.len() >= 64 << 10 => {
+                return Err(FeedbackError::Store(
+                    "settings.json is too big to be changed".into(),
+                ));
+            }
+            Some(b) => match serde_json::from_slice::<serde_json::Value>(&b) {
+                Ok(serde_json::Value::Object(o)) => o,
+                _ => serde_json::Map::new(),
+            },
+            None => serde_json::Map::new(),
+        };
+        object.extend(keys);
         let b = serde_json::to_vec(&serde_json::Value::Object(object))
             .map_err(|e| FeedbackError::Store(e.to_string()))?;
         self.storage
@@ -300,6 +325,7 @@ impl Hub {
 
     /// Stores the answer of the person to "may Kadakas send my reports?".
     pub fn set_send(&mut self, on: Option<bool>) -> Result<(), FeedbackError> {
+        let _guard = self.lock()?;
         let mut s = self.settings();
         s.send = on;
         self.save_settings(&s)
@@ -309,13 +335,17 @@ impl Hub {
     /// used. A new address gives every unsent report a fresh start: the tries and the back-off
     /// belonged to the old address.
     pub fn set_url(&mut self, url: Option<String>) -> Result<(), FeedbackError> {
-        let mut s = self.settings();
-        let new = url
-            .map(|u| u.trim().to_string())
-            .filter(|u| !u.is_empty() && u.len() <= 300);
-        let changed = s.url != new;
-        s.url = new;
-        self.save_settings(&s)?;
+        let changed = {
+            let _guard = self.lock()?;
+            let mut s = self.settings();
+            let new = url
+                .map(|u| u.trim().to_string())
+                .filter(|u| !u.is_empty() && u.len() <= 300);
+            let changed = s.url != new;
+            s.url = new;
+            self.save_settings(&s)?;
+            changed
+        };
         if changed {
             self.reset_tries(None)?;
         }
@@ -1726,6 +1756,119 @@ mod tests {
         assert_eq!(raw["from_the_future"]["a"][0], 1);
         assert_eq!(raw["omit_installation"], false);
         assert_eq!(h.crash_policy(), CrashPolicy::Always);
+    }
+
+    /// A hub whose settings file was written by a newer version: a policy that this version does
+    /// not know, a key that it does not know, and (with `installation`) an installation ID.
+    fn newer_file(installation: bool) -> Hub {
+        let mut h = Hub::in_memory();
+        let id = if installation {
+            r#""installation":"abc","#
+        } else {
+            ""
+        };
+        let file = format!(
+            r#"{{"send":true,"url":"https://x.example/f",{id}"omit_installation":true,
+                "crash_policy":"ask_later","from_the_future":{{"a":[1]}}}}"#
+        );
+        h.storage.write(SETTINGS, file.as_bytes()).unwrap();
+        h
+    }
+
+    fn raw_settings(h: &Hub) -> serde_json::Value {
+        serde_json::from_slice(&h.storage.read(SETTINGS).unwrap()).unwrap()
+    }
+
+    /// The file still says what the newer version wrote, key for key, except `changed`.
+    fn assert_kept_except(h: &Hub, changed: &[&str]) {
+        let now = raw_settings(h);
+        let was: serde_json::Value = serde_json::from_str(
+            r#"{"send":true,"url":"https://x.example/f","installation":"abc",
+                "omit_installation":true,"crash_policy":"ask_later","from_the_future":{"a":[1]}}"#,
+        )
+        .unwrap();
+        for (k, v) in was.as_object().unwrap() {
+            if changed.contains(&k.as_str()) {
+                continue;
+            }
+            // `installation` is absent from the file without one.
+            if k == "installation" && now.get(k).is_none() {
+                continue;
+            }
+            assert_eq!(now.get(k), Some(v), "key {k} in {now}");
+        }
+    }
+
+    #[test]
+    fn no_setter_writes_the_fallback_of_an_unknown_policy_back() {
+        // Every setter that runs for another reason leaves "ask_later" as it is.
+        let mut h = newer_file(true);
+        h.set_include_installation(true).unwrap();
+        assert_kept_except(&h, &["omit_installation"]);
+        assert_eq!(raw_settings(&h)["omit_installation"], false);
+
+        let mut h = newer_file(true);
+        let id = h.reset_installation_id().unwrap();
+        assert_kept_except(&h, &["installation"]);
+        assert_eq!(raw_settings(&h)["installation"], id.as_str());
+
+        let mut h = newer_file(true);
+        h.set_send(Some(false)).unwrap();
+        assert_kept_except(&h, &["send"]);
+        assert_eq!(raw_settings(&h)["send"], false);
+
+        let mut h = newer_file(true);
+        h.set_url(Some("https://y.example/f".into())).unwrap();
+        assert_kept_except(&h, &["url"]);
+        assert_eq!(raw_settings(&h)["url"], "https://y.example/f");
+
+        // The installation ID is made by itself when the first report goes out.
+        let mut h = newer_file(false);
+        let id = h.installation_id();
+        assert_kept_except(&h, &["installation"]);
+        assert_eq!(raw_settings(&h)["installation"], id.as_str());
+        // A setter that changes nothing writes nothing.
+        let before = h.storage.read(SETTINGS).unwrap();
+        h.set_send(Some(true)).unwrap();
+        assert_eq!(h.storage.read(SETTINGS).unwrap(), before);
+    }
+
+    #[test]
+    fn the_person_can_choose_the_policy_that_an_unknown_value_reads_as() {
+        let mut h = newer_file(true);
+        h.set_crash_policy(CrashPolicy::Ask).unwrap();
+        assert_eq!(raw_settings(&h)["crash_policy"], "ask");
+        assert_kept_except(&h, &["crash_policy"]);
+    }
+
+    #[test]
+    fn a_settings_file_of_64_kib_or_more_is_not_replaced() {
+        let mut h = Hub::in_memory();
+        let big = format!(r#"{{"send":true,"pad":"{}"}}"#, "x".repeat(70 << 10));
+        h.storage.write(SETTINGS, big.as_bytes()).unwrap();
+        let e = h.set_send(Some(false)).unwrap_err();
+        assert!(e.to_string().contains("too big"), "{e}");
+        assert_eq!(h.storage.read(SETTINGS).unwrap(), big.as_bytes());
+        assert!(h.set_crash_policy(CrashPolicy::Always).is_err());
+        assert_eq!(h.storage.read(SETTINGS).unwrap(), big.as_bytes());
+    }
+
+    #[test]
+    fn a_setter_waits_for_the_lock_like_the_others() {
+        // set_send and set_url take the lock of the hub, as the dialog's write does.
+        let dir = std::env::temp_dir().join(format!("kadakas-hub-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = Hub::new(Box::new(crate::store::DirStorage::new(dir.clone())));
+        let b = Hub::new(Box::new(crate::store::DirStorage::new(dir.clone())));
+        let guard = b.lock().unwrap();
+        // The lock is held by another hub: this one waits (and, in this test, gives up in time).
+        let start = std::time::Instant::now();
+        let r = a.set_send(Some(true));
+        drop(guard);
+        assert!(r.is_err(), "a held lock stops the write");
+        assert!(start.elapsed() >= std::time::Duration::from_millis(100));
+        assert!(a.set_send(Some(true)).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

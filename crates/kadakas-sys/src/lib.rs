@@ -3,6 +3,7 @@
 //! - [`fsio`]: atomic file writes with a `.bak` copy and a flush to disk.
 //! - [`jsonfile`]: settings files in JSON, changed key by key under a lock.
 //! - [`paths`]: the form of a path that people and agents see (no `\\?\` prefix).
+//! - [`savelog`]: the last try to save settings when a program ends, and its log line.
 //! - [`process`]: process groups, kill of a whole process tree, process liveness.
 //! - [`dirs`]: the per-user config, data, state, runtime and cache folders.
 //! - [`sysinfo`]: the physical memory of the computer.
@@ -18,5 +19,6 @@ pub mod fsio;
 pub mod jsonfile;
 pub mod paths;
 pub mod process;
+pub mod savelog;
 pub mod sysinfo;
 pub mod tmp;

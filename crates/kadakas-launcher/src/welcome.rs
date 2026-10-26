@@ -123,8 +123,8 @@ pub fn show_again() {
 struct WelcomeApp {
     state: WelcomeState,
     dirs: Dirs,
-    /// The choices were handled once. A second press of a button closes the window.
-    handled: bool,
+    /// How many times the choices were stored (a press of a button, or the close button).
+    attempts: u32,
     /// The mark could not be written: the launcher exits with an error.
     mark_failed: Arc<AtomicBool>,
     /// The language of the window title, to change the title when the language changes.
@@ -132,14 +132,17 @@ struct WelcomeApp {
 }
 
 impl WelcomeApp {
-    /// Stores what the button says. Returns true when the window can close. When something could
-    /// not be written the problem is shown in the dialog and the window stays; the next press of
-    /// a button closes it.
+    /// Stores what the button says. Returns true when the window can close.
+    ///
+    /// When something could not be written, the problem is shown in the dialog and the window
+    /// stays. A later press tries again. The window closes when the storing worked (a Cancel
+    /// stores nothing, so it always works) or after the second failed try, so a file that never
+    /// can be written does not keep the person in the dialog.
     fn finish(&mut self, button: Button) -> bool {
-        if self.handled {
+        if self.attempts >= MAX_ATTEMPTS {
             return true;
         }
-        self.handled = true;
+        self.attempts += 1;
         let problems = gate::finish(
             &self.dirs,
             self.state.kind,
@@ -148,17 +151,21 @@ impl WelcomeApp {
             &self.state.initial,
             &self.state.detected,
         );
+        self.mark_failed
+            .store(gate::mark_failed(&problems), Ordering::SeqCst);
         if problems.is_empty() {
+            self.state.problem = None;
             return true;
         }
         let text = tr!("welcome-failed", problems = problems.join("; "));
         eprintln!("kadakas-launcher: {text}");
-        self.mark_failed
-            .store(gate::mark_failed(&problems), Ordering::SeqCst);
         self.state.problem = Some(text);
         false
     }
 }
+
+/// The most tries to store the choices. After the last failed try the next press closes the window.
+const MAX_ATTEMPTS: u32 = 2;
 
 impl eframe::App for WelcomeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -206,7 +213,7 @@ pub fn run_window(root: PathBuf, kind: Kind, modeler_installed: bool) -> eframe:
     let app = WelcomeApp {
         state,
         dirs,
-        handled: false,
+        attempts: 0,
         mark_failed: mark_failed.clone(),
         title_language: language,
     };
@@ -384,7 +391,7 @@ mod tests {
         let mut app = WelcomeApp {
             state,
             dirs,
-            handled: false,
+            attempts: 0,
             mark_failed: failed.clone(),
             title_language: "en-US",
         };
@@ -395,14 +402,46 @@ mod tests {
             failed.load(Ordering::SeqCst),
             "the exit status will be an error"
         );
-        assert!(app.finish(Button::Primary), "the second press closes it");
+        // A second press tries again; the file still cannot be written: the window stays.
+        assert!(!app.finish(Button::Primary), "the second try fails too");
+        // After the last failed try the next press closes the window.
+        assert!(app.finish(Button::Primary));
+        // A problem that goes away: the second press stores the choices and closes.
+        let c = detect(&kadakas_welcome::SystemLocale::default(), true);
+        let again_dirs = Dirs {
+            launcher: base.join("again").join("l"),
+            prefs: None,
+            feedback: None,
+        };
+        std::fs::write(base.join("again"), b"x").unwrap();
+        let ok_flag = Arc::new(AtomicBool::new(false));
+        let mut again = WelcomeApp {
+            state: WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true),
+            dirs: again_dirs.clone(),
+            attempts: 0,
+            mark_failed: ok_flag.clone(),
+            title_language: "en-US",
+        };
+        assert!(!again.finish(Button::Primary));
+        assert!(ok_flag.load(Ordering::SeqCst));
+        std::fs::remove_file(base.join("again")).unwrap();
+        assert!(
+            again.finish(Button::Primary),
+            "stored at last, so it closes"
+        );
+        assert!(again.state.problem.is_none());
+        assert!(!ok_flag.load(Ordering::SeqCst), "no error exit any more");
+        assert_eq!(
+            kadakas_update::welcome::done_version(&again_dirs.launcher),
+            1
+        );
         // Files that were written do not make an error exit.
         let ok_dirs = dirs_for(&base.join("ok"));
         let c = detect(&kadakas_welcome::SystemLocale::default(), true);
         let mut fine = WelcomeApp {
             state: WelcomeState::new(Kind::FirstRun, c.clone(), c, vec![], true),
             dirs: ok_dirs,
-            handled: false,
+            attempts: 0,
             mark_failed: Arc::new(AtomicBool::new(false)),
             title_language: "en-US",
         };

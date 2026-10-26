@@ -1511,7 +1511,9 @@ impl KadakasApp {
         if self.updates.take_settings_changed(ctx.input(|i| i.time)) {
             self.reload_prefs(ctx);
         }
-        self.updates.save_if_changed();
+        if let Some(wait) = self.updates.save_if_changed(ctx.input(|i| i.time)) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
         if let Some(e) = self.updates.take_error() {
             self.status = e;
         }
@@ -1524,16 +1526,18 @@ impl KadakasApp {
 
     /// Reads `prefs.json` again and makes it current (language, units, theme and the rest apply
     /// in the next frame). Called when the welcome dialog stored choices. Changes of this window
-    /// that are not written yet are dropped: they are written in every frame.
+    /// that are not written yet (a save failed) stay on top of the file, and the next frame tries
+    /// to write them at once.
     #[cfg(not(target_arch = "wasm32"))]
     fn reload_prefs(&mut self, ctx: &egui::Context) {
-        let (prefs, warning) = match &self.prefs_dir {
+        let (reloaded, warning) = match &self.prefs_dir {
             Some(d) => prefs::load_from(d),
             None => (Prefs::default(), None),
         };
-        self.prefs = prefs;
-        self.prefs_saved = prefs;
-        self.session.snap = prefs.snap;
+        self.prefs = prefs::with_pending(&reloaded, &self.prefs_saved, &self.prefs);
+        self.prefs_saved = reloaded;
+        self.prefs_retry.succeeded();
+        self.session.snap = self.prefs.snap;
         if let Some(w) = warning {
             self.status = w;
         }
@@ -3306,8 +3310,43 @@ impl KadakasApp {
         }
     }
 
+    /// The program ends and the preferences are still unsaved: one more try after a short wait.
+    /// A second failure goes to stderr and to `save-failed.log` in the state folder.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_prefs_last_try(&mut self) {
+        let log = kadakas_sys::dirs::state_dir();
+        self.save_prefs_last_try_to(std::time::Duration::from_millis(250), log.as_deref());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_prefs_last_try_to(
+        &mut self,
+        pause: std::time::Duration,
+        log: Option<&std::path::Path>,
+    ) {
+        if self.prefs == self.prefs_saved {
+            return;
+        }
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let (saved, now) = (self.prefs_saved, self.prefs);
+        let result = kadakas_sys::savelog::final_attempt(
+            || prefs::save_changes_to(&dir, &saved, &now),
+            pause,
+            "the preferences",
+            log,
+        );
+        if result.is_ok() {
+            self.prefs_saved = self.prefs;
+        }
+    }
+
     /// Saves the preferences and the layout when they changed.
-    fn persist(&mut self, now: f64) {
+    ///
+    /// Returns the seconds until the next try when the preferences are still unsaved, so that the
+    /// window wakes up for it even if nothing else happens.
+    fn persist(&mut self, now: f64) -> Option<f64> {
         let _ = now; // used by the desktop build only
         self.prefs.snap = self.session.snap;
         #[cfg(not(target_arch = "wasm32"))]
@@ -3342,6 +3381,12 @@ impl KadakasApp {
         {
             self.prefs_saved = self.prefs;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.prefs != self.prefs_saved {
+            // At least a little: the pause can be over by the time the frame ends.
+            return Some(self.prefs_retry.remaining(now).max(0.05));
+        }
+        None
     }
 
     /// A short notice in the status line when an agent connects or disconnects (not on every
@@ -3578,6 +3623,7 @@ impl eframe::App for KadakasApp {
         self.autosave.finish();
         self.feedback.finish(&mut self.session.feedback.hub);
         self.persist(f64::INFINITY);
+        self.save_prefs_last_try();
         self.save_layouts();
         // Last of all: a restart to update (with the open documents), and the clean-exit mark
         // that tells the launcher that this run did not crash.
@@ -4142,7 +4188,9 @@ impl eframe::App for KadakasApp {
         }
         self.layout_prompt(&ctx);
         let now = ctx.input(|i| i.time);
-        self.persist(now);
+        if let Some(wait) = self.persist(now) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
     }
 }
 
@@ -4199,6 +4247,8 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let mut app = KadakasApp::blank();
         app.prefs_dir = Some(d.clone());
+        // The layouts are saved by the same call; the test must not touch the real folder.
+        app.layout_checked = f64::INFINITY;
         app.prefs.cues = !app.prefs.cues;
         // prefs.json is a folder: the write fails.
         std::fs::create_dir_all(d.join("prefs.json")).unwrap();
@@ -4244,6 +4294,73 @@ mod tests {
         app.reload_prefs(&egui::Context::default());
         assert_eq!(app.prefs.theme, crate::theme::ThemeChoice::Dark);
         assert_eq!(app.prefs, app.prefs_saved);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_failed_save_asks_for_a_wake_up_keeps_pending_changes_over_a_reload_and_is_logged_at_exit()
+    {
+        let d = std::env::temp_dir().join(format!("kadakas-app-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("log")).unwrap();
+        let mut app = KadakasApp::blank();
+        app.prefs_dir = Some(d.clone());
+        app.layout_checked = f64::INFINITY;
+        let cues = app.prefs.cues;
+        app.prefs.cues = !cues;
+        std::fs::create_dir_all(d.join("prefs.json")).unwrap();
+        // The failed save asks to be drawn again when the pause is over, though nothing else
+        // happens.
+        let wait = app
+            .persist(1.0)
+            .expect("an unsaved change asks for a wake-up");
+        assert!((wait - 1.0).abs() < 1e-9, "{wait}");
+        let wait = app.persist(1.5).unwrap();
+        assert!((wait - 0.5).abs() < 1e-9, "{wait}");
+        // The welcome dialog stores a theme while the change waits. The reload keeps the change.
+        std::fs::remove_dir_all(d.join("prefs.json")).unwrap();
+        std::fs::write(d.join("prefs.json"), r#"{"theme":"dark"}"#).unwrap();
+        app.reload_prefs(&egui::Context::default());
+        assert_eq!(
+            app.prefs.theme,
+            crate::theme::ThemeChoice::Dark,
+            "the dialog's value"
+        );
+        assert_eq!(
+            app.prefs.cues, !cues,
+            "the change that was not saved is still there"
+        );
+        assert_ne!(app.prefs, app.prefs_saved);
+        // The retry pause starts over, so the next frame writes both.
+        assert_eq!(app.persist(1.6), None);
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("prefs.json")).unwrap()).unwrap();
+        assert_eq!(
+            (v["theme"].as_str(), v["cues"].as_bool()),
+            (Some("dark"), Some(!cues))
+        );
+        // The program ends with an unsaved change and a file that cannot be written: one more
+        // try after a pause, then the reason is in the log.
+        app.prefs.cues = cues;
+        std::fs::remove_file(d.join("prefs.json")).unwrap();
+        std::fs::create_dir_all(d.join("prefs.json")).unwrap();
+        let log = d.join("log");
+        app.save_prefs_last_try_to(std::time::Duration::from_millis(1), Some(&log));
+        assert_ne!(app.prefs, app.prefs_saved);
+        let text = std::fs::read_to_string(log.join("save-failed.log")).unwrap();
+        assert!(
+            text.contains("the preferences") && text.contains("prefs.json"),
+            "{text}"
+        );
+        // The problem is gone at the next end: the last try saves.
+        std::fs::remove_dir_all(d.join("prefs.json")).unwrap();
+        app.save_prefs_last_try_to(std::time::Duration::from_millis(1), Some(&log));
+        assert_eq!(app.prefs, app.prefs_saved);
+        // A reload without a pending change is the file.
+        assert_eq!(
+            prefs::with_pending(&Prefs::default(), &app.prefs, &app.prefs),
+            Prefs::default()
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

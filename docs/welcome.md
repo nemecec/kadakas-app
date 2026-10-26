@@ -74,10 +74,13 @@ The prefs folder is the same for the app, the modeler and the dialog (`kadakas_s
 ### How files are written
 
 - Every writer changes **only the keys it changed**. It does this in the file as it is now, under a lock (`kadakas_sys::jsonfile`, a `.lock` file next to the file). The app, the modeler and the window `kadakas-launcher manage` keep their settings in memory. A later save of an old copy used to undo what the dialog had stored. Now it does not. Keys that a program does not know stay, in every file.
-- The writer waits up to one second for the lock. The holders keep it for a few milliseconds. On a file system without locks (some network shares) the write goes on without a lock, with one line on stderr.
+- The writer waits up to one second for the lock. This wait happens on the thread of the window. The holders keep the lock for a few milliseconds, so the wait is short in practice. On a file system without locks (some network shares) the write goes on without a lock, with one line on stderr.
 - The running app and modeler **read their preferences again** when the dialog stores a change. The dialog moves the stamp `changed` in `welcome.json`. The programs look at it twice a second. The app reads the update settings again at the same time. The window `manage` reads `launcher.json` again when its dialog ends.
-- A save that fails keeps the changes unsaved. The status line shows the failure. The program tries again after 1, 2, 4 ... seconds, at most 30.
-- A file with text that is not a JSON object is copied to `<name>.damaged-<seconds>`. This name is never replaced. Then the file is replaced. The `.bak` of the last good version stays: a write does not move a damaged or empty file into `.bak`. An empty file is replaced and not copied.
+- A save that fails keeps the changes unsaved. The status line shows the failure at each try. The program tries again after 1, 2, 4 ... seconds, at most 30. A window that is idle wakes up for the try. The same holds for the update settings of the app.
+- A reload (the dialog stored a choice) keeps the changes that were not saved yet. They stay on top of the file, and the next frame writes them.
+- When the program ends with unsaved changes, it waits a moment and tries once more. If that fails, the reason goes to stderr and to the file `save-failed.log` in the state folder.
+- A file with text that is not a JSON object is copied to `<name>.damaged-<seconds>`. This name is never replaced. The same damaged text makes one copy, not one per try. Only the newest 10 copies stay. If no copy is written, the file is not replaced.
+- The last good version is `<name>.bak`. When a file is empty or damaged, the program loads the `.bak` and tells the person in the status line. A write after the damage starts from the `.bak`, so the settings come back. It also keeps the `.bak` as `<name>.good-<seconds>`, because the next writes move `.bak` on. A damaged or empty file never moves into `.bak`.
 - A read error that is not "not found" (permission, disk) stops the write. The launcher prints the problem. The file is not replaced by defaults. A write keeps the permissions of the file that it replaces. A problem with one file does not stop the others.
 - The mark that the dialog was seen is in its **own file**, `welcome.json`. An older version of the app writes `launcher.json` without the keys that it does not know. A mark in that file is lost when the person goes back to an older version. The old key `welcome_done` of `launcher.json` is still read.
 - Values that this version does not know give the default for that one field. The other keys of the file stay readable. This holds for the units (including the Swiss grouping), the theme, the navigation and the crash policy. A write of the crash policy changes that one key and keeps the rest of the feedback settings.
@@ -109,10 +112,10 @@ The dialog is a window of its own process: `kadakas-launcher welcome [--first-ru
 The style is `navigation` in `prefs.json`. The modeler keeps its own choice in `modeler.json` (View > Mouse or trackpad). That choice wins for the modeler until the person changes the navigation in the dialog.
 
 - *Mouse*: the wheel zooms to the pointer, exactly as before the style existed. egui turns a scroll with Shift into a horizontal one, so the wheel with Shift does not zoom.
-- *Trackpad*: the app reads the raw wheel events of the window system. egui turns a vertical scroll with Shift into a horizontal one and keeps the modifier for a whole gesture. For this reason egui does not serve here. A scroll pans. With Shift, a vertical scroll tilts (pitch) and a horizontal scroll turns (yaw). The pinch zooms.
+- *Trackpad*: the app reads the raw wheel events of the window system. egui does not serve here. It turns a vertical scroll with Shift into a horizontal one. It also keeps the modifier for a whole gesture. A scroll pans. With Shift, a vertical scroll tilts (pitch) and a horizontal scroll turns (yaw). The pinch zooms.
 - **The Shift choice of a gesture** is made when the gesture starts. If Shift goes up in the middle, an orbit stays an orbit. If Shift goes down in the middle, the rest becomes an orbit.
-- **Momentum**: winit reports the momentum of a macOS trackpad as a new `Start` after the `End`. A `Start` within 0.4 seconds after an `End` of an orbit keeps the orbit. So the momentum of an orbit stays an orbit when Shift is up. A new gesture within 0.4 seconds after an orbit is read as momentum. This is a known limit.
-- **The gesture is forgotten** when the pointer leaves the canvas, and when no wheel event comes for 0.6 seconds (a window system that sends no `End`).
+- **Momentum**: winit reports the momentum of a macOS trackpad as a new `Start` after the `End`. A `Start` within 0.4 seconds after an `End` of an orbit keeps the orbit. So the momentum of an orbit stays an orbit when Shift is up. This join is used once. The end of the momentum does not arm it again. A new gesture within 0.4 seconds after an orbit is read as momentum. This is a known limit.
+- **The gesture is forgotten** in two cases. The pointer leaves the canvas. Or 3 seconds pass without a wheel event while a gesture is open (the window system lost the `End`). A rest of the fingers that is shorter keeps the gesture.
 
 ## Numbers in the UI
 
@@ -120,14 +123,14 @@ The number format is the one preference that the whole UI uses. It has a decimal
 
 - **Shown**: lengths, areas, angles, the Measurements box and the fields of the programs. The live labels of the tools. The numbers inside messages: `tr!` writes a number argument with the decimal symbol (`kadakas_l10n::set_decimal_symbol`). Byte counts have digit grouping.
 - **Typed**: every number field (`DragValue`, `Slider`) writes and reads the number in the format (`.ui_number()`, crate `kadakas-ui-number`). It accepts both `.` and `,` as the decimal separator. The criteria and the default of a field accept `1,5`. A worksheet cell entry that is a plain number accepts it too. In a **formula** the comma separates arguments, so numbers in formulas are written with a point.
-- **`1,234`** is ambiguous. With a format that groups with a comma it is 1234. With a decimal comma it is 1.234. The format decides. Every place that reads a number follows this rule, also the cells, the criteria and the field defaults: `1.500` is 1500 with German formats and 1.5 with English formats.
+- **`1,234`** is ambiguous. With a format that groups with a comma it is 1234. With a decimal comma it is 1.234. The format decides. Every place that reads a number follows this rule. This includes the cells, the criteria and the field defaults. So `1.500` is 1500 with German formats and 1.5 with English formats.
 - **The Swiss apostrophe** groups digits only in the Swiss format. In every other format `’` and `'` are the foot mark (`5’6”`).
-- **Not affected**: files, the JSON-RPC API, MCP, the command line, exports (DXF, IFC, CSV, STEP, glTF, SVG, PDF coordinates), ids, logs and the formula grammar. They use the plain format (a point, no grouping).
-- **The check**: `scripts/check-number-format.sh` (in CI, job `number-format`) fails for a number widget without `.ui_number()` or a unit extension. It fails for a fixed precision in a text macro (`format!`, `write!`, `println!` and the like: `{:.2}`, `{:>6.1}`, `{:.prec$}`) in the UI crates and in the launcher crates. `scripts/number-format-allow.txt` lists the exceptions, with a reason each.
+- **Not affected**: files, the JSON-RPC API, MCP, the command line, exports, ids, logs and the formula grammar. The exports are DXF, IFC, CSV, STEP, glTF, SVG and the coordinates in PDF. All of these use the plain format (a point, no grouping).
+- **The check**: `scripts/check-number-format.sh` (in CI, job `number-format`) fails for a number widget without `.ui_number()` or a unit extension. It also fails for a fixed precision in a text macro. The macros are `format!`, `write!`, `println!` and the like. The forms are `{:.2}`, `{:>6.1}`, `{0:.2}` and `{:.prec$}`. It scans the UI crates and the launcher crates. `scripts/number-format-allow.txt` lists the exceptions, with a reason each.
 
 ### Limits
 
-- **Drawing text is not covered** (PLAT-27). The dimension text of the drawing, the display and the printed cells of a worksheet, the plant schedule and lists, the irrigation report and the site labels follow the format of the drawing, not the preference. The UI covers the fields and labels of the windows.
+- **Drawing text is not covered** (PLAT-27). These follow the format of the drawing, not the preference: dimension text, worksheet display and printed cells, plant schedules, irrigation reports, site labels. The UI covers the fields and labels of the windows.
 - Messages that the engine crates write with numbers inside the text keep the plain format. This holds for the irrigation network and extract reports, plant placement, and the `notes` of commands (English text). The core crates have no dependency on `kadakas-units`.
 - Integers inside messages have no digit grouping, because a count is sometimes an id or a year. A size in bytes has grouping at its places (the file limit, the picture limit, the plug-in limit).
 - A float that is written with `format!("{}")` and no precision is not found by the check.
@@ -144,12 +147,12 @@ The frame tests do not show these. A person looks at them on a real screen befor
 - **Focus and keys**: the focus ring on the cards and the buttons. The Tab order: cards, language, units, number format, More options, the options inside, Use defaults, Start. Enter and Esc with a drop-down open (the drop-down takes them). The close button of the window (it is Use defaults on a first start).
 - **Screen reader**: the cards are read as radio buttons with their description and state. The drop-downs are read with their name and value.
 - **Live language**: the dialog changes language and window title at once when the language drop-down changes. The number style follows the language when the format is not stored.
-- **Trackpad**: a real Mac trackpad and a Windows precision touchpad. Look at the pan direction, Shift for tilt and turn, the pinch speed, the momentum after the fingers leave, and a mouse wheel that is unchanged.
+- **Trackpad**: a real Mac trackpad and a Windows precision touchpad. Look at the pan direction and Shift for tilt and turn. Look at the pinch speed and the momentum after the fingers leave. Check that a mouse wheel is unchanged.
 - **Show welcome**: from the app, from the modeler and from the manage window. The language, the theme, the units, the navigation and the update mode apply at once in the running program. The changes survive continued use: toggle a snap in the app, change the channel in the manage window, and look in the files.
 
 ## How to reset
 
-Use Show welcome. Or delete `welcome.json` (and the key `welcome_done` of `launcher.json`) in the install folder. The next start shows the dialog with the current settings. To see the dialog with the defaults of the system, as on a first start, remove the install folder of the launcher (`KADAKAS_LAUNCHER_ROOT`, else `launcher` in the state folder) and the settings files (`prefs.json`, `modeler.json`, the feedback `settings.json`). Removing the install folder also removes the downloaded versions.
+Use Show welcome. Or delete `welcome.json` (and the key `welcome_done` of `launcher.json`) in the install folder. The next start shows the dialog with the current settings. To see the dialog as on a first start, with the defaults of the system, remove two things. The first is the install folder of the launcher (`KADAKAS_LAUNCHER_ROOT`, else `launcher` in the state folder). The second is the settings files (`prefs.json`, `modeler.json`, the feedback `settings.json`). Removing the install folder also removes the downloaded versions.
 
 ## Going back to an older version
 
@@ -159,9 +162,9 @@ An older app also writes `launcher.json` and `prefs.json` without the keys that 
 
 ## Code
 
-- `kadakas-welcome` (no window code): `choices` (the choices and their defaults), `sysloc` (what the system says, per operating system, with injected answers for tests), `gate` (when the dialog is due, what each button does, the lock), `stores` (the table above).
+- `kadakas-welcome` has no window code. `choices` holds the choices and their defaults. `sysloc` holds what the system says, per operating system, with injected answers for tests. `gate` decides when the dialog is due, what each button does, and holds the lock. `stores` holds the table above.
 - `kadakas-launcher`: `welcome_ui.rs` (the widget, with frame tests), `welcome.rs` (the process, the step before the start, Show welcome).
-- `kadakas-sys`: `jsonfile` (changes key by key under a lock), `fsio::lock_file`, `dirs::prefs_dir`.
+- `kadakas-sys`: `jsonfile` (changes key by key under a lock, copies of damaged and good versions), `fsio::lock_file`, `dirs::prefs_dir`, `savelog` (the last try at exit).
 - `kadakas-update`: `welcome` (the mark file and the stamp), `Settings` (unknown keys, strict update), `handshake` (`request_welcome`), `Supervisor::with_welcome`.
 - `kadakas-units`: `number_convention`, `region_of`, `imperial_region`, `lenient`, and the helpers `num`, `num_range`, `parse_num`, `int`.
 - `kadakas-ui-number`: `.ui_number()` for `DragValue` and `Slider`.
