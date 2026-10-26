@@ -19,9 +19,10 @@
 # At the end the script runs scripts/check-version.sh. Commit the changed files.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/python.sh
 
 ver="${1:?usage: set-version.sh VERSION (for example 0.1.0-beta.1)}"
-python3 -I scripts/version_cmp.py valid "$ver" || exit 1
+"$PY" -I scripts/version_cmp.py valid "$ver" || exit 1
 # These fail early when a package form is not possible.
 pep=$(scripts/packager-version.sh pep440 "$ver")
 scripts/packager-version.sh wix "$ver" >/dev/null

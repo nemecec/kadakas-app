@@ -13,13 +13,14 @@
 # text), so the script fails and asks for an OVERRIDE, for example 0.2.0-dev.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/python.sh"
 ver="${1:?usage: next-dev-version.sh RELEASED_VERSION [OVERRIDE]}"
 override="${2:-}"
-python3 -I "$here/version_cmp.py" valid "$ver" || exit 1
+"$PY" -I "$here/version_cmp.py" valid "$ver" || exit 1
 if [[ "$ver" == *-* ]] && [[ "${ver#*-}" =~ ^dev(\.|$) ]]; then echo "$ver is a development version, not a release" >&2; exit 1; fi
 core="${ver%%-*}"
 if [ -n "$override" ]; then
-  python3 -I "$here/version_cmp.py" valid "$override" || exit 1
+  "$PY" -I "$here/version_cmp.py" valid "$override" || exit 1
   re_dev='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})-dev$'
   [[ "$override" =~ $re_dev ]] || { echo "the development version must be X.Y.Z-dev: $override" >&2; exit 1; }
   next="$override"
@@ -29,7 +30,7 @@ elif [ "$core" = "$ver" ]; then
 else
   next="$core-dev"
 fi
-if [ "$(python3 -I "$here/version_cmp.py" "$next" "$ver")" != 1 ]; then
+if [ "$("$PY" -I "$here/version_cmp.py" "$next" "$ver")" != 1 ]; then
   echo "the development version $next is not newer than $ver. Give an explicit next development version (for example the next minor, X.Y.0-dev)." >&2
   exit 1
 fi

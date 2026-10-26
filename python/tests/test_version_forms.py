@@ -1,7 +1,9 @@
 """The Python form of a Kadakas version (scripts/packager-version.sh pep440) must be a valid PEP 440
 version and must sort like the semver order of the releases."""
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,10 +11,35 @@ import pytest
 packaging_version = pytest.importorskip("packaging.version")
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "packager-version.sh"
-pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+SCRIPT = "scripts/packager-version.sh"
 
-# In the order of semver (kadakas_update::Version).
+
+def find_bash():
+    """The bash that runs the script. On Windows it is Git bash, the shell that release.yml uses.
+    `bash` on the PATH can be the one of WSL there, which does not read Windows paths and has no
+    Python, so it is not taken."""
+    if os.name != "nt":
+        return shutil.which("bash")
+    roots = []
+    git = shutil.which("git")
+    if git:
+        roots.append(Path(git).resolve().parents[1])
+    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        if os.environ.get(var):
+            roots.append(Path(os.environ[var]) / "Git")
+    for root in roots:
+        for sub in ("bin", "usr/bin"):
+            candidate = root / sub / "bash.exe"
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+BASH = find_bash()
+# The script is used in release.yml on every system, so a missing bash is a failure, not a skip.
+pytestmark = pytest.mark.skipif(BASH is None and os.name != "nt", reason="needs bash")
+
+# # In the order of semver (kadakas_update::Version).
 ORDER = [
     "0.1.0-alpha.1",
     "0.1.0-beta.1",
@@ -26,7 +53,13 @@ ORDER = [
 
 
 def pep440(version):
-    out = subprocess.run(["bash", str(SCRIPT), "pep440", version], capture_output=True, text=True, check=True)
+    if BASH is None:
+        pytest.fail("Git bash was not found (looked next to git.exe and in Program Files\\Git). release.yml needs it.")
+    # A relative path and the working directory avoid the path style of Windows. The script finds
+    # Python through KADAKAS_PYTHON: python3 does not exist on Windows.
+    env = dict(os.environ, KADAKAS_PYTHON=sys.executable)
+    out = subprocess.run([BASH, SCRIPT, "pep440", version], cwd=REPO, env=env, capture_output=True, text=True)
+    assert out.returncode == 0, "exit %s\nstdout: %s\nstderr: %s" % (out.returncode, out.stdout, out.stderr)
     return out.stdout.strip()
 
 

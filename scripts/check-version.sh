@@ -6,6 +6,7 @@
 #   scripts/check-version.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+. scripts/python.sh
 
 bad=0
 fail() { echo "version: $*" >&2; bad=1; }
@@ -22,7 +23,7 @@ ws=$(value_of Cargo.toml "[workspace.package]" version)
 echo "workspace version: $ws"
 
 # The version must be a tag the release workflows accept, and one that kadakas_update::Version reads.
-python3 -I scripts/version_cmp.py valid "$ws" || fail "$ws is not a version that the release workflows accept"
+"$PY" -I scripts/version_cmp.py valid "$ws" || fail "$ws is not a version that the release workflows accept"
 
 # Package forms. An error here means the pre-release label cannot be mapped.
 pep=$(scripts/packager-version.sh pep440 "$ws") || { fail "no PEP 440 form of $ws"; pep=""; }
