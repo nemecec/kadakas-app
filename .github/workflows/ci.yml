@@ -168,8 +168,6 @@ jobs:
       - run: scripts/tests/test_check_attribution.sh
   # The version is in many files (docs/release.md). This check needs only bash and awk.
   version:
-  # Numbers in the UI follow the number format of the person (PLAT-26). No build, python only.
-  number-format:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -179,6 +177,12 @@ jobs:
       - run: scripts/tests/test_versions.sh
       - run: .github/scripts/test-find-tested-commit.sh
       - run: .github/scripts/test-fetch-published-record.sh
+  # Numbers in the UI follow the number format of the person (PLAT-26). No build, python only.
+  number-format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/check-number-format.sh
       - run: python3 -I scripts/tests/test_check_number_format.py
   # THIRD_PARTY_NOTICES.txt must match the dependencies. The installers ship it (packager.toml).
