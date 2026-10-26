@@ -24,6 +24,7 @@ First public build. Kadakas is a CAD program for landscape architects. It is not
 - Collaboration client for a shared drawing.
 - English and Estonian user interface.
 - Installers for macOS, Windows and Linux.
+- Smoke test of the installers: every release package is installed on a clean runner, started, and checked before the release is made.
 
 ### Known limitations
 
