@@ -84,14 +84,28 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) ("kadakas-smoke-" + [guid]::
 New-Item -ItemType Directory -Path $work | Out-Null
 if ($Artifacts) { New-Item -ItemType Directory -Force -Path $Artifacts | Out-Null; $Artifacts = (Resolve-Path $Artifacts).Path }
 
+# Logs that stay when the step is cut short: a transcript, and a watchdog that, after 9 minutes
+# (before the 12 minute limit of the step), lists the processes, ends msiexec and keeps what it found.
+$logDir = if ($Artifacts) { $Artifacts } else { $work }
+try { Start-Transcript -Path (Join-Path $logDir "transcript-$Kind.txt") -Force | Out-Null } catch { Write-Host "smoke: no transcript: $_" }
+$watchdog = Start-Job -ArgumentList $logDir, $Kind -ScriptBlock {
+  param($dir, $kind)
+  Start-Sleep -Seconds 540
+  $out = Join-Path $dir "watchdog-$kind.txt"
+  "The smoke test of $kind did not end in 9 minutes. $(Get-Date -Format o)" | Out-File $out
+  Get-Process | Sort-Object CPU -Descending | Select-Object -First 40 Id, ProcessName, CPU, StartTime, Path | Format-Table -AutoSize | Out-String -Width 250 | Out-File $out -Append
+  Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'msiexec|kadakas|setup|uninstall' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List | Out-String -Width 250 | Out-File $out -Append
+  Get-EventLog -LogName Application -Newest 30 -ErrorAction SilentlyContinue | Where-Object { $_.Source -match 'MsiInstaller|Restart' } | Format-List TimeGenerated, Source, EventID, Message | Out-String -Width 250 | Out-File $out -Append
+  Get-Process msiexec -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
 if ($null -ne (Find-InstallDir)) { Fail "Kadakas is installed already on this machine: $(Find-InstallDir)" }
 
 Step "install $Package"
 # The MSI log goes straight to the artifacts folder: it stays there if the step is cut short.
-$logDir = if ($Artifacts) { $Artifacts } else { $work }
 $log = Join-Path $logDir "install-$Kind.log"
 if ($Kind -eq 'msi') {
-  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") 300 'msiexec /i' $log
+  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"", 'REBOOT=ReallySuppress', 'MSIRESTARTMANAGERCONTROL=Disable') 300 'msiexec /i' $log
 } else {
   $code = Run-Limited $Package @('/S') 300 'the installer' $null
 }
@@ -149,7 +163,7 @@ finally {
 Step 'uninstall'
 if ($Kind -eq 'msi') {
   $ulog = Join-Path $logDir "uninstall-$Kind.log"
-  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") 300 'msiexec /x' $ulog
+  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"", 'REBOOT=ReallySuppress', 'MSIRESTARTMANAGERCONTROL=Disable') 300 'msiexec /x' $ulog
   if ($code -ne 0 -and $code -ne 3010) { Fail "msiexec /x ended with $code" }
 } else {
   $uninstaller = Get-ChildItem -Path $dir -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -162,5 +176,8 @@ foreach ($f in @('kadakas-launcher.exe', 'kadakas-app.exe', 'kadakas-modeler.exe
   if (-not (Wait-Gone (Join-Path $dir $f) 60)) { Fail "still there after the uninstall: $dir\$f" }
 }
 if (@(Find-Shortcuts).Count -ne 0) { Fail "a Start menu entry stays after the uninstall: $((Find-Shortcuts)[0].FullName)" }
+Stop-Job $watchdog -ErrorAction SilentlyContinue
+Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Step "OK ($Kind)"
+try { Stop-Transcript | Out-Null } catch { }
