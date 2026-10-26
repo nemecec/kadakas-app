@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Template: scripts/macos-app.sh writes dist-app/Info.plist from it (packager-macos.toml). @BUILD@ is the
+  <!-- Template: scripts/macos-app.sh writes dist-app/Info.plist from it (packager-macos.toml). @CORE@ is the
        numbers of the version (0.1.0): Apple allows only digits and dots in CFBundleShortVersionString.
        @VERSION@ is the full semver (0.1.0-beta.1). The packager sets CFBundleVersion itself. -->
   <key>CFBundleShortVersionString</key>
-  <string>@BUILD@</string>
+  <string>@CORE@</string>
   <key>KadakasVersion</key>
   <string>@VERSION@</string>
   <!-- NS...UsageDescription keys (camera, location, files and the like) go here, and in

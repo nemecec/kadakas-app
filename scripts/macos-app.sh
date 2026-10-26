@@ -38,9 +38,12 @@ cp packaging/icons/icon.icns "$app/Contents/Resources/icon.icns"
 for f in THIRD_PARTY_NOTICES.txt docs/attribution.md LICENSE-APACHE LICENSE-MIT; do
   if [ -f "$f" ]; then cp "$f" "$app/Contents/Resources/"; fi
 done
-# CFBundleVersion and CFBundleShortVersionString are digits and dots only (Apple): the version
-# without the pre-release part. The full version is in the key KadakasVersion.
-sed_version=(-e "s/@VERSION@/$version/g" -e "s/@BUILD@/${version%%-*}/g")
+# CFBundleShortVersionString is digits and dots only (Apple): the version without the pre-release
+# part. CFBundleVersion is a build number, also digits and dots (the date and time, like the one
+# that cargo-packager writes; BUILD_NUMBER sets it). The full version is in the key KadakasVersion.
+build="${BUILD_NUMBER:-$(date -u +%Y%m%d.%H%M%S)}"
+[[ "$build" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "BUILD_NUMBER must be digits and dots: $build" >&2; exit 1; }
+sed_version=(-e "s/@VERSION@/$version/g" -e "s/@CORE@/${version%%-*}/g" -e "s/@BUILD@/$build/g")
 sed "${sed_version[@]}" packaging/macos/App-Info.plist > "$app/Contents/Info.plist"
 # The Info.plist for the outer bundle (packager-macos.toml: info-plist-path).
 sed "${sed_version[@]}" packaging/macos/Info.plist > "$out/Info.plist"

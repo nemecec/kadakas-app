@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- The Info.plist of the inner app bundle `Kadakas Engine.app` (the app itself, see
-     packager-macos.toml and scripts/macos-app.sh). @BUILD@ (the numbers of the version: 0.1.0; Apple allows only digits and dots in CFBundleShortVersionString and CFBundleVersion) and @VERSION@ (the full semver, 0.1.0-beta.1, in the key KadakasVersion) are replaced by the script.
+     packager-macos.toml and scripts/macos-app.sh). @CORE@ (the numbers of the version: 0.1.0), @BUILD@ (a build number, digits and dots: 20261026.103000) and @VERSION@ (the full semver, 0.1.0-beta.1, in the key KadakasVersion) are replaced by the script.
 
      Why it looks like this:
      - The FILE name is "Kadakas Engine.app", the NAME shown (CFBundleName, CFBundleDisplayName,
@@ -38,7 +38,7 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>@BUILD@</string>
+  <string>@CORE@</string>
   <key>KadakasVersion</key>
   <string>@VERSION@</string>
   <key>CFBundleVersion</key>

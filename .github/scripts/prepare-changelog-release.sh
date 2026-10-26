@@ -19,7 +19,7 @@ version="${1:?usage: prepare-changelog-release.sh VERSION}"
 changelog="${CHANGELOG:-CHANGELOG.md}"
 date="${CHANGELOG_DATE:-$(date -u +%Y-%m-%d)}"
 new_tag="v${version}"
-re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+re='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
 [[ "$version" =~ $re ]] || { echo "bad version: $version" >&2; exit 1; }
 
 # Windows line ends would end up in the links. Refuse them with a clear message.

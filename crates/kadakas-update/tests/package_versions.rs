@@ -80,8 +80,11 @@ fn the_wix_numbers_keep_the_order_of_the_prereleases_of_one_release() {
         "0.1.0-alpha.1",
         "0.1.0-beta.1",
         "0.1.0-beta.2",
+        "0.1.0-beta.4999",
+        "0.1.0-beta.9999",
         "0.1.0-dev",
         "0.1.0-rc.1",
+        "0.1.0-rc.9999",
     ];
     let numbers: Vec<u64> = list
         .iter()

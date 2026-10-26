@@ -16,11 +16,11 @@ here="$(cd "$(dirname "$0")" && pwd)"
 ver="${1:?usage: next-dev-version.sh RELEASED_VERSION [OVERRIDE]}"
 override="${2:-}"
 python3 -I "$here/version_cmp.py" valid "$ver" || exit 1
-case "$ver" in *-dev|*-dev.*) echo "$ver is a development version, not a release" >&2; exit 1 ;; esac
+if [[ "$ver" == *-* ]] && [[ "${ver#*-}" =~ ^dev(\.|$) ]]; then echo "$ver is a development version, not a release" >&2; exit 1; fi
 core="${ver%%-*}"
 if [ -n "$override" ]; then
   python3 -I "$here/version_cmp.py" valid "$override" || exit 1
-  re_dev='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev$'
+  re_dev='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})-dev$'
   [[ "$override" =~ $re_dev ]] || { echo "the development version must be X.Y.Z-dev: $override" >&2; exit 1; }
   next="$override"
 elif [ "$core" = "$ver" ]; then

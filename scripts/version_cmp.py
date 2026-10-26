@@ -6,7 +6,7 @@
 
 A valid version is major.minor.patch with an optional pre-release part: identifiers of lower-case
 letters, digits and inner hyphens, separated by dots. No leading zeros in the numbers or in the
-numeric identifiers. At most 40 characters. A release is newer than its pre-releases. Identifiers
+numeric identifiers. Numbers have at most 9 digits. At most 40 characters. A release is newer than its pre-releases. Identifiers
 compare as numbers when both are numbers, a number before text, text by bytes, fewer identifiers
 first.
 """
@@ -14,7 +14,7 @@ import re
 import sys
 
 MAX_LEN = 40
-PATTERN = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9a-z]+(?:[.-][0-9a-z]+)*))?")
+PATTERN = re.compile(r"(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-([0-9a-z]+(?:[.-][0-9a-z]+)*))?")
 
 
 def problem(text):
@@ -24,8 +24,11 @@ def problem(text):
     m = PATTERN.fullmatch(text)
     if not m:
         return "not major.minor.patch[-pre-release] in lower case"
-    if m.group(4) and any(i.isdigit() and len(i) > 1 and i[0] == "0" for i in m.group(4).split(".")):
+    ids = m.group(4).split(".") if m.group(4) else []
+    if any(i.isdigit() and len(i) > 1 and i[0] == "0" for i in ids):
         return "leading zero in a number of the pre-release part"
+    if any(i.isdigit() and len(i) > 9 for i in ids):
+        return "a number of the pre-release part has more than 9 digits"
     return None
 
 

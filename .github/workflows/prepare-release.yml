@@ -6,13 +6,13 @@ name: Prepare release
 #
 # A push made with the GITHUB_TOKEN does not start other workflows. So the job starts release.yml
 # by hand (workflow_dispatch on the tag). release.yml makes a DRAFT release. A person reads it and
-# presses Publish. Publishing starts update-manifest.yml, which needs the approval of the
+# presses Publish. Publishing starts update-manifest.yml. That workflow needs the approval of the
 # environment update-signing. See docs/release.md.
 #
-# Needs the GitHub Environment "release" (a required reviewer is a good idea). The job that pushes
-# asks for contents: write and actions: write itself, so the default token rights of the
-# repository can stay read-only. If main is protected so that the Actions bot cannot push, the push
-# fails and nothing is left behind (the push of the commit and the tag is atomic).
+# The workflow needs the GitHub Environment "release". A required reviewer is a good idea. The job
+# that pushes asks for contents: write and actions: write itself. The default token rights of the
+# repository stay read-only. If main is protected and the Actions bot cannot push, the push fails
+# and nothing is left behind. The push of the commit and the tag is atomic.
 # Actions are pinned to commit SHAs, as in ci.yml.
 on:
   workflow_dispatch:
@@ -82,7 +82,7 @@ jobs:
           set -euo pipefail
           [ "$WF_REF" = "refs/heads/main" ] || { echo "::error::Start this workflow on the branch main (it was started on $WF_REF)."; exit 1; }
           # The same pattern as the tag check in update-manifest.yml.
-          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          re='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           [[ "$VERSION" =~ $re ]] || { echo "::error::Bad version. Use 0.1.0 or 0.1.0-beta.1 (no v, lower case)."; exit 1; }
           # The strict rules of kadakas_update::Version: no leading zeros in numbers, at most 40 characters.
           python3 -I scripts/version_cmp.py valid "$VERSION" || { echo "::error::Bad version: see the message above."; exit 1; }
@@ -92,25 +92,24 @@ jobs:
             echo "::error::The tag $tag exists already. Delete it first (Delete release workflow) or choose another version."; exit 1
           fi
           # A development version (-dev) is what main carries between releases. It is never released.
-          case "$VERSION" in *-dev|*-dev.*) echo "::error::$VERSION is a development version. Release a real version."; exit 1 ;; esac
-          # The new version must be newer than every tag. The workspace version is no help: it is
-          # a -dev version after a release (it sorts below the next release, but not always above the
-          # last tag, for example after a rehearsal).
+          if [[ "$VERSION" == *-* ]] && [[ "${VERSION#*-}" =~ ^dev(\.|$) ]]; then echo "::error::$VERSION is a development version. Release a real version."; exit 1; fi
+          # The new version must be newer than the tags. A stable version is compared with the stable
+          # tags (a hotfix 0.1.1 may follow 0.2.0-beta.1), a pre-release with all tags. The workspace
+          # version is no help: it is a -dev version after a release.
           ws=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
           tags=$(git tag --list 'v*')
           if [ -z "$tags" ]; then
             echo "No release tag exists yet, so there is nothing to compare the new version with. The workspace version is $ws and the requested version is $VERSION. $VERSION is accepted." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
-          for t in $tags; do
-            v="${t#v}"
-            python3 -I scripts/version_cmp.py valid "$v" 2>/dev/null || continue
-            [ "$(python3 -I scripts/version_cmp.py "$VERSION" "$v")" = "1" ] || { echo "::error::$VERSION is not newer than the existing tag $t."; exit 1; }
-          done
+          # shellcheck disable=SC2086
+          python3 -I scripts/published_guard.py order "$VERSION" $tags || { echo "::error::The version is not newer than an existing tag (see above)."; exit 1; }
           # A published version number is never reused or lowered, even if its release was deleted.
           # The sign job of update-manifest.yml keeps the record (asset of the release update-manifests).
-          mkdir -p hp
-          gh release download update-manifests --pattern highest-published.json --dir hp --clobber 2>/dev/null || echo "No record of published versions yet."
-          python3 -I scripts/published_guard.py check hp/highest-published.json "$VERSION" || { echo "::error::$VERSION was published before or is lower than a published version (see above). Release a HIGHER version."; exit 1; }
+          # A failed read stops here: it must not look like an empty record.
+          .github/scripts/fetch-published-record.sh hp
+          channel_args=()
+          if [[ "$VERSION" != *-* ]]; then channel_args=(--channel stable); fi
+          python3 -I scripts/published_guard.py check hp/highest-published.json "$VERSION" "${channel_args[@]}" || { echo "::error::$VERSION was published before or is lower than a published version (see above). Release a HIGHER version."; exit 1; }
           next_dev=$(scripts/next-dev-version.sh "$VERSION" "$NEXT_DEV")
           echo "next_dev=$next_dev" >> "$GITHUB_OUTPUT"
           # CI must be green on this commit or on the newest commit before it that CI tested (a
@@ -268,6 +267,7 @@ jobs:
             echo "- The push worked, but the development version is not set (the tag stays on the release commit):"
             echo
             echo "      git checkout main && git pull"
+            echo "      cargo fetch"
             echo "      scripts/set-version.sh $NEXT_DEV"
             echo "      git add -u && git commit -m 'Set next development version $NEXT_DEV' && git push"
             echo
@@ -320,13 +320,14 @@ jobs:
               echo "The tag $TAG and its commit are pushed. Do this by hand:"
               echo
               echo "    git checkout main && git pull"
+              echo "    cargo fetch"
               echo "    scripts/set-version.sh $NEXT_DEV"
               echo "    git add -u && git commit -m 'Set next development version $NEXT_DEV' && git push"
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::$1 The release is tagged ($TAG). See the summary for the commands."
             exit 1
           }
-          re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-dev$'
+          re='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})-dev$'
           [[ "$NEXT_DEV" =~ $re ]] || manual "Bad development version."
           { cargo fetch --locked && scripts/set-version.sh "$NEXT_DEV"; } || manual "set-version failed."
           git add Cargo.toml Cargo.lock packager.toml packager-macos.toml python/pyproject.toml python/kadakas/__init__.py THIRD_PARTY_NOTICES.txt
