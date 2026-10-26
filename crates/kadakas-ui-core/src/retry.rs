@@ -26,6 +26,11 @@ impl Retry {
         self.next_try = now + self.pause();
     }
 
+    /// Seconds until the next try is due (0 when it is due now or nothing failed).
+    pub fn remaining(&self, now: f64) -> f64 {
+        (self.next_try - now).max(0.0)
+    }
+
     /// A try worked.
     pub fn succeeded(&mut self) {
         *self = Retry::default();
@@ -63,6 +68,14 @@ mod tests {
         assert_eq!(r.failures(), 8);
         r.succeeded();
         assert_eq!((r.failures(), r.pause()), (0, 1.0));
+        let mut fresh = Retry::default();
+        assert_eq!(fresh.remaining(5.0), 0.0);
+        fresh.failed(10.0);
+        assert_eq!(fresh.remaining(10.0), 1.0);
+        assert_eq!(fresh.remaining(10.25), 0.75);
+        assert_eq!(fresh.remaining(12.0), 0.0);
+        fresh.succeeded();
+        assert_eq!(fresh.remaining(10.0), 0.0);
         assert!(r.due(0.0));
         // Very many failures do not overflow.
         for _ in 0..100 {

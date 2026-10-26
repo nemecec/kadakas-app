@@ -66,6 +66,11 @@ class Widgets(unittest.TestCase):
             'tr!("a", x = format!("{:.3}", info.scale.x))',
             'format!(\n    "{a} and {b:.2}",\n    a = 1,\n)',
             'panic!("{:.1}", v)',
+            'format!("{0:.2} and {1}", x, y)',
+            'format!("{1:>8.3}", x, y)',
+            'format!("{:.0$}", 2, x)',
+            'format!("{:.1$}", x, 3)',
+            'format!("{{{x:.2}}}")',
         ]
         for text in bad:
             self.assertTrue(cnf.raw_floats(text), text)
@@ -77,6 +82,10 @@ class Widgets(unittest.TestCase):
             'tr!("a", x = 1)',
             'format!("{:?}", v)',
             'let s = "{:.2} is only text";',
+            'format!("{{:.2}} is a brace")',
+            'format!("{{x:.3}}")',
+            'format!("{0} {1}", x, y)',
+            'format!("{0:.0}", x)',
         ]
         for text in good:
             self.assertFalse(cnf.raw_floats(text), text)

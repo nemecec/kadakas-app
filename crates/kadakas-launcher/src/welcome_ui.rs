@@ -32,6 +32,9 @@ pub struct WelcomeState {
     /// language then changes the number style that the dialog shows, so that it shows what the
     /// programs will use. A pick of the person ends this.
     number_follows_language: bool,
+    /// The same at the start of the dialog (a pick of the style that the programs follow brings
+    /// `number_follows_language` back).
+    follows_at_open: bool,
     /// What could not be written, shown above the buttons. The dialog stays open until the
     /// person presses a button again.
     pub problem: Option<String>,
@@ -54,6 +57,7 @@ impl WelcomeState {
             modeler_installed,
             focus_pending: true,
             number_follows_language: false,
+            follows_at_open: false,
             problem: None,
         }
     }
@@ -61,6 +65,7 @@ impl WelcomeState {
     /// The number format is not stored, so the programs follow the language for it.
     pub fn follow_language_for_numbers(mut self, follows: bool) -> WelcomeState {
         self.number_follows_language = follows;
+        self.follows_at_open = follows;
         self
     }
 
@@ -80,9 +85,9 @@ impl WelcomeState {
     /// The person picked a number style: it is stored from now on.
     pub fn set_number(&mut self, style: kadakas_welcome::NumberStyle) {
         self.choices.number = style;
-        if style != self.initial.number {
-            self.number_follows_language = false;
-        }
+        // The programs follow the language as long as the style is the one they follow. A pick
+        // of another style ends that, and a pick of the first one brings it back.
+        self.number_follows_language = self.follows_at_open && style == self.initial.number;
     }
 
     /// The tag of the language that the dialog speaks now.
@@ -732,6 +737,18 @@ mod tests {
         st.set_number(NumberStyle::DotComma);
         st.set_language("et");
         assert_eq!(st.choices.number, NumberStyle::DotComma);
+        // A pick of the style that the programs follow brings it back.
+        st.set_number(st.initial.number);
+        st.set_language("en-US");
+        assert_eq!(
+            st.choices.number,
+            NumberStyle::CommaDot,
+            "follows the language again"
+        );
+        st.set_number(NumberStyle::PlainDot);
+        st.set_number(st.initial.number);
+        st.set_language("et");
+        assert_eq!(st.choices.number, NumberStyle::SpaceComma);
         // A first start never follows the language: the system formats were detected.
         let c2 = stores::current(&dirs, &["en-US".to_string()], true);
         let mut first = WelcomeState::new(Kind::FirstRun, c2.clone(), c2, vec![], true);

@@ -308,6 +308,19 @@ pub fn number_follows_language(dirs: &Dirs) -> bool {
         && jsonfile::get_path(&o, &["units", "grouping"]).is_none()
 }
 
+/// A settings file as the programs read it: an empty or damaged file gives the last good version.
+fn read_loaded(path: &Path) -> Map<String, Value> {
+    jsonfile::read_for_load(path)
+        .ok()
+        .flatten()
+        .and_then(|(bytes, _)| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|v| match v {
+            Value::Object(o) => Some(o),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 /// The choices that the programs use now. A key that is missing has the default of the program
 /// that reads it (the app and the modeler have no region detection: lengths are millimeters, the
 /// number format follows the language), not the default of this dialog.
@@ -324,11 +337,11 @@ pub fn current(dirs: &Dirs, languages: &[String], modeler_installed: bool) -> Ch
     c.updates = s.mode;
     let prefs = dirs
         .prefs_file()
-        .map(|f| jsonfile::read_object(&f))
+        .map(|f| read_loaded(&f))
         .unwrap_or_default();
     let modeler = dirs
         .modeler_file()
-        .map(|f| jsonfile::read_object(&f))
+        .map(|f| read_loaded(&f))
         .unwrap_or_default();
     let own = c.mode == Mode::Modeler;
     // Language: "system" or a tag in prefs.json; a tag or null in modeler.json.
@@ -805,6 +818,22 @@ mod tests {
         assert!(
             apply(&bad_launcher, &detect(&sys(&[]), true), None)[0].starts_with("launcher.json")
         );
+        cleanup(&d);
+    }
+
+    #[test]
+    fn the_dialog_shows_the_last_good_version_of_a_damaged_file_as_the_programs_do() {
+        let d = dirs("stores-restore");
+        let prefs = d.prefs.clone().unwrap();
+        std::fs::create_dir_all(&prefs).unwrap();
+        std::fs::write(
+            prefs.join("prefs.json.bak"),
+            r#"{"theme":"dark","navigation":"trackpad"}"#,
+        )
+        .unwrap();
+        std::fs::write(prefs.join("prefs.json"), "").unwrap();
+        let c = current(&d, &langs(&["en-US"]), true);
+        assert_eq!((c.theme, c.navigation), (Theme::Dark, Navigation::Trackpad));
         cleanup(&d);
     }
 

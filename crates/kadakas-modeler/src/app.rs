@@ -1611,10 +1611,17 @@ impl ModelerApp {
         let Some(dir) = self.prefs_dir.clone() else {
             return;
         };
-        let (prefs, warning) = prefs::load_from(&dir);
-        self.prefs = prefs.clone();
-        self.prefs_saved = prefs;
-        self.language_applied = None;
+        let (reloaded, warning) = prefs::load_from(&dir);
+        // A change that could not be saved stays on top of what the files say now.
+        let merged = prefs::with_pending(&reloaded, &self.prefs_saved, &self.prefs);
+        // The language and the units are process wide: they are applied again only when they
+        // changed.
+        if prefs::locale_differs(&self.prefs, &merged) {
+            self.language_applied = None;
+        }
+        self.prefs = merged;
+        self.prefs_saved = reloaded;
+        self.prefs_retry.succeeded();
         self.theme_applied = None;
         if let Some(w) = warning {
             self.status = w;
@@ -1654,6 +1661,41 @@ impl ModelerApp {
                     self.prefs_retry.failed(now);
                 }
             }
+        }
+        // An unsaved change wakes the window for the next try, though nothing else happens.
+        if self.prefs != self.prefs_saved {
+            let wait = self.prefs_retry.remaining(now).max(0.05);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait));
+        }
+    }
+
+    /// The program ends and the settings are still unsaved: one more try after a short wait. A
+    /// second failure goes to stderr and to `save-failed.log` in the state folder.
+    fn save_prefs_last_try(&mut self) {
+        let log = kadakas_sys::dirs::state_dir();
+        self.save_prefs_last_try_to(std::time::Duration::from_millis(250), log.as_deref());
+    }
+
+    pub(crate) fn save_prefs_last_try_to(
+        &mut self,
+        pause: std::time::Duration,
+        log: Option<&std::path::Path>,
+    ) {
+        if self.prefs == self.prefs_saved {
+            return;
+        }
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let (saved, now) = (self.prefs_saved.clone(), self.prefs.clone());
+        let result = kadakas_sys::savelog::final_attempt(
+            || prefs::save_changes_to(&dir, &saved, &now),
+            pause,
+            "the settings",
+            log,
+        );
+        if result.is_ok() {
+            self.prefs_saved = self.prefs.clone();
         }
     }
 
@@ -2130,6 +2172,7 @@ impl ModelerApp {
 
     /// The program ends: the launcher gets the clean-exit mark, as the last thing.
     pub fn on_exit(&mut self) {
+        self.save_prefs_last_try();
         self.launch.finish();
     }
 }

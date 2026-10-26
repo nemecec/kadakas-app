@@ -451,7 +451,15 @@ mod tests {
     fn the_lock_of_a_program_that_is_killed_is_free_at_once() {
         let d = temp_dir("lock-crash");
         let p = d.join("l.lock");
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        // The child is killed when the test ends, also when an assertion fails.
+        struct Kill(std::process::Child);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "fsio::tests::lock_holder",
@@ -462,6 +470,7 @@ mod tests {
             .stdin(std::process::Stdio::null())
             .spawn()
             .unwrap();
+        let mut child = Kill(child);
         let held = p.with_extension("held");
         let start = std::time::Instant::now();
         while !held.exists() {
@@ -476,8 +485,8 @@ mod tests {
         assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
         // The child dies with the lock held (a crash). The system frees the lock; no program
         // has to decide that it is stale.
-        child.kill().unwrap();
-        child.wait().unwrap();
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
         assert!(lock_file(&p, std::time::Duration::from_secs(5)).is_ok());
         let _ = std::fs::remove_dir_all(&d);
     }

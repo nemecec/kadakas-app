@@ -227,3 +227,4 @@ modeler-view-navigation = Mouse or trackpad
 modeler-nav-mouse = Mouse (the wheel zooms)
 modeler-nav-trackpad = Trackpad (scroll moves, pinch zooms)
 modeler-help-show-welcome = Show welcome
+modeler-prefs-restored = The settings file { $path } was damaged. The last good copy is in use.

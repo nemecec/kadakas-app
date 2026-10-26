@@ -227,3 +227,4 @@ modeler-view-navigation = Hiir või puuteplaat
 modeler-nav-mouse = Hiir (ratas suumib)
 modeler-nav-trackpad = Puuteplaat (kerimine liigutab, näpistus suumib)
 modeler-help-show-welcome = Näita tervitust
+modeler-prefs-restored = Seadistuste fail { $path } oli rikutud. Kasutusel on viimane korralik koopia.

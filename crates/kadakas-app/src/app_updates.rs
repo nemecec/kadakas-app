@@ -94,6 +94,8 @@ pub struct Updates {
     /// The stamp of the welcome dialog that this run has seen (`kadakas_update::welcome`).
     welcome_seen: String,
     next_welcome_poll: f64,
+    /// When a save of the update settings failed, the pause before the next try.
+    save_retry: kadakas_ui_core::retry::Retry,
     /// The version whose notice the person put off with "Later" in this run.
     later: Option<String>,
     restart: Restart,
@@ -135,6 +137,7 @@ impl Updates {
             next_open_poll: 0.0,
             welcome_seen,
             next_welcome_poll: 0.0,
+            save_retry: Default::default(),
             later: None,
             restart: Restart::None,
             skipped_told: false,
@@ -298,12 +301,18 @@ impl Updates {
 
     /// Writes the settings when the window changed them. The launcher reads them at its next
     /// cycle. The write keeps the parts that only the launcher writes (flavor, profile).
-    pub fn save_if_changed(&mut self) {
-        let Some(root) = self.root.clone() else {
-            return;
-        };
+    ///
+    /// A write that fails keeps the changes unsaved and shows the failure. It is tried again after
+    /// a pause that grows (1, 2, 4 ... 30 seconds). `now` is the time in seconds. The result is
+    /// the seconds until the next try while changes are unsaved, so that the window wakes up for
+    /// it.
+    pub fn save_if_changed(&mut self, now: f64) -> Option<f64> {
+        let root = self.root.clone()?;
         if self.settings == self.saved {
-            return;
+            return None;
+        }
+        if !self.save_retry.due(now) {
+            return Some(self.save_retry.remaining(now));
         }
         // Only the fields that this window changed: the copy in memory can be older than the
         // file (the welcome dialog stored a mode), and the other fields must stay as they are.
@@ -325,10 +334,13 @@ impl Updates {
             Ok(saved) => {
                 self.settings = saved.clone();
                 self.saved = saved;
+                self.save_retry.succeeded();
+                None
             }
             Err(e) => {
                 self.error = Some(tr!("app-updates-save-failed", error = e.to_string()));
-                self.saved = self.settings.clone();
+                self.save_retry.failed(now);
+                Some(self.save_retry.remaining(now).max(0.05))
             }
         }
     }
@@ -614,7 +626,7 @@ mod tests {
         assert!(!u.request_welcome(), "no launcher, no request");
         // The settings still work: they are read when the launcher starts the app.
         u.settings.keep_older = 3;
-        u.save_if_changed();
+        u.save_if_changed(100.0);
         assert_eq!(Settings::load(&d).keep_older, 3);
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -631,7 +643,7 @@ mod tests {
         // Before the window looks at the stamp: the person changes Keep older. The mode in the
         // file stays, because this window did not change it.
         u.settings.keep_older = 4;
-        u.save_if_changed();
+        u.save_if_changed(200.0);
         let s = Settings::load(&d);
         assert_eq!((s.mode, s.keep_older), (UpdateMode::NotifyOnly, 4));
         assert_eq!(
@@ -645,7 +657,7 @@ mod tests {
         assert!(u.take_settings_changed(10.0));
         assert_eq!(u.settings.mode, UpdateMode::AutoDownload);
         u.settings.keep_older = 2;
-        u.save_if_changed();
+        u.save_if_changed(300.0);
         let s = Settings::load(&d);
         assert_eq!((s.mode, s.keep_older), (UpdateMode::AutoDownload, 2));
         std::fs::remove_dir_all(&d).unwrap();
@@ -829,7 +841,7 @@ mod tests {
         u.settings.channel = Channel::Local;
         u.settings.site = "file:///tmp/site".into();
         u.settings.keep_older = 0;
-        u.save_if_changed();
+        u.save_if_changed(400.0);
         let on_disk = Settings::load(&d);
         assert_eq!(on_disk.mode, UpdateMode::NotifyOnly);
         assert_eq!(on_disk.channel, Channel::Local);
@@ -838,14 +850,14 @@ mod tests {
         assert_eq!(on_disk.profile, "acad", "the launcher's part stays");
         // A number over the limit is cut by the settings schema.
         u.settings.keep_older = 9999;
-        u.save_if_changed();
+        u.save_if_changed(500.0);
         assert_eq!(Settings::load(&d).keep_older, MAX_KEEP_OLDER);
         // Nothing changed: nothing is written.
         let stamp = std::fs::metadata(Settings::path(&d))
             .unwrap()
             .modified()
             .unwrap();
-        u.save_if_changed();
+        u.save_if_changed(600.0);
         assert_eq!(
             std::fs::metadata(Settings::path(&d))
                 .unwrap()
@@ -859,9 +871,20 @@ mod tests {
         std::fs::write(&blocker, b"x").unwrap();
         let mut bad = Updates::new(None, Some(blocker.join("launcher")));
         bad.settings.keep_older = 5;
-        bad.save_if_changed();
+        let first = bad.save_if_changed(1.0);
+        assert_eq!(first, Some(1.0), "the window wakes up for the retry");
         assert!(bad.take_error().is_some());
+        // Inside the pause nothing is tried; after it the failure shows again. The change stays.
+        assert_eq!(bad.save_if_changed(1.5), Some(0.5));
         assert!(bad.take_error().is_none());
+        assert_eq!(bad.save_if_changed(2.5), Some(2.0));
+        assert!(bad.take_error().is_some());
+        assert_ne!(bad.settings, bad.saved, "still unsaved");
+        // The folder is there at last: the change is written, and the retry starts over.
+        std::fs::remove_file(&blocker).unwrap();
+        assert_eq!(bad.save_if_changed(10.0), None);
+        assert_eq!(Settings::load(&blocker.join("launcher")).keep_older, 5);
+        assert_eq!(bad.settings, bad.saved);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
