@@ -19,6 +19,23 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 function Step($m) { Write-Host "smoke: $m" }
 function Fail($m) { [Console]::Error.WriteLine("smoke: FAILED: $m"); exit 1 }
 
+# Starts a program and waits for it, at most $seconds. A program that hangs is killed with its
+# children and the job fails with the end of the log (if there is one).
+function Run-Limited($file, $argList, $seconds, $what, $logPath) {
+  $p = Start-Process -FilePath $file -ArgumentList $argList -PassThru
+  $null = $p.Handle # keeps the exit code readable
+  if (-not $p.WaitForExit($seconds * 1000)) {
+    & taskkill /PID $p.Id /T /F 2>&1 | Out-Null
+    if ($logPath -and (Test-Path $logPath)) {
+      Write-Host "smoke: end of ${logPath}:"
+      Get-Content -Path $logPath -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+      if ($Artifacts) { Copy-Item $logPath (Join-Path $Artifacts (Split-Path -Leaf $logPath)) -ErrorAction SilentlyContinue }
+    }
+    Fail "$what did not end in $seconds seconds"
+  }
+  return $p.ExitCode
+}
+
 # The installed copy: the folder from the uninstall entry of the registry, or a known place.
 function Find-InstallDir {
   $keys = @(
@@ -29,7 +46,8 @@ function Find-InstallDir {
   foreach ($k in $keys) {
     foreach ($e in (Get-ItemProperty -Path $k -ErrorAction SilentlyContinue)) {
       if ($e.DisplayName -and $e.DisplayName -like 'Kadakas*') {
-        if ($e.InstallLocation -and (Test-Path (Join-Path $e.InstallLocation 'kadakas-launcher.exe'))) { return $e.InstallLocation.TrimEnd('\') }
+        $loc = if ($e.InstallLocation) { $e.InstallLocation.Trim('"').TrimEnd('\') } else { '' }
+        if ($loc -and (Test-Path (Join-Path $loc 'kadakas-launcher.exe'))) { return $loc }
         if ($e.UninstallString) {
           $dir = Split-Path -Parent ($e.UninstallString -replace '"', '' -replace ' /.*$', '')
           if (Test-Path (Join-Path $dir 'kadakas-launcher.exe')) { return $dir }
@@ -72,12 +90,12 @@ if ($null -ne (Find-InstallDir)) { Fail "Kadakas is installed already on this ma
 Step "install $Package"
 $log = Join-Path $work 'install.log'
 if ($Kind -eq 'msi') {
-  $p = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") -Wait -PassThru
+  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") 600 'msiexec /i' $log
 } else {
-  $p = Start-Process -FilePath $Package -ArgumentList @('/S') -Wait -PassThru
+  $code = Run-Limited $Package @('/S') 600 'the installer' $null
 }
 if ($Artifacts -and (Test-Path $log)) { Copy-Item $log (Join-Path $Artifacts "install-$Kind.log") -ErrorAction SilentlyContinue }
-if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Fail "the installer ended with $($p.ExitCode)" }
+if ($code -ne 0 -and $code -ne 3010) { Fail "the installer ended with $code" }
 
 # An NSIS installer can finish in a child process: wait for the files.
 $dir = $null
@@ -118,14 +136,15 @@ finally {
 
 Step 'uninstall'
 if ($Kind -eq 'msi') {
-  $p = Start-Process -FilePath msiexec.exe -ArgumentList @('/x', "`"$Package`"", '/qn', '/norestart') -Wait -PassThru
-  if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Fail "msiexec /x ended with $($p.ExitCode)" }
+  $ulog = Join-Path $work 'uninstall.log'
+  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") 600 'msiexec /x' $ulog
+  if ($code -ne 0 -and $code -ne 3010) { Fail "msiexec /x ended with $code" }
 } else {
   $uninstaller = Get-ChildItem -Path $dir -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $uninstaller) { Fail "no uninstaller in $dir" }
-  # _?= keeps the uninstaller from copying itself away, so that -Wait waits for it.
-  $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/S', "_?=$dir") -Wait -PassThru
-  if ($p.ExitCode -ne 0) { Fail "the uninstaller ended with $($p.ExitCode)" }
+  # _?= keeps the uninstaller from copying itself away, so that the wait is for the real work.
+  $code = Run-Limited $uninstaller.FullName @('/S', "_?=$dir") 600 'the uninstaller' $null
+  if ($code -ne 0) { Fail "the uninstaller ended with $code" }
 }
 foreach ($f in @('kadakas-launcher.exe', 'kadakas-app.exe', 'kadakas-modeler.exe', 'kadakas.exe')) {
   if (-not (Wait-Gone (Join-Path $dir $f) 60)) { Fail "still there after the uninstall: $dir\$f" }
