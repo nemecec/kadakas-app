@@ -16,3 +16,4 @@ uic-curve-refused-loop = Tahk kasutab kõverat viisil, mida ei saa uuesti ehitad
 uic-curve-refused-invalid = Uued lõigud teeksid mudeli vigaseks, näiteks liiga lühikeste servadega.
 uic-curve-refused-unknown-kind = Selle ringi liiki see programm ei tunne, seega ta seda ei muuda.
 uic-curve-note-unknown-kind = Ring, mille liiki see programm ei tunne, kaotas kirjelduse, sest kõver muutus.
+uic-curve-note-broken = Ring või kaar kaotas oma täpse kirjelduse, sest selle servad pole enam üks ahel. Kõver ise jääb alles.

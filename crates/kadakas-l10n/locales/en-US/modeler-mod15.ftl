@@ -3,7 +3,7 @@
 modeler-curve-kind = Shape
 modeler-curve-kind-circle = Circle
 modeler-curve-kind-arc = Arc
-modeler-curve-kind-polygon = Regular polygon
+modeler-curve-kind-polygon = Polygon
 modeler-curve-radius = Radius
 modeler-curve-center = Center
 modeler-curve-segments = Segments
@@ -13,3 +13,4 @@ modeler-curve-sweep = Sweep angle
 modeler-curve-length = Length
 modeler-curve-circumference = Circumference
 modeler-curve-segments-set = The curve now has { $segments } segments.
+modeler-curve-not-true = Not a true circle: the model is scaled unequally

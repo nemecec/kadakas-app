@@ -118,18 +118,25 @@ impl SurfaceModel {
             .filter(|(c, _)| m.curves.contains_key(c))
             .map(|(c, a)| (*c, a.clone()))
             .collect();
+        m.analytic_raw = self
+            .analytic_raw
+            .iter()
+            .filter(|(c, _)| m.curves.contains_key(c))
+            .map(|(c, r)| (*c, r.clone()))
+            .collect();
         m
     }
 
     /// Takes the selection out: the faces go, and the chosen edges that no other face uses.
     /// Up to two edits of the model (see [`SurfaceModel::apply`]); on an error the model is
-    /// unchanged.
-    pub fn remove(&mut self, sel: &Selection) -> Result<(), SurfaceError> {
+    /// unchanged. Returns the notes of the edits (a circle that lost its description).
+    pub fn remove(&mut self, sel: &Selection) -> Result<Vec<String>, SurfaceError> {
         let mut work = self.clone();
+        let mut notes = Vec::new();
         if !sel.faces.is_empty() {
-            work.apply(&Edit::EraseFaces {
+            notes.extend(work.apply_with_notes(&Edit::EraseFaces {
                 faces: sel.faces.iter().copied().collect(),
-            })?;
+            })?);
         }
         let gone: Vec<EdgeId> = sel
             .edges
@@ -138,24 +145,26 @@ impl SurfaceModel {
             .filter(|e| work.edges.contains_key(e) && work.faces_of_edge(*e).is_empty())
             .collect();
         if !gone.is_empty() {
-            work.apply(&Edit::EraseEdges { edges: gone })?;
+            notes.extend(work.apply_with_notes(&Edit::EraseEdges { edges: gone })?);
         }
         *self = work;
-        Ok(())
+        Ok(notes)
     }
 
     /// Draws all edges of `other` into this model, `other` placed by `xf` (in the local
     /// coordinates of this model; `None`: as they are). See the module documentation. On an error
-    /// the model is unchanged.
+    /// the model is unchanged. Returns the notes: a circle description that a curve lost where
+    /// it landed.
     pub fn absorb(
         &mut self,
         other: &SurfaceModel,
         xf: Option<DAffine3>,
-    ) -> Result<(), SurfaceError> {
+    ) -> Result<Vec<String>, SurfaceError> {
         let mut a = Absorber::new(self.clone());
         a.absorb(other, xf)?;
+        let notes = a.take_notes();
         *self = a.finish();
-        Ok(())
+        Ok(notes)
     }
 
     /// The plain version of [`SurfaceModel::absorb`], one `apply` per step, that the version with
@@ -268,7 +277,7 @@ impl SurfaceModel {
             if let Some(list) = mapped {
                 // A chain that is not a chain any more (the edge was cut) is not a curve. The
                 // circle of the curve is fitted again where the chain landed.
-                // The note of a description that is lost has no place in the plain absorb.
+                // The note of a description that is lost has no place in the reference absorb.
                 let _ = work.add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
             }
         }
@@ -423,6 +432,10 @@ impl Absorber {
                     .add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
                 if let Ok((_, Some(note))) = made {
                     self.notes.push(note);
+                } else if made.is_ok() && other.analytic_raw.contains_key(c) {
+                    self.notes.push(format!(
+                        "curve {c} lost its circle description: its kind is not known to this program, so it cannot follow the change"
+                    ));
                 }
             }
         }

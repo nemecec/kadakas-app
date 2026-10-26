@@ -200,7 +200,8 @@ impl Tx<'_> {
             } else {
                 let part = m.extract(&sel);
                 let mut rest = m;
-                rest.remove(&sel).map_err(|e| invalid(e.to_string()))?;
+                let notes = rest.remove(&sel).map_err(|e| invalid(e.to_string()))?;
+                self.exact_notes.extend(notes);
                 if let Some(p) = part.problem() {
                     return Err(invalid(p));
                 }
@@ -285,7 +286,8 @@ impl Tx<'_> {
                     remove_model = Some((*mid, None));
                 } else {
                     let mut rest = m.clone();
-                    rest.remove(sel).map_err(|e| invalid(e.to_string()))?;
+                    let notes = rest.remove(sel).map_err(|e| invalid(e.to_string()))?;
+                    self.exact_notes.extend(notes);
                     remove_model = Some((*mid, Some(rest)));
                 }
             }

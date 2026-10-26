@@ -26,7 +26,15 @@ pub fn rows(ui: &mut egui::Ui, shape: &CurveShape, out: &mut Vec<TrayAction>) {
         ui.end_row();
     };
     row(ui, tr!("modeler-curve-kind"), kind_text(&shape.kind));
-    row(ui, tr!("modeler-curve-radius"), u.length_text(shape.radius));
+    if shape.uniform {
+        row(ui, tr!("modeler-curve-radius"), u.length_text(shape.radius));
+    } else {
+        row(
+            ui,
+            tr!("modeler-curve-radius"),
+            tr!("modeler-curve-not-true"),
+        );
+    }
     row(
         ui,
         tr!("modeler-curve-center"),
@@ -37,18 +45,20 @@ pub fn rows(ui: &mut egui::Ui, shape: &CurveShape, out: &mut Vec<TrayAction>) {
             u.length_text(shape.center[2])
         ),
     );
-    if let Some(sweep) = shape.sweep_deg {
-        row(ui, tr!("modeler-curve-sweep"), u.angle_text_d(sweep, 1));
+    if shape.uniform {
+        if let Some(sweep) = shape.sweep_deg {
+            row(ui, tr!("modeler-curve-sweep"), u.angle_text_d(sweep, 1));
+        }
+        row(
+            ui,
+            if shape.sweep_deg.is_some() {
+                tr!("modeler-curve-length")
+            } else {
+                tr!("modeler-curve-circumference")
+            },
+            u.length_text(shape.length),
+        );
     }
-    row(
-        ui,
-        if shape.sweep_deg.is_some() {
-            tr!("modeler-curve-length")
-        } else {
-            tr!("modeler-curve-circumference")
-        },
-        u.length_text(shape.length),
-    );
     // The number of segments: a field with a button. The value waits in the memory of the
     // window until Set is pressed.
     ui.label(egui::RichText::new(tr!("modeler-curve-segments")).weak());

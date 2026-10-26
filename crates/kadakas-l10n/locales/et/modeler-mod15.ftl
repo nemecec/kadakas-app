@@ -3,7 +3,7 @@
 modeler-curve-kind = Kuju
 modeler-curve-kind-circle = Ring
 modeler-curve-kind-arc = Kaar
-modeler-curve-kind-polygon = Korrapärane hulknurk
+modeler-curve-kind-polygon = Hulknurk
 modeler-curve-radius = Raadius
 modeler-curve-center = Keskpunkt
 modeler-curve-segments = Lõikude arv
@@ -13,3 +13,4 @@ modeler-curve-sweep = Kaare nurk
 modeler-curve-length = Pikkus
 modeler-curve-circumference = Ümbermõõt
 modeler-curve-segments-set = Kõveral on nüüd { $segments } lõiku.
+modeler-curve-not-true = Pole tõeline ring: mudel on ebavõrdselt skaleeritud

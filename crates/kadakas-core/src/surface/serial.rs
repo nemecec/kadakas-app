@@ -1,4 +1,5 @@
-//! The saved form of a surface model (version [`FORMAT`]):
+//! The saved form of a surface model (version 1, or 2 when it has circle descriptions, see
+//! [`FORMAT`]):
 //!
 //! ```json
 //! {"kind": "surface_model", "v": 1, "name": "Shed", "next_id": 9,
@@ -11,7 +12,9 @@
 //! A vertex is `[id, x, y, z]`, an edge `[id, first vertex, second vertex]` or, with attributes,
 //! `[id, a, b, {attrs}]`. A face may have `attrs`. `curves` is a list of `[id, edge, edge, ...]`.
 //! `curve_geometry` (MOD-15, optional) is a list of `[curve id, {kind, center, normal, axis,
-//! radius, start?, end?}]`: the exact circle of a curve (see `analytic`).
+//! radius, start?, end?}]`: the exact circle of a curve (see `analytic`). A row that this
+//! version cannot read is kept and written back while its chain is as it was. A model with
+//! `curve_geometry`, or with a log entry of segments or of another version, is written as `v` 2.
 //! `rev` counts the edits and `log` holds the recent ones (see `sync`). `transform` is the three
 //! columns of the matrix and then the move (left out for the identity). Everything is in id order
 //! and each loop starts at its smallest vertex id, so the same model gives the same text.
@@ -90,7 +93,7 @@ fn vids(l: &[u32]) -> Vec<VertexId> {
 impl Serialize for SurfaceModel {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         Raw {
-            v: FORMAT,
+            v: self.format_needed(),
             name: self.name.clone(),
             transform: (self.transform != DAffine3::IDENTITY)
                 .then(|| self.transform.to_cols_array()),
@@ -137,11 +140,20 @@ impl Serialize for SurfaceModel {
                         .collect()
                 })
                 .collect(),
-            curve_geometry: self
-                .analytic
-                .iter()
-                .filter_map(|(id, a)| Some((id.0, serde_json::to_value(a).ok()?)))
-                .collect(),
+            curve_geometry: {
+                let mut rows: Vec<(u32, Value)> = self
+                    .analytic
+                    .iter()
+                    .filter_map(|(id, a)| Some((id.0, serde_json::to_value(a).ok()?)))
+                    .collect();
+                rows.extend(
+                    self.analytic_raw
+                        .iter()
+                        .map(|(id, r)| (id.0, r.value.clone())),
+                );
+                rows.sort_by_key(|r| r.0);
+                rows
+            },
             rev: self.rev,
             log: self.log.clone(),
             extra: self.extra.clone(),
@@ -228,15 +240,42 @@ impl<'de> Deserialize<'de> for SurfaceModel {
         let mut m = SurfaceModel::from_parts(vertices, edges, faces, raw.next_id);
         m.edge_attrs = edge_attrs;
         m.curves = curves;
+        let mut unread = Vec::new();
         for (id, v) in raw.curve_geometry {
-            // A description that this version cannot read is left out: the chain stays.
-            if let Ok(a) = serde_json::from_value::<Analytic>(v) {
-                m.analytic.insert(CurveId(id), a);
+            // A description that this version cannot read stays as it is (see `analytic`).
+            match serde_json::from_value::<Analytic>(v.clone()) {
+                Ok(a) => {
+                    if m.analytic.insert(CurveId(id), a).is_some() {
+                        m.load_notes.push(format!(
+                            "the file has two circle descriptions for curve {id}: the later one is used"
+                        ));
+                    }
+                }
+                Err(_) => unread.push((id, v)),
             }
         }
-        super::analytic::validate_loaded(&mut m);
+        super::analytic::validate_loaded(&mut m, unread);
         m.rev = raw.rev;
         m.log = raw.log;
+        for e in &m.log {
+            if let super::sync::Intent::Unknown(v) = &e.intent {
+                // Written by another version of the program, or damaged: kept either way.
+                let other_version = serde_json::from_value::<super::sync::Intent>(v.clone())
+                    .err()
+                    .is_some_and(|err| err.to_string().starts_with("unknown variant"));
+                m.load_notes.push(if other_version {
+                    format!(
+                        "edit {} of the log was written by another version of the program: it is kept as it is and not replayed",
+                        e.n
+                    )
+                } else {
+                    format!(
+                        "edit {} of the log is damaged (a field does not fit): it is kept as it is and not replayed",
+                        e.n
+                    )
+                });
+            }
+        }
         m.extra = raw.extra;
         m.name = raw.name;
         if let Some(t) = raw.transform {

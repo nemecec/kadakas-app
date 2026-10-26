@@ -15,7 +15,9 @@ fn at_most(text: &str) -> Option<String> {
 /// The text of a refusal or a note of an edit, for the person.
 pub fn localize(text: &str) -> String {
     let has = |s: &str| text.contains(s);
-    if has("lost its circle description") && !has("its kind is not known") {
+    if has("lost its circle description") && has("the chain is broken") {
+        tr!("uic-curve-note-broken")
+    } else if has("lost its circle description") && !has("its kind is not known") {
         tr!("uic-curve-note-dropped")
     } else if has("its start and end angle are updated") {
         tr!("uic-curve-note-angles")
