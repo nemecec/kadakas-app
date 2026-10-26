@@ -41,11 +41,15 @@ pub struct Builder {
     pub default_class: ClassId,
     full: bool,
     last_id: kadakas_core::uid::Uid,
-    /// The objects that `add` made, in order (for `rollback`).
-    added: Vec<ObjectId>,
+    /// The objects that `add` made, in order, with their layers (for `rollback`).
+    added: Vec<(ObjectId, LayerId)>,
     /// Objects of a rolled-back unit of work. `finish` deletes them at the end of the batch (their
     /// IDs were taken, so the IDs of the later commands stay right).
     doomed: Vec<ObjectId>,
+    /// Layers that a rolled-back unit of work made. `finish` deletes those that have no object.
+    rolled_layers: Vec<(String, LayerId)>,
+    /// Counts the rollbacks: a checkpoint from before one is stale (see [`Builder::rollback`]).
+    generation: u64,
     /// Probe mode: shapes are not stored, only their bounds (mm) are collected.
     probe: Option<(DVec2, DVec2)>,
     /// Shift (mm) that every added shape gets. Imports use it to keep geometry near the origin.
@@ -58,6 +62,10 @@ pub struct Builder {
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     added: usize,
+    layers: usize,
+    notes: usize,
+    full: bool,
+    generation: u64,
     objects: BTreeMap<String, usize>,
     skipped: Vec<crate::report::Skipped>,
 }
@@ -147,6 +155,8 @@ impl Builder {
             last_id: kadakas_core::uid::Uid::NIL,
             added: Vec::new(),
             doomed: Vec::new(),
+            rolled_layers: Vec::new(),
+            generation: 0,
             probe: None,
             offset: DVec2::ZERO,
             hatches: ctx.hatches.clone(),
@@ -478,7 +488,7 @@ impl Builder {
             });
         }
         self.report.count(kind);
-        self.added.push(id);
+        self.added.push((id, layer));
         true
     }
 
@@ -487,19 +497,36 @@ impl Builder {
     pub fn checkpoint(&self) -> Checkpoint {
         Checkpoint {
             added: self.added.len(),
+            layers: self.layers.len(),
+            notes: self.report.notes.len(),
+            full: self.full,
+            generation: self.generation,
             objects: self.report.objects.clone(),
             skipped: self.report.skipped.clone(),
         }
     }
 
-    /// Takes back the objects that were added since `cp` and restores the counts of the report
-    /// (objects and skipped). The objects are deleted at the end of the batch; layers, classes and
-    /// resources that were made since stay. Returns how many objects went.
+    /// Takes back what was done since `cp`: the objects that were added (they are deleted at the
+    /// end of the batch), the counts of the report (objects and skipped), the notes, and the limit
+    /// of objects (a rollback below the limit lets the import go on). Layers that were made since
+    /// stay for now, and `finish` deletes those that have no object. Returns how many objects went.
+    ///
+    /// A checkpoint is good until the next rollback. After one, an older or newer checkpoint is
+    /// stale: using it does nothing and returns 0 (take a new one).
     pub fn rollback(&mut self, cp: Checkpoint) -> usize {
+        if cp.generation != self.generation {
+            return 0;
+        }
+        self.generation += 1;
         let gone = self.added.split_off(cp.added.min(self.added.len()));
-        self.doomed.extend(gone.iter().copied());
+        self.doomed.extend(gone.iter().map(|(id, _)| *id));
+        let from = cp.layers.min(self.layers.len());
+        self.rolled_layers
+            .extend(self.layers[from..].iter().cloned());
         self.report.objects = cp.objects;
         self.report.skipped = cp.skipped;
+        self.report.notes.truncate(cp.notes);
+        self.full = cp.full;
         gone.len()
     }
 
@@ -508,6 +535,15 @@ impl Builder {
             self.cmds.push(Command::DeleteObjects {
                 ids: std::mem::take(&mut self.doomed),
             });
+        }
+        // A layer that only a rolled-back unit of work used is deleted, not left empty.
+        for (name, id) in std::mem::take(&mut self.rolled_layers) {
+            if !self.added.iter().any(|(_, l)| *l == id) {
+                self.cmds.push(Command::DeleteLayer { id });
+                if let Some(i) = self.report.layers_created.iter().position(|n| *n == name) {
+                    self.report.layers_created.remove(i);
+                }
+            }
         }
         for id in std::mem::take(&mut self.relock) {
             self.cmds.push(Command::ModifyLayer {
@@ -656,6 +692,146 @@ mod tests {
                 .iter()
                 .any(|(_, o)| o.data.get("k") == Some(&Value::from(3)))
         );
+    }
+
+    fn line(x: f64) -> Shape {
+        Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::new(x, 0.0),
+        }
+    }
+
+    #[test]
+    fn a_layer_that_only_a_rolled_back_unit_used_is_deleted() {
+        let doc = Document::with_sequential_ids();
+        let mut b = Builder::new(&Context::of(&doc), "test", 100);
+        let c = b.default_class;
+        let kept = b.layer("Kept", true);
+        assert!(b.add(
+            "LINE",
+            line(1.0),
+            kept,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        let cp = b.checkpoint();
+        let lost = b.layer("Lost", true);
+        assert!(b.add(
+            "LINE",
+            line(2.0),
+            lost,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        // A layer made in the unit and used afterwards stays.
+        let shared = b.layer("Shared", true);
+        assert!(b.add(
+            "LINE",
+            line(3.0),
+            shared,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        b.rollback(cp);
+        assert!(b.add(
+            "LINE",
+            line(4.0),
+            shared,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        let r = b.finish();
+        let mut ed = Editor::new(doc);
+        ed.execute(&r.command).unwrap();
+        let names: Vec<String> = ed.doc().layers.iter().map(|l| l.name.clone()).collect();
+        assert!(names.contains(&"Kept".to_string()) && names.contains(&"Shared".to_string()));
+        assert!(!names.contains(&"Lost".to_string()), "{names:?}");
+        assert!(!r.report.layers_created.contains(&"Lost".to_string()));
+        assert!(r.report.layers_created.contains(&"Shared".to_string()));
+        assert_eq!(ed.doc().objects.len(), 2);
+        // One undo step takes everything back, also after a rollback.
+        assert!(ed.undo());
+        assert!(ed.doc().objects.is_empty());
+        assert_eq!(ed.doc().layers.len(), 1);
+    }
+
+    #[test]
+    fn a_rollback_below_the_object_limit_lets_the_import_go_on() {
+        let doc = Document::with_sequential_ids();
+        let mut b = Builder::new(&Context::of(&doc), "test", 1);
+        let (l, c) = (b.default_layer, b.default_class);
+        let cp = b.checkpoint();
+        assert!(b.add(
+            "LINE",
+            line(1.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        // The second object of the same unit hits the limit: the import is full, with a note.
+        assert!(!b.add(
+            "LINE",
+            line(2.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        assert!(b.is_full());
+        b.rollback(cp);
+        assert!(!b.is_full());
+        assert!(b.report.notes.is_empty(), "{:?}", b.report.notes);
+        assert!(b.add(
+            "LINE",
+            line(3.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        assert_eq!(b.report.total(), 1);
+    }
+
+    #[test]
+    fn a_stale_checkpoint_does_nothing() {
+        let doc = Document::with_sequential_ids();
+        let mut b = Builder::new(&Context::of(&doc), "test", 100);
+        let (l, c) = (b.default_layer, b.default_class);
+        let outer = b.checkpoint();
+        assert!(b.add(
+            "LINE",
+            line(1.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        let inner = b.checkpoint();
+        assert!(b.add(
+            "LINE",
+            line(2.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        // Back to the outer point, then the inner one (older than the rollback): no effect.
+        assert_eq!(b.rollback(outer), 2);
+        assert!(b.add(
+            "LINE",
+            line(3.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        assert_eq!(b.rollback(inner), 0);
+        assert_eq!(b.report.total(), 1);
     }
 
     #[test]
