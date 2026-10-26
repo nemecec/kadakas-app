@@ -2246,20 +2246,22 @@ mod tests {
     #[test]
     fn the_exact_surfaces_of_a_read_count_in_its_size() {
         let plain = Rc::new((Some(MeshData::default()), vec![]));
-        let mut m = MeshData::default();
-        m.exact = Some(Box::new(kadakas_core::exact::ExactSolid {
-            version: 1,
-            product: String::new(),
-            unit_mm: 1.0,
-            tolerance_mm: 0.1,
-            angle_deg: 15.0,
-            vertices: vec![DVec3::ZERO; 1000],
-            edges: vec![],
-            shells: vec![],
-            faces: vec![],
-            mesh_hash: 0,
-            extra: Default::default(),
-        }));
+        let m = MeshData {
+            exact: Some(Box::new(kadakas_core::exact::ExactSolid {
+                version: 1,
+                product: String::new(),
+                unit_mm: 1.0,
+                tolerance_mm: 0.1,
+                angle_deg: 15.0,
+                vertices: vec![DVec3::ZERO; 1000],
+                edges: vec![],
+                shells: vec![],
+                faces: vec![],
+                mesh_hash: 0,
+                extra: Default::default(),
+            })),
+            ..Default::default()
+        };
         let with = Rc::new((Some(m), vec![]));
         assert!(brep_read_bytes(&with) >= brep_read_bytes(&plain) + 50_000);
     }
