@@ -44,6 +44,41 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Index into `languages()` of the language of the whole process.
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// The decimal symbol of numbers inside messages, as a code point (`.` or `,`).
+static DECIMAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new('.' as u32);
+
+thread_local! {
+    /// A decimal symbol that overrides the process one on this thread (tests).
+    static DECIMAL_OVERRIDE: std::cell::Cell<Option<char>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sets how a number inside a message is written: `.` (the default) or `,`. The UI calls this
+/// with the number format of the person (`kadakas_units::current().number.decimal`) when it
+/// starts and when the person changes the language or the number format. Files, the API and
+/// the command line do not use messages, so they are not affected.
+pub fn set_decimal_symbol(symbol: char) {
+    DECIMAL.store(symbol as u32, Ordering::Relaxed);
+}
+
+/// The decimal symbol of numbers inside messages.
+pub fn decimal_symbol() -> char {
+    DECIMAL_OVERRIDE
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| char::from_u32(DECIMAL.load(Ordering::Relaxed)).unwrap_or('.'))
+}
+
+/// Runs `f` with another decimal symbol on this thread only. For tests.
+pub fn with_decimal_symbol<R>(symbol: char, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<char>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DECIMAL_OVERRIDE.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(DECIMAL_OVERRIDE.with(|o| o.replace(Some(symbol))));
+    f()
+}
+
 thread_local! {
     /// The localizer of this thread, with the language index that it was made for.
     static CACHE: RefCell<Option<(usize, usize, Rc<Localizer>)>> = const { RefCell::new(None) };
@@ -159,6 +194,33 @@ mod tests {
         assert_eq!(tr!("common-ok"), "OK");
         assert_eq!(tr!("common-delete-n", count = 1), "Delete 1 object");
         assert_eq!(tr!("common-delete-n", count = 3,), "Delete 3 objects");
+    }
+
+    #[test]
+    fn a_number_inside_a_message_follows_the_decimal_symbol() {
+        assert_eq!(tr!("common-delete-n", count = 2.5), "Delete 2.5 objects");
+        with_decimal_symbol(',', || {
+            assert_eq!(tr!("common-delete-n", count = 2.5), "Delete 2,5 objects");
+            assert_eq!(
+                tr!("common-delete-n", count = -0.25f32),
+                "Delete -0,25 objects"
+            );
+            // Whole numbers and counts are the same in every format, and plurals still work.
+            assert_eq!(tr!("common-delete-n", count = 1), "Delete 1 object");
+            assert_eq!(
+                tr!("common-delete-n", count = 12345),
+                "Delete 12345 objects"
+            );
+            // Text arguments are not touched.
+            assert_eq!(tr!("common-test-hello", name = "1.5"), "Hello 1.5");
+            assert_eq!(decimal_symbol(), ',');
+        });
+        assert_eq!(decimal_symbol(), '.');
+        with_language("et", || {
+            with_decimal_symbol(',', || {
+                assert!(tr!("common-delete-n", count = 2.5).contains("2,5"));
+            });
+        });
     }
 
     #[test]

@@ -16,6 +16,7 @@ use kadakas_core::surface::{FaceId, PaintSide};
 use kadakas_l10n::tr;
 use kadakas_ui_core::materials::{MaterialEdit, MaterialRow, MaterialsPanel, Request};
 use kadakas_ui_core::modeler::{EntityInfo, Summary};
+use kadakas_view3d::numfmt::UiNumber;
 
 /// Which panels of the tray are open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,12 +144,26 @@ pub fn kind_text(kind: &str) -> String {
 
 /// Three angles in degrees.
 fn degrees(a: [f64; 3]) -> String {
-    format!("{:.1}°, {:.1}°, {:.1}°", a[0], a[1], a[2])
+    let n = |v: f64| kadakas_units::num(v, 1);
+    format!("{}°, {}°, {}°", n(a[0]), n(a[1]), n(a[2]))
+}
+
+/// The normal of a face: three numbers in the number format of the person. They are separated by
+/// a semicolon where the decimal symbol is a comma.
+fn normal_text(n: [f64; 3]) -> String {
+    let sep = if kadakas_units::current().number.decimal == kadakas_units::Decimal::Comma {
+        "; "
+    } else {
+        ", "
+    };
+    let f = |v: f64| kadakas_units::num(v, 2);
+    [f(n[0]), f(n[1]), f(n[2])].join(sep)
 }
 
 /// Three scale factors.
 fn factors(a: [f64; 3]) -> String {
-    format!("{:.3} × {:.3} × {:.3}", a[0], a[1], a[2])
+    let n = |v: f64| kadakas_units::num(v, 3);
+    format!("{} × {} × {}", n(a[0]), n(a[1]), n(a[2]))
 }
 
 fn lengths(size: [f64; 3]) -> String {
@@ -409,11 +424,7 @@ pub fn entity_info(ui: &mut egui::Ui, data: &TrayData, out: &mut Vec<TrayAction>
                     row(ui, tr!("modeler-entity-id"), id.to_string());
                     row(ui, tr!("modeler-entity-model"), model.clone());
                     row(ui, tr!("modeler-entity-area"), u.area_text(*area));
-                    row(
-                        ui,
-                        tr!("modeler-entity-normal"),
-                        format!("{:.2}, {:.2}, {:.2}", normal[0], normal[1], normal[2]),
-                    );
+                    row(ui, tr!("modeler-entity-normal"), normal_text(*normal));
                     row(ui, tr!("modeler-entity-loop-edges"), edges.to_string());
                     row(ui, tr!("modeler-entity-holes"), holes.to_string());
                     for (label, side, current) in [
@@ -555,7 +566,7 @@ fn editor(
                 ];
                 let mut done = false;
                 for c in &mut rgb {
-                    let r = ui.add(egui::DragValue::new(c).range(0..=255));
+                    let r = ui.add(egui::DragValue::new(c).range(0..=255).ui_number());
                     done |= commit(&r);
                 }
                 b.value.base_color.0[..3].copy_from_slice(&rgb);
@@ -576,7 +587,10 @@ fn editor(
                     1 => &mut b.value.roughness,
                     _ => &mut b.value.metallic,
                 };
-                let r = ui.add(egui::Slider::new(v, 0.0..=1.0).fixed_decimals(2));
+                let r = ui.add(egui::Slider::new(v, 0.0..=1.0)
+                        .fixed_decimals(2)
+                        .ui_number(),
+                );
                 if commit(&r) {
                     edits.push(match which {
                         0 => MaterialEdit::Opacity(*v),
@@ -639,7 +653,11 @@ fn editor(
                 let mut done = false;
                 ui.horizontal(|ui| {
                     for c in v.iter_mut() {
-                        let r = ui.add(egui::DragValue::new(c).speed(1.0).range(min..=1e9));
+                        let r = ui.add(egui::DragValue::new(c)
+                                .speed(1.0)
+                                .range(min..=1e9)
+                                .ui_number(),
+                        );
                         done |= commit(&r);
                     }
                 });
@@ -654,7 +672,10 @@ fn editor(
             ui.end_row();
 
             ui.label(egui::RichText::new(tr!("modeler-materials-rotation")).weak());
-            let r = ui.add(egui::DragValue::new(&mut b.value.mapping.rotation).speed(1.0));
+            let r = ui.add(egui::DragValue::new(&mut b.value.mapping.rotation)
+                    .speed(1.0)
+                    .ui_number(),
+            );
             if commit(&r) {
                 edits.push(MaterialEdit::Rotation(b.value.mapping.rotation));
             }

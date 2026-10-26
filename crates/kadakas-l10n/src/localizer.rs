@@ -66,6 +66,24 @@ fn bundle(tag: &str) -> FluentBundle<FluentResource> {
     bundle_from(tag, lang.files.iter().map(|(_, text)| *text))
 }
 
+/// How a number inside a message is written: Fluent writes it with a decimal point; the person
+/// may want a comma (`kadakas_l10n::set_decimal_symbol`). Whole numbers and counts are the same
+/// in every format. Digit grouping is not added here: a number in a message can be an id, a
+/// year or a count. A text that needs groups (a size in bytes) is formatted by `kadakas-units`
+/// and passed as text.
+fn number_formatter<M>(value: &FluentValue<'_>, _memoizer: &M) -> Option<String> {
+    let FluentValue::Number(n) = value else {
+        return None;
+    };
+    let text = n.as_string();
+    let symbol = crate::decimal_symbol();
+    Some(if symbol == '.' {
+        text.into_owned()
+    } else {
+        text.replace('.', &symbol.to_string())
+    })
+}
+
 fn bundle_from<'a>(
     tag: &str,
     texts: impl Iterator<Item = &'a str>,
@@ -74,6 +92,7 @@ fn bundle_from<'a>(
     let mut b = FluentBundle::new(vec![id]);
     // Unicode isolation marks around arguments are noise in a plain UI.
     b.set_use_isolating(false);
+    b.set_formatter(Some(number_formatter));
     for text in texts {
         // A file with a syntax error keeps its good messages (`Err` holds both). The CI check
         // reports the error.

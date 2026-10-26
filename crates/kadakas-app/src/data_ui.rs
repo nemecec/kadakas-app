@@ -8,6 +8,7 @@
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
 use kadakas_units::DateFormat;
+use kadakas_view3d::numfmt::UiNumber;
 use std::collections::HashMap;
 
 use egui::{Color32, DragValue, Id, Ui};
@@ -250,7 +251,7 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
         }
         FieldType::Integer => {
             let mut n = shown.as_i64().unwrap_or(0);
-            let r = ui.add(DragValue::new(&mut n).speed(0.2));
+            let r = ui.add(DragValue::new(&mut n).speed(0.2).ui_number());
             (Value::from(n), r.drag_stopped() || r.lost_focus())
         }
         FieldType::Number
@@ -266,7 +267,8 @@ fn field_editor(ui: &mut Ui, f: &FieldDef, shown: Value) -> (Value, bool) {
             };
             let drag = DragValue::new(&mut n)
                 .speed(speed)
-                .range(-record::MAX_FIELD..=record::MAX_FIELD);
+                .range(-record::MAX_FIELD..=record::MAX_FIELD)
+                .ui_number();
             // The units of the person show for the fields that have a unit of their own.
             let drag = match f.ty {
                 FieldType::Dimension => drag.length(),
@@ -354,6 +356,10 @@ fn default_text(f: &FieldDef) -> String {
     match &f.default {
         None => String::new(),
         Some(Value::String(s)) => s.clone(),
+        // A number is shown in the number format of the person, as the field reads it back.
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .map_or_else(|| n.to_string(), |x| kadakas_units::num_plain_trim(x, 12)),
         Some(v) => v.to_string(),
     }
 }
@@ -370,10 +376,7 @@ fn set_default(f: &mut FieldDef, text: &str) {
             | FieldType::Dimension
             | FieldType::Area
             | FieldType::Volume
-            | FieldType::Angle => text
-                .trim()
-                .parse::<f64>()
-                .ok()
+            | FieldType::Angle => kadakas_units::parse_num(text.trim())
                 .filter(|n| n.is_finite())
                 .map_or_else(
                     || Value::String(text.into()),
@@ -1139,7 +1142,7 @@ fn sheet_window(ui: &mut Ui, session: &mut Session, st: &mut SheetState, status:
     if commit && st.cell_text != input {
         let mut next = def.clone();
         match next
-            .set_cell(&address, &st.cell_text, None)
+            .set_cell(&address, &cell_entry(&st.cell_text), None)
             .and_then(|_| save_def(session, id, &next, status))
         {
             Ok(()) => {
@@ -1334,16 +1337,34 @@ fn criteria_fields(doc: &Document) -> Vec<String> {
     out
 }
 
+/// What a person typed in a cell, for the worksheet. A plain number written in the number format
+/// of the person (`1,5` where the decimal symbol is a comma) becomes the number with a point; the
+/// worksheet and the file always hold a point. A formula (`=...`) and a text (`'...`) stay as
+/// typed: in a formula the comma separates arguments, so its numbers are written with a point.
+pub fn cell_entry(text: &str) -> String {
+    let t = text.trim();
+    if t.is_empty() || t.starts_with('=') || text.starts_with('\'') || t.parse::<f64>().is_ok() {
+        return text.to_string();
+    }
+    match kadakas_units::parse_num(t).filter(|n| n.is_finite()) {
+        Some(n) => n.to_string(),
+        None => text.to_string(),
+    }
+}
+
 /// The comparison operators of the criteria builder.
 const OPERATORS: [&str; 6] = ["=", "<>", "<", "<=", ">", ">="];
 
 /// One clause for the criteria: `Area > 20` or `Kind = "plant"`. A number stays a number, anything else is text.
 pub fn criteria_clause(name: &str, op: &str, value: &str) -> String {
     let v = value.trim();
-    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite)
-        || v.eq_ignore_ascii_case("true")
-        || v.eq_ignore_ascii_case("false")
-    {
+    // A number is written with a point in the criteria, whatever the person types (`1,5` is 1.5
+    // where the decimal symbol is a comma).
+    let literal = if v.parse::<f64>().is_ok_and(f64::is_finite) {
+        v.to_string()
+    } else if let Some(n) = kadakas_units::parse_num(v).filter(|n| n.is_finite()) {
+        n.to_string()
+    } else if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
         v.to_string()
     } else {
         format!("\"{}\"", v.replace('"', "\"\""))
@@ -1839,6 +1860,67 @@ mod tests {
         assert!(s.worksheet_result(sid).is_some());
         assert_eq!(unique_name(s.editor.doc(), "worksheet", "Areas"), "Areas 2");
         assert_eq!(unique_name(s.editor.doc(), "worksheet", "Other"), "Other");
+    }
+
+    #[test]
+    fn numbers_typed_with_a_comma_are_numbers_where_the_decimal_symbol_is_a_comma() {
+        let comma = kadakas_units::Settings {
+            decimal: Some(kadakas_units::Decimal::Comma),
+            grouping: Some(kadakas_units::Grouping::Space),
+            ..Default::default()
+        }
+        .resolve("en-US");
+        kadakas_units::with_units(comma, || {
+            assert_eq!(criteria_clause("Area", ">", "1,5"), "Area > 1.5");
+            assert_eq!(criteria_clause("Area", ">", "20"), "Area > 20");
+            assert_eq!(criteria_clause("Kind", "=", "a,b"), "Kind = \"a,b\"");
+            assert_eq!(criteria_clause("Area", ">", "1 234,5"), "Area > 1234.5");
+            let mut f = FieldDef::new("w", FieldType::Number);
+            set_default(&mut f, "2,5");
+            assert_eq!(f.default, Some(Value::from(2.5)));
+            assert_eq!(default_text(&f), "2,5", "shown the way it reads back");
+            let mut i = FieldDef::new("n", FieldType::Integer);
+            set_default(&mut i, "7");
+            assert_eq!(i.default, Some(Value::from(7)));
+            // The invariant form is still read.
+            set_default(&mut f, "3.25");
+            assert_eq!(f.default, Some(Value::from(3.25)));
+        });
+        kadakas_units::with_units(kadakas_units::Units::METRIC, || {
+            assert_eq!(criteria_clause("Area", ">", "1,5"), "Area > 1.5");
+        });
+    }
+
+    #[test]
+    fn a_cell_entry_with_a_decimal_comma_is_a_number_and_a_formula_is_not_touched() {
+        let comma = kadakas_units::Settings {
+            decimal: Some(kadakas_units::Decimal::Comma),
+            grouping: Some(kadakas_units::Grouping::Space),
+            ..Default::default()
+        }
+        .resolve("en-US");
+        kadakas_units::with_units(comma, || {
+            assert_eq!(cell_entry("1,5"), "1.5");
+            assert_eq!(cell_entry(" -2,25 "), "-2.25");
+            assert_eq!(cell_entry("1 234,5"), "1234.5");
+            assert_eq!(cell_entry("7"), "7");
+            assert_eq!(cell_entry("3.5"), "3.5");
+            // Formulas, text and other entries stay as typed.
+            assert_eq!(cell_entry("=SUM(1,5)"), "=SUM(1,5)");
+            assert_eq!(cell_entry("'1,5"), "'1,5");
+            assert_eq!(cell_entry("Item, big"), "Item, big");
+            assert_eq!(cell_entry("2026-10-26"), "2026-10-26");
+            assert_eq!(cell_entry(""), "");
+        });
+        // The worksheet reads the result as a number.
+        kadakas_units::with_units(comma, || {
+            let mut def = WorksheetDef::default();
+            def.set_cell("A1", &cell_entry("1,5"), None).unwrap();
+            assert_eq!(
+                kadakas_sheet::def::interpret(&cell_entry("1,5")),
+                kadakas_sheet::def::Content::Const(kadakas_sheet::value::Value::Number(1.5))
+            );
+        });
     }
 
     #[test]

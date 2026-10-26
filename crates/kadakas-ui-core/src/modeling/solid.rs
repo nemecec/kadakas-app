@@ -110,7 +110,7 @@ pub fn operands(doc: &Document, sub: &SubSelection, swap: bool) -> Result<Operan
 
 /// A volume in m³ for the status line.
 fn cubic_metres(mm3: f64) -> String {
-    format!("{:.3}", mm3 / 1e9)
+    kadakas_units::num(mm3 / 1e9, 3)
 }
 
 /// What an operation would do, in the language of the window, or why it cannot. The volumes come

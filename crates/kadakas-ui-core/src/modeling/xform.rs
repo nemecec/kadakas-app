@@ -576,6 +576,25 @@ fn text_len(units: &Units, v: f64) -> String {
     units.length_text(v)
 }
 
+/// An angle for the Measurements box, in the number format of the person: `45,0°`.
+fn angle_label(units: &Units, radians: f64) -> String {
+    format!("{}°", units.number_text(radians.to_degrees(), 1))
+}
+
+/// Scale factors for the Measurements box: one number for a uniform scale, else three.
+fn factor_label(units: &Units, f: DVec3, uniform: bool) -> String {
+    if uniform || f.x == f.y && f.y == f.z {
+        units.number_text(f.x, 2)
+    } else {
+        format!(
+            "{}; {}; {}",
+            units.number_text(f.x, 2),
+            units.number_text(f.y, 2),
+            units.number_text(f.z, 2)
+        )
+    }
+}
+
 impl Xform {
     pub fn choose(&mut self, tool: ModelerTool) {
         *self = Xform {
@@ -707,19 +726,10 @@ impl Xform {
                 let c = self.cursor?;
                 Some((LiveLabel::Length, text_len(units, plane.origin.distance(c))))
             }
-            XRun::Angle { angle, .. } => {
-                Some((LiveLabel::Angle, format!("{:.1}°", angle.to_degrees())))
-            }
+            XRun::Angle { angle, .. } => Some((LiveLabel::Angle, angle_label(units, *angle))),
             XRun::Scale {
                 factors, uniform, ..
-            } => {
-                let t = if *uniform || factors.x == factors.y && factors.y == factors.z {
-                    format!("{:.2}", factors.x)
-                } else {
-                    format!("{:.2}; {:.2}; {:.2}", factors.x, factors.y, factors.z)
-                };
-                Some((LiveLabel::Factor, t))
-            }
+            } => Some((LiveLabel::Factor, factor_label(units, *factors, *uniform))),
             XRun::Idle => None,
         }
     }
@@ -1530,4 +1540,38 @@ fn protractor(plane: &Plane3, r: f64, from: f64) -> Vec<[DVec3; 2]> {
 /// The Move, Rotate or Scale action of a selection, for the menu or a test: the world matrix.
 pub fn xform_action(w: &World, ctx: &Context, matrix: DAffine3, copies: u32) -> Option<Action> {
     Subject::resolve(w, ctx).map(|s| s.action(matrix, copies))
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+    use kadakas_units::{Decimal, Grouping, Settings};
+
+    fn units(decimal: Decimal) -> Units {
+        Settings {
+            decimal: Some(decimal),
+            grouping: Some(Grouping::None),
+            ..Settings::default()
+        }
+        .resolve("en-US")
+    }
+
+    #[test]
+    fn the_angle_and_the_factors_follow_the_decimal_symbol() {
+        let comma = units(Decimal::Comma);
+        let point = units(Decimal::Point);
+        assert_eq!(angle_label(&comma, std::f64::consts::FRAC_PI_4), "45,0°");
+        assert_eq!(angle_label(&point, std::f64::consts::FRAC_PI_4), "45.0°");
+        assert_eq!(angle_label(&comma, -std::f64::consts::FRAC_PI_2), "-90,0°");
+        let f = DVec3::new(1.5, 1.5, 1.5);
+        assert_eq!(factor_label(&comma, f, true), "1,50");
+        assert_eq!(
+            factor_label(&point, f, false),
+            "1.50",
+            "equal factors are one number"
+        );
+        let g = DVec3::new(1.5, 2.0, 0.25);
+        assert_eq!(factor_label(&comma, g, false), "1,50; 2,00; 0,25");
+        assert_eq!(factor_label(&point, g, false), "1.50; 2.00; 0.25");
+    }
 }

@@ -13,6 +13,7 @@
 pub mod gpu3d;
 pub mod import_widgets;
 pub mod input;
+pub mod numfmt;
 pub mod scroll;
 pub mod vertex;
 pub mod view3d;

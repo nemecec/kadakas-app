@@ -13,6 +13,7 @@ use kadakas_ui_core::style_edit::{
     self, Choice, Follow, StyleEditor, StyleKind, default_tolerance, dimension_samples,
     length_units, set_enabled,
 };
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::enum_names;
 use crate::panels;
@@ -224,7 +225,7 @@ fn paper_field(ui: &mut Ui, label: String, v: &mut f64, lo: f64, hi: f64) {
 
 fn decimals_field(ui: &mut Ui, label: String, v: &mut u8) {
     ui.label(label);
-    ui.add(DragValue::new(v).range(0..=8));
+    ui.add(DragValue::new(v).range(0..=8).ui_number());
     ui.end_row();
 }
 
@@ -332,9 +333,19 @@ fn dimension_fields(ui: &mut Ui, e: &mut StyleEditor) {
                 }
                 if let Some(t) = &mut s.tolerance {
                     ui.label(tr!("style-ui-plus"));
-                    ui.add(DragValue::new(&mut t.plus).speed(0.1).range(0.0..=1.0e6));
+                    ui.add(
+                        DragValue::new(&mut t.plus)
+                            .speed(0.1)
+                            .range(0.0..=1.0e6)
+                            .ui_number(),
+                    );
                     ui.label(tr!("style-ui-minus"));
-                    ui.add(DragValue::new(&mut t.minus).speed(0.1).range(0.0..=1.0e6));
+                    ui.add(
+                        DragValue::new(&mut t.minus)
+                            .speed(0.1)
+                            .range(0.0..=1.0e6)
+                            .ui_number(),
+                    );
                 }
             });
             ui.end_row();
@@ -372,7 +383,8 @@ fn text_fields(ui: &mut Ui, e: &mut StyleEditor) {
             ui.add(
                 DragValue::new(&mut s.line_spacing)
                     .speed(0.05)
-                    .range(0.5..=5.0),
+                    .range(0.5..=5.0)
+                    .ui_number(),
             );
             ui.end_row();
             color_field(ui, tr!("style-ui-color"), &mut s.color);

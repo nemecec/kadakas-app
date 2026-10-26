@@ -3,6 +3,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -85,7 +86,7 @@ pub fn roof_lines(m: &Massing, view: &View, offset: DVec2) -> Vec<[Pos2; 2]> {
 
 fn num(ui: &mut Ui, label: &str, v: &mut f64, speed: f64, suffix: &str) -> bool {
     ui.label(label);
-    let drag = DragValue::new(v).speed(speed);
+    let drag = DragValue::new(v).speed(speed).ui_number();
     let r = ui.add(match suffix {
         " mm" => drag.length(),
         "\u{b0}" => drag.degrees(),
@@ -119,7 +120,7 @@ pub fn massing_fields(ui: &mut Ui, m: &mut Massing) -> bool {
     if let Some(floors) = &mut m.floors {
         ui.label(tr!("gis-ui-floors"));
         let mut n = *floors as i64;
-        let r = ui.add(DragValue::new(&mut n).range(1..=300));
+        let r = ui.add(DragValue::new(&mut n).range(1..=300).ui_number());
         *floors = n.clamp(1, 300) as u32;
         commit |= r.drag_stopped() || r.lost_focus();
         ui.end_row();
@@ -192,7 +193,7 @@ pub fn underlay_fields(ui: &mut Ui, u: &mut Underlay) -> bool {
     commit |= ui.text_edit_singleline(&mut u.name).lost_focus();
     ui.end_row();
     ui.label(tr!("gis-ui-opacity"));
-    let r = ui.add(egui::Slider::new(&mut u.opacity, 0.0..=1.0));
+    let r = ui.add(egui::Slider::new(&mut u.opacity, 0.0..=1.0).ui_number());
     commit |= r.drag_stopped() || r.lost_focus();
     ui.end_row();
     ui.label(tr!("gis-ui-raster"));
@@ -217,7 +218,7 @@ pub fn massing_bar(s: &mut MassingToolSettings, ui: &mut Ui) {
     ui.radio_value(&mut s.by_floors, true, tr!("gis-ui-floors"));
     if s.by_floors {
         let mut n = s.floors as i64;
-        ui.add(DragValue::new(&mut n).range(1..=300));
+        ui.add(DragValue::new(&mut n).range(1..=300).ui_number());
         s.floors = n.clamp(1, 300) as u32;
         ui.label("x");
         ui.add(

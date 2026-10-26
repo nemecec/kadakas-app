@@ -10,6 +10,7 @@ use kadakas_core::plants::care::WaterNeed;
 use kadakas_core::plants::style::{PlantCategory, PlantStyle};
 use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::panels::run_command;
 
@@ -174,7 +175,10 @@ fn number_cell(
     length: bool,
 ) -> Option<f64> {
     let mut v: f64 = ui.data_mut(|d| d.get_temp(key)).unwrap_or(current);
-    let drag = DragValue::new(&mut v).speed(speed).range(min..=1.0e9);
+    let drag = DragValue::new(&mut v)
+        .speed(speed)
+        .range(min..=1.0e9)
+        .ui_number();
     let r = ui.add(if length { drag.length() } else { drag });
     if r.dragged() || r.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));

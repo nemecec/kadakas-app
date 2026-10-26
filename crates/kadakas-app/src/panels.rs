@@ -9,6 +9,7 @@ use kadakas_core::command::{Command, Outcome};
 use kadakas_core::model::{Attributes, Color, ObjectId, Shape, Vertex, VertexKind};
 use kadakas_l10n::tr;
 use kadakas_render::{Projection, RenderMode, StandardView, ViewSettings};
+use kadakas_view3d::numfmt::UiNumber;
 
 use kadakas_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
 
@@ -986,7 +987,8 @@ pub fn data_bar(
                 ui.add(
                     DragValue::new(&mut s.text_height)
                         .speed(5.0)
-                        .range(1.0..=100000.0),
+                        .range(1.0..=100000.0)
+                        .ui_number(),
                 );
             }
             Tool::Plant => {
@@ -996,13 +998,15 @@ pub fn data_bar(
                 ui.add(
                     DragValue::new(&mut s.spread)
                         .speed(50.0)
-                        .range(1.0..=100000.0),
+                        .range(1.0..=100000.0)
+                        .ui_number(),
                 );
                 ui.label(tr!("panels-height"));
                 ui.add(
                     DragValue::new(&mut s.plant_height)
                         .speed(50.0)
-                        .range(0.0..=100000.0),
+                        .range(0.0..=100000.0)
+                        .ui_number(),
                 );
             }
             Tool::LandscapeArea => {
@@ -1141,7 +1145,7 @@ impl Fields {
     }
     /// A plain number: a scale, a factor, a count, a rotation in radians.
     pub(crate) fn plain(&mut self, ui: &mut Ui, v: &mut f64, speed: f64) {
-        let r = ui.add(DragValue::new(v).speed(speed));
+        let r = ui.add(DragValue::new(v).speed(speed).ui_number());
         self.commit |= r.drag_stopped() || r.lost_focus();
     }
     /// A labeled length in mm, in the units of the person.
@@ -1381,7 +1385,7 @@ fn edit_shape(
                 let mut deg = a.matrix3.x_axis.y.atan2(a.matrix3.x_axis.x).to_degrees();
                 let before = deg;
                 ui.label(tr!("panels-rotation-deg"));
-                let r = ui.add(DragValue::new(&mut deg).speed(1.0));
+                let r = ui.add(DragValue::new(&mut deg).speed(1.0).ui_number());
                 f.commit |= r.drag_stopped() || r.lost_focus();
                 ui.end_row();
                 if deg != before {
@@ -1395,9 +1399,9 @@ fn edit_shape(
                     ui.label(tr!("panels-scale"));
                     ui.label(tr!(
                         "panels-scale-xyz",
-                        x = format!("{:.3}", info.scale.x),
-                        y = format!("{:.3}", info.scale.y),
-                        z = format!("{:.3}", info.scale.z)
+                        x = kadakas_units::num(info.scale.x, 3),
+                        y = kadakas_units::num(info.scale.y, 3),
+                        z = kadakas_units::num(info.scale.z, 3)
                     ));
                     ui.end_row();
                 }
@@ -1511,7 +1515,8 @@ fn edit_shape(
                     DragValue::new(&mut factor)
                         .speed(0.1)
                         .range(0.0..=100.0)
-                        .suffix(tr!("panels-x-dbh")),
+                        .suffix(tr!("panels-x-dbh"))
+                        .ui_number(),
                 );
                 if r.changed() {
                     *rpz_factor = Some(factor);

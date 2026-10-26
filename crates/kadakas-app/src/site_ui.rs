@@ -17,6 +17,7 @@ use kadakas_l10n::tr;
 use kadakas_site::draw::shown_surfaces;
 use kadakas_site::{SiteCache, Surface};
 use kadakas_ui_core::tools::ToolSettings;
+use kadakas_view3d::numfmt::UiNumber;
 use serde_json::json;
 
 use crate::canvas::color32;
@@ -351,7 +352,11 @@ fn look_fields(
         }
         SurfaceLook::Elevation => {
             ui.label(tr!("site-ui-elevation-bands"));
-            let r = ui.add(DragValue::new(&mut s.elevation_bands).range(1..=MAX_ELEVATION_BANDS));
+            let r = ui.add(
+                DragValue::new(&mut s.elevation_bands)
+                    .range(1..=MAX_ELEVATION_BANDS)
+                    .ui_number(),
+            );
             commit |= r.drag_stopped() || r.lost_focus();
             ui.end_row();
             ui.label(tr!("site-ui-fixed-range"));

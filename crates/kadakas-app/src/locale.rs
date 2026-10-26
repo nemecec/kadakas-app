@@ -94,6 +94,8 @@ pub fn apply(language: LanguageChoice, units: &Settings) -> &'static str {
     let (tag, resolved) = resolve(language, units, &system_languages());
     kadakas_l10n::set_language(tag);
     kadakas_units::set_current(resolved);
+    // Numbers inside messages follow the decimal symbol of the person too.
+    kadakas_l10n::set_decimal_symbol(resolved.number.decimal.symbol());
     tag
 }
 
