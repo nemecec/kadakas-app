@@ -27,7 +27,8 @@ fmt="${1:?usage: packager-version.sh FORMAT VERSION}"
 ver="${2:?usage: packager-version.sh FORMAT VERSION}"
 
 here="$(cd "$(dirname "$0")" && pwd)"
-python3 -I "$here/version_cmp.py" valid "$ver" || exit 1
+. "$here/python.sh"
+"$PY" -I "$here/version_cmp.py" valid "$ver" || exit 1
 core="${ver%%-*}"
 pre=""
 if [ "$core" != "$ver" ]; then pre="${ver#*-}"; fi
