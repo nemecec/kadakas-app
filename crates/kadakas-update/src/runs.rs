@@ -281,7 +281,9 @@ fn remove_run_files(root: &Path, id: &str) {
 /// True while the file is locked by somebody. A file that is not there is not locked. Any other
 /// error (a full disk, too many open files) is returned: the answer is not known.
 fn is_locked(path: &Path) -> std::io::Result<bool> {
-    let f = match std::fs::OpenOptions::new().write(true).open(path) {
+    // Read-only: a lock is taken on a descriptor that cannot write too (flock on Unix, LockFileEx
+    // with read access on Windows), and a read-only or foreign file is no reason to fail.
+    let f = match std::fs::OpenOptions::new().read(true).open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e),
@@ -490,6 +492,51 @@ impl Store {
         self.settle_runs_at(now_seconds())
     }
 
+    /// [`Store::settle_runs`] for the programs: the problems go to the standard error and to the
+    /// launcher log (`launcher.log` in the root of the store, the last 64 KB), and are returned for
+    /// the status of the launcher.
+    pub fn settle_runs_logged(&self) -> Vec<String> {
+        let problems = self.settle_runs();
+        for p in &problems {
+            eprintln!("kadakas-launcher: {p}");
+        }
+        if !problems.is_empty() {
+            self.append_launcher_log(&problems);
+        }
+        problems
+    }
+
+    /// The file of the launcher log.
+    pub fn launcher_log_path(&self) -> PathBuf {
+        self.root().join("launcher.log")
+    }
+
+    fn append_launcher_log(&self, lines: &[String]) {
+        const MAX: usize = 64 * 1024;
+        let path = self.launcher_log_path();
+        let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+        for l in lines {
+            text.push_str(&format!(
+                "{} settle: {}\n",
+                now_seconds(),
+                l.replace('\n', " ")
+            ));
+        }
+        if text.len() > MAX {
+            let mut cut = text.len() - MAX;
+            while !text.is_char_boundary(cut) {
+                cut += 1;
+            }
+            text = text[cut..].to_string();
+        }
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!(
+                "kadakas-launcher: the log {} was not written: {e}",
+                path.display()
+            );
+        }
+    }
+
     /// Like [`Store::settle_runs`], with the time in seconds that the length of a run is
     /// measured against (a test sets it).
     #[must_use]
@@ -499,8 +546,11 @@ impl Store {
             let _guard = match self.lock(true) {
                 Ok(g) => g,
                 Err(e) => {
-                    problems.push(format!("run {id}: the install lock was not taken: {e}"));
-                    continue;
+                    // Every run waits for the same lock: one report, no wait for each record.
+                    problems.push(format!(
+                        "the install lock was not taken, no run was settled: {e}"
+                    ));
+                    break;
                 }
             };
             // Another launcher may have settled it while we waited for the lock.
@@ -625,10 +675,26 @@ mod tests {
         // The clock is a part of the call: `before` is earlier than every start, so every run is
         // short (0 seconds) whatever the load of the computer that runs the test.
         let later = before;
-        assert_eq!(s.settle_runs_at(later), Vec::<String>::new());
+        // Another test may start a child process at this moment, and for a short time the child
+        // holds a copy of every descriptor (see `store.rs`), so a lock that is free looks taken.
+        // The settling is tried again for up to 2 seconds before the test looks at the result.
+        let mut problems = Vec::new();
+        for _ in 0..100 {
+            problems = s.settle_runs_at(later);
+            if !run_file(s.root(), &id1, "json").exists()
+                && !run_file(s.root(), &id2, "json").exists()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(
             s.crashed_slots().into_iter().collect::<Vec<_>>(),
-            [slot("1.2.0")]
+            [slot("1.2.0")],
+            "run files: {:?}",
+            std::fs::read_dir(runs_dir(s.root()))
+                .map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>())
         );
         assert_eq!(s.running_slots(), [slot("1.3.0")]);
         assert!(!run_file(s.root(), &id1, "json").exists());
@@ -744,6 +810,28 @@ mod tests {
         crate::store::tests::rm_dir(&root);
     }
 
+    /// Makes the lock file unreadable. Returns false (and the test stops) where that has no
+    /// effect: on Windows, and for a user who ignores the permissions (root).
+    #[cfg(unix)]
+    fn unreadable(path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let works = std::fs::File::open(path).is_err();
+        if !works {
+            eprintln!(
+                "SKIP: the permissions of {} are not enforced here",
+                path.display()
+            );
+        }
+        works
+    }
+
+    #[cfg(not(unix))]
+    fn unreadable(_path: &Path) -> bool {
+        eprintln!("SKIP: no way to make a lock file unreadable here");
+        false
+    }
+
     #[test]
     fn a_lock_file_that_cannot_be_read_is_reported_and_the_run_stays() {
         let root = tmp("run-settle-error");
@@ -751,11 +839,12 @@ mod tests {
         let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
         let id = g.id().to_string();
         drop(g);
-        // The lock file is a directory: opening it for writing fails with an error that is not
-        // "not found". The state of the run is not known, so it is not settled, and it is reported.
+        // The lock file cannot be read: opening it fails with an error that is not "not found".
+        // The state of the run is not known, so it is not settled, and it is reported.
         let lock = run_file(s.root(), &id, "lock");
-        std::fs::remove_file(&lock).unwrap();
-        std::fs::create_dir(&lock).unwrap();
+        if !unreadable(&lock) {
+            return;
+        }
         let problems = s.settle_runs_at(0);
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(problems[0].contains(&id), "{problems:?}");
@@ -763,9 +852,55 @@ mod tests {
         assert!(s.crashed_slots().is_empty());
         // A run whose state is not known counts as running.
         assert_eq!(s.running_slots(), [slot("1.1.0")]);
-        std::fs::remove_dir(&lock).unwrap();
+        // The lock file is readable again: the run is settled.
+        std::fs::remove_file(&lock).unwrap();
         assert!(s.settle_runs_at(0).is_empty());
         assert!(!run_file(s.root(), &id, "json").exists());
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
+    fn a_read_only_lock_file_does_not_hold_a_run_as_running() {
+        let root = tmp("run-settle-readonly");
+        let s = store(&root);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        let id = g.id().to_string();
+        drop(g);
+        let lock = run_file(s.root(), &id, "lock");
+        let mut perms = std::fs::metadata(&lock).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&lock, perms).unwrap();
+        // The probe opens the file for reading only: it knows that nobody holds the lock.
+        assert_eq!(is_locked(&lock).ok(), Some(false));
+        assert!(s.running_slots().is_empty());
+        let problems = s.settle_runs_at(0);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(!run_file(s.root(), &id, "json").exists());
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
+    fn the_problems_of_settling_go_to_the_launcher_log() {
+        let root = tmp("run-settle-log");
+        let s = store(&root);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        let id = g.id().to_string();
+        drop(g);
+        let lock = run_file(s.root(), &id, "lock");
+        if !unreadable(&lock) {
+            return;
+        }
+        let problems = s.settle_runs_logged();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        let log = std::fs::read_to_string(s.launcher_log_path()).unwrap();
+        assert!(log.contains("settle:") && log.contains(&id), "{log}");
+        // The log keeps its last 64 KB only.
+        for _ in 0..3 {
+            let big = vec!["x".repeat(30_000)];
+            s.append_launcher_log(&big);
+        }
+        let len = std::fs::metadata(s.launcher_log_path()).unwrap().len();
+        assert!(len <= 64 * 1024, "{len}");
         crate::store::tests::rm_dir(&root);
     }
 
