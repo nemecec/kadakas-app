@@ -12,7 +12,7 @@
 # machine or a container for it. The AppImage path installs nothing: it extracts the image into a
 # work folder. KADAKAS_SMOKE_SUDO overrides the command for root rights (empty: none).
 set -euo pipefail
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 kind="${1:?usage: linux.sh deb|appimage PACKAGE VERSION [ARTIFACTS_DIR]}"
@@ -28,7 +28,14 @@ elif [ "$(id -u)" = 0 ]; then SUDO=""
 else SUDO="sudo"; fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/kadakas-smoke.XXXXXX")"
-cleanup() { rm -rf "$work"; }
+installed_name=""
+cleanup() {
+  # A failed run must not leave the package installed (only a package that this run installed).
+  if [ -n "$installed_name" ]; then
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$installed_name" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$work"
+}
 trap cleanup EXIT
 
 shot=""
@@ -53,8 +60,13 @@ case "$kind" in
   deb)
     command -v dpkg >/dev/null 2>&1 || fail "dpkg is needed"
     name="$(dpkg-deb -f "$package" Package)"
+    # The run installs and removes the package. Never over a real install of a person.
+    if dpkg -s "$name" >/dev/null 2>&1 && [ -z "${CI:-}" ]; then
+      fail "$name is installed already. This script removes it at the end. Set CI=1 to allow it."
+    fi
     step "install $package (package $name)"
     # apt installs the dependencies of the package too.
+    installed_name="$name"
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$package"
     dpkg -L "$name" > "$work/files.txt"
     for b in kadakas-launcher kadakas-app kadakas-modeler kadakas; do
@@ -73,6 +85,7 @@ case "$kind" in
     run_smoke /usr/bin/kadakas-launcher "$version" "$artifacts" "$shot" "$work/run"
     step "uninstall $name"
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$name"
+    installed_name=""
     while IFS= read -r f; do
       case "$f" in /usr/bin/* | /usr/share/applications/*) [ -d "$f" ] || gone "$f" ;; esac
     done < "$work/files.txt"

@@ -173,6 +173,7 @@ The frame tests do not show these. A person looks at them on a real screen befor
 - **Screen reader**: the cards are read as radio buttons with their description and state. The drop-downs are read with their name and value.
 - **Live language**: the dialog changes language and window title at once when the language drop-down changes. The number style follows the language when the format is not stored.
 - **Trackpad**: a real Mac trackpad and a Windows precision touchpad. Look at the pan direction and Shift for tilt and turn. Look at the pinch speed and the momentum after the fingers leave. Check that a mouse wheel is unchanged.
+- **Upgrade over a running app**: install version N, start the app, then install N+1 silently and with the wizard, for the MSI and for NSIS. The running app must get a close request and a chance to save. Check the exit code, a delayed replace (3010) and that the new version starts.
 - **Show welcome**: from the app, from the modeler and from the manage window. The language, the theme, the units, the navigation and the update mode apply at once in the running program. The changes survive continued use: toggle a snap in the app, change the channel in the manage window, and look in the files.
 
 ## How to reset

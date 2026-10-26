@@ -155,7 +155,7 @@ GitHub renames some uploaded assets. A character such as `~` in the name of the 
 
 ## Smoke test of the installers (PLAT-28)
 
-After the build, the job `smoke` of `release.yml` installs every package on a clean runner of its own system. It starts the program the first time, and it checks the result. The job `publish` needs it: a failed smoke test blocks the release. The same job runs on a manual start, so a branch can rehearse it. The nightly pre-release is a tag with a dash (`v0.1.0-beta.1`). It goes through the same workflow and the same test. `nightly.yml` builds no installers.
+After the build, the job `smoke` of `release.yml` installs every package on a clean runner of its own system. It starts the program the first time, and it checks the result. The job `publish` needs it: a failed smoke test blocks the release. The same job runs on a manual start, so a branch is tested before a tag. The nightly pre-release is a tag with a dash (`v0.1.0-beta.1`). It goes through the same workflow and the same test. `nightly.yml` builds no installers.
 
 | Package | Runner | How it is installed |
 |---|---|---|

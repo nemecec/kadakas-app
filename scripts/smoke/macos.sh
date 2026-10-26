@@ -8,7 +8,7 @@
 # that stands for /Applications (the default is /Applications; on your own Mac use a temporary
 # folder, so that nothing is installed).
 set -euo pipefail
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 dmg="${1:?usage: macos.sh PACKAGE.dmg VERSION [ARTIFACTS_DIR]}"
@@ -22,7 +22,10 @@ mkdir -p "$apps"
 work="$(mktemp -d "${TMPDIR:-/tmp}/kadakas-smoke.XXXXXX")"
 mnt="$work/mnt"
 mounted=""
+installed=""
 cleanup() {
+  # A failed run must not leave the app in the applications folder.
+  if [ -n "$installed" ]; then rm -rf "$installed"; fi
   if [ -n "$mounted" ]; then hdiutil detach "$mnt" -force >/dev/null 2>&1 || true; fi
   rm -rf "$work"
 }
@@ -39,9 +42,13 @@ src="$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)"
 name="$(basename "$src")"
 
 step "copy $name to $apps"
+# The run replaces and then removes the app. Never over a real install of a person.
+if [ -e "$apps/$name" ] && [ -z "${CI:-}" ]; then
+  fail "$apps/$name exists. This script removes it at the end. Set KADAKAS_SMOKE_APPLICATIONS to a temporary folder, or CI=1."
+fi
 rm -rf "${apps:?}/$name"
-ditto "$src" "$apps/$name"
 installed="$apps/$name"
+ditto "$src" "$installed"
 hdiutil detach "$mnt" >/dev/null 2>&1 || hdiutil detach "$mnt" -force >/dev/null
 mounted=""
 
@@ -74,4 +81,5 @@ run_smoke "$launcher" "$version" "$artifacts" "screencapture -x {out}" "$work/ru
 step "remove $installed"
 rm -rf "$installed"
 gone "$installed"
+installed=""
 step "OK (dmg)"
