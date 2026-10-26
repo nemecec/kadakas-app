@@ -14,6 +14,10 @@ on:
         description: "Rehearsal: build and test only the Windows MSI (no other package, no web build)"
         type: boolean
         default: false
+      msi_rm_disabled:
+        description: "Rehearsal: run msiexec in the smoke test with the Restart Manager off (MSIRESTARTMANAGERCONTROL=Disable, REBOOT=ReallySuppress)"
+        type: boolean
+        default: true
 
 # Jobs get read access only. The publish job asks for more.
 permissions:
@@ -248,10 +252,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         env:
+          # Only a manual start can turn the flags off (a rehearsal). Every other start has them on.
+          MSI_FLAGS: ${{ format('{0}', inputs.msi_rm_disabled) == 'false' && 'off' || 'on' }}
           KIND: ${{ matrix.kind }}
           PACKAGE: ${{ steps.pkg.outputs.package }}
           VERSION: ${{ steps.pkg.outputs.version }}
-        run: scripts/smoke/windows.ps1 -Kind $env:KIND -Package $env:PACKAGE -Version $env:VERSION -Artifacts smoke-artifacts
+        run: scripts/smoke/windows.ps1 -Kind $env:KIND -Package $env:PACKAGE -Version $env:VERSION -MsiFlags $env:MSI_FLAGS -Artifacts smoke-artifacts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
