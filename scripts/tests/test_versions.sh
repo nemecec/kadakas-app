@@ -62,11 +62,12 @@ eq "dev < release" "$(vc 0.1.0-dev 0.1.0)" -1
 eq "release < next dev" "$(vc 0.1.0 0.1.1-dev)" -1
 # Windows (Git bash): python3 is often missing or a stub of the Store that fails. The scripts then
 # use python, or $KADAKAS_PYTHON.
+real_python="$(command -v python3)"
 stub=$(mktemp -d)
 printf '#!/bin/sh\nexit 49\n' > "$stub/python3"; chmod +x "$stub/python3"
-ln -s "$(command -v python3)" "$stub/python"
+ln -s "$real_python" "$stub/python"
 eq "a failing python3 stub is skipped" "$(PATH="$stub:$PATH" pv pep440 0.1.0-beta.1)" 0.1.0b1
-eq "KADAKAS_PYTHON is used" "$(PATH="$stub:$PATH" KADAKAS_PYTHON="$(command -v python3)" pv pep440 0.1.0-beta.1)" 0.1.0b1
+eq "KADAKAS_PYTHON is used" "$(PATH="$stub:$PATH" KADAKAS_PYTHON="$real_python" pv pep440 0.1.0-beta.1)" 0.1.0b1
 rm -rf "$stub"
 
 # The macOS bundles: short version = the numbers, CFBundleVersion = a build number, full version in KadakasVersion.
