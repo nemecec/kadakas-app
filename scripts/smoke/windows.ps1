@@ -29,7 +29,6 @@ function Run-Limited($file, $argList, $seconds, $what, $logPath) {
     if ($logPath -and (Test-Path $logPath)) {
       Write-Host "smoke: end of ${logPath}:"
       Get-Content -Path $logPath -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-      if ($Artifacts) { Copy-Item $logPath (Join-Path $Artifacts (Split-Path -Leaf $logPath)) -ErrorAction SilentlyContinue }
     }
     Fail "$what did not end in $seconds seconds"
   }
@@ -88,13 +87,14 @@ if ($Artifacts) { New-Item -ItemType Directory -Force -Path $Artifacts | Out-Nul
 if ($null -ne (Find-InstallDir)) { Fail "Kadakas is installed already on this machine: $(Find-InstallDir)" }
 
 Step "install $Package"
-$log = Join-Path $work 'install.log'
+# The MSI log goes straight to the artifacts folder: it stays there if the step is cut short.
+$logDir = if ($Artifacts) { $Artifacts } else { $work }
+$log = Join-Path $logDir "install-$Kind.log"
 if ($Kind -eq 'msi') {
   $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") 300 'msiexec /i' $log
 } else {
   $code = Run-Limited $Package @('/S') 300 'the installer' $null
 }
-if ($Artifacts -and (Test-Path $log)) { Copy-Item $log (Join-Path $Artifacts "install-$Kind.log") -ErrorAction SilentlyContinue }
 if ($code -ne 0 -and $code -ne 3010) { Fail "the installer ended with $code" }
 
 # An NSIS installer can finish in a child process: wait for the files.
@@ -148,7 +148,7 @@ finally {
 
 Step 'uninstall'
 if ($Kind -eq 'msi') {
-  $ulog = Join-Path $work 'uninstall.log'
+  $ulog = Join-Path $logDir "uninstall-$Kind.log"
   $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") 300 'msiexec /x' $ulog
   if ($code -ne 0 -and $code -ne 3010) { Fail "msiexec /x ended with $code" }
 } else {
