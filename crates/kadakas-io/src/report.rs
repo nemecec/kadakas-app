@@ -40,6 +40,11 @@ pub struct Report {
     /// DXF: entities that gave nothing. Each one has a line in `skipped`.
     #[serde(skip_serializing_if = "is_zero")]
     pub entities_skipped: usize,
+    /// Panics that the importer caught inside one unit of work (the full message and place, for
+    /// the log of the session and the failure that a bug report carries). Never serialized: the
+    /// notes have the cleaned text.
+    #[serde(skip)]
+    pub handled_panics: Vec<String>,
     /// True if the import set or used a georeference.
     pub georeferenced: bool,
     /// DXF and DWG: the drawing and revision that the objects carry in `data.import` (IOP-22).

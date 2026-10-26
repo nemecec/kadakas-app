@@ -166,6 +166,11 @@ impl Session {
                 return Err(import_rpc(e));
             }
         };
+        // Panics that the import caught inside one product: the log and the failure of the session
+        // have them (a bug report finds them) and the session is marked.
+        for detail in &result.report.handled_panics {
+            self.note_handled_panic("import.file", detail);
+        }
         let mut summary = None;
         self.editor
             .execute_stepwise(|step| {

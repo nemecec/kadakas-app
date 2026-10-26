@@ -118,6 +118,15 @@ pub fn clean_ring(points: &[DVec2]) -> Vec<DVec2> {
 /// overflow it.
 pub const MAX_OVERLAY_COORD: f64 = 1.0e12;
 
+/// True when every point is finite and within [`MAX_OVERLAY_COORD`]: [`split_with_holes`] gives
+/// pieces for these rings. A caller that gets none can ask this to tell a refusal from an empty area.
+pub fn rings_in_range(outer: &[DVec2], holes: &[Vec<DVec2>]) -> bool {
+    outer
+        .iter()
+        .chain(holes.iter().flatten())
+        .all(|p| p.is_finite() && p.abs().max_element() <= MAX_OVERLAY_COORD)
+}
+
 /// Splits a ring with holes into simple polygons without holes. It cuts the area into horizontal
 /// strips at the height of every hole vertex. Inside a strip, a hole crosses the whole strip, so the
 /// pieces have no holes. `outer` is counterclockwise. At most 400 cuts are used. With more, a piece
@@ -125,11 +134,7 @@ pub const MAX_OVERLAY_COORD: f64 = 1.0e12;
 pub fn split_with_holes(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DVec2>> {
     // The overlay works on an integer grid: a number that is not finite or is beyond the bound
     // would overflow it. Such an outline has no pieces.
-    if outer
-        .iter()
-        .chain(holes.iter().flatten())
-        .any(|p| !p.is_finite() || p.abs().max_element() > MAX_OVERLAY_COORD)
-    {
+    if !rings_in_range(outer, holes) {
         return Vec::new();
     }
     if holes.is_empty() {

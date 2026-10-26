@@ -41,12 +41,25 @@ pub struct Builder {
     pub default_class: ClassId,
     full: bool,
     last_id: kadakas_core::uid::Uid,
+    /// The objects that `add` made, in order (for `rollback`).
+    added: Vec<ObjectId>,
+    /// Objects of a rolled-back unit of work. `finish` deletes them at the end of the batch (their
+    /// IDs were taken, so the IDs of the later commands stay right).
+    doomed: Vec<ObjectId>,
     /// Probe mode: shapes are not stored, only their bounds (mm) are collected.
     probe: Option<(DVec2, DVec2)>,
     /// Shift (mm) that every added shape gets. Imports use it to keep geometry near the origin.
     offset: DVec2,
     /// The hatch fills that the document had before this import (see `Context::hatches`).
     pub hatches: Vec<(ResourceId, String, kadakas_core::graphics::HatchDef)>,
+}
+
+/// A state of a [`Builder`] to go back to (see [`Builder::checkpoint`]).
+#[derive(Clone, Debug)]
+pub struct Checkpoint {
+    added: usize,
+    objects: BTreeMap<String, usize>,
+    skipped: Vec<crate::report::Skipped>,
 }
 
 /// Checks the rules that `Command::AddObject` enforces, so one bad entity
@@ -132,6 +145,8 @@ impl Builder {
             default_class: ctx.active_class,
             full: false,
             last_id: kadakas_core::uid::Uid::NIL,
+            added: Vec::new(),
+            doomed: Vec::new(),
             probe: None,
             offset: DVec2::ZERO,
             hatches: ctx.hatches.clone(),
@@ -463,10 +478,37 @@ impl Builder {
             });
         }
         self.report.count(kind);
+        self.added.push(id);
         true
     }
 
+    /// The state to go back to with [`Builder::rollback`]: a unit of work that fails part way
+    /// (a product whose geometry panics) leaves no object and no count behind.
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            added: self.added.len(),
+            objects: self.report.objects.clone(),
+            skipped: self.report.skipped.clone(),
+        }
+    }
+
+    /// Takes back the objects that were added since `cp` and restores the counts of the report
+    /// (objects and skipped). The objects are deleted at the end of the batch; layers, classes and
+    /// resources that were made since stay. Returns how many objects went.
+    pub fn rollback(&mut self, cp: Checkpoint) -> usize {
+        let gone = self.added.split_off(cp.added.min(self.added.len()));
+        self.doomed.extend(gone.iter().copied());
+        self.report.objects = cp.objects;
+        self.report.skipped = cp.skipped;
+        gone.len()
+    }
+
     pub fn finish(mut self) -> ImportResult {
+        if !self.doomed.is_empty() {
+            self.cmds.push(Command::DeleteObjects {
+                ids: std::mem::take(&mut self.doomed),
+            });
+        }
         for id in std::mem::take(&mut self.relock) {
             self.cmds.push(Command::ModifyLayer {
                 id,
@@ -568,6 +610,52 @@ mod tests {
         assert_eq!(r.report.skipped_total(), 1);
         assert!(ed.undo());
         assert_eq!(ed.doc().layers.len(), 1);
+    }
+
+    #[test]
+    fn a_rollback_takes_back_the_objects_and_the_counts_and_keeps_the_ids_right() {
+        let doc = Document::with_sequential_ids();
+        let mut b = Builder::new(&Context::of(&doc), "test", 100);
+        let (l, c) = (b.default_layer, b.default_class);
+        let line = |x: f64| Shape::Line {
+            a: DVec2::ZERO,
+            b: DVec2::new(x, 0.0),
+        };
+        assert!(b.add(
+            "LINE",
+            line(1.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        let cp = b.checkpoint();
+        assert!(b.add(
+            "LINE",
+            line(2.0),
+            l,
+            c,
+            Attributes::default(),
+            BTreeMap::new()
+        ));
+        b.report.skip("X", "why");
+        assert_eq!(b.rollback(cp), 1);
+        assert_eq!(b.report.total(), 1);
+        assert_eq!(b.report.skipped_total(), 0);
+        // The object after the rollback has the ID that the plan gave it.
+        let mut data = BTreeMap::new();
+        data.insert("k".to_string(), Value::from(3));
+        assert!(b.add("LINE", line(3.0), l, c, Attributes::default(), data));
+        let r = b.finish();
+        let mut ed = Editor::new(doc);
+        ed.execute(&r.command).unwrap();
+        let objects = &ed.doc().objects;
+        assert_eq!(objects.len(), 2, "the rolled-back object is deleted");
+        assert!(
+            objects
+                .iter()
+                .any(|(_, o)| o.data.get("k") == Some(&Value::from(3)))
+        );
     }
 
     #[test]
