@@ -362,6 +362,7 @@ fn import_index(
             rows: Vec::new(),
             triangles: 0,
             geometry_notes: BTreeMap::new(),
+            journal: Vec::new(),
             z_dropped: 0,
             fuel: fuel.clone(),
             catch,
@@ -450,6 +451,8 @@ thread_local! {
     /// A test sets it to N to make the Nth product panic (see `run`).
     static PANIC_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// A test sets it to make the next product panic after it added its objects.
+    /// Calls of `cut_openings` (the probe pass must make none).
+    static CUT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PANIC_AFTER_ADD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -475,8 +478,37 @@ fn place_only(detail: &str) -> String {
     }
 }
 
+/// The sets of the importer that a product adds to.
+#[derive(Clone, Copy)]
+enum Mark {
+    Cut,
+    Uncut,
+    Open,
+    Bodyless,
+}
+
+/// What the importer keeps outside the builder, as it was before a product (see `Importer::run`).
+struct Before {
+    rows: usize,
+    triangles: usize,
+    geometry_notes: BTreeMap<(String, String), (usize, usize)>,
+    opening_failures: BTreeMap<(String, bool), OpeningTally>,
+}
+
+/// The number in front of a sentence ("3 faces were left out") and the sentence without it.
+fn split_count(sentence: &str) -> (usize, &str) {
+    let digits = sentence.chars().take_while(char::is_ascii_digit).count();
+    match (
+        sentence[..digits].parse::<usize>(),
+        sentence[digits..].strip_prefix(' '),
+    ) {
+        (Ok(n), Some(rest)) if digits > 0 => (n, rest),
+        _ => (0, sentence),
+    }
+}
+
 /// Hosts with openings that were not all cut, for one reason.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct OpeningTally {
     hosts: usize,
     openings: usize,
@@ -532,7 +564,11 @@ struct Importer<'a> {
     sym_src: RefCell<HashMap<u64, Option<Rc<SymSrc>>>>,
     rows: Vec<(ObjectId, Vec<model::PropSet>)>,
     triangles: usize,
-    geometry_notes: BTreeMap<String, usize>,
+    /// Notes of the geometry by (class, sentence without its count): the products and the amount
+    /// (the number in front of the sentence, summed).
+    geometry_notes: BTreeMap<(String, String), (usize, usize)>,
+    /// What this product added to the sets below (to take it back after a panic).
+    journal: Vec<(Mark, u64)>,
     z_dropped: usize,
     /// Openings that were cut from their host, and openings whose cut failed.
     /// The work budget for the booleans of the whole import.
@@ -642,22 +678,83 @@ impl<'a> Importer<'a> {
         Some(((c / 1000.0).round() * 1000.0, turn))
     }
 
-    /// True when the file says that Kadakas wrote it (an `IfcApplication` named Kadakas). Only such
-    /// a file has the site turned on purpose: the export writes the rotation of a georeference
-    /// without a CRS as the turn of the `IfcSite`, and the import turns it back. A file of another
-    /// program keeps the turn of its site in the geometry.
+    /// True when the file says that Kadakas wrote it: the originating system of `FILE_NAME` in the
+    /// STEP header (every Kadakas export has it, in all schemas) or an `IfcApplication` named
+    /// Kadakas (IFC2x3 has one too). Only such a file has the site turned on purpose: the export
+    /// writes the rotation of a georeference without a CRS as the turn of the `IfcSite`, and the
+    /// import turns it back. A file of another program keeps the turn of its site in the geometry.
     fn written_by_kadakas(&self) -> bool {
-        self.cx.x.ids_of("IFCAPPLICATION").iter().any(|id| {
-            self.cx.ent(*id).is_some_and(|e| {
-                e.attrs
-                    .iter()
-                    .any(|a| text(a).is_some_and(|t| t.eq_ignore_ascii_case("Kadakas")))
+        let header = self.cx.x.header().to_ascii_lowercase();
+        let in_header = header.find("file_name").is_some_and(|at| {
+            let end = header[at..].find(");").map_or(header.len(), |e| at + e);
+            header[at..end].contains("'kadakas'")
+        });
+        in_header
+            || self.cx.x.ids_of("IFCAPPLICATION").iter().any(|id| {
+                self.cx.ent(*id).is_some_and(|e| {
+                    e.attrs
+                        .iter()
+                        .any(|a| text(a).is_some_and(|t| t.eq_ignore_ascii_case("Kadakas")))
+                })
             })
-        })
+    }
+
+    /// Adds to one of the sets of the opening bookkeeping and remembers it for `restore`.
+    fn mark(&mut self, which: Mark, id: u64) {
+        let new = match which {
+            Mark::Cut => self.cut.insert(id),
+            Mark::Uncut => self.uncut.insert(id),
+            Mark::Open => self.open_cuts.insert(id),
+            Mark::Bodyless => self.bodyless.insert(id),
+        };
+        if new {
+            self.journal.push((which, id));
+        }
+    }
+
+    /// A note about the geometry of a product. A number in front of the sentence is an amount
+    /// that is summed, so there is one line for each kind of note.
+    fn geometry_note(&mut self, class: &str, sentence: &str, products: usize) {
+        let (amount, rest) = split_count(sentence);
+        let t = self
+            .geometry_notes
+            .entry((class.to_string(), rest.to_string()))
+            .or_default();
+        t.0 += products;
+        t.1 += amount;
+    }
+
+    /// The state to go back to if the product that follows panics.
+    fn before(&mut self) -> Before {
+        self.journal.clear();
+        Before {
+            rows: self.rows.len(),
+            triangles: self.triangles,
+            geometry_notes: self.geometry_notes.clone(),
+            opening_failures: self.opening_failures.clone(),
+        }
+    }
+
+    /// Takes back what a product that panicked left in the importer (the builder has its own
+    /// rollback): the cut openings, the notes, the records and the triangles it counted.
+    fn restore(&mut self, before: Before) {
+        for (which, id) in std::mem::take(&mut self.journal) {
+            match which {
+                Mark::Cut => self.cut.remove(&id),
+                Mark::Uncut => self.uncut.remove(&id),
+                Mark::Open => self.open_cuts.remove(&id),
+                Mark::Bodyless => self.bodyless.remove(&id),
+            };
+        }
+        self.rows.truncate(before.rows);
+        self.triangles = before.triangles;
+        self.geometry_notes = before.geometry_notes;
+        self.opening_failures = before.opening_failures;
     }
 
     fn run(&mut self) {
         self.place_file();
+        geom::take_range_drops();
         let mut cands: BTreeSet<u64> = BTreeSet::new();
         let names: HashSet<String> = model::product_names().collect();
         for (id, n) in self.cx.x.iter() {
@@ -708,6 +805,7 @@ impl<'a> Importer<'a> {
             let (objects, skipped) = (self.b.report.total(), self.b.report.skipped_total());
             // A panic in the geometry of one product skips that product, not the file. What the
             // product had added before the panic is taken back, so the counts agree.
+            let before = self.before();
             let outcome = if self.catch {
                 let cp = self.b.checkpoint();
                 let r = kadakas_crash::ring::catch(|| {
@@ -724,8 +822,12 @@ impl<'a> Importer<'a> {
                 self.product(&e, &rep);
                 Ok(())
             };
+            // Faces that the overlay refused outside of the evaluation of the product (a symbol, a
+            // box) are told here.
+            let late = geom::take_range_drops();
             if let Err((cp, detail)) = outcome {
                 self.b.rollback(cp);
+                self.restore(before);
                 self.b.report.skip(&class, "internal error in this product");
                 if self.internal_errors.len() < 3 {
                     self.internal_errors.push(place_only(&detail));
@@ -734,6 +836,13 @@ impl<'a> Importer<'a> {
                     self.b.report.handled_panics.push(detail);
                 }
                 self.internal_count += 1;
+            }
+            if late > 0 && !self.b.is_probe() {
+                self.geometry_note(
+                    &class,
+                    &format!("{late} faces with numbers out of range (beyond 1e12) were left out"),
+                    1,
+                );
             }
             self.b.report.entities_read += 1;
             if self.b.report.total() > objects {
@@ -777,8 +886,14 @@ impl<'a> Importer<'a> {
                 self.cut.len()
             ));
         }
-        for (what, n) in std::mem::take(&mut self.geometry_notes) {
-            self.b.report.note(&format!("{n} x {what}"));
+        for ((class, what), (products, amount)) in std::mem::take(&mut self.geometry_notes) {
+            if amount > 0 {
+                self.b.report.note(&format!(
+                    "{class}: {amount} {what} (in {products} products)"
+                ));
+            } else {
+                self.b.report.note(&format!("{products} x {class}: {what}"));
+            }
         }
         if self.cx.bad_placements.get() > 0 {
             self.b.report.note(&format!(
@@ -1075,7 +1190,11 @@ impl<'a> Importer<'a> {
             out = self.eval_product(e, &reps, false);
         }
         let mut notes = std::mem::take(&mut out.issues);
-        if !out.pieces.is_empty() && self.model.openings_of.contains_key(&e.id) {
+        // The probe pass only measures: the cuts do not change the bounds, so it makes none.
+        if !out.pieces.is_empty()
+            && !self.b.is_probe()
+            && self.model.openings_of.contains_key(&e.id)
+        {
             self.cut_openings(e, &reps, &mut out, &class);
         }
         if out.pieces.is_empty() {
@@ -1086,10 +1205,11 @@ impl<'a> Importer<'a> {
             }
         }
         if out.pieces.is_empty() {
-            let why = notes
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "no body geometry".into());
+            // The count in front of a sentence is left out: products with other counts are one line.
+            let why = notes.first().map_or_else(
+                || "no body geometry".to_string(),
+                |n| split_count(n).1.to_string(),
+            );
             self.b.report.skip(&class, &why);
             return;
         }
@@ -1101,10 +1221,7 @@ impl<'a> Importer<'a> {
             );
         } else {
             for n in notes.drain(..) {
-                *self
-                    .geometry_notes
-                    .entry(format!("{class}: {n}"))
-                    .or_default() += 1;
+                self.geometry_note(&class, &n, 1);
             }
         }
 
@@ -1196,6 +1313,8 @@ impl<'a> Importer<'a> {
     /// opening that was cut from one piece and not from another counts as cut, and the report says
     /// that it was cut in part. The report counts both cases per host (see `finish_opening_notes`).
     fn cut_openings(&mut self, e: &Entity, reps: &[Rc<Entity>], out: &mut EvalOut, class: &str) {
+        #[cfg(test)]
+        CUT_CALLS.with(|c| c.set(c.get() + 1));
         let Some(list) = self.model.openings_of.get(&e.id).cloned() else {
             return;
         };
@@ -1228,6 +1347,11 @@ impl<'a> Importer<'a> {
                 })
                 .collect();
             let got = self.eval_product(&op, &op_reps, false);
+            // What the geometry of an opening lost (a face out of range, an unsupported item) is
+            // told, with the class of the opening.
+            for issue in &got.issues {
+                self.geometry_note(&model::class_name(&op.name), issue, 1);
+            }
             let mut m = geom::MeshData::default();
             for p in &got.pieces {
                 if let Some(pm) = geom::piece_mesh(p) {
@@ -1235,7 +1359,7 @@ impl<'a> Importer<'a> {
                 }
             }
             if m.t.is_empty() {
-                self.bodyless.insert(*id);
+                self.mark(Mark::Bodyless, *id);
                 continue;
             }
             cutters.push((*id, m));
@@ -1282,7 +1406,7 @@ impl<'a> Importer<'a> {
                 Ok(m) => {
                     // The cut is exact in volume. A mesh that is not closed is told, not hidden.
                     if !csg::is_closed(&m) {
-                        self.open_cuts.insert(e.id);
+                        self.mark(Mark::Open, e.id);
                     }
                     for (id, _) in &near {
                         *cut_in.entry(*id).or_default() += 1;
@@ -1303,14 +1427,14 @@ impl<'a> Importer<'a> {
         for (id, _) in &cutters {
             match (cut_in.contains_key(id), failed_in.contains_key(id)) {
                 (_, false) => {
-                    self.cut.insert(*id);
+                    self.mark(Mark::Cut, *id);
                 }
                 (true, true) => {
-                    self.cut.insert(*id);
+                    self.mark(Mark::Cut, *id);
                     partly += 1;
                 }
                 (false, true) => {
-                    self.uncut.insert(*id);
+                    self.mark(Mark::Uncut, *id);
                     kept += 1;
                 }
             }

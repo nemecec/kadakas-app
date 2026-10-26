@@ -728,6 +728,99 @@ fn only_a_file_of_kadakas_has_its_turned_site_turned_back() {
     assert_eq!(rotation, 0.0);
 }
 
+/// A surface model of `n` faces, each with a hole that has a point at 1E15: the overlay refuses all.
+fn bad_faces_product(base: u64, n: u64, with_solid: bool) -> String {
+    let mut s = String::new();
+    let mut faces = Vec::new();
+    for i in 0..n {
+        let b = base + i * 10;
+        s.push_str(&format!(
+            "#{b}=IFCCARTESIANPOINT((0.,0.,0.));\n#{p1}=IFCCARTESIANPOINT((4000.,0.,0.));\n#{p2}=IFCCARTESIANPOINT((4000.,4000.,0.));\n#{p3}=IFCCARTESIANPOINT((0.,4000.,0.));\n\
+#{h1}=IFCCARTESIANPOINT((1.E15,1000.,0.));\n#{h2}=IFCCARTESIANPOINT((2000.,1000.,0.));\n#{h3}=IFCCARTESIANPOINT((2000.,2000.,0.));\n\
+#{l1}=IFCPOLYLOOP((#{b},#{p1},#{p2},#{p3}));\n#{l2}=IFCPOLYLOOP((#{h1},#{h2},#{h3}));\n#{o}=IFCFACEOUTERBOUND(#{l1},.T.);\n#{i}=IFCFACEBOUND(#{l2},.T.);\n#{f}=IFCFACE((#{o},#{i}));\n",
+            p1 = b + 1, p2 = b + 2, p3 = b + 3, h1 = b + 4, h2 = b + 5, h3 = b + 6,
+            l1 = b + 7, l2 = b + 8, o = b + 9, i = b + 9000, f = b + 9001
+        ));
+        faces.push(format!("#{}", b + 9001));
+    }
+    let shell = base + 5000;
+    s.push_str(&format!(
+        "#{shell}=IFCOPENSHELL(({}));\n#{m}=IFCSHELLBASEDSURFACEMODEL((#{shell}));\n",
+        faces.join(","),
+        m = shell + 1
+    ));
+    let mut items = format!("#{}", shell + 1);
+    if with_solid {
+        s.push_str(&extr(
+            base + 7000,
+            "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)",
+            10.0,
+        ));
+        items.push_str(&format!(",#{}", base + 7001));
+    }
+    s.push_str(&product(
+        base + 6000,
+        "IFCBUILDINGELEMENTPROXY",
+        &items,
+        "$,@,$,$",
+    ));
+    s
+}
+
+#[test]
+fn the_same_kind_of_note_is_one_line_whatever_the_counts() {
+    // Two products with 1 and 2 faces out of range: one line with the sum, not one line for each
+    // number.
+    let data = format!(
+        "{}{}",
+        bad_faces_product(20_000, 1, true),
+        bad_faces_product(40_000, 2, true)
+    );
+    let (_, r) = run(&data, &IfcImportOptions::default());
+    let lines: Vec<&String> = r
+        .notes
+        .iter()
+        .filter(|n| n.contains("faces with numbers out of range"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{:?} {:?}", r.notes, r.skipped);
+    assert!(
+        lines[0].contains("3 faces") && lines[0].contains("2 products"),
+        "{}",
+        lines[0]
+    );
+}
+
+#[test]
+fn products_that_lose_all_their_faces_give_one_skipped_line() {
+    let data = format!(
+        "{}{}",
+        bad_faces_product(20_000, 1, false),
+        bad_faces_product(40_000, 2, false)
+    );
+    let (_, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(r.skipped.len(), 1, "{:?}", r.skipped);
+    assert_eq!(r.skipped[0].count, 2);
+    assert!(
+        r.skipped[0]
+            .reason
+            .starts_with("faces with numbers out of range")
+    );
+}
+
+#[test]
+fn a_note_sentence_splits_into_its_count_and_the_rest() {
+    assert_eq!(
+        super::split_count("3 faces were left out"),
+        (3, "faces were left out")
+    );
+    assert_eq!(
+        super::split_count("faces were left out"),
+        (0, "faces were left out")
+    );
+    assert_eq!(super::split_count("12 "), (12, ""));
+    assert_eq!(super::split_count("3x"), (0, "3x"));
+}
+
 #[test]
 fn big_solids_of_a_file_without_units_are_bounded_before_they_are_made() {
     // A 4 KB file whose project has no unit assignment: 300 and 290 are meters, so the spheres have

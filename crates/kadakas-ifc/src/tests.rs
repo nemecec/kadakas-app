@@ -2003,6 +2003,12 @@ fn a_georeference_without_a_crs_survives_a_round_trip_within_a_millimeter() {
             "{version}: {:?}",
             g.origin
         );
+        // The rotation comes back as the rotation of the georeference in every schema.
+        assert!(
+            (g.rotation - 0.3).abs() < 1e-9,
+            "{version}: the rotation is {}",
+            g.rotation
+        );
         // Export that again and import again: the world coordinates do not move.
         let (bytes2, _) = export_bytes(a.doc(), &opts).unwrap();
         let second = import_bytes(

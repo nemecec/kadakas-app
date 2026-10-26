@@ -9,7 +9,8 @@
 //! debug build on a busy computer. The full run damages every statement in all ways; it takes
 //! about 20 minutes for the fixtures in a release build:
 //! `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored`.
-//! The nightly checks run it (see docs/dev-guide.md).
+//! No CI job runs the full run yet. It is run by hand, and a nightly step is planned for the merge
+//! (see docs/dev-guide.md).
 
 mod support;
 
@@ -161,29 +162,39 @@ fn one_of_each_type(files: &[(String, String)]) -> Vec<Vec<usize>> {
     plan
 }
 
-/// True when the import returned (with a result or an error) and no product was skipped after an
-/// internal error. The entry has no catch of its own, so a panic ends the call; the check of the
-/// skip line and the note is a second guard in case a catch is ever added to it.
+type Imported = Result<kadakas_io::ImportResult, kadakas_ifc::IfcImportError>;
+
+/// True when an import went well enough: it returned, and no product was skipped after an internal
+/// error (the entry has no catch of its own, so this is a second guard in case one is added).
+fn fine(result: &Imported) -> bool {
+    match result {
+        Ok(r) => {
+            !r.report
+                .skipped
+                .iter()
+                .any(|s| s.reason.contains("internal error"))
+                && !r.report.notes.iter().any(|n| n.contains("internal error"))
+                && r.report.handled_panics.is_empty()
+        }
+        Err(e) => !matches!(e, kadakas_ifc::IfcImportError::Internal(_)),
+    }
+}
+
+/// Runs `f` and says if it returned `true`; a panic is `false`.
+fn guard(f: impl FnOnce() -> bool) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(false)
+}
+
+/// True when the import of this text is fine and does not panic.
 fn run(text: &str) -> bool {
     let doc = Document::with_sequential_ids();
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-        || match import_bytes_unguarded(
+    guard(|| {
+        fine(&import_bytes_unguarded(
             text.as_bytes().to_vec(),
             &doc,
             &IfcImportOptions::default(),
-        ) {
-            Ok(r) => {
-                !r.report
-                    .skipped
-                    .iter()
-                    .any(|s| s.reason.contains("internal error"))
-                    && !r.report.notes.iter().any(|n| n.contains("internal error"))
-                    && r.report.handled_panics.is_empty()
-            }
-            Err(e) => !matches!(e, kadakas_ifc::IfcImportError::Internal(_)),
-        },
-    ))
-    .unwrap_or(false)
+        ))
+    })
 }
 
 fn check(name: &str, text: &str, pick: &dyn Fn(usize) -> bool, full: bool) -> usize {
@@ -263,21 +274,38 @@ fn damaged_fixtures_never_panic_full() {
 }
 
 #[test]
-fn the_damage_check_sees_a_panic_and_an_internal_error_note() {
-    // The check must fail when a panic is injected (the entry has no catch per product), and when
-    // the result says that a product was skipped after an internal error.
-    assert!(run(&std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/ifc/extruded_rect.ifc")
-    )
-    .unwrap()));
-    let bad = kadakas_ifc::IfcImportError::Internal("x".into());
-    assert!(matches!(bad, kadakas_ifc::IfcImportError::Internal(_)));
-    let seen = kadakas_ifc::run_guarded(|| panic!("injected"));
-    assert!(matches!(
-        seen,
-        Err(kadakas_ifc::IfcImportError::Internal(_))
-    ));
+fn the_damage_check_fails_on_a_panic_and_on_an_internal_error() {
+    let doc = Document::with_sequential_ids();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/ifc/extruded_rect.ifc");
+    let good = import_bytes_unguarded(
+        std::fs::read(path).unwrap(),
+        &doc,
+        &IfcImportOptions::default(),
+    );
+    assert!(fine(&good));
+    // A panic anywhere in the call is a failure.
+    assert!(guard(|| true));
+    assert!(!guard(|| panic!("injected")));
+    // A product skipped after an internal error, a caught panic and an `Internal` error are failures.
+    let ok = good.as_ref().unwrap();
+    let mut skipped = ok.clone();
+    skipped
+        .report
+        .skip("IfcWall", "internal error in this product");
+    assert!(!fine(&Ok(skipped)));
+    let mut handled = ok.clone();
+    handled.report.handled_panics.push("x".into());
+    assert!(!fine(&Ok(handled)));
+    let mut noted = ok.clone();
+    noted
+        .report
+        .note("1 products were skipped after an internal error");
+    assert!(!fine(&Ok(noted)));
+    assert!(!fine(&Err(kadakas_ifc::IfcImportError::Internal(
+        "x".into()
+    ))));
+    assert!(fine(&Err(kadakas_ifc::IfcImportError::Format("x".into()))));
 }
 
 #[test]

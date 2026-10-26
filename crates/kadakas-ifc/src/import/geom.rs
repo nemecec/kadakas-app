@@ -49,15 +49,11 @@ impl BrepCacheInner {
     }
 }
 
-/// The bytes that a read takes: the triangles, the exact surfaces (their size as data) and the
-/// sentences.
+/// The bytes that a read takes: the triangles, the exact surfaces (a structural estimate from
+/// the counts, not a serialization) and the sentences.
 fn brep_read_bytes(read: &BrepRead) -> usize {
     let mesh = read.0.as_ref().map_or(0, |m| {
-        m.v.len() * 24
-            + m.t.len() * 12
-            + m.exact
-                .as_ref()
-                .map_or(0, |x| serde_json::to_vec(&**x).map_or(0, |v| v.len()))
+        m.v.len() * 24 + m.t.len() * 12 + m.exact.as_ref().map_or(0, |x| x.approx_bytes())
     });
     mesh + read.1.iter().map(|s| s.len() + 24).sum::<usize>() + 64
 }
@@ -2245,6 +2241,27 @@ mod tests {
             "{} {area}",
             v / 1000.0
         );
+    }
+
+    #[test]
+    fn the_exact_surfaces_of_a_read_count_in_its_size() {
+        let plain = Rc::new((Some(MeshData::default()), vec![]));
+        let mut m = MeshData::default();
+        m.exact = Some(Box::new(kadakas_core::exact::ExactSolid {
+            version: 1,
+            product: String::new(),
+            unit_mm: 1.0,
+            tolerance_mm: 0.1,
+            angle_deg: 15.0,
+            vertices: vec![DVec3::ZERO; 1000],
+            edges: vec![],
+            shells: vec![],
+            faces: vec![],
+            mesh_hash: 0,
+            extra: Default::default(),
+        }));
+        let with = Rc::new((Some(m), vec![]));
+        assert!(brep_read_bytes(&with) >= brep_read_bytes(&plain) + 50_000);
     }
 
     #[test]
