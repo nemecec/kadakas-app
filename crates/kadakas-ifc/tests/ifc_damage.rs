@@ -9,8 +9,8 @@
 //! debug build on a busy computer. The full run damages every statement in all ways; it takes
 //! about 20 minutes for the fixtures in a release build:
 //! `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored`.
-//! No CI job runs the full run yet. It is run by hand, and a nightly step is planned for the merge
-//! (see docs/dev-guide.md).
+//! The nightly workflow runs the full run in the job `ifc-damage`. The CI of a pull request does not
+//! run it (see docs/dev-guide.md).
 
 mod support;
 

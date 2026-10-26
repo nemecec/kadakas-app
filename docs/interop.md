@@ -327,7 +327,7 @@ A ZIP entry packed with bzip2 is refused with `bzip2 is not supported, use defla
 
 `tests/ifc_damage.rs` damages every entity type of the fixtures and of the cached public files at least once. The fixture `tests/fixtures/ifc/all_kinds.ifc` has every type that the importer reads, and the script `tests/data/make_ifc_fixtures.py` makes it. Each type gets a cut of the attribute list and a bad value for one attribute (a missing reference, a wrong kind, a huge number, a wrong list). The test requires that the import returns and that no product was skipped after an internal error.
 
-The full run damages every statement in every way. It takes about 20 minutes for the fixtures in a release build. Run it by hand with `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored damaged_fixtures_never_panic_full`. No CI job runs it yet. A nightly step with this named test is planned for the merge.
+The full run damages every statement in every way. It takes about 20 minutes for the fixtures in a release build. Run it by hand with `cargo test --release -p kadakas-ifc --test ifc_damage -- --ignored damaged_fixtures_never_panic_full`. The nightly workflow runs it in the job `ifc-damage`. The CI of a pull request does not run it.
 
 ### Left out, with the reason
 
