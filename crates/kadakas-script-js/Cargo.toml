@@ -25,7 +25,7 @@ sha2 = "0.11.0"
 # Names the cached module by the hash of its input.
 sha2 = "0.11.0"
 # Checks the imports and exports of the module that the build made.
-wasmparser = { version = "0.258.3", default-features = false, features = ["std"] }
+wasmparser = { version = "0.262.0", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # The tests run the metered engine (the engine of the browser) on a plain wasmtime compiler.

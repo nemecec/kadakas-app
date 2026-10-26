@@ -9,7 +9,7 @@ repository.workspace = true
 description = "Triangle mesh files for Kadakas (MOD-12): readers for OBJ, STL and glTF and a writer for STL. Pure Rust, no file access, no other Kadakas crate."
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
