@@ -1629,6 +1629,12 @@ pub(crate) fn split_counted(outer: &[DVec2], holes: &[Vec<DVec2>]) -> Vec<Vec<DV
     crate::geom::split_with_holes(outer, holes)
 }
 
+/// Puts back a count that `take_range_drops` took (an evaluation inside another one must not
+/// lose the drops of the outer one).
+pub(crate) fn add_range_drops(n: usize) {
+    RANGE_DROPS.with(|c| c.set(c.get() + n));
+}
+
 /// The number of faces that `split_counted` refused since the last call; it starts again at zero.
 pub(crate) fn take_range_drops() -> usize {
     RANGE_DROPS.with(|c| c.replace(0))

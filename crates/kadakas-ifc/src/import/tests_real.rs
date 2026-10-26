@@ -805,6 +805,24 @@ fn products_that_lose_all_their_faces_give_one_skipped_line() {
             .reason
             .starts_with("faces with numbers out of range")
     );
+    // The count of the faces is not lost: the notes have it.
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("3 faces with numbers out of range") && n.contains("in 2 products")),
+        "{:?}",
+        r.notes
+    );
+    // One product: the singular.
+    let (_, one) = run(
+        &bad_faces_product(20_000, 1, true),
+        &IfcImportOptions::default(),
+    );
+    assert!(
+        one.notes.iter().any(|n| n.ends_with("(in 1 product)")),
+        "{:?}",
+        one.notes
+    );
 }
 
 #[test]
@@ -819,6 +837,117 @@ fn a_note_sentence_splits_into_its_count_and_the_rest() {
     );
     assert_eq!(super::split_count("12 "), (12, ""));
     assert_eq!(super::split_count("3x"), (0, "3x"));
+}
+
+/// The rotation of the georeference after the import of `turned_site("Revit", 1)` with the entry
+/// `file_name` in the STEP header (`None`: no entry).
+fn rotation_with_header(file_name: Option<&str>) -> f64 {
+    let bytes = super::tests_more::file("IFC4", &turned_site("Revit", 1));
+    let text = String::from_utf8(bytes).unwrap();
+    let entry = file_name.map(|f| format!("{f}\n")).unwrap_or_default();
+    let text = text.replace("FILE_SCHEMA(", &format!("{entry}FILE_SCHEMA("));
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    ed.doc().georef.clone().expect("a georeference").rotation
+}
+
+#[test]
+fn only_the_version_and_the_system_of_file_name_say_that_kadakas_wrote_the_file() {
+    let turned = 0.6f64.atan2(0.8);
+    // As Kadakas writes it: the system and the preprocessor are Kadakas.
+    let kad = "FILE_NAME('m.ifc','t',(''),(''),'Kadakas','Kadakas','');";
+    assert!((rotation_with_header(Some(kad)) - turned).abs() < 1e-9);
+    let lower = "FILE_NAME('m.ifc','t',(''),(''),'x','kadakas','');";
+    assert!((rotation_with_header(Some(lower)) - turned).abs() < 1e-9);
+    // Kadakas as the organisation or the author of a file of another program: not turned back.
+    for foreign in [
+        "FILE_NAME('m.ifc','t',('Kadakas'),('Kadakas'),'Revit','Revit','');",
+        "FILE_NAME('Kadakas.ifc','t',(''),(''),'Revit','Revit','Kadakas');",
+        "FILE_NAME('m.ifc','t',(''),(''),'Revit','Kadakas plugin','');",
+        "FILE_NAME('m.ifc','t',(''),('Kadakas''s plan'),'Revit','Revit','');",
+        "FILE_NAME('m.ifc','t',(''),(''),'Kadakas''s','Revit','');",
+    ] {
+        assert_eq!(rotation_with_header(Some(foreign)), 0.0, "{foreign}");
+    }
+    // No entry and a damaged entry: not turned back, and no panic.
+    assert_eq!(rotation_with_header(None), 0.0);
+    for damaged in [
+        "FILE_NAME('m.ifc','t',(''),(''),'Kadakas'",
+        "FILE_NAME 'Kadakas','Kadakas';",
+    ] {
+        assert_eq!(rotation_with_header(Some(damaged)), 0.0, "{damaged}");
+    }
+}
+
+/// A vegetation area (meters) placed 2 m above the layer: its own height is not stored.
+fn raised_area() -> String {
+    let area = "#100=IFCCARTESIANPOINT((0.,0.));#101=IFCCARTESIANPOINT((100.,0.));#102=IFCCARTESIANPOINT((100.,100.));#103=IFCCARTESIANPOINT((0.,100.));\n\
+#104=IFCPOLYLINE((#100,#101,#102,#103,#100));\n#110=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#104);\n#111=IFCEXTRUDEDAREASOLID(#110,#5,#4,0.1);\n\
+#800=IFCCARTESIANPOINT((0.,0.,2.));\n#801=IFCAXIS2PLACEMENT3D(#800,$,$);\n#802=IFCLOCALPLACEMENT($,#801);\n";
+    let p = product(
+        112,
+        "IFCGEOGRAPHICELEMENT",
+        "#111",
+        "'vegetation',@,$,.USERDEFINED.",
+    )
+    .replace("#7,", "#802,");
+    format!("{area}{p}")
+}
+
+fn in_meters(data: &str) -> Vec<u8> {
+    String::from_utf8(super::tests_more::file("IFC4", data))
+        .unwrap()
+        .replace(".LENGTHUNIT.,.MILLI.,.METRE.", ".LENGTHUNIT.,$,.METRE.")
+        .into_bytes()
+}
+
+#[test]
+fn a_rolled_back_area_is_not_counted_in_the_elevation_note() {
+    let note = |panic: bool| {
+        super::PANIC_AFTER_ADD.with(|c| c.set(panic));
+        let doc = Document::with_sequential_ids();
+        let r = import_bytes(
+            in_meters(&raised_area()),
+            &doc,
+            &IfcImportOptions::default(),
+        )
+        .unwrap();
+        super::PANIC_AFTER_ADD.with(|c| c.set(false));
+        r.report
+            .notes
+            .iter()
+            .any(|n| n.contains("keep the elevation of their layer"))
+    };
+    // Without a panic the area is imported and the note says that its height is not stored.
+    assert!(note(false), "the setup must give the note");
+    // The area panicked after it was added: it is gone, and the note is gone with it.
+    assert!(!note(true));
+}
+
+#[test]
+fn a_product_that_panicked_has_the_panic_line_only() {
+    // Faces out of range are counted in the product that then panics: no note about the faces.
+    super::PANIC_AFTER_ADD.with(|c| c.set(true));
+    let data = format!(
+        "{}{}",
+        bad_faces_product(20_000, 1, true),
+        extr(50_000, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0)
+    );
+    let (_, r) = run(&data, &IfcImportOptions::default());
+    assert!(
+        !r.notes
+            .iter()
+            .any(|n| n.contains("faces with numbers out of range")),
+        "{:?}",
+        r.notes
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("internal error")),
+        "{:?}",
+        r.notes
+    );
 }
 
 #[test]

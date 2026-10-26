@@ -374,6 +374,7 @@ fn import_index(
             cut: HashSet::new(),
             uncut: HashSet::new(),
             bodyless: HashSet::new(),
+            noted_openings: HashSet::new(),
         }
     };
     let mut imp = make();
@@ -485,12 +486,17 @@ enum Mark {
     Uncut,
     Open,
     Bodyless,
+    /// An opening whose geometry notes were written (once, whatever the number of hosts).
+    Noted,
 }
 
 /// What the importer keeps outside the builder, as it was before a product (see `Importer::run`).
 struct Before {
     rows: usize,
     triangles: usize,
+    z_dropped: usize,
+    bad_placements: usize,
+    other_placements: usize,
     geometry_notes: BTreeMap<(String, String), (usize, usize)>,
     opening_failures: BTreeMap<(String, bool), OpeningTally>,
 }
@@ -588,6 +594,7 @@ struct Importer<'a> {
     uncut: HashSet<u64>,
     /// Openings that have no Body representation (a Reference representation is not subtracted).
     bodyless: HashSet<u64>,
+    noted_openings: HashSet<u64>,
 }
 
 /// Wall-clock-free helpers for the object data.
@@ -678,17 +685,20 @@ impl<'a> Importer<'a> {
         Some(((c / 1000.0).round() * 1000.0, turn))
     }
 
-    /// True when the file says that Kadakas wrote it: the originating system of `FILE_NAME` in the
-    /// STEP header (every Kadakas export has it, in all schemas) or an `IfcApplication` named
-    /// Kadakas (IFC2x3 has one too). Only such a file has the site turned on purpose: the export
-    /// writes the rotation of a georeference without a CRS as the turn of the `IfcSite`, and the
-    /// import turns it back. A file of another program keeps the turn of its site in the geometry.
+    /// True when the file says that Kadakas wrote it: the preprocessor version or the originating
+    /// system of `FILE_NAME` in the STEP header (the fifth and sixth attributes, where every
+    /// Kadakas export writes `'Kadakas'`) is exactly `Kadakas`, in any case. An organisation or an
+    /// author with that name does not count. An `IfcApplication` named Kadakas counts too (IFC2x3
+    /// has one). Only such a file has the site turned on purpose: the export writes the rotation of
+    /// a georeference without a CRS as the turn of the `IfcSite`, and the import turns it back. A
+    /// file of another program keeps the turn of its site in the geometry.
     fn written_by_kadakas(&self) -> bool {
-        let header = self.cx.x.header().to_ascii_lowercase();
-        let in_header = header.find("file_name").is_some_and(|at| {
-            let end = header[at..].find(");").map_or(header.len(), |e| at + e);
-            header[at..end].contains("'kadakas'")
-        });
+        let is_kadakas = |v: Option<&crate::step::Value>| {
+            v.and_then(text)
+                .is_some_and(|t| t.trim().eq_ignore_ascii_case("Kadakas"))
+        };
+        let in_header = crate::step::header_entry(self.cx.x.header(), "FILE_NAME")
+            .is_some_and(|a| is_kadakas(a.get(4)) || is_kadakas(a.get(5)));
         in_header
             || self.cx.x.ids_of("IFCAPPLICATION").iter().any(|id| {
                 self.cx.ent(*id).is_some_and(|e| {
@@ -706,6 +716,7 @@ impl<'a> Importer<'a> {
             Mark::Uncut => self.uncut.insert(id),
             Mark::Open => self.open_cuts.insert(id),
             Mark::Bodyless => self.bodyless.insert(id),
+            Mark::Noted => self.noted_openings.insert(id),
         };
         if new {
             self.journal.push((which, id));
@@ -730,6 +741,9 @@ impl<'a> Importer<'a> {
         Before {
             rows: self.rows.len(),
             triangles: self.triangles,
+            z_dropped: self.z_dropped,
+            bad_placements: self.cx.bad_placements.get(),
+            other_placements: self.cx.other_placements.get(),
             geometry_notes: self.geometry_notes.clone(),
             opening_failures: self.opening_failures.clone(),
         }
@@ -744,10 +758,14 @@ impl<'a> Importer<'a> {
                 Mark::Uncut => self.uncut.remove(&id),
                 Mark::Open => self.open_cuts.remove(&id),
                 Mark::Bodyless => self.bodyless.remove(&id),
+                Mark::Noted => self.noted_openings.remove(&id),
             };
         }
         self.rows.truncate(before.rows);
         self.triangles = before.triangles;
+        self.z_dropped = before.z_dropped;
+        self.cx.bad_placements.set(before.bad_placements);
+        self.cx.other_placements.set(before.other_placements);
         self.geometry_notes = before.geometry_notes;
         self.opening_failures = before.opening_failures;
     }
@@ -825,6 +843,7 @@ impl<'a> Importer<'a> {
             // Faces that the overlay refused outside of the evaluation of the product (a symbol, a
             // box) are told here.
             let late = geom::take_range_drops();
+            let finished = outcome.is_ok();
             if let Err((cp, detail)) = outcome {
                 self.b.rollback(cp);
                 self.restore(before);
@@ -837,7 +856,8 @@ impl<'a> Importer<'a> {
                 }
                 self.internal_count += 1;
             }
-            if late > 0 && !self.b.is_probe() {
+            // A product that panicked has the line of the panic only.
+            if late > 0 && finished && !self.b.is_probe() {
                 self.geometry_note(
                     &class,
                     &format!("{late} faces with numbers out of range (beyond 1e12) were left out"),
@@ -888,9 +908,10 @@ impl<'a> Importer<'a> {
         }
         for ((class, what), (products, amount)) in std::mem::take(&mut self.geometry_notes) {
             if amount > 0 {
-                self.b.report.note(&format!(
-                    "{class}: {amount} {what} (in {products} products)"
-                ));
+                let unit = if products == 1 { "product" } else { "products" };
+                self.b
+                    .report
+                    .note(&format!("{class}: {amount} {what} (in {products} {unit})"));
             } else {
                 self.b.report.note(&format!("{products} x {class}: {what}"));
             }
@@ -1210,6 +1231,10 @@ impl<'a> Importer<'a> {
                 || "no body geometry".to_string(),
                 |n| split_count(n).1.to_string(),
             );
+            // The count goes to the notes, so the report keeps it.
+            if let Some(n) = notes.first().filter(|n| split_count(n).0 > 0) {
+                self.geometry_note(&class, n, 1);
+            }
             self.b.report.skip(&class, &why);
             return;
         }
@@ -1329,6 +1354,7 @@ impl<'a> Importer<'a> {
         }
         // The cutters, in the units of the file (the host is in the same units).
         let mut cutters: Vec<(u64, geom::MeshData)> = Vec::new();
+        let mut opening_issues: Vec<(u64, String, Vec<String>)> = Vec::new();
         for id in &list {
             let Some(op) = self.cx.ent(*id) else { continue };
             let Some(shape) = self.cx.get(attr(&op, 6)) else {
@@ -1348,9 +1374,10 @@ impl<'a> Importer<'a> {
                 .collect();
             let got = self.eval_product(&op, &op_reps, false);
             // What the geometry of an opening lost (a face out of range, an unsupported item) is
-            // told, with the class of the opening.
-            for issue in &got.issues {
-                self.geometry_note(&model::class_name(&op.name), issue, 1);
+            // told below, for the openings that end up cut. An opening that stays an object is a
+            // product of its own and tells it there.
+            if !got.issues.is_empty() {
+                opening_issues.push((*id, model::class_name(&op.name), got.issues.clone()));
             }
             let mut m = geom::MeshData::default();
             for p in &got.pieces {
@@ -1424,18 +1451,29 @@ impl<'a> Importer<'a> {
         }
         out.pieces = pieces;
         let (mut kept, mut partly) = (0usize, 0usize);
+        let mut cut_now: HashSet<u64> = HashSet::new();
         for (id, _) in &cutters {
             match (cut_in.contains_key(id), failed_in.contains_key(id)) {
                 (_, false) => {
                     self.mark(Mark::Cut, *id);
+                    cut_now.insert(*id);
                 }
                 (true, true) => {
                     self.mark(Mark::Cut, *id);
+                    cut_now.insert(*id);
                     partly += 1;
                 }
                 (false, true) => {
                     self.mark(Mark::Uncut, *id);
                     kept += 1;
+                }
+            }
+        }
+        for (id, class, issues) in opening_issues {
+            if cut_now.contains(&id) && !self.noted_openings.contains(&id) {
+                self.mark(Mark::Noted, id);
+                for issue in &issues {
+                    self.geometry_note(&class, issue, 1);
                 }
             }
         }
@@ -1611,7 +1649,8 @@ impl<'a> Importer<'a> {
             ev.instancing = Some(&ok);
         }
         let annotation = e.name == "IFCANNOTATION";
-        geom::take_range_drops();
+        // Drops that an outer evaluation counted are not ours: put them back at the end.
+        let outer_drops = geom::take_range_drops();
         for r in reps {
             if !self.wanted_rep(r, annotation) {
                 continue;
@@ -1624,6 +1663,7 @@ impl<'a> Importer<'a> {
         }
         // Faces with numbers beyond the range of the overlay were left out: say so.
         let dropped = geom::take_range_drops();
+        geom::add_range_drops(outer_drops);
         if dropped > 0 {
             ev.issues.push(format!(
                 "{dropped} faces with numbers out of range (beyond 1e12) were left out"

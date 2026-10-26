@@ -403,6 +403,21 @@ pub struct StepFile {
     pub duplicates: Vec<u64>,
 }
 
+/// The attributes of a header entry (`FILE_NAME`, `FILE_DESCRIPTION`, ...) read with the parser of
+/// the entities, so strings with `''` and escapes are right. The keyword is found in any case,
+/// outside of strings and comments. `None` when the entry is missing or damaged.
+pub fn header_entry(header: &str, keyword: &str) -> Option<Vec<Value>> {
+    let at = find_keyword(header, keyword)?;
+    let mut p = Parser {
+        s: header,
+        i: at + keyword.len(),
+        depth: 0,
+        cost: 0,
+    };
+    p.eat(b'(').ok()?;
+    p.attr_list(0).ok()
+}
+
 /// The schema names of `FILE_SCHEMA` in the text of a header. The keyword is found in any case
 /// (some exporters write `file_schema`), outside of strings.
 pub fn header_schemas(header: &str) -> Vec<String> {
@@ -979,6 +994,20 @@ mod tests {
         ] {
             assert_eq!(decode_string(&encode_string(s)), s, "{s:?}");
         }
+    }
+
+    #[test]
+    fn a_header_entry_is_read_with_the_parser_of_the_entities() {
+        let h = "FILE_DESCRIPTION(('x'),'2;1');\nFILE_NAME('a''b.ifc','t',('O''Neil'),('Org (x);'),'pre','Kadakas','');\n";
+        let v = header_entry(h, "FILE_NAME").unwrap();
+        assert_eq!(v.len(), 7);
+        assert_eq!(v[0], Value::Str("a'b.ifc".into()));
+        assert_eq!(v[4], Value::Str("pre".into()));
+        assert_eq!(v[5], Value::Str("Kadakas".into()));
+        assert!(header_entry("file_name('a')", "FILE_NAME").is_some());
+        assert!(header_entry("FILE_NAME('a'", "FILE_NAME").is_none());
+        assert!(header_entry("FILE_NAME 'a'", "FILE_NAME").is_none());
+        assert!(header_entry("", "FILE_NAME").is_none());
     }
 
     #[test]

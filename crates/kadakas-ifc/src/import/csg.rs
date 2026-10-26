@@ -125,6 +125,9 @@ pub enum CsgError {
     TooBig,
     /// The work budget ([`Fuel`]) is used up.
     OutOfFuel,
+    /// One mesh needs more cells for the healing of its T-junctions than [`HEAL_CELLS`], whatever
+    /// budget is left.
+    TooManyCells,
 }
 
 impl std::fmt::Display for CsgError {
@@ -134,6 +137,9 @@ impl std::fmt::Display for CsgError {
             CsgError::Empty => "a solid has no volume",
             CsgError::TooBig => "the solids are too complex for a boolean operation",
             CsgError::OutOfFuel => "the work budget for boolean operations is used up",
+            CsgError::TooManyCells => {
+                "the healing of the edges of a solid needs more cells than one solid may use"
+            }
         })
     }
 }
@@ -456,8 +462,8 @@ fn mesh_of(polys: &[Polygon], fuel: &Fuel) -> MeshData {
     }
     m.weld(EPS);
     m.compact();
-    // A result that cannot be healed (the budget is used up) is kept as it is, not closed: the
-    // caller checks `is_closed` and the import says so.
+    // A result that cannot be healed (the budget or the cells of one mesh are used up) is kept as
+    // it is, and it is not closed: the caller checks `is_closed` and the import says so.
     let _ = heal_t_junctions(&mut m, fuel, heal_limit());
     m
 }
@@ -470,9 +476,9 @@ fn mesh_of(polys: &[Polygon], fuel: &Fuel) -> MeshData {
 /// (a long thin wall gets many cells along its length and one across). An edge looks only at the
 /// cells of its box, so the work follows the number of triangles and the vertices near their edges,
 /// not the product of the two. The cells that edges look at are charged to `fuel` (one unit each,
-/// the budget of the import). It gives up, with the mesh unchanged, when they pass the fuel or
-/// [`HEAL_CELLS`] for one mesh; the caller finds out with `is_closed` (a result that is not closed is
-/// marked and counted). The budget is counted, not timed.
+/// the budget of the import). It gives up with the mesh unchanged: `OutOfFuel` when the next edge
+/// needs more than the fuel that is left, `TooManyCells` when the cells of this mesh pass `cap`
+/// ([`HEAL_CELLS`]), whatever fuel is left. The budget is counted, not timed.
 fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel, cap: u64) -> Result<(), CsgError> {
     use std::collections::HashMap;
     let n = m.v.len();
@@ -515,7 +521,10 @@ fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel, cap: u64) -> Result<(), CsgEr
             let count = ((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) * (c1.2 - c0.2 + 1)).max(1) as u64;
             visited += count;
             // The cells of the edges before this one are charged already: giving up costs no more.
-            if visited > cap || count > fuel.left() {
+            if visited > cap {
+                return Err(CsgError::TooManyCells);
+            }
+            if count > fuel.left() {
                 return Err(CsgError::OutOfFuel);
             }
             fuel.spend(count);
@@ -990,8 +999,19 @@ mod budget_tests {
         // and less than the whole healing needs.
         let small = Fuel::new(used / 2);
         let mut m = wall.clone();
-        assert!(heal_t_junctions(&mut m, &small, HEAL_CELLS).is_err());
+        assert_eq!(
+            heal_t_junctions(&mut m, &small, HEAL_CELLS),
+            Err(CsgError::OutOfFuel)
+        );
         assert_eq!(m, wall);
+        // With fuel left, the cap of the mesh has its own reason.
+        let mut m2 = wall.clone();
+        let rich = Fuel::new(IMPORT_FUEL);
+        assert_eq!(
+            heal_t_junctions(&mut m2, &rich, 1),
+            Err(CsgError::TooManyCells)
+        );
+        assert!(rich.left() > 0 && m2 == wall);
         let spent = used / 2 - small.left();
         assert!(
             spent > 0 && spent <= used / 2 && small.left() < used,

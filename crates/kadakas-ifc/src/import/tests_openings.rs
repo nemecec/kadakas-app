@@ -389,3 +389,40 @@ fn the_probe_pass_cuts_no_openings() {
     ed.execute(&r.command).unwrap();
     assert_eq!(objs(&ed).len(), 1, "{:?}", r.report);
 }
+
+/// The wall of the fixture with an item that cannot be read in the representation of the door.
+fn wall_with_a_bad_door() -> Vec<u8> {
+    String::from_utf8(fixture("wall_with_openings.ifc"))
+        .unwrap()
+        .replace(
+            "#204=IFCSHAPEREPRESENTATION(#13,'Body','SweptSolid',(#203));",
+            "#9000=IFCTEXTLITERAL('x',#11,.LEFT.);\n#204=IFCSHAPEREPRESENTATION(#13,'Body','SweptSolid',(#203,#9000));",
+        )
+        .into_bytes()
+}
+
+#[test]
+fn what_an_opening_lost_is_told_once_whether_it_was_cut_or_kept() {
+    let lines = |opts: &IfcImportOptions| -> Vec<String> {
+        let doc = Document::with_sequential_ids();
+        let r = import_bytes(wall_with_a_bad_door(), &doc, opts).unwrap();
+        r.report
+            .notes
+            .iter()
+            .filter(|n| n.contains("IfcOpeningElement") && n.contains("unsupported"))
+            .cloned()
+            .collect()
+    };
+    // Cut: the note comes from the cut. Once.
+    let cut = lines(&IfcImportOptions::default());
+    assert_eq!(cut.len(), 1, "{cut:?}");
+    assert!(cut[0].starts_with("1 x "), "{cut:?}");
+    // Kept as an object (no work left): the opening is a product of its own and says it there.
+    // The cut does not say it a second time.
+    let kept = lines(&IfcImportOptions {
+        boolean_work: 1,
+        ..Default::default()
+    });
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(kept[0].starts_with("1 x "), "{kept:?}");
+}
