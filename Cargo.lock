@@ -3013,7 +3013,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-ui-number"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "egui",
  "kadakas-units",
@@ -3061,13 +3061,14 @@ dependencies = [
  "kadakas-review",
  "kadakas-ui-core",
  "kadakas-ui-number",
+ "kadakas-units",
  "pollster 1.0.1",
  "serde_json",
 ]
 
 [[package]]
 name = "kadakas-welcome"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "kadakas-feedback",
  "kadakas-l10n",
