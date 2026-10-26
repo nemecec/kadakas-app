@@ -66,7 +66,9 @@ impl Model {
         // A start after a crash: remove half-made folders and old downloads, and settle the
         // runs whose launcher is gone.
         updater.store().recover();
-        updater.store().settle_runs();
+        for problem in updater.store().settle_runs() {
+            eprintln!("kadakas-launcher: {problem}");
+        }
         let settings = Settings::load(updater.store().root());
         let mut m = Model {
             updater,
