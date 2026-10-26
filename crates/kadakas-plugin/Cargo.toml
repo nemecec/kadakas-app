@@ -30,7 +30,7 @@ wasmtime = { version = "49.0.4", default-features = false, features = ["std", "r
 
 # The browser engine: the WebAssembly API of the page, and its localStorage.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

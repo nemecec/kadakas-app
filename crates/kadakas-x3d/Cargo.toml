@@ -9,7 +9,7 @@ repository.workspace = true
 description = "3D output: glTF, GLB and OBJ writers, and section and elevation drawings from the 3D model. Pure Rust, no file access."
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 kadakas-core = { path = "../kadakas-core" }
 kadakas-render = { path = "../kadakas-render" }
 spade = "2.15.1"

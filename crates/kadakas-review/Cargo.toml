@@ -20,7 +20,7 @@ kadakas-core = { path = "../kadakas-core" }
 kadakas-props = { path = "../kadakas-props" }
 glam = { version = "0.34.1", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
 roxmltree = { version = "0.21.1", optional = true }
