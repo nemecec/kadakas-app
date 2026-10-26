@@ -11,7 +11,9 @@ param(
   [Parameter(Mandatory = $true)][ValidateSet('msi', 'nsis')][string]$Kind,
   [Parameter(Mandatory = $true)][string]$Package,
   [Parameter(Mandatory = $true)][string]$Version,
-  [string]$Artifacts = ''
+  [string]$Artifacts = '',
+  # on: msiexec runs with MSIRESTARTMANAGERCONTROL=Disable and REBOOT=ReallySuppress. off: without them.
+  [ValidateSet('on', 'off')][string]$MsiFlags = 'on'
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -102,14 +104,17 @@ $watchdog = Start-Job -ArgumentList $logDir, $Kind -ScriptBlock {
 if ($null -ne (Find-InstallDir)) { Fail "Kadakas is installed already on this machine: $(Find-InstallDir)" }
 
 Step "install $Package"
+$msiProps = if ($MsiFlags -eq 'on') { @('REBOOT=ReallySuppress', 'MSIRESTARTMANAGERCONTROL=Disable') } else { @() }
+Step "msiexec properties: $($msiProps -join ' ') (flags $MsiFlags)"
 # The MSI log goes straight to the artifacts folder: it stays there if the step is cut short.
 $log = Join-Path $logDir "install-$Kind.log"
 if ($Kind -eq 'msi') {
-  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"", 'REBOOT=ReallySuppress', 'MSIRESTARTMANAGERCONTROL=Disable') 300 'msiexec /i' $log
+  $code = Run-Limited msiexec.exe (@('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") + $msiProps) 300 'msiexec /i' $log
 } else {
   $code = Run-Limited $Package @('/S') 300 'the installer' $null
 }
-if ($code -ne 0 -and $code -ne 3010) { Fail "the installer ended with $code" }
+# 3010 (a restart is needed) is a failure too: a fresh install on a clean runner must not need one.
+if ($code -ne 0) { Fail "the installer ended with $code" }
 
 # An NSIS installer can finish in a child process: wait for the files.
 $dir = $null
@@ -163,8 +168,8 @@ finally {
 Step 'uninstall'
 if ($Kind -eq 'msi') {
   $ulog = Join-Path $logDir "uninstall-$Kind.log"
-  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"", 'REBOOT=ReallySuppress', 'MSIRESTARTMANAGERCONTROL=Disable') 300 'msiexec /x' $ulog
-  if ($code -ne 0 -and $code -ne 3010) { Fail "msiexec /x ended with $code" }
+  $code = Run-Limited msiexec.exe (@('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") + $msiProps) 300 'msiexec /x' $ulog
+  if ($code -ne 0) { Fail "msiexec /x ended with $code" }
 } else {
   $uninstaller = Get-ChildItem -Path $dir -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $uninstaller) { Fail "no uninstaller in $dir" }
