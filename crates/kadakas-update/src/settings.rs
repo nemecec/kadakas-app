@@ -75,9 +75,6 @@ pub struct Settings {
     pub flavor: String,
     /// The workspace profile that the app gets. Empty: none.
     pub profile: String,
-    /// The version of the welcome dialog (PLAT-26) that the person has seen. 0: never. A later
-    /// dialog that asks something new has a higher number and is shown once more.
-    pub welcome_done: u32,
     /// Keys that this version does not know (a newer launcher or another program wrote them).
     /// They stay in the file when it is written again.
     #[serde(flatten)]
@@ -85,15 +82,7 @@ pub struct Settings {
 }
 
 /// The keys that [`Settings`] knows.
-const KNOWN_KEYS: [&str; 7] = [
-    "channel",
-    "mode",
-    "keep_older",
-    "site",
-    "flavor",
-    "profile",
-    "welcome_done",
-];
+const KNOWN_KEYS: [&str; 6] = ["channel", "mode", "keep_older", "site", "flavor", "profile"];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -104,7 +93,6 @@ impl Default for Settings {
             site: String::new(),
             flavor: MAIN_FLAVOR.to_string(),
             profile: String::new(),
-            welcome_done: 0,
             extra: BTreeMap::new(),
         }
     }
@@ -150,9 +138,6 @@ impl Settings {
         {
             self.mode = m;
         }
-        if let Some(w) = o.get("welcome_done").and_then(serde_json::Value::as_u64) {
-            self.welcome_done = w.min(u64::from(u32::MAX)) as u32;
-        }
         for (k, v) in o {
             if !KNOWN_KEYS.contains(&k.as_str()) {
                 self.extra.insert(k.clone(), v.clone());
@@ -194,7 +179,14 @@ impl Settings {
 
     /// Reads the file, lets `change` edit it and writes it again, so a change of one part (the
     /// app writes the update part) keeps what another program changed in the other part.
+    ///
+    /// The file is locked while this runs. A file that cannot be parsed is first copied to
+    /// `launcher.json.bak`. A read error other than "not found" stops the write: the file is not
+    /// replaced by defaults.
     pub fn update(root: &Path, change: impl FnOnce(&mut Settings)) -> std::io::Result<Settings> {
+        std::fs::create_dir_all(root)?;
+        let _guard = kadakas_sys::jsonfile::lock(&Self::path(root))?;
+        kadakas_sys::jsonfile::read_for_update(&Self::path(root))?;
         let mut s = Settings::load(root);
         change(&mut s);
         s.fix();
@@ -238,7 +230,6 @@ mod tests {
             site: "file:///tmp/site".into(),
             flavor: "sketch".into(),
             profile: "acad".into(),
-            welcome_done: 1,
             extra: BTreeMap::new(),
         };
         s.save(&root.join("sub")).unwrap();
@@ -347,6 +338,25 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_file_is_kept_aside_and_a_read_error_stops_the_write() {
+        let root = tmp("settings-bak");
+        std::fs::write(Settings::path(&root), b"{ nope").unwrap();
+        Settings::update(&root, |s| s.keep_older = 3).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("launcher.json.bak")).unwrap(),
+            "{ nope"
+        );
+        assert_eq!(Settings::load(&root).keep_older, 3);
+        // A folder in place of the file is a read error: nothing is replaced.
+        let root2 = tmp("settings-eio");
+        std::fs::create_dir_all(Settings::path(&root2)).unwrap();
+        assert!(Settings::update(&root2, |_| {}).is_err());
+        assert!(Settings::path(&root2).is_dir());
+        crate::store::tests::rm_dir(&root);
+        crate::store::tests::rm_dir(&root2);
+    }
+
+    #[test]
     fn unknown_keys_and_the_welcome_mark_are_kept() {
         let root = tmp("settings-extra");
         std::fs::write(
@@ -355,7 +365,7 @@ mod tests {
         )
         .unwrap();
         let s = Settings::update(&root, |s| s.keep_older = 2).unwrap();
-        assert_eq!((s.welcome_done, s.keep_older), (1, 2));
+        assert_eq!(s.keep_older, 2);
         let text = std::fs::read_to_string(Settings::path(&root)).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["future"]["a"][1], 2);
@@ -367,7 +377,11 @@ mod tests {
         )
         .unwrap();
         let s = Settings::load(&root);
-        assert_eq!((s.welcome_done, s.extra.len()), (2, 1));
+        assert_eq!(
+            s.extra.len(),
+            2,
+            "welcome_done and future are kept as they are"
+        );
         assert_eq!(s.extra["future"], "x");
         crate::store::tests::rm_dir(&root);
     }

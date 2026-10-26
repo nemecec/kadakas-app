@@ -47,7 +47,7 @@ struct RawFlavor {
 
 /// The flavors that need no `flavors.json`: the id (which is also the name of the program), and
 /// the name that the UI shows. A flavor is listed when its program is in the version folder.
-pub const BUILT_IN: &[(&str, &str)] = &[("kadakas-modeler", "Kadakas Modeler (SketchUp-like)")];
+pub const BUILT_IN: &[(&str, &str)] = &[("kadakas-modeler", "Kadakas Modeler")];
 
 /// The name of the app bundle in a version folder on macOS.
 pub const APP_BUNDLE: &str = "Kadakas Engine.app";
@@ -200,7 +200,7 @@ mod tests {
         let f = discover(&d);
         let ids: Vec<&str> = f.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["kadakas-app", "kadakas-modeler"]);
-        assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
+        assert_eq!(f[1].name, "Kadakas Modeler");
         assert_eq!(
             pick(&f, "kadakas-modeler").unwrap().exe,
             exe_path("kadakas-modeler")
@@ -213,7 +213,7 @@ mod tests {
         .unwrap();
         let f = discover(&d);
         assert_eq!(f.len(), 2);
-        assert_eq!(f[1].name, "Kadakas Modeler (SketchUp-like)");
+        assert_eq!(f[1].name, "Kadakas Modeler");
         crate::store::tests::rm_dir(&d);
     }
 

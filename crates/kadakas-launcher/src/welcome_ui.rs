@@ -19,6 +19,8 @@ pub const WIDTH: f32 = 600.0;
 pub struct WelcomeState {
     pub kind: Kind,
     pub choices: Choices,
+    /// What the dialog showed when it opened. Only what the person changes from this is stored.
+    pub initial: Choices,
     /// The defaults of the system, for the first start.
     pub detected: Choices,
     /// The locales of the system, the most wanted first.
@@ -38,6 +40,7 @@ impl WelcomeState {
     ) -> WelcomeState {
         WelcomeState {
             kind,
+            initial: choices.clone(),
             choices,
             detected,
             system,
@@ -370,6 +373,7 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
         });
     ui.add_space(12.0);
     ui.label(tr!("welcome-later"));
+    ui.label(egui::RichText::new(tr!("welcome-later-help")).weak());
     if st.kind != Kind::FirstRun {
         ui.label(egui::RichText::new(tr!("welcome-applies-later")).weak());
     }
@@ -379,7 +383,7 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
 mod tests {
     use super::*;
     use egui::{Event, Key, Modifiers, Pos2, Rect, Shape};
-    use kadakas_welcome::choices::detect;
+    use kadakas_welcome::{SystemLocale, choices::detect};
 
     /// A text on the screen with its box and the box that clips it.
     #[derive(Debug, Clone)]
@@ -411,7 +415,7 @@ mod tests {
     impl Harness {
         fn new(kind: Kind) -> Harness {
             let system = vec!["en-US".to_string()];
-            let detected = detect(&system, true);
+            let detected = detect(&SystemLocale::from_languages(system.clone()), true);
             Harness {
                 ctx: egui::Context::default(),
                 st: WelcomeState::new(kind, detected.clone(), detected, system, true),
@@ -507,7 +511,7 @@ mod tests {
             "Number format",
             "1,234.56",
             "More options",
-            "You can change all of this later in Settings.",
+            "You can change all of this later in Preferences (in the 3D modeler: the View menu).",
             "Start",
             "Use defaults",
         ] {
@@ -599,7 +603,9 @@ mod tests {
             h.seen
         );
         assert!(!h.has("Start"));
-        assert!(h.has("Seda kõike saad hiljem seadetes muuta."));
+        assert!(
+            h.has("Seda kõike saad hiljem muuta eelistustes (3D-modelleerijas: menüüs Vaade).")
+        );
         // Back to the language of the system.
         h.st.choices.language = None;
         h.frame(vec![]);
@@ -632,32 +638,56 @@ mod tests {
         assert_eq!(example(&h), "Example: 3048 mm and 1234,56");
     }
 
+    /// The window in points on a screen of `pixels` at `scale`: the window height is the
+    /// height of the screen less the room of the title bar and the task bar (80 points), at most
+    /// 560 points, and never less than the smallest window.
+    fn window_on(pixels: (f32, f32), scale: f32) -> Vec2 {
+        let points = Vec2::new(pixels.0 / scale, pixels.1 / scale);
+        Vec2::new(WIDTH.min(points.x), (points.y - 80.0).clamp(420.0, 560.0))
+    }
+
     #[test]
-    fn the_buttons_stay_in_view_at_125_and_150_percent_and_in_the_smallest_window() {
-        for scale in [1.0, 1.25, 1.5] {
-            for size in [Vec2::new(WIDTH, 560.0), Vec2::new(480.0, 420.0)] {
-                let mut h = Harness::new(Kind::FirstRun);
-                h.screen = size;
-                h.ctx.set_pixels_per_point(scale);
-                h.settle();
-                assert!(h.visible("Start"), "Start at {scale} in {size:?}");
-                assert!(
-                    h.visible("Use defaults"),
-                    "Use defaults at {scale} in {size:?}"
-                );
-            }
-        }
-        // At the normal size nothing of the first screen is cut off.
-        let mut h = Harness::new(Kind::FirstRun);
-        h.ctx.set_pixels_per_point(1.5);
-        h.settle();
-        for t in [
-            "Welcome to Kadakas",
-            "3D Modeler",
-            "More options",
-            "You can change all of this later in Settings.",
+    fn the_buttons_stay_in_view_on_real_screens_in_both_languages() {
+        // 1366 x 768 at 125 percent, 1920 x 1080 at 150 percent, 1280 x 720 at 100 percent and
+        // the smallest window. The sizes are in points, as the window gets them.
+        for (pixels, scale) in [
+            ((1366.0, 768.0), 1.25),
+            ((1920.0, 1080.0), 1.5),
+            ((1280.0, 720.0), 1.0),
+            ((800.0, 600.0), 1.0),
         ] {
-            assert!(h.visible(t), "{t}");
+            for tag in ["en-US", "et"] {
+                {
+                    let mut h = Harness::new(Kind::FirstRun);
+                    h.screen = window_on(pixels, scale);
+                    h.ctx.set_pixels_per_point(scale);
+                    h.st.choices.language = Some(tag.to_string());
+                    h.settle();
+                    let (start, second) = if tag == "et" {
+                        ("Alusta", "Kasuta vaikeväärtusi")
+                    } else {
+                        ("Start", "Use defaults")
+                    };
+                    let what = format!("{pixels:?} at {scale} in {tag}, window {:?}", h.screen);
+                    assert!(h.visible(start), "{start}: {what}");
+                    assert!(h.visible(second), "{second}: {what}");
+                    // Nothing runs out of the window on the right (long Estonian texts wrap).
+                    for s in &h.seen {
+                        assert!(
+                            s.rect.right() <= h.screen.x + 0.5,
+                            "{:?} is too wide: {what}",
+                            s.text
+                        );
+                    }
+                    // The heading and the first card are on the first screen.
+                    let heading = if tag == "et" {
+                        "Tere tulemast Kadakasse"
+                    } else {
+                        "Welcome to Kadakas"
+                    };
+                    assert!(h.visible(heading), "{heading}: {what}");
+                }
+            }
         }
     }
 

@@ -125,12 +125,10 @@ pub fn system_languages() -> Vec<String> {
     sys_locale::get_locales().collect()
 }
 
-/// The folder of the files. `None` if there is no home folder.
+/// The folder of the files. `None` if there is no home folder. The same as the folder of the
+/// app (`kadakas_sys::dirs::prefs_dir`).
 pub fn dir() -> Option<PathBuf> {
-    if let Some(d) = std::env::var_os("KADAKAS_PREFS_DIR").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(d));
-    }
-    kadakas_sys::dirs::config_dir()
+    kadakas_sys::dirs::prefs_dir()
 }
 
 /// The settings in `dir`. The second value is a warning for the status line, when a file was
@@ -188,6 +186,22 @@ pub fn load() -> (Prefs, Option<String>) {
         Some(d) => load_from(&d),
         None => (Prefs::default(), None),
     }
+}
+
+/// Writes the keys that differ between `saved` (the settings as they were read or written last)
+/// and `now`, into `modeler.json` as it is on disk. A key that this program did not change (the
+/// welcome dialog stored it in the meantime) and a key that it does not know stay as they are.
+pub fn save_changes_to(dir: &Path, saved: &Prefs, now: &Prefs) -> Result<(), String> {
+    let value = |p: &Prefs| serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+    let changes = kadakas_sys::jsonfile::diff(&value(saved), &value(now));
+    let path = dir.join("modeler.json");
+    kadakas_sys::jsonfile::write_changes(&path, &changes).map_err(|e| {
+        tr!(
+            "modeler-prefs-cannot-write",
+            path = path.display(),
+            error = e
+        )
+    })
 }
 
 /// Writes the settings whole into a temporary file first, so a crash cannot leave half a file.
@@ -264,6 +278,37 @@ mod tests {
             "et",
             "falls back to the system"
         );
+    }
+
+    #[test]
+    fn a_save_writes_only_what_changed_and_keeps_what_another_program_wrote() {
+        let d = temp("save-changes");
+        let saved = Prefs::default();
+        save_to(&d, &saved).unwrap();
+        let mut text: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("modeler.json")).unwrap())
+                .unwrap();
+        text["theme"] = "dark".into();
+        text["language"] = "et".into();
+        text["from_the_future"] = serde_json::json!([1, 2]);
+        std::fs::write(d.join("modeler.json"), text.to_string()).unwrap();
+        let now = Prefs {
+            tray: false,
+            navigation: Some(NavStyle::Trackpad),
+            ..saved.clone()
+        };
+        save_changes_to(&d, &saved, &now).unwrap();
+        let (back, warning) = load_from(&d);
+        assert_eq!(warning, None);
+        assert_eq!(back.theme, ThemeChoice::Dark);
+        assert_eq!(back.language.as_deref(), Some("et"));
+        assert!(!back.tray);
+        assert_eq!(back.navigation, Some(NavStyle::Trackpad));
+        let text: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("modeler.json")).unwrap())
+                .unwrap();
+        assert_eq!(text["from_the_future"][1], 2);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

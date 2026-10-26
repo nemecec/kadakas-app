@@ -90,6 +90,9 @@ pub struct Updates {
     stamp: Option<SystemTime>,
     next_poll: f64,
     next_open_poll: f64,
+    /// The stamp of the welcome dialog that this run has seen (`kadakas_update::welcome`).
+    welcome_seen: String,
+    next_welcome_poll: f64,
     /// The version whose notice the person put off with "Later" in this run.
     later: Option<String>,
     restart: Restart,
@@ -116,6 +119,10 @@ impl Updates {
 
     pub fn new(link: Option<AppLink>, root: Option<PathBuf>) -> Updates {
         let settings = root.as_deref().map(Settings::load).unwrap_or_default();
+        let welcome_seen = root
+            .as_deref()
+            .map(kadakas_update::welcome::applied_stamp)
+            .unwrap_or_default();
         Updates {
             _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
             _run_lock: link.as_ref().and_then(AppLink::hold_run_lock),
@@ -125,6 +132,8 @@ impl Updates {
             stamp: None,
             next_poll: 0.0,
             next_open_poll: 0.0,
+            welcome_seen,
+            next_welcome_poll: 0.0,
             later: None,
             restart: Restart::None,
             skipped_told: false,
@@ -171,6 +180,24 @@ impl Updates {
         }
         self.next_open_poll = now + OPEN_POLL_SECONDS;
         link.take_open()
+    }
+
+    /// True once when the welcome dialog stored choices since this run last looked. Looks twice a
+    /// second at most.
+    pub fn take_welcome_applied(&mut self, now: f64) -> bool {
+        let Some(root) = self.root.as_deref().filter(|_| self.link.is_some()) else {
+            return false;
+        };
+        if now < self.next_welcome_poll {
+            return false;
+        }
+        self.next_welcome_poll = now + OPEN_POLL_SECONDS;
+        let stamp = kadakas_update::welcome::applied_stamp(root);
+        if stamp == self.welcome_seen {
+            return false;
+        }
+        self.welcome_seen = stamp;
+        true
     }
 
     /// The notice to show, if any.
@@ -573,6 +600,23 @@ mod tests {
         u.settings.keep_older = 3;
         u.save_if_changed();
         assert_eq!(Settings::load(&d).keep_older, 3);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_stored_welcome_choice_is_seen_once() {
+        let d = tmp("welcome-stamp");
+        let mut u = Updates::from_env(&env_of(&d));
+        assert!(!u.take_welcome_applied(0.0));
+        kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
+        assert!(!u.take_welcome_applied(0.1), "looks twice a second at most");
+        assert!(u.take_welcome_applied(1.0));
+        assert!(!u.take_welcome_applied(2.0), "once");
+        kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
+        assert!(u.take_welcome_applied(3.0));
+        // Without the launcher nothing is looked at.
+        let mut alone = Updates::new(None, Some(d.clone()));
+        assert!(!alone.take_welcome_applied(10.0));
         std::fs::remove_dir_all(&d).unwrap();
     }
 

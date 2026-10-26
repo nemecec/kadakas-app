@@ -278,6 +278,7 @@ fn units_section(ui: &mut egui::Ui, s: &mut Settings, language: &str) {
             (Some(Grouping::Comma), "1,234,567".into()),
             (Some(Grouping::Point), "1.234.567".into()),
             (Some(Grouping::Space), "1\u{a0}234\u{a0}567".into()),
+            (Some(Grouping::Apostrophe), "1\u{2019}234\u{2019}567".into()),
         ],
         |g| g.is_some_and(|g| g.symbol() == Some(decimal_symbol)),
     );

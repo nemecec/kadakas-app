@@ -1497,6 +1497,10 @@ impl KadakasApp {
         if let Some(note) = self.updates.skipped_note() {
             self.status = note;
         }
+        // The welcome dialog stored choices (Help > Show welcome): read the preferences again.
+        if self.updates.take_welcome_applied(ctx.input(|i| i.time)) {
+            self.reload_prefs(ctx);
+        }
         self.updates.save_if_changed();
         if let Some(e) = self.updates.take_error() {
             self.status = e;
@@ -1506,6 +1510,21 @@ impl KadakasApp {
         {
             self.on_save_choice(ctx, choice);
         }
+    }
+
+    /// Reads `prefs.json` again and makes it current (language, units, theme and the rest apply
+    /// in the next frame). Called when the welcome dialog stored choices. Changes of this window
+    /// that are not written yet are dropped: they are written in every frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reload_prefs(&mut self, ctx: &egui::Context) {
+        let (prefs, warning) = prefs::load();
+        self.prefs = prefs;
+        self.prefs_saved = prefs;
+        self.session.snap = prefs.snap;
+        if let Some(w) = warning {
+            self.status = w;
+        }
+        ctx.request_repaint();
     }
 
     /// The person answered the question about unsaved changes before the restart.
@@ -3281,7 +3300,7 @@ impl KadakasApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.prefs != self.prefs_saved {
-                match prefs::save(&self.prefs) {
+                match prefs::save_changes(&self.prefs_saved, &self.prefs) {
                     Ok(()) => self.prefs_saved = self.prefs,
                     Err(e) => {
                         self.status = e;

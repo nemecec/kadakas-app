@@ -320,6 +320,48 @@ pub fn open_regular(
     }))
 }
 
+/// An advisory lock on a file: the operating system holds it while the value lives, and
+/// releases it when the program ends, so no program ever decides that a lock is stale.
+#[derive(Debug)]
+pub struct FileLock(std::fs::File);
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+/// Takes the lock on the file `path` (made when it is missing; its folder too). Waits up to
+/// `wait` for another holder. An error: the folder cannot be made, the file cannot be opened, or
+/// the wait ran out (`ErrorKind::WouldBlock`).
+pub fn lock_file(path: &Path, wait: std::time::Duration) -> std::io::Result<FileLock> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(FileLock(file)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if start.elapsed() >= wait {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "another program holds the lock",
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
