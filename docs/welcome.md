@@ -136,9 +136,34 @@ The number format is the one preference that the whole UI uses. It has a decimal
 - A float that is written with `format!("{}")` and no precision is not found by the check.
 - The Indian lakh grouping is not supported.
 
+## Test mode (smoke test of the installers)
+
+The smoke test of the installers (PLAT-28, `docs/release.md`) needs a dialog that nobody clicks. Two variables turn the test mode on. Without `KADAKAS_SMOKE_STATE` nothing changes. A normal start ignores `KADAKAS_SMOKE_HOLD_SECS`.
+
+| Variable | Meaning |
+|---|---|
+| `KADAKAS_SMOKE_STATE=<path>` | The dialog writes a JSON file to this path after its third frame. Then it waits and answers like the second button ("Use defaults" on a first start). An empty value turns the mode off. |
+| `KADAKAS_SMOKE_HOLD_SECS=N` | Seconds between the state file and the answer. The default is 3, the most is 60. A screenshot is taken in this time. |
+
+The state file has this form. It is written in one step, so a reader never sees half of it.
+
+```json
+{
+  "version": "0.1.0-beta.1",
+  "kind": "first_run",
+  "modeler_installed": true,
+  "shown": {
+    "mode": "kadakas-modeler", "language": "en-US", "units": "metric", "number": "1,234.56",
+    "theme": "system", "navigation": "mouse", "crash": "ask", "updates": "autoupdate"
+  }
+}
+```
+
+`version` is the version of the launcher. `kind` is `first_run`, `update` or `manual`. The answer goes through the same code as a click. So `welcome.json` and the settings files are written as for a person. The code is `kadakas_welcome::smoke` (the state and the steps, with unit tests) and `smoke_step` in `welcome.rs` of the launcher.
+
 ## Check in a real window
 
-The frame tests do not show these. A person looks at them on a real screen before a release.
+The frame tests do not show these. A person looks at them on a real screen before a release. The smoke test of the installers covers the install, the first start and the ping. It does not cover these points.
 
 - **macOS bundle**: no second Dock icon stays after the dialog. The dialog comes in front of Finder when `Kadakas.app` starts from a double click. A second `.kad` double click while the dialog is open opens after the button. A Dock click while the dialog is open brings the dialog forward.
 - **Windows**: two double clicks on a `.kad` file at the first start show one dialog. The dialog comes in front of Explorer.

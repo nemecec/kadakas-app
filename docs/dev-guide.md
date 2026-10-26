@@ -192,9 +192,9 @@ Workflows are in `.github/workflows/`. Actions are pinned to commit SHAs.
 |---|---|---|---|
 | `ci.yml` | `test` | every push and pull request, on Linux, macOS and Windows | fmt, clippy, Rust tests with nextest, doctests, Python tests with pytest-xdist |
 | `ci.yml` | `wasm`, `web` | same | wasm32 check, `trunk build` |
-| `ci.yml` | `test-hooks`, `deny`, `attribution`, `notices` | same | test-only features, licenses, attribution rows, `THIRD_PARTY_NOTICES.txt` |
+| `ci.yml` | `test-hooks`, `deny`, `attribution`, `notices`, `smoke-scripts` | same | test-only features, licenses, attribution rows, `THIRD_PARTY_NOTICES.txt`, the self-test of the smoke scripts |
 | `nightly.yml` | `coverage` (4 shards), `perf`, `fuzz` | 02:15 UTC when main has a commit from the last 25 hours, on tags `v*`, by hand | line coverage, timing tests in release mode, 300 s of container fuzzing |
-| `release.yml` | `package`, `web`, `publish` | on tags `v*`, by hand | installers and a draft release |
+| `release.yml` | `package`, `web`, `smoke`, `publish` | on tags `v*`, by hand | installers, the smoke test of every package, and a draft release |
 | `update-manifest.yml` | `plan`, `tool`, `sign` | on a published release, every Monday, by hand | signed update manifests |
 
 - Start the nightly run by hand with `gh workflow run nightly.yml`. A manual run always runs every job.
@@ -204,6 +204,27 @@ Workflows are in `.github/workflows/`. Actions are pinned to commit SHAs.
 - Caches: `Swatinem/rust-cache` keeps compiled dependencies, one key per system and job kind (`test-ubuntu-latest`, `test-macos-latest`, `test-windows-latest`, `wasm`, `web`, `coverage`, `perf-release`, `release-*`). Only runs on `main` save a cache. Other branches and tags restore the cache of `main`. GitHub keeps 10 GB per repository and removes the least recently used caches first. Expected sizes after compression: test 0.7 to 1.2 GB per system, coverage 1 GB, perf 0.7 GB, wasm 0.3 GB, web 0.4 GB, release 0.6 to 1 GB each. Check the real sizes in Settings, Actions, Caches after the first runs on `main`.
 - To warm the release caches, start `release.yml` by hand on `main`.
 - Python tests run in parallel with `-n auto`. Give each test its own temp folder and port 0, never a fixed name or port.
+
+### Smoke test of the installers by hand
+
+The scripts in `scripts/smoke/` are what the job `smoke` of `release.yml` runs (PLAT-28, `docs/release.md`). Build the installers first (`docs/release.md`, "Build on your own machine"), then run the script of your system. The second argument is the version of the app, as in `Cargo.toml`.
+
+```sh
+scripts/smoke/macos.sh dist/Kadakas_0.1.0_aarch64.dmg 0.1.0 smoke-artifacts          # macOS
+xvfb-run -a scripts/smoke/linux.sh deb dist/kadakas_0.1.0_amd64.deb 0.1.0            # Linux, installs with sudo
+xvfb-run -a scripts/smoke/linux.sh appimage dist/kadakas_0.1.0_amd64.AppImage 0.1.0  # Linux, installs nothing
+pwsh scripts/smoke/windows.ps1 -Kind msi -Package dist\Kadakas_0.1.0_x64_en-US.msi -Version 0.1.0   # Windows, installs
+```
+
+- On a Mac, `KADAKAS_SMOKE_APPLICATIONS=/tmp/apps` installs into that folder and not into `/Applications`. The test windows open on your screen for about a minute.
+- The `deb` and Windows paths install on the machine and remove the package at the end. Use a virtual machine or a container for them.
+- `SMOKE_RUN_ARGS` passes more options to `smoke_run.py` (`--hold`, `--timeout`, `--settle`). Run `python3 scripts/smoke/smoke_run.py run --help` for the list.
+- To test your own build without a package, run `smoke_run.py` on the launcher. Use a new `--work` folder each time.
+
+  ```sh
+  python3 -I scripts/smoke/smoke_run.py run --launcher target/release/kadakas-launcher --version 0.1.0 --work /tmp/smoke-run
+  ```
+- Self-test of the helper with a fake launcher: `python3 -I scripts/tests/test_smoke_run.py`. CI runs it in the job `smoke-scripts`, with `shellcheck`.
 
 ## Parallel work in worktrees
 
