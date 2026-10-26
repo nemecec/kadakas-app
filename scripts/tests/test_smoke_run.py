@@ -10,6 +10,7 @@ import importlib.util
 import io
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -80,7 +81,8 @@ elif not first:
         put(os.path.join(root, "runs", "1.json"), {{}})
     if mode == "exits":
         sys.exit(3)
-    if os.environ.get("KADAKAS_AGENT_PORT") is not None and mode != "no_agent":
+    flavor = json.load(open(os.path.join(root, "launcher.json"))).get("flavor")
+    if os.environ.get("KADAKAS_AGENT_PORT") is not None and mode != "no_agent" and flavor == "kadakas-app":
         threading.Thread(target=serve, daemon=True).start()
 time.sleep(120)
 '''
@@ -96,6 +98,11 @@ class SmokeRun(unittest.TestCase):
         os.chmod(self.fake, os.stat(self.fake).st_mode | stat.S_IXUSR)
         self.runs = 0
         self.artifacts = os.path.join(self.tmp, "artifacts")
+
+    def leftovers(self):
+        """Processes that still run the fake launcher of this test."""
+        out = subprocess.run(["ps", "-eo", "pid=,args="], stdout=subprocess.PIPE, universal_newlines=True).stdout
+        return [l for l in out.splitlines() if self.fake in l]
 
     def run_it(self, mode="ok", version="1.2.3", shot=""):
         os.environ["FAKE_MODE"] = mode
@@ -115,6 +122,8 @@ class SmokeRun(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("the app answered the ping with version 1.2.3", out)
         self.assertTrue(os.path.isfile(os.path.join(self.artifacts, "third.log")))
+        self.assertTrue(os.path.isfile(os.path.join(self.artifacts, "welcome-state.json")))
+        self.assertEqual(self.leftovers(), [])
 
     def test_the_screenshot_is_kept_and_a_failed_one_is_only_a_warning(self):
         code, out, err = self.run_it(shot="cp /etc/hosts {out}")
@@ -141,6 +150,7 @@ class SmokeRun(unittest.TestCase):
         self.failure("no_run", "made no run record")
         self.failure("exits", "the launcher ended at the second start (3)")
         self.failure("wrong_ping", "the app answers version '0.0.1'")
+        self.failure("no_agent", "timeout (15.0 s) while we waited for agent.json")
 
     def test_a_launcher_that_never_opens_the_dialog_times_out_with_its_log(self):
         os.environ["FAKE_MODE"] = "no_state"

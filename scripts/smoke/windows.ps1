@@ -181,6 +181,13 @@ foreach ($f in @('kadakas-launcher.exe', 'kadakas-app.exe', 'kadakas-modeler.exe
   if (-not (Wait-Gone (Join-Path $dir $f) 60)) { Fail "still there after the uninstall: $dir\$f" }
 }
 if (@(Find-Shortcuts).Count -ne 0) { Fail "a Start menu entry stays after the uninstall: $((Find-Shortcuts)[0].FullName)" }
+# The desktop shortcuts (the MSI makes one on the public desktop) go with the uninstall too.
+foreach ($d in @("$env:PUBLIC\Desktop", [Environment]::GetFolderPath('Desktop'))) {
+  if ($d -and (Test-Path $d)) {
+    $left = Get-ChildItem -Path $d -Filter 'Kadakas*.lnk' -ErrorAction SilentlyContinue
+    if ($left) { Fail "a desktop shortcut stays after the uninstall: $($left[0].FullName)" }
+  }
+}
 Stop-Job $watchdog -ErrorAction SilentlyContinue
 Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

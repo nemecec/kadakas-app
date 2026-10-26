@@ -19,6 +19,10 @@ screenshot is a warning, never an error.
 
 The test uses its own folders in `--work` (launcher root, preferences, feedback, runtime), so a
 run on a developer machine does not touch the real settings. Python 3.8 and the standard library.
+
+Every start ends with SIGTERM or taskkill, because the app has no quit call. The launcher then
+sees runs without the clean-exit mark (crash marks). The test does not check that path. The
+bundled app starts in every case, and the content of health.json is written to the log.
 """
 import argparse
 import json
@@ -200,6 +204,18 @@ def wait_for(what, cond, timeout, proc=None, poll=0.25):
 # Screenshots
 
 
+def keep_file(src, artifacts):
+    """Copies a file to the artifacts folder (best effort)."""
+    if not artifacts:
+        return
+    try:
+        os.makedirs(artifacts, exist_ok=True)
+        with open(src, "rb") as a, open(os.path.join(artifacts, os.path.basename(src)), "wb") as b:
+            b.write(a.read())
+    except OSError as e:
+        warn(f"{src} was not copied: {e}")
+
+
 def screenshot(cmd, out, artifacts):
     """Best effort. A failure is a warning."""
     if not cmd:
@@ -340,6 +356,7 @@ def run(args):
         wait_for("the state file of the welcome dialog", lambda: os.path.isfile(work.state), args.timeout, first)
         state = read_json(work.state)
         log(f"the dialog is open: {json.dumps(state)}")
+        keep_file(work.state, artifacts)
         screenshot(args.screenshot_cmd, os.path.join(work.root, "welcome.png"), artifacts)
         check_state(state, args.version)
         wait_for(
@@ -411,6 +428,10 @@ def run(args):
                     raise SmokeError(f"the app does not answer the ping: {e}\n{third.tail()}")
                 time.sleep(1)
         log(f"the app answered the ping with version {answered}")
+        # Every start ends with a kill, so the launcher sees runs without the clean-exit mark.
+        # The app has no quit call yet, so this path is not tested. Say what the launcher kept.
+        health = os.path.join(work.launcher, "health.json")
+        log(f"health.json: {open(health).read().strip() if os.path.isfile(health) else 'none'}")
         screenshot(args.screenshot_cmd, os.path.join(work.root, "app.png"), artifacts)
         third.stop()
         log("OK")
@@ -421,7 +442,7 @@ def run(args):
         if artifacts:
             try:
                 os.makedirs(artifacts, exist_ok=True)
-                for name in ("first.log", "second.log", "third.log", "welcome-state.json"):
+                for name in ("first.log", "second.log", "third.log"):
                     src = os.path.join(work.root, name)
                     if os.path.isfile(src):
                         with open(src, "rb") as a, open(os.path.join(artifacts, name), "wb") as b:
