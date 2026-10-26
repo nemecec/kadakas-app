@@ -50,10 +50,10 @@ jobs:
         run: |
           set -euo pipefail
           # A tag is plain text from outside. Check its form before anything uses it.
-          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          re='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           if [ -n "$EVENT_TAG" ]; then
             [[ "$EVENT_TAG" =~ $re ]] || { echo "bad tag: $EVENT_TAG"; exit 1; }
-            case "$EVENT_TAG" in *-dev|*-dev.*) echo "a development version is never released: $EVENT_TAG"; exit 1 ;; esac
+            if [[ "$EVENT_TAG" == *-* ]] && [[ "${EVENT_TAG#*-}" =~ ^dev(\.|$) ]]; then echo "a development version is never released: $EVENT_TAG"; exit 1; fi
             [ "${#EVENT_TAG}" -le 41 ] || { echo "tag longer than 40 characters after the v: $EVENT_TAG"; exit 1; }
             if [[ "$EVENT_TAG" == *-* ]] && [[ ".${EVENT_TAG#*-}" =~ \.0[0-9]+(\.|$) ]]; then echo "leading zero in a number of the pre-release part: $EVENT_TAG"; exit 1; fi
             echo "tags=[\"$EVENT_TAG\"]" >> "$GITHUB_OUTPUT"
@@ -120,9 +120,9 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x tool/sign-manifest
-          re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
+          re='^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(-[0-9a-z]+([.-][0-9a-z]+)*)?$'
           [[ "$TAG" =~ $re ]] || { echo "bad tag: $TAG"; exit 1; }
-          case "$TAG" in *-dev|*-dev.*) echo "a development version is never released: $TAG"; exit 1 ;; esac
+          if [[ "$TAG" == *-* ]] && [[ "${TAG#*-}" =~ ^dev(\.|$) ]]; then echo "a development version is never released: $TAG"; exit 1; fi
           [ "${#TAG}" -le 41 ] || { echo "tag longer than 40 characters after the v: $TAG"; exit 1; }
           if [[ "$TAG" == *-* ]] && [[ ".${TAG#*-}" =~ \.0[0-9]+(\.|$) ]]; then echo "leading zero in a number of the pre-release part: $TAG"; exit 1; fi
           # The version in the tag must be the version in the workspace at that tag.
@@ -135,6 +135,10 @@ jobs:
           KADAKAS_UPDATE_SIGNING_KEY: ${{ secrets.KADAKAS_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          # The key goes only to the signing command. The other commands (gh, jq, python, the other
+          # commands of the tool) do not get it in their environment.
+          signing_key="$KADAKAS_UPDATE_SIGNING_KEY"
+          unset KADAKAS_UPDATE_SIGNING_KEY
           tool=./tool/sign-manifest
           version="${TAG#v}"
           keys=()
@@ -159,9 +163,15 @@ jobs:
           mkdir -p existing out
           # The record of the highest version ever published (scripts/published_guard.py). It only
           # goes up, and Delete release does not touch it: a published number is never reused.
-          gh release download update-manifests --pattern highest-published.json --dir existing --clobber 2>/dev/null || true
+          # It is a guard against mistakes of the process, not a security control: whoever can
+          # write to the release can change it. A failed read stops the job (a 502 must never look
+          # like an empty record).
+          .github/scripts/fetch-published-record.sh existing
+          # The same version again is fine only for a scheduled re-sign. A published version (a
+          # release or a hand-started run) must be higher than the record.
+          allow_equal=(--allow-equal); if [ "$STRICT" = "true" ]; then allow_equal=(); fi
           for c in $channels; do
-            if ! python3 -I scripts/published_guard.py check existing/highest-published.json "$version" --channel "$c" --allow-equal; then
+            if ! python3 -I scripts/published_guard.py check existing/highest-published.json "$version" --channel "$c" "${allow_equal[@]}"; then
               if [ "$STRICT" = "true" ] && [ "$c" = "beta" ] && [ "$channels" != "beta" ]; then
                 echo "The beta channel has a higher version than $version. Left as it is."
                 continue
@@ -186,9 +196,10 @@ jobs:
                 continue
               fi
             fi
-            $tool sign --manifest "out/unsigned-$c.json" --key-env KADAKAS_UPDATE_SIGNING_KEY --out "out/manifest-$c.json"
+            KADAKAS_UPDATE_SIGNING_KEY="$signing_key" $tool sign --manifest "out/unsigned-$c.json" --key-env KADAKAS_UPDATE_SIGNING_KEY --out "out/manifest-$c.json"
             $tool verify --signed "out/manifest-$c.json" "${keys[@]}"
-            gh release upload update-manifests "out/manifest-$c.json" --clobber
+            # The record first, then the manifest: a record that is too high is the safe direction.
             python3 -I scripts/published_guard.py record existing/highest-published.json "$version" "$c"
             gh release upload update-manifests existing/highest-published.json --clobber
+            gh release upload update-manifests "out/manifest-$c.json" --clobber
           done

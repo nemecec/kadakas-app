@@ -61,6 +61,15 @@ impl Version {
             return Err(bad("bad pre-release part (an empty part around a hyphen)"));
         }
         if let Some(p) = pre
+            && p.split('.')
+                .any(|id| id.len() > 9 && id.bytes().all(|b| b.is_ascii_digit()))
+        {
+            // Same cap as for the numbers of the version: the order never depends on an overflow.
+            return Err(bad(
+                "a number of the pre-release part has more than 9 digits",
+            ));
+        }
+        if let Some(p) = pre
             && p.split('.').any(|id| {
                 id.len() > 1 && id.starts_with('0') && id.bytes().all(|b| b.is_ascii_digit())
             })
@@ -191,6 +200,8 @@ mod tests {
             "1.2.3-a-",
             "1.2.3-a.-b",
             "1.2.3-a--b",
+            "1.2.3-1234567890",
+            "1.2.3-a.99999999999999999999999",
             "1234567890.0.0",
         ] {
             assert!(Version::parse(t).is_err(), "{t}");
@@ -229,6 +240,8 @@ mod tests {
         assert!(v("0.1.0-dev") < v("0.1.0-rc.1"));
         assert_eq!(v("0.1.0-beta.1").to_string(), "0.1.0-beta.1");
         assert!(v("0.1.1-dev").is_dev() && v("0.1.1-dev.2").is_dev());
+        // Only the first identifier decides, like the scripts.
+        assert!(!v("0.1.0-beta.1-dev").is_dev() && !v("0.1.0-dev-x").is_dev());
         assert!(!v("0.1.0-beta.1").is_dev() && !v("0.1.0").is_dev() && !v("0.1.0-devel").is_dev());
     }
 

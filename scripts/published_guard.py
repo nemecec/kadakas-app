@@ -11,6 +11,10 @@ release does not touch it.
         exit 1 when VERSION is not higher than the record (of the channel, or of any channel).
         --allow-equal accepts the same version (a new signature of the latest release).
         A missing file means nothing was published: exit 0.
+    published_guard.py order VERSION TAG...
+        exit 1 when VERSION is not newer than a tag. A stable VERSION is compared with the stable
+        tags only (a hotfix 0.1.1 may follow a beta 0.2.0-beta.1). A pre-release is compared with
+        all tags. Tags that are no versions (and -dev) are skipped.
     published_guard.py record FILE VERSION CHANNEL...
         sets the record of each channel to the higher of the old one and VERSION.
 """
@@ -67,6 +71,20 @@ def main(argv):
             file=sys.stderr,
         )
         return 1
+    if len(argv) >= 3 and argv[1] == "order":
+        version, tags = argv[2], argv[3:]
+        why = problem(version)
+        if why:
+            sys.exit("bad version %r: %s" % (version, why))
+        stable = "-" not in version
+        for tag in tags:
+            v = tag[1:] if tag.startswith("v") else tag
+            if problem(v) or (stable and "-" in v):
+                continue
+            if cmp(version, v) <= 0:
+                print("%s is not newer than the existing tag %s." % (version, tag), file=sys.stderr)
+                return 1
+        return 0
     if len(argv) >= 5 and argv[1] == "record":
         path, version, channels = argv[2], argv[3], argv[4:]
         why = problem(version)

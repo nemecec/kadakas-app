@@ -35,22 +35,42 @@ expect() { # label expected-exit
 
 a=$(commit "source" src/a.rs); run "$a" completed success
 expect "HEAD has a green run" 0
-b=$(commit "docs only [skip ci]" docs/x.md)
-expect "docs after a green commit" 0
+commit "readme only [skip ci]" README.md >/dev/null
+expect "a markdown file outside docs after a green commit" 0
 grep -q "tested=$a" "$tmp/out" && ok "reports the tested commit" || bad "reports the tested commit"
+commit "docs [skip ci]" docs/keyboard-shortcuts.md >/dev/null
+expect "a file in docs/ counts (tests and installers read it)" 1
+git reset -q --hard HEAD~1
 c=$(commit "source [skip ci]" src/b.rs)
 expect "a source change without CI is refused" 1
 grep -q "src/b\|source \[skip ci\]" "$tmp/err" && ok "lists the untested commit" || bad "lists the untested commit"
-d=$(commit "Set next development version 0.1.1-dev" Cargo.toml github-actions[bot]@users.noreply.github.com)
+commit "Set next development version 0.1.1-dev" Cargo.toml github-actions[bot]@users.noreply.github.com >/dev/null
 run "$c" completed success
 expect "bot commit after a green source commit" 0
+commit "Set next development version 0.1.2-dev" src/evil.rs github-actions[bot]@users.noreply.github.com >/dev/null
+expect "a bot-looking commit that changes a source file is refused" 1
+git reset -q --hard HEAD~1
 e=$(commit "source" src/c.rs); run "$e" completed failure
 expect "a red run is refused" 1
 run "$e" in_progress null
 expect "CI still running on HEAD is refused" 1
 run "$e" completed success
-f=$(commit "Release 0.1.0" Cargo.toml github-actions[bot]@users.noreply.github.com)
+commit "Release 0.1.0" Cargo.toml github-actions[bot]@users.noreply.github.com >/dev/null
 expect "the release commit of the bot is not a source change" 0
+# A merge commit brings a source change in on a side branch: no CI run tested it.
+git checkout -q -b side
+commit "side source" src/side.rs >/dev/null
+git checkout -q main
+git merge -q --no-ff side -m "Merge side [skip ci]"
+expect "a source change through a merge is refused" 1
+git reset -q --hard HEAD~1
+git branch -q -D side
+git checkout -q -b docside
+commit "side readme" README.md >/dev/null
+git checkout -q main
+git merge -q --no-ff docside -m "Merge docside"
+expect "a merge of a markdown change is fine" 0
+git reset -q --hard HEAD~1
 rm -f "$tmp/runs/"*
 expect "no run at all is refused" 1
 [ "$fails" = 0 ] || { echo "$fails test(s) failed" >&2; exit 1; }

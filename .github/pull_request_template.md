@@ -4,5 +4,5 @@
 
 - [ ] Tests added or updated.
 - [ ] Docs updated.
-- [ ] Line added under `[Unreleased]` in `CHANGELOG.md` (for a change that a user can notice).
+- [ ] Line added under `[Unreleased]` in `CHANGELOG.md` (if a user notices the change).
 - [ ] Attribution rows added (for a new asset or dependency).

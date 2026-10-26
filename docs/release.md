@@ -85,60 +85,73 @@ One time:
 
 - Create the GitHub Environment `release` (Settings, Environments). Add a required reviewer.
 - Limit the deployment branches of the environment `release` to `main`.
-- The workflows ask for their write rights themselves, so the repository setting "Workflow permissions" can stay read-only.
-- `main` must let `github-actions[bot]` push (no required pull request for it). Otherwise the push fails and nothing is left behind.
+- Keep the repository setting "Workflow permissions" read-only. The workflows ask for their write rights themselves.
+- Let `github-actions[bot]` push to `main` (no required pull request for it). If it cannot push, the push fails and nothing is left behind.
 
 Steps:
 
 1. Check that CI on `main` is green. Look at the last Nightly run.
-2. Start **Prepare release** with `version` (for example `0.1.0-beta.1`) and `dry_run` on (the default). Nothing changes. Read the two diffs in the artifact `release-patch`. The plan job checks these points: the version form, a new tag, a version newer than every tag and newer than every version ever published, green CI, a filled Unreleased section in `CHANGELOG.md`, `cargo check`, the version check, the attribution check.
-3. Start it again with `dry_run` off. Approve the environment `release`. The job commits `Release <version>` to `main`, creates the annotated tag `v<version>`, pushes both in one atomic push, and starts **Release** on the tag. A push with the workflow token does not start other workflows, so the job starts **Release** itself. Then it makes the second commit (see Development versions).
+2. Start **Prepare release** with `version` (for example `0.1.0-beta.1`) and `dry_run` on (the default). Nothing changes. Read the two diffs in the artifact `release-patch`. The plan job checks these points: the form of the version, a new tag, a version newer than the tags and newer than every version ever published, green CI, a filled Unreleased section in `CHANGELOG.md`, `cargo check`, the version check, the attribution check.
+3. Start it again with `dry_run` off. Approve the environment `release`. The job commits `Release <version>` to `main`, creates the annotated tag `v<version>`, and pushes both in one atomic push. Then it starts **Release** on the tag. A push with the workflow token does not start other workflows, so the job starts **Release** itself. At the end it makes the second commit (see Development versions).
 4. **Release** builds the installers and makes a **draft** release. A version with a dash is marked as pre-release. The notes are the section of this version in `CHANGELOG.md`.
 5. Read the draft. Press **Publish**.
 6. Publishing starts **Update manifest**. Approve the environment `update-signing`. A version with a dash goes to the beta channel only. A stable version goes to the stable and the beta channel.
 7. Check `manifest-beta.json` (or `manifest-stable.json`) in the release `update-manifests`.
-8. Test the update on a second machine. The default channel is Stable, and a beta never goes to it. To get a beta: install the previous build, open Preferences, Updates, switch the channel to Beta, and check that the launcher offers the new version. A build with the bundled version `0.1.0-beta.1` starts on every channel, but it is offered only the versions that the channel allows. A stable `0.1.0` is newer than `0.1.0-beta.N`, and Beta users get it too.
+8. Test the update on a second machine. The default channel is Stable, and a beta never goes to it. To get a beta, install the previous build and open Preferences, Updates. Switch the channel to Beta and check that the launcher offers the new version. A build with the bundled version `0.1.0-beta.1` starts on every channel. It gets only the versions that its channel allows. A stable `0.1.0` is newer than `0.1.0-beta.N`, and Beta users get it too.
 
-**The CI check.** The head of `main` often has no CI run (a `[skip ci]` commit, or a commit of the release bot). The plan job takes the newest commit among the last 20 with a finished run and requires that run to be green. Commits after it that change only docs and `*.md` files, or that the release bot made, are fine. Another source change is refused: wait for CI, or start with `skip_ci_check`. The summary shows the run that was used.
+**The CI check.** The head of `main` often has no CI run (a `[skip ci]` commit, or a commit of the release bot). The plan job takes the newest commit among the last 20 that has a finished CI run on `main`. That run must be green. After that commit, only these changes are fine: Markdown files outside `docs/`, issue templates, and commits of the release bot that change only version files. Tests and installers read files in `docs/`, so a change there counts as a source change. Every other change is refused. Wait for CI, or start with `skip_ci_check`. A merge commit counts with the files that it changed against its first parent. The summary shows the run that the job used.
 
-**Options.** `skip_ci_check` skips the CI test (use it only on purpose). `allow_empty_changelog` allows an empty Unreleased section (a stable release then has no notes and **Release** stops, so write the section first). `next_dev_version` sets the next development version (`X.Y.Z-dev`).
+**Options.** `skip_ci_check` skips the CI test. Use it only on purpose. `allow_empty_changelog` allows an empty Unreleased section. A stable release then has no notes and **Release** stops, so write the section first. `next_dev_version` sets the next development version (`X.Y.Z-dev`).
 
-**Queue.** The workflows use the concurrency group `release`. A run waits for the run in progress, it does not cancel it. When a third run is queued, GitHub replaces the one that waits. Start the next run only after the last one ended.
+**Queue.** The workflows use the concurrency group `release`. A run waits for the run in progress and does not cancel it. When a third run is queued, GitHub replaces the one that waits. Start the next run only after the last one ended.
 
-By hand, on a machine: `cargo fetch`, then `scripts/set-version.sh 0.1.0-beta.1`, then `scripts/check-version.sh`. `set-version.sh` puts all files back if a step fails. The check also runs in CI (job `version`) and in **Release**.
+By hand, on a machine: run `cargo fetch`, then `scripts/set-version.sh 0.1.0-beta.1`, then `scripts/check-version.sh`. `set-version.sh` puts all files back if a step fails. The check also runs in CI (job `version`) and in **Release**.
 
 ### Published versions are never reused
 
-The launcher refuses a manifest that is older than the newest one it has seen. So a published version number is never reused or lowered, even if the release is deleted. The sign job of **Update manifest** keeps the highest version per channel in the asset `highest-published.json` of the release `update-manifests`. It only goes up. **Prepare release** and the sign job refuse a version that is not higher (except a new signature of the same latest version). **Delete release** never removes the file. After you delete a bad release, release a **higher** version.
+The launcher refuses a manifest that is older than the newest one it has seen. So nobody reuses or lowers a published version number, even if the release is deleted. The sign job of **Update manifest** keeps the highest version per channel in the asset `highest-published.json` of the release `update-manifests`. The file only goes up. The sign job writes it before it uploads the manifest.
+
+- **Prepare release** compares a stable version with the stable record and with the stable tags. So a hotfix `0.1.1` can follow `0.2.0-beta.1`.
+- It compares a pre-release with all tags and with the highest version of all channels.
+- The sign job refuses a lower version. It accepts the same version only for the weekly re-sign.
+- A failed read of the record stops the job. A network error never counts as an empty record.
+- **Delete release** never removes the file. After you delete a bad release, release a **higher** version.
+
+The record is a guard against mistakes in the process. It is not a security control. Whoever can write to the release `update-manifests` can change it.
 
 ### Development versions
 
-After a release, **Prepare release** makes a second commit on `main`: `Set next development version <v>-dev`. After `0.1.0` the version is `0.1.1-dev`. After `0.1.0-beta.1` it is `0.1.0-dev`. The input `next_dev_version` can set another one (exactly `X.Y.Z-dev`). The result must be newer than the release. After a release candidate `0.1.0-dev` is older than `0.1.0-rc.1` (letters compare as text), so the workflow stops and you give an explicit `next_dev_version`. The tag stays on the release commit, so the build has the release version. A `-dev` version sorts below the release (`0.1.0-beta.2 < 0.1.0-dev < 0.1.0`), and it is never tagged or put in a manifest: `release.yml`, `update-manifest.yml`, `sign-manifest` and the launcher refuse it. A build of `main` carries `-dev`: MSI `0.1.1-15000` (as `0.1.1.15000`), deb `0.1.1~dev`, Python `0.1.1rc0.dev0`.
+After a release, **Prepare release** makes a second commit on `main`: `Set next development version <v>-dev`. After `0.1.0` the version is `0.1.1-dev`. After `0.1.0-beta.1` it is `0.1.0-dev`. The input `next_dev_version` sets another one (exactly `X.Y.Z-dev`). The result has to be newer than the release. After a release candidate, `0.1.0-dev` is older than `0.1.0-rc.1` because letters compare as text. The workflow stops, and you give an explicit `next_dev_version`.
 
-If a step fails after the push, the release is tagged already. The run summary lists the commands for each case: start the build by hand (`gh workflow run release.yml --ref <tag>`), or set the development version by hand. The second commit also runs when the build did not start. If main moved, the job rebases once, runs the version check, and pushes again.
+The tag stays on the release commit, so the build has the release version. A `-dev` version sorts below the release (`0.1.0-beta.2 < 0.1.0-dev < 0.1.0`). It is never tagged and never put in a manifest. `release.yml`, `update-manifest.yml`, `sign-manifest` and the launcher refuse it. A build of `main` carries `-dev`: MSI `0.1.1-20000` (built as `0.1.1.20000`), deb `0.1.1~dev`, Python `0.1.1rc0.dev0`.
+
+If a step fails after the push, the release is tagged already. The run summary lists the commands for each case. Start the build by hand with `gh workflow run release.yml --ref <tag>`, or set the development version by hand (run `cargo fetch` first). The second commit also runs when the build did not start. If `main` moved, the job rebases once, runs the version check, and pushes again.
 
 ### Delete a bad release
 
 Start **Delete release** with the `tag`. It deletes the draft or published release and the tag. It removes the signed manifest in `update-manifests` if the manifest names this version. It keeps `highest-published.json`. It refuses the latest stable release unless `force` is on.
 
-The commit `Release <version>` stays on `main`, and by then `main` has the next `-dev` version from the second commit. Do not reuse the number: release a higher version. The version in `main` is already the next `-dev` version, so the next **Prepare release** run works as usual.
+The commit `Release <version>` stays on `main`. By then `main` has the next `-dev` version from the second commit. Do not reuse the number. Release a higher version. The next **Prepare release** run works as usual.
 
 ### Version forms
 
-The workspace version in `Cargo.toml` is the only truth. Each package format gets the form it can take. `scripts/packager-version.sh` is the one place for the mappings.
+The workspace version in `Cargo.toml` is the only truth. Each package format gets the form it takes. `scripts/packager-version.sh` is the one place for the mappings.
 
 | Place | Form of `0.1.0-beta.1` | Form of `0.1.1-dev` |
 |---|---|---|
 | App, launcher, manifest, tag, NSIS, AppImage, `.dmg` | `0.1.0-beta.1` | `0.1.1-dev` |
-| macOS `CFBundleShortVersionString` and `CFBundleVersion` (digits and dots only, as Apple requires) | `0.1.0` | `0.1.1` |
+| macOS `CFBundleShortVersionString` (digits and dots only, as Apple requires) | `0.1.0` | `0.1.1` |
+| macOS `CFBundleVersion` of the inner app (a build number) | `20261026.103000` | `20261026.103000` |
 | macOS key `KadakasVersion` (the full version) | `0.1.0-beta.1` | `0.1.1-dev` |
-| Windows MSI (WiX): cargo-packager turns a numeric pre-release into the fourth number | `0.1.0-10001`, built as `0.1.0.10001` | `0.1.1-15000`, built as `0.1.1.15000` |
-| Debian `.deb` | `0.1.0~beta.1` (a tilde sorts before `0.1.0`; a dash would sort after) | `0.1.1~dev` |
-| Python (PEP 440) | `0.1.0b1` | `0.1.1rc0.dev0` (sorts above the betas, below the release) |
+| Windows MSI (WiX). cargo-packager turns a numeric pre-release into the fourth number. | `0.1.0-10001`, built as `0.1.0.10001` | `0.1.1-20000`, built as `0.1.1.20000` |
+| Debian `.deb` | `0.1.0~beta.1` (a tilde sorts before `0.1.0`, a dash sorts after) | `0.1.1~dev` |
+| Python (PEP 440) | `0.1.0b1` | `0.1.1rc0.dev0` (above the betas, below the release) |
 
-`release.yml` builds the MSI and the `.deb` with a copy of the packager config that has the mapped version. `crates/kadakas-update/tests/package_versions.rs` runs the same semver conversion as cargo-packager 0.11.8 on every mapped value, and `python/tests/test_version_forms.py` checks the PEP 440 order. Only CI can confirm the real MSI and `.deb` builds. The MSI file name has `0.1.0.10001`. Windows Installer ignores the fourth number when it compares versions, so `0.1.0-beta.1` and `0.1.0` look the same to it. Beta users update through the launcher, not through the MSI.
+The numbers of the MSI keep the order: alpha is N, beta is 10000+N, dev is 20000, rc is 30000+N (N below 10000). Major and minor go up to 255 for an MSI.
 
-GitHub may rename an uploaded asset: a character such as `~` in the name of the `.deb` can become a dot. The package inside keeps its version.
+`release.yml` builds the MSI and the `.deb` with a copy of the packager config that has the mapped version. `crates/kadakas-update/tests/package_versions.rs` runs the same semver conversion as cargo-packager 0.11.8 on every mapped value. `python/tests/test_version_forms.py` checks the PEP 440 order. Only CI confirms the real MSI and `.deb` builds. The MSI file name has `0.1.0.10001`. Windows Installer ignores the fourth number when it compares versions, so `0.1.0-beta.1` and `0.1.0` look the same to it. Beta users update through the launcher, not through the MSI.
+
+GitHub renames some uploaded assets. A character such as `~` in the name of the `.deb` becomes a dot. The package inside keeps its version.
 
 ## Launcher and updates
 

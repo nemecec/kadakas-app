@@ -8,16 +8,18 @@
 # Prints "tested=<sha>" and "run=<url>" on success. Exit 1 when:
 #   - the run on the tested commit did not succeed, or CI still runs on HEAD;
 #   - there is no run in the last 20 commits;
-#   - a commit after the tested one changed a source file. Docs, *.md files, issue and PR
-#     templates, and the commits of the release bot ("Release ..." and "Set next development
-#     version ...": they change only version files) do not count.
+#   - a commit after the tested one changed a source file. Only *.md files outside docs/ and the
+#     issue templates do not count: tests and installers read files in docs/ (include_str!,
+#     packager resources). A commit of the release bot ("Release ..." and "Set next development
+#     version ...") does not count when it changed only version files.
+#   - A merge commit counts with the files that it changed against its first parent.
 # The list of the untested commits goes to stderr, so the plan job shows it.
 set -euo pipefail
 
 head_sha="$(git rev-parse "${1:-HEAD}")"
 tested="" url=""
 for c in $(git rev-list --first-parent -n 20 "$head_sha"); do
-  run="$(gh run list --workflow ci.yml --commit "$c" --limit 1 --json status,conclusion,url --jq '.[0] // empty')"
+  run="$(gh run list --workflow ci.yml --event push --branch main --commit "$c" --limit 1 --json status,conclusion,url --jq '.[0] // empty')"
   [ -n "$run" ] || continue
   status="$(jq -r .status <<<"$run")"
   concl="$(jq -r .conclusion <<<"$run")"
@@ -45,13 +47,24 @@ if [ "$tested" != "$head_sha" ]; then
   echo "CI tested $tested ($url). These commits came after it:" >&2
   git log --format='  %h %an: %s' "$tested..$head_sha" >&2
   bad=""
+  # The files that a release commit of the bot may change.
+  version_files='^(Cargo\.toml|Cargo\.lock|packager\.toml|packager-macos\.toml|python/pyproject\.toml|python/kadakas/__init__\.py|THIRD_PARTY_NOTICES\.txt|CHANGELOG\.md)$'
   for c in $(git rev-list --first-parent "$tested..$head_sha"); do
     author="$(git log -1 --format=%ae "$c")"
     subject="$(git log -1 --format=%s "$c")"
-    if [[ "$author" == *github-actions* ]] && [[ "$subject" == "Release "* || "$subject" == "Set next development version "* ]]; then
-      continue
+    # A merge commit: compare with the first parent (diff-tree shows nothing for a merge).
+    if git rev-parse -q --verify "$c^1" >/dev/null; then
+      changed="$(git diff --name-only "$c^1" "$c")"
+    else
+      changed="$(git diff-tree --no-commit-id --name-only -r --root "$c")"
     fi
-    files="$(git diff-tree --no-commit-id --name-only -r --root "$c" | grep -Ev '^docs/|\.md$|^\.github/ISSUE_TEMPLATE/|^\.github/pull_request_template\.md$' || true)"
+    if [[ "$author" == *github-actions* ]] && [[ "$subject" == "Release "* || "$subject" == "Set next development version "* ]]; then
+      if ! grep -Ev "$version_files" <<<"$changed" | grep -q .; then continue; fi
+    fi
+    files="$(grep -Ev '(^|/)[^/]*\.md$|^\.github/ISSUE_TEMPLATE/' <<<"$changed" || true)"
+    # A markdown file in docs/ counts: tests and installers read it.
+    docs_md="$(grep -E '^docs/.*\.md$' <<<"$changed" || true)"
+    files="$(printf '%s\n%s\n' "$files" "$docs_md" | grep . || true)"
     if [ -n "$files" ]; then bad+="$(git log -1 --format='  %h %s' "$c")"$'\n'; fi
   done
   if [ -n "$bad" ]; then

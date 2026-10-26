@@ -13,7 +13,7 @@
 #           cargo-packager 0.11.8 (wix/mod.rs convert_version) parses the version as semver first, then
 #           turns a NUMERIC pre-release into the fourth number: 0.1.0-10001 becomes 0.1.0.10001.
 #           So this script prints the semver form with a numeric pre-release:
-#           alpha.N -> -N, beta.N -> -(10000+N), dev -> -15000, rc.N -> -(20000+N) (N below 10000),
+#           alpha.N -> -N, beta.N -> -(10000+N), dev -> -20000, rc.N -> -(30000+N) (N below 10000),
 #           for example 0.1.0-beta.2 -> 0.1.0-10002. This is the order of the versions
 #           (alpha < beta < dev < rc). The release has no pre-release part. Windows Installer ignores
 #           the fourth number when it compares versions: 0.1.0-beta.2 and 0.1.0 look the same to it.
@@ -54,12 +54,17 @@ case "$fmt" in
     esac ;;
   wix)
     need_label
+    # WiX takes major and minor up to 255 and patch up to 65535 (cargo-packager convert_version).
+    IFS=. read -r wix_major wix_minor wix_patch <<<"$core"
+    if [ "$wix_major" -gt 255 ] || [ "$wix_minor" -gt 255 ] || [ "$wix_patch" -gt 65535 ]; then
+      echo "the MSI version needs major and minor up to 255 and patch up to 65535: $core" >&2; exit 1
+    fi
     case "$label" in
       "") echo "$core" ;;
       alpha) echo "$core-$num" ;;
       beta) echo "$core-$((10000 + num))" ;;
-      dev) echo "$core-15000" ;;
-      rc) echo "$core-$((20000 + num))" ;;
+      dev) echo "$core-20000" ;;
+      rc) echo "$core-$((30000 + num))" ;;
     esac ;;
   *) echo "unknown format: $fmt" >&2; exit 1 ;;
 esac

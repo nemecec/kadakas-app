@@ -68,7 +68,7 @@ jobs:
           set -euo pipefail
           scripts/check-version.sh
           if [ "$REF_TYPE" = "tag" ]; then
-            case "$REF_NAME" in *-dev|*-dev.*) echo "::error::a development version is never released"; exit 1 ;; esac
+            if [[ "$REF_NAME" == *-* ]] && [[ "${REF_NAME#*-}" =~ ^dev(\.|$) ]]; then echo "::error::a development version is never released"; exit 1; fi
             ws=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
             [ "v$ws" = "$REF_NAME" ] || { echo "::error::tag $REF_NAME does not match the workspace version $ws"; exit 1; }
           fi
