@@ -183,7 +183,7 @@ Details.
 - Both Debian and MSI versions differ from the app version (`0.1.0~beta.1`, `0.1.0-10001`). The scripts get the app version from the workspace `Cargo.toml`.
 - The `describe` method of the JSON-RPC API returns `version`. This is what the ping reads.
 
-**Open issue (MSI).** In three rehearsal runs the MSI leg never ended. The runner was cut at the time limit and kept no log. The legs for NSIS, deb, AppImage and both dmg files passed. The MSI install is the main suspect. A hang on a clean runner can be a real defect of the package, so the leg stays strict. The script now writes the msiexec log to the artifacts folder and limits each step to 12 minutes. Run the workflow by hand once more and read `install-msi.log`.
+**The MSI leg.** Three early runs hung on the MSI leg and kept no log. The cause is probably the Restart Manager of Windows Installer, which waits in a silent install on a runner. The script now runs `msiexec` with `MSIRESTARTMANAGERCONTROL=Disable` and `REBOOT=ReallySuppress`. With that the leg passes: the install takes 2 seconds. The script also writes the msiexec log, a transcript and (after 9 minutes) a `watchdog-msi.txt` with the process list into the artifacts, so a new hang leaves a log. To test the MSI alone, start the workflow by hand with `gh workflow run release.yml --ref BRANCH -f only_msi=true`. It builds Windows only and runs the MSI leg.
 
 A person still checks some points on a real machine. They stay on the human checklist in `docs/welcome.md` ("Check in a real window"). They are real GPU rendering, the double click and the Dock flow, the Gatekeeper and SmartScreen warnings, high DPI scaling and trackpads.
 
