@@ -206,7 +206,11 @@ def screenshot(cmd, out, artifacts):
         return
     try:
         out = os.path.abspath(out)
-        argv = [a.replace("{out}", out) for a in shlex.split(cmd, posix=not IS_WINDOWS)]
+        if IS_WINDOWS:
+            # CreateProcess takes one string: shlex would keep the quotes in the words.
+            argv = cmd.replace("{out}", out)
+        else:
+            argv = [a.replace("{out}", out) for a in shlex.split(cmd)]
         r = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         if r.returncode != 0 or not os.path.isfile(out) or os.path.getsize(out) == 0:
             warn(f"screenshot {os.path.basename(out)} failed ({r.returncode}): {r.stdout.decode('utf-8', 'replace')[-300:]}")

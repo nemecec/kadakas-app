@@ -177,7 +177,7 @@ jobs:
   # The screenshots and logs are kept as artifacts; a failed screenshot never fails the job.
   smoke:
     needs: package
-    timeout-minutes: 30
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
