@@ -8,6 +8,7 @@ use kadakas_l10n::tr;
 use kadakas_units::{
     AngleFormat, AreaUnit, Date, DateFormat, Decimal, Grouping, LengthUnit, Settings,
 };
+use kadakas_view3d::numfmt::UiNumber;
 
 /// The name of a navigation style.
 pub fn nav_style_label(n: kadakas_ui_core::nav3d::NavStyle) -> String {
@@ -96,14 +97,16 @@ impl PrefsDialog {
                     ui.label(tr!("prefs-ui-max-versions"));
                     ui.add(
                         egui::DragValue::new(edit.max_versions)
-                            .range(1..=kadakas_api::VERSIONS_MAX as u32),
+                            .range(1..=kadakas_api::VERSIONS_MAX as u32)
+                            .ui_number(),
                     );
                 });
                 ui.horizontal(|ui| {
                     ui.label(tr!("prefs-ui-max-version-size"));
                     ui.add(
                         egui::DragValue::new(edit.max_version_mib)
-                            .range(1..=(kadakas_api::VERSION_BYTES_MAX / (1024 * 1024)) as u32),
+                            .range(1..=(kadakas_api::VERSION_BYTES_MAX / (1024 * 1024)) as u32)
+                            .ui_number(),
                     );
                 });
                 ui.small(tr!("prefs-ui-versions-hint"));

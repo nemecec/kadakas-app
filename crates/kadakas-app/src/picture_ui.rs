@@ -251,7 +251,10 @@ impl PictureUi {
                     name,
                     result: Err(tr!(
                         "picture-ui-error",
-                        message = tr!("picture-ui-too-large", limit = limits.max_bytes)
+                        message = tr!(
+                            "picture-ui-too-large",
+                            limit = kadakas_units::int(limits.max_bytes as i64)
+                        )
                     )),
                 }
             } else {

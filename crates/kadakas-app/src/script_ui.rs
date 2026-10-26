@@ -6,6 +6,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use std::path::{Path, PathBuf};
 
 use std::collections::VecDeque;
@@ -667,7 +668,8 @@ fn param_widget(ui: &mut Ui, p: &Value, value: &mut Value, id_salt: &str) -> boo
                 ui.label(label);
                 let mut d = egui::DragValue::new(&mut x)
                     .range(lo..=hi)
-                    .speed(if ty == "length" { 10.0 } else { 0.1 });
+                    .speed(if ty == "length" { 10.0 } else { 0.1 })
+                    .ui_number();
                 if ty == "length" {
                     d = d.length();
                 }

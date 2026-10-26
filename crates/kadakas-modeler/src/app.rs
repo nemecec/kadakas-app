@@ -325,14 +325,14 @@ impl ModelerApp {
         app
     }
 
-    /// A launcher link for the tests (the run lock, the alive stamp and the open requests).
-    #[cfg(test)]
     /// Where the settings are written (the tests use a temporary folder).
     #[cfg(test)]
     pub fn set_prefs_dir(&mut self, dir: Option<PathBuf>) {
         self.prefs_dir = dir;
     }
 
+    /// A launcher link for the tests (the run lock, the alive stamp and the open requests).
+    #[cfg(test)]
     pub fn set_launch(&mut self, launch: Launch) {
         self.launch = launch;
     }
@@ -1274,7 +1274,10 @@ impl ModelerApp {
         let command = modeling::resize_command(plan, &r);
         match self.session.editor.execute(&command) {
             Ok(out) => {
-                let mut text = tr!("modeler-resize-done", factor = format!("{:.4}", r.factor));
+                let mut text = tr!(
+                    "modeler-resize-done",
+                    factor = kadakas_units::num(r.factor, 4)
+                );
                 if !out.notes.is_empty() {
                     text = format!("{text} {}", out.notes.join("; "));
                 }
@@ -1305,7 +1308,7 @@ impl ModelerApp {
                         "modeler-resize-question",
                         measured = u.length_text(r.measured),
                         typed = u.length_text(r.typed),
-                        factor = format!("{:.4}", r.factor),
+                        factor = kadakas_units::num(r.factor, 4),
                         count = plan.scaled,
                         flat = plan.plan_objects
                     ),

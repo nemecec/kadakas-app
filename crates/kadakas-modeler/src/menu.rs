@@ -8,6 +8,7 @@ use kadakas_render::StandardView;
 use kadakas_ui_core::keymap::Action;
 use kadakas_ui_core::modeler::ModelerTool;
 use kadakas_ui_core::nav3d::{MAX_FOV_DEG, MIN_FOV_DEG, NavAction};
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::app::{Cmd, MENU_VIEWS, ModelerApp};
 use crate::prefs::ThemeChoice;
@@ -540,7 +541,8 @@ fn camera_menu(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
         let mut deg = app.nav.fov_deg();
         let slider = egui::Slider::new(&mut deg, MIN_FOV_DEG..=MAX_FOV_DEG)
             .suffix("°")
-            .fixed_decimals(1);
+            .fixed_decimals(1)
+            .ui_number();
         if ui.add_enabled(perspective, slider).changed() {
             cmds.push(Cmd::SetFov(deg));
         }

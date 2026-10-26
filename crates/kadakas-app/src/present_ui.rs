@@ -7,6 +7,7 @@ use kadakas_api::Session;
 use kadakas_core::present::{RenderMode, RenderStyle, SunSettings};
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use serde_json::{Value, json};
 
 /// Applies a built-in render style (`Shaded`, `Realistic`, `Hidden Line`, ...): the style becomes a
@@ -294,7 +295,12 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
                        range: std::ops::RangeInclusive<f64>| {
             ui.label(label);
             if ui
-                .add(egui::DragValue::new(v).speed(speed).range(range))
+                .add(
+                    egui::DragValue::new(v)
+                        .speed(speed)
+                        .range(range)
+                        .ui_number(),
+                )
                 .changed()
             {
                 edits.push(SunEdit::Set(json!({ key: *v })));
@@ -348,14 +354,18 @@ fn sun_panel(ui: &mut egui::Ui, session: &mut Session) -> Option<String> {
                 match part {
                     DatePart::Year => {
                         c1 = ui
-                            .add(egui::DragValue::new(&mut y).range(1900..=2100))
+                            .add(egui::DragValue::new(&mut y).range(1900..=2100).ui_number())
                             .changed();
                     }
                     DatePart::Month => {
-                        c2 = ui.add(egui::DragValue::new(&mut m).range(1..=12)).changed();
+                        c2 = ui
+                            .add(egui::DragValue::new(&mut m).range(1..=12).ui_number())
+                            .changed();
                     }
                     DatePart::Day => {
-                        c3 = ui.add(egui::DragValue::new(&mut d).range(1..=31)).changed();
+                        c3 = ui
+                            .add(egui::DragValue::new(&mut d).range(1..=31).ui_number())
+                            .changed();
                     }
                 }
             }

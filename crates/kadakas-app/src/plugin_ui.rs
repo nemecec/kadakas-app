@@ -82,7 +82,10 @@ fn read_file(path: &std::path::Path, max: usize) -> Result<Vec<u8>, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > max {
-        return Err(tr!("plugin-ui-too-big", max = max));
+        return Err(tr!(
+            "plugin-ui-too-big",
+            max = kadakas_units::int(max as i64)
+        ));
     }
     Ok(bytes)
 }

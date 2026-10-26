@@ -115,7 +115,9 @@ impl Prefs {
     pub fn apply_language(&self, system: &[String]) -> &'static str {
         let tag = self.language_tag(system);
         kadakas_l10n::set_language(tag);
-        kadakas_units::set_current(self.units.resolve(tag));
+        let units = self.units.resolve(tag);
+        kadakas_units::set_current(units);
+        kadakas_l10n::set_decimal_symbol(units.number.decimal.symbol());
         tag
     }
 }
@@ -205,6 +207,8 @@ pub fn save_changes_to(dir: &Path, saved: &Prefs, now: &Prefs) -> Result<(), Str
 }
 
 /// Writes the settings whole into a temporary file first, so a crash cannot leave half a file.
+/// The program itself writes only the keys it changed (`save_changes_to`); this is for tests.
+#[cfg(test)]
 pub fn save_to(dir: &Path, prefs: &Prefs) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| {
         tr!(

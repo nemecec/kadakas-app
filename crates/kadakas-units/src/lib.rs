@@ -494,6 +494,27 @@ pub fn num_plain_trim(v: f64, max_decimals: usize) -> String {
     current().number.plain().format_trim(v, max_decimals)
 }
 
+/// A number for a widget that a person drags or types in (`DragValue`, `Slider`): at most
+/// `max_decimals` decimals and at least `min_decimals`, no digit grouping, so it reads back
+/// exactly.
+pub fn num_range(v: f64, min_decimals: usize, max_decimals: usize) -> String {
+    let f = current().number.plain();
+    let max = max_decimals.max(min_decimals);
+    let mut s = f.format(v, max);
+    let d = f.decimal.symbol();
+    if let Some(at) = s.find(d) {
+        let mut have = s.len() - at - 1;
+        while have > min_decimals && s.ends_with('0') {
+            s.pop();
+            have -= 1;
+        }
+        if s.ends_with(d) {
+            s.pop();
+        }
+    }
+    s
+}
+
 /// A whole number for people to read, with digit grouping: `1 234 567`.
 pub fn int(n: i64) -> String {
     current().number.format(n as f64, 0)
@@ -530,6 +551,12 @@ mod tests {
             assert_eq!(num_trim(2.5, 3), "2,5");
             assert_eq!(num_plain(1234.5, 2), "1234,50");
             assert_eq!(num_plain_trim(-0.25, 4), "-0,25");
+            assert_eq!(num_range(1.5, 0, 3), "1,5");
+            assert_eq!(num_range(1.5, 2, 3), "1,50");
+            assert_eq!(num_range(2.0, 0, 3), "2");
+            assert_eq!(num_range(2.0, 1, 1), "2,0");
+            assert_eq!(num_range(-1234.5678, 0, 2), "-1234,57");
+            assert_eq!(num_range(0.0004, 0, 3), "0");
             assert_eq!(int(1234567), "1\u{a0}234\u{a0}567");
             assert_eq!(int(-12345), "-12\u{a0}345");
             assert_eq!(int(1000), "1\u{a0}000");

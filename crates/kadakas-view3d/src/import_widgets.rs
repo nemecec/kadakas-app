@@ -2,6 +2,7 @@
 //! `kadakas-modeler`: the unit and the up axis of the file, and the question "Soften edges
 //! under an angle?". The logic is in `kadakas_ui_core::mesh_import`.
 
+use crate::numfmt::UiNumber;
 use kadakas_l10n::tr;
 use kadakas_ui_core::mesh_import::{self, MeshImportForm, SoftenPref};
 
@@ -70,7 +71,8 @@ pub fn mesh_options(ui: &mut egui::Ui, m: &mut MeshImportForm, salt: &str) {
                 ui.add(
                     egui::DragValue::new(t)
                         .range(mesh_import::TOLERANCE_RANGE.0..=mesh_import::TOLERANCE_RANGE.1)
-                        .speed(0.01),
+                        .speed(0.01)
+                        .ui_number(),
                 );
             });
         }
@@ -94,7 +96,8 @@ pub fn soften_question(ui: &mut egui::Ui, pref: &mut SoftenPref, preview: Option
                 egui::DragValue::new(&mut pref.angle)
                     .range(0.0..=180.0)
                     .speed(0.5)
-                    .suffix("\u{b0}"),
+                    .suffix("\u{b0}")
+                    .ui_number(),
             );
         });
         ui.label(egui::RichText::new(tr!("meshio-ui-soften-hint")).weak());

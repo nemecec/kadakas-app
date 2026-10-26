@@ -7,6 +7,7 @@ use egui::{DragValue, Ui};
 use kadakas_api::Session;
 use kadakas_core::viewrules::Phase;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use serde_json::json;
 
 /// What the section remembers between frames.
@@ -109,9 +110,9 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
             ui.strong(tr!("rules-ui-survey-point"));
             ui.horizontal(|ui| {
                 ui.label(tr!("rules-ui-e"));
-                ui.add(DragValue::new(&mut st.easting).speed(1.0));
+                ui.add(DragValue::new(&mut st.easting).speed(1.0).ui_number());
                 ui.label(tr!("rules-ui-n"));
-                ui.add(DragValue::new(&mut st.northing).speed(1.0));
+                ui.add(DragValue::new(&mut st.northing).speed(1.0).ui_number());
             });
             let one = selection.len() == 1;
             if ui
@@ -215,7 +216,12 @@ pub fn section(ui: &mut Ui, session: &mut Session, status: &mut String) {
                         ),
                     );
                 }
-                ui.add(DragValue::new(&mut st.bins).speed(0.2).range(2..=12));
+                ui.add(
+                    DragValue::new(&mut st.bins)
+                        .speed(0.2)
+                        .range(2..=12)
+                        .ui_number(),
+                );
                 if ui
                     .add_enabled(
                         rules.visualization.is_some(),

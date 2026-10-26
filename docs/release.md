@@ -197,9 +197,8 @@ One schema (`kadakas_update::Settings`), one file (`launcher.json`). The app wri
 | Channel | Stable, Nightly (the `beta` manifest channel), Local | Stable |
 | Older versions to keep | 0 to 50 | 1 |
 | Local update site (channel Local) | a `file://` address | empty |
-| `welcome_done` (not a setting to edit) | the version of the welcome dialog that the person has seen, 0 for none (PLAT-26, `docs/welcome.md`) | 0 |
 
-The file keeps keys that this version does not know, and the welcome dialog writes `flavor`, `mode` and `welcome_done` in it.
+The file keeps keys that this version does not know, and every writer changes only its own keys under a lock. The welcome dialog writes `flavor` and `mode` here. The mark that the dialog was seen is in its own file, `welcome.json` (PLAT-26, `docs/welcome.md`), so an older version of the app cannot remove it.
 
 - **Auto-update** downloads new versions and starts the newest one that did not crash at its last start. **Auto-download** downloads, and the person chooses when to switch (the "Restart to update" button). **Notify only** shows "Kadakas X is available" with a Download button.
 - The launcher and the app talk with files only (`handshake.rs`). The app has no network code. It reads `runs/<id>.status.json`, and writes `<id>.download` (Notify only), `<id>.restart.json` (the open documents) and `<id>.clean` (the clean-exit mark).
@@ -249,7 +248,7 @@ When the launcher starts and the version next to it (from the installer) is newe
 
 The archive is a `.tar.gz` with `kadakas-app`, `kadakas-modeler` and `kadakas` (with `.exe` on Windows) at the top level. The unpacker accepts plain files and folders only. It refuses links, absolute paths, `..`, backslashes and `:` in names.
 
-The launcher lists `kadakas-app` as a flavor, and `kadakas-modeler` ("Kadakas Modeler (SketchUp-like)", PLAT-11) when that program is in the version folder. No file is needed for these two. On macOS both programs are in `Kadakas Engine.app` (`scripts/macos-app.sh` puts `kadakas-modeler` there, so it is in the update archive too), and the launcher finds them inside the bundle. A version folder may also hold `flavors.json` to list more programs (other UI flavors).
+The launcher lists `kadakas-app` as a flavor, and `kadakas-modeler` ("Kadakas Modeler", PLAT-11) when that program is in the version folder. No file is needed for these two. On macOS both programs are in `Kadakas Engine.app` (`scripts/macos-app.sh` puts `kadakas-modeler` there, so it is in the update archive too), and the launcher finds them inside the bundle. A version folder may also hold `flavors.json` to list more programs (other UI flavors).
 
 ### Not tried for real
 

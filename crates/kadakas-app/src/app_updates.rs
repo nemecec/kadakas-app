@@ -15,6 +15,7 @@ use kadakas_l10n::tr;
 use kadakas_update::handshake::{AppLink, Notice, RunStatus, SkipReason, notice};
 use kadakas_update::settings::{MAX_KEEP_OLDER, valid_site};
 use kadakas_update::{Channel, Settings, UpdateMode};
+use kadakas_view3d::numfmt::UiNumber;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -402,7 +403,11 @@ pub fn prefs_section(ui: &mut egui::Ui, u: &mut Updates) {
     }
     ui.horizontal(|ui| {
         ui.label(tr!("app-updates-keep-older"));
-        ui.add(egui::DragValue::new(&mut u.settings.keep_older).range(0..=MAX_KEEP_OLDER));
+        ui.add(
+            egui::DragValue::new(&mut u.settings.keep_older)
+                .range(0..=MAX_KEEP_OLDER)
+                .ui_number(),
+        );
     });
     ui.small(tr!("app-updates-keep-older-hint"));
     if !u.has_launcher() {

@@ -5,6 +5,7 @@
 use crate::units_ui::DragValueExt as _;
 use egui::epaint::{Mesh, PathShape, PathStroke, Vertex as EguiVertex};
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use std::sync::Arc;
 
 use egui::{Color32, FontId, Painter, Pos2, Stroke, Ui};
@@ -52,7 +53,8 @@ pub fn options(ui: &mut Ui, s: &mut GradingSettings) {
                 egui::DragValue::new(&mut s.grade_percent)
                     .speed(0.1)
                     .range(-100.0..=100.0)
-                    .suffix(" %"),
+                    .suffix(" %")
+                    .ui_number(),
             );
         }
         GradingMode::Stake => {

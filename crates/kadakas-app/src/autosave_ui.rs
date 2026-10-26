@@ -2,6 +2,7 @@
 
 use kadakas_core::model::Document;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::autosave::{AutosaveSettings, Scheduler};
 
@@ -250,18 +251,27 @@ impl AutosaveUi {
                 ui.label(tr!("autosave-ui-every"));
                 ui.add(
                     egui::DragValue::new(&mut s.interval_minutes)
-                        .range(1..=AutosaveSettings::MAX_MINUTES),
+                        .range(1..=AutosaveSettings::MAX_MINUTES)
+                        .ui_number(),
                 );
                 ui.label(tr!("autosave-ui-minutes-with-changes"));
             });
             ui.horizontal(|ui| {
                 ui.label(tr!("autosave-ui-or-after"));
-                ui.add(egui::DragValue::new(&mut s.every_ops).range(0..=10_000));
+                ui.add(
+                    egui::DragValue::new(&mut s.every_ops)
+                        .range(0..=10_000)
+                        .ui_number(),
+                );
                 ui.label(tr!("autosave-ui-operations-0-off"));
             });
             ui.horizontal(|ui| {
                 ui.label(tr!("autosave-ui-keep-the-last"));
-                ui.add(egui::DragValue::new(&mut s.keep).range(1..=AutosaveSettings::MAX_KEEP));
+                ui.add(
+                    egui::DragValue::new(&mut s.keep)
+                        .range(1..=AutosaveSettings::MAX_KEEP)
+                        .ui_number(),
+                );
                 ui.label(tr!("autosave-ui-versions-label"));
             });
             #[cfg(not(target_arch = "wasm32"))]

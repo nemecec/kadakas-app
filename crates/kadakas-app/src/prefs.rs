@@ -153,6 +153,9 @@ pub fn write_file(dir: &std::path::Path, name: &str, text: &str) -> Result<(), S
         .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
 }
 
+/// Writes the prefs whole. The program itself writes only the keys it changed
+/// (`save_changes_to`); this is for tests.
+#[cfg(test)]
 pub fn save_to(dir: &std::path::Path, prefs: &Prefs) -> Result<(), String> {
     let text = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
     write_file(dir, "prefs.json", &text)
@@ -172,13 +175,6 @@ pub fn save_changes_to(dir: &std::path::Path, saved: &Prefs, now: &Prefs) -> Res
 pub fn save_changes(saved: &Prefs, now: &Prefs) -> Result<(), String> {
     match dir() {
         Some(d) => save_changes_to(&d, saved, now),
-        None => Ok(()),
-    }
-}
-
-pub fn save(prefs: &Prefs) -> Result<(), String> {
-    match dir() {
-        Some(d) => save_to(&d, prefs),
         None => Ok(()),
     }
 }

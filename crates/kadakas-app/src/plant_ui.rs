@@ -15,6 +15,7 @@ use kadakas_core::resource::{ResourceBody, ResourceId};
 use kadakas_l10n::{msg, tr, translate};
 use kadakas_plants::placement::Pattern;
 use kadakas_plants::schedule;
+use kadakas_view3d::numfmt::UiNumber;
 use serde_json::{Map, Value, json};
 
 use crate::canvas::color32;
@@ -104,7 +105,12 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
             if matches!(ps.by, By::Count | By::SpacingAndCount) {
                 ui.horizontal(|ui| {
                     ui.label(tr!("plant-ui-count"));
-                    ui.add(DragValue::new(&mut ps.count).speed(0.2).range(1..=20000));
+                    ui.add(
+                        DragValue::new(&mut ps.count)
+                            .speed(0.2)
+                            .range(1..=20000)
+                            .ui_number(),
+                    );
                 });
             }
             if ps.by == By::Density {
@@ -123,7 +129,12 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
             spacing_row(ui, ps, &tr!("plant-ui-spacing-in-a-row"));
             ui.horizontal(|ui| {
                 ui.label(tr!("plant-ui-rows"));
-                ui.add(DragValue::new(&mut ps.rows).speed(0.2).range(1..=20));
+                ui.add(
+                    DragValue::new(&mut ps.rows)
+                        .speed(0.2)
+                        .range(1..=20)
+                        .ui_number(),
+                );
             });
             ui.horizontal(|ui| {
                 ui.label(tr!("plant-ui-row-spacing"));
@@ -181,7 +192,8 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
                 DragValue::new(&mut percent)
                     .speed(1.0)
                     .range(0.0..=90.0)
-                    .suffix(" %"),
+                    .suffix(" %")
+                    .ui_number(),
             )
             .changed()
         {
@@ -193,7 +205,8 @@ pub fn plant_mode_bar(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) 
         ui.add(
             DragValue::new(&mut ps.seed)
                 .speed(1.0)
-                .prefix(tr!("plant-ui-seed")),
+                .prefix(tr!("plant-ui-seed"))
+                .ui_number(),
         );
     });
     ui.add_enabled(
@@ -308,7 +321,10 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
                 (tr!("plant-ui-price"), &mut st.price, 0.5, 0.0, false),
             ] {
                 ui.label(label);
-                let drag = DragValue::new(v).speed(speed).range(min..=1.0e9);
+                let drag = DragValue::new(v)
+                    .speed(speed)
+                    .range(min..=1.0e9)
+                    .ui_number();
                 let r = ui.add(if is_length { drag.length() } else { drag });
                 commit |= r.drag_stopped() || r.lost_focus();
                 ui.end_row();
@@ -452,7 +468,8 @@ fn style_form(ui: &mut Ui, st: &mut PlantStyle, name: &mut String, new_key: &mut
             let r = ui.add(
                 DragValue::new(&mut st.maintenance.hours_per_year)
                     .speed(0.1)
-                    .range(0.0..=100_000.0),
+                    .range(0.0..=100_000.0)
+                    .ui_number(),
             );
             commit |= r.drag_stopped() || r.lost_focus();
             ui.end_row();
@@ -962,7 +979,8 @@ pub fn plant_object_info(ui: &mut Ui, session: &mut Session, id: ObjectId, statu
                             let mut x = v.as_f64().unwrap_or(0.0);
                             let drag = DragValue::new(&mut x)
                                 .speed(25.0)
-                                .range(if key == "price" { 0.0 } else { 1.0 }..=1.0e9);
+                                .range(if key == "price" { 0.0 } else { 1.0 }..=1.0e9)
+                                .ui_number();
                             let r = ui.add(if key == "price" { drag } else { drag.length() });
                             if r.drag_stopped() || r.lost_focus() {
                                 **v = json!(x);

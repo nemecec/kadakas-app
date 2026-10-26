@@ -9,6 +9,7 @@ use kadakas_core::command::Command;
 use kadakas_core::edit2d::spec::{ArrayLayout, ArrayParams};
 use kadakas_core::model::ObjectId;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 
 fn len(v: &mut f64) -> DragValue<'_> {
     DragValue::new(v).speed(10.0).range(-1.0e7..=1.0e7).length()
@@ -170,7 +171,7 @@ impl ArrayDialog {
                     Shape::Linear => {
                         ui.horizontal(|ui| {
                             ui.label(tr!("array-ui-number-of-duplicates"));
-                            ui.add(DragValue::new(&mut self.count).range(1..=1000));
+                            ui.add(DragValue::new(&mut self.count).range(1..=1000).ui_number());
                         });
                         ui.horizontal(|ui| {
                             ui.selectable_value(
@@ -203,9 +204,13 @@ impl ArrayDialog {
                     Shape::Rectangular => {
                         ui.horizontal(|ui| {
                             ui.label(tr!("array-ui-columns"));
-                            ui.add(DragValue::new(&mut self.columns).range(1..=1000));
+                            ui.add(
+                                DragValue::new(&mut self.columns)
+                                    .range(1..=1000)
+                                    .ui_number(),
+                            );
                             ui.label(tr!("array-ui-rows"));
-                            ui.add(DragValue::new(&mut self.rows).range(1..=1000));
+                            ui.add(DragValue::new(&mut self.rows).range(1..=1000).ui_number());
                         });
                         ui.horizontal(|ui| {
                             ui.label(tr!("array-ui-distance-between-columns"));
@@ -227,7 +232,7 @@ impl ArrayDialog {
                     Shape::Circular => {
                         ui.horizontal(|ui| {
                             ui.label(tr!("array-ui-number-of-duplicates"));
-                            ui.add(DragValue::new(&mut self.count).range(1..=1000));
+                            ui.add(DragValue::new(&mut self.count).range(1..=1000).ui_number());
                             ui.label(tr!("array-ui-angle-between"));
                             ui.add(
                                 DragValue::new(&mut self.step_deg)
@@ -263,7 +268,8 @@ impl ArrayDialog {
                         DragValue::new(&mut self.resize_factor)
                             .speed(0.01)
                             .range(0.01..=100.0)
-                            .prefix("x "),
+                            .prefix("x ")
+                            .ui_number(),
                     );
                 });
                 ui.horizontal(|ui| {

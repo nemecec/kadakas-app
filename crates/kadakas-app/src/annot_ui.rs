@@ -9,6 +9,7 @@ use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::canvas::{Style, color32};
 use crate::view::{View, ViewExt as _};
@@ -302,7 +303,11 @@ pub fn tool_options(
             });
             ui.horizontal(|ui| {
                 ui.label(tr!("annot-ui-segments"));
-                ui.add(DragValue::new(&mut s.bar_segments).range(1..=20));
+                ui.add(
+                    DragValue::new(&mut s.bar_segments)
+                        .range(1..=20)
+                        .ui_number(),
+                );
             });
         }
         Tool::RevisionCloud => {
@@ -349,7 +354,7 @@ pub fn panel_buttons(ui: &mut Ui, doc: &Document, requests: &mut PanelRequests) 
 
 fn num(ui: &mut Ui, commit: &mut bool, label: &str, v: &mut f64, speed: f64) {
     ui.label(label);
-    let r = ui.add(DragValue::new(v).speed(speed));
+    let r = ui.add(DragValue::new(v).speed(speed).ui_number());
     *commit |= r.drag_stopped() || r.lost_focus();
     ui.end_row();
 }

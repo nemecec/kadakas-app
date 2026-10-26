@@ -3,6 +3,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use std::cell::RefCell;
 
 use egui::epaint::{Mesh, PathShape, PathStroke};
@@ -163,7 +164,7 @@ pub fn tool_options(ui: &mut Ui, settings: &mut ToolSettings, doc: &Document) ->
                unit: &str| {
         ui.horizontal(|ui| {
             ui.label(label);
-            let drag = DragValue::new(v).speed(speed).range(range);
+            let drag = DragValue::new(v).speed(speed).range(range).ui_number();
             ui.add(match unit {
                 "\u{b0}" => drag.degrees(),
                 "direction" => drag.direction(),

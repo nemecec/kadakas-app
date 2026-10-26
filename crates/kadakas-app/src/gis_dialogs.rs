@@ -7,6 +7,7 @@
 
 use kadakas_api::Session;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,10 +381,11 @@ impl GisDialogs {
                         ui.add(
                             egui::DragValue::new(&mut self.max_px)
                                 .range(64..=4096)
-                                .speed(16),
+                                .speed(16)
+                                .ui_number(),
                         );
                         ui.label(tr!("gis-dialogs-opacity"));
-                        ui.add(egui::Slider::new(&mut self.opacity, 0.0..=1.0));
+                        ui.add(egui::Slider::new(&mut self.opacity, 0.0..=1.0).ui_number());
                     });
                     ui.small(tr!("gis-dialogs-the-map-covers-the-drawing-plus-a"));
                 } else {

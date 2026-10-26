@@ -4,6 +4,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
+use kadakas_view3d::numfmt::UiNumber;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -261,7 +262,8 @@ fn hardscape_info(
                 DragValue::new(&mut p)
                     .speed(0.1)
                     .range(-100.0..=100.0)
-                    .suffix(" %"),
+                    .suffix(" %")
+                    .ui_number(),
             );
             let r2 = if d.mode == Mode::Slab {
                 Some(ui.add(DragValue::new(&mut a).speed(1.0).degrees()))

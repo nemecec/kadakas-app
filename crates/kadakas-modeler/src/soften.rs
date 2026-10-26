@@ -4,6 +4,7 @@
 
 use kadakas_l10n::tr;
 use kadakas_ui_core::modeling::{EdgeStyle, SoftenPanel};
+use kadakas_view3d::numfmt::UiNumber;
 
 use crate::app::Cmd;
 
@@ -30,7 +31,8 @@ pub fn panel(ui: &mut egui::Ui, p: &mut SoftenPanel, enabled: bool) -> Option<Ch
         let r = ui.add(
             egui::Slider::new(&mut p.angle, 0.0..=180.0)
                 .suffix("°")
-                .fixed_decimals(1),
+                .fixed_decimals(1)
+                .ui_number(),
         );
         if r.drag_stopped() || (r.changed() && !r.dragged()) {
             out = Some(Change::Apply);
