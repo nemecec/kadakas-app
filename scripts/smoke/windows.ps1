@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-function Step($m) { Write-Host "smoke: $m" }
+function Step($m) { Write-Host ("smoke: [{0:HH:mm:ss}] {1}" -f (Get-Date), $m) }
 function Fail($m) { [Console]::Error.WriteLine("smoke: FAILED: $m"); exit 1 }
 
 # Starts a program and waits for it, at most $seconds. A program that hangs is killed with its
@@ -90,9 +90,9 @@ if ($null -ne (Find-InstallDir)) { Fail "Kadakas is installed already on this ma
 Step "install $Package"
 $log = Join-Path $work 'install.log'
 if ($Kind -eq 'msi') {
-  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") 600 'msiexec /i' $log
+  $code = Run-Limited msiexec.exe @('/i', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$log`"") 300 'msiexec /i' $log
 } else {
-  $code = Run-Limited $Package @('/S') 600 'the installer' $null
+  $code = Run-Limited $Package @('/S') 300 'the installer' $null
 }
 if ($Artifacts -and (Test-Path $log)) { Copy-Item $log (Join-Path $Artifacts "install-$Kind.log") -ErrorAction SilentlyContinue }
 if ($code -ne 0 -and $code -ne 3010) { Fail "the installer ended with $code" }
@@ -112,14 +112,26 @@ try {
   }
   $links = @(Find-Shortcuts)
   if ($links.Count -eq 0) { Fail 'no Start menu entry (Kadakas*.lnk)' }
-  $shell = New-Object -ComObject WScript.Shell
-  $target = $shell.CreateShortcut($links[0].FullName).TargetPath
-  # An MSI shortcut is advertised: Windows may show no plain target for it. So this is a warning.
-  if ($target -notlike '*kadakas-launcher.exe') { Write-Host "smoke: WARNING: the Start menu entry shows the target '$target', not the launcher" }
+  # An MSI shortcut is advertised: to read its target can make Windows Installer act. So the
+  # target is read for NSIS only, in a job with a time limit (an MSI run hung after the install).
+  if ($Kind -eq 'nsis') {
+    $lnk = $links[0].FullName
+    $job = Start-Job -ScriptBlock { param($f) (New-Object -ComObject WScript.Shell).CreateShortcut($f).TargetPath } -ArgumentList $lnk
+    if (Wait-Job $job -Timeout 30) {
+      $target = Receive-Job $job
+      if ($target -notlike '*kadakas-launcher.exe') { Write-Host "smoke: WARNING: the Start menu entry shows the target '$target', not the launcher" }
+    } else {
+      Write-Host 'smoke: WARNING: the Start menu entry target was not read in 30 seconds'
+      Stop-Job $job
+    }
+    Remove-Job $job -Force
+  }
   Step "Start menu entry: $($links[0].FullName)"
+  Step 'kadakas --version'
   $ver = & (Join-Path $dir 'kadakas.exe') --version
   if (-not $ver) { Fail 'kadakas --version prints nothing' }
 
+  Step 'the starts (smoke_run.py)'
   $py = if (Get-Command python -ErrorAction SilentlyContinue) { 'python' } else { 'python3' }
   $shot = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$here\screenshot.ps1`" {out}"
   $runArgs = @('-I', (Join-Path $here 'smoke_run.py'), 'run', '--launcher', (Join-Path $dir 'kadakas-launcher.exe'),
@@ -137,13 +149,13 @@ finally {
 Step 'uninstall'
 if ($Kind -eq 'msi') {
   $ulog = Join-Path $work 'uninstall.log'
-  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") 600 'msiexec /x' $ulog
+  $code = Run-Limited msiexec.exe @('/x', "`"$Package`"", '/qn', '/norestart', '/l*v', "`"$ulog`"") 300 'msiexec /x' $ulog
   if ($code -ne 0 -and $code -ne 3010) { Fail "msiexec /x ended with $code" }
 } else {
   $uninstaller = Get-ChildItem -Path $dir -Filter 'uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $uninstaller) { Fail "no uninstaller in $dir" }
   # _?= keeps the uninstaller from copying itself away, so that the wait is for the real work.
-  $code = Run-Limited $uninstaller.FullName @('/S', "_?=$dir") 600 'the uninstaller' $null
+  $code = Run-Limited $uninstaller.FullName @('/S', "_?=$dir") 300 'the uninstaller' $null
   if ($code -ne 0) { Fail "the uninstaller ended with $code" }
 }
 foreach ($f in @('kadakas-launcher.exe', 'kadakas-app.exe', 'kadakas-modeler.exe', 'kadakas.exe')) {
