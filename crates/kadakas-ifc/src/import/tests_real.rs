@@ -435,17 +435,10 @@ fn points_far_from_the_origin_find_the_file_when_every_placement_is_at_the_origi
 }
 
 #[test]
-fn a_file_that_the_samples_did_not_show_is_found_by_a_second_pass() {
-    // The far points are in lists that the stride sample skips: 500,000 near points come first and
-    // the far points have the highest numbers, and the stride of the sample (5) skips them. The second pass, which only measures, finds the file.
-    let mut s = String::new();
-    for i in 0..500_000u64 {
-        s.push_str(&format!(
-            "#{}=IFCCARTESIANPOINT((1.,1.,1.));\n",
-            1_000_000 + i
-        ));
-    }
-    s.push_str(&far_points_file(650_000.0, 6_500_000.0, 5_000_000));
+fn a_file_that_the_placements_did_not_show_is_found_by_a_second_pass() {
+    // No placement says where the file is (all at the origin) and the points are far, in meters:
+    // the objects fail the range test, and the second pass, which only measures, finds the file.
+    let s = far_points_file(650_000.0, 6_500_000.0, 5_000_000);
     let bytes = super::tests_more::file("IFC4", &s);
     let text = String::from_utf8(bytes)
         .unwrap()
@@ -458,6 +451,14 @@ fn a_file_that_the_samples_did_not_show_is_found_by_a_second_pass() {
         ed.doc().georef.is_some() && !ed.doc().objects.is_empty(),
         "{:?}",
         r.report
+    );
+    assert!(
+        r.report
+            .notes
+            .iter()
+            .any(|n| n.contains("read again with a shift")),
+        "{:?}",
+        r.report.notes
     );
 }
 
@@ -523,6 +524,208 @@ fn a_panic_in_one_product_skips_that_product_only() {
         "{:?}",
         r.notes
     );
+}
+
+fn two_products() -> String {
+    format!(
+        "{}{}{}{}",
+        body(),
+        slab(30, "#21"),
+        extr(40, "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,100.,100.)", 10.0),
+        slab(50, "#41")
+    )
+}
+
+#[test]
+fn the_unguarded_entry_does_not_catch_a_panic_in_a_product() {
+    // The tests of damaged files use this entry: they must see a panic in a product.
+    super::PANIC_AT.with(|c| c.set(1));
+    let bytes = super::tests_more::file("IFC4", &two_products());
+    let doc = Document::with_sequential_ids();
+    let seen = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = import_bytes_unguarded(bytes.clone(), &doc, &IfcImportOptions::default());
+    }));
+    super::PANIC_AT.with(|c| c.set(0));
+    assert!(seen.is_err(), "the panic was caught inside the import");
+    // The guarded entry catches it for the product and says so.
+    super::PANIC_AT.with(|c| c.set(1));
+    let r = import_bytes(bytes, &doc, &IfcImportOptions::default()).unwrap();
+    assert_eq!(r.report.handled_panics.len(), 1);
+    assert!(r.report.handled_panics[0].contains("a bug in the geometry of a product"));
+}
+
+#[test]
+fn a_panic_after_the_objects_of_a_product_were_added_takes_them_back() {
+    super::PANIC_AFTER_ADD.with(|c| c.set(true));
+    let (ed, r) = run(&two_products(), &IfcImportOptions::default());
+    // The first product panicked after its object was added: it is gone, and the counts agree.
+    assert_eq!(objs(&ed).len(), 1, "{r:?}");
+    assert_eq!(r.total(), 1, "{r:?}");
+    assert_eq!(r.entities_read, 2);
+    assert_eq!((r.entities_imported, r.entities_skipped), (1, 1));
+    assert_eq!(r.entities_read, r.entities_imported + r.entities_skipped);
+    assert!(
+        r.skipped
+            .iter()
+            .any(|s| s.reason == "internal error in this product" && s.count == 1),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn the_note_of_a_panic_has_no_absolute_path() {
+    super::PANIC_AT.with(|c| c.set(1));
+    let (_, r) = run(&two_products(), &IfcImportOptions::default());
+    let note = r
+        .notes
+        .iter()
+        .find(|n| n.contains("internal error"))
+        .expect("a note");
+    assert!(!note.contains('/') && !note.contains('\\'), "{note}");
+    assert!(note.contains(".rs:"), "{note}");
+    assert_eq!(
+        super::place_only("boom at /home/x/.cargo/registry/src/y/z.rs:10:5"),
+        "boom at z.rs:10:5"
+    );
+    assert_eq!(super::place_only("boom"), "boom");
+}
+
+/// Annotation points: `near` at the origin and `far` at (6.5e9, 6.5e9) mm.
+fn annotation_points(near: usize, far: usize) -> String {
+    let mut s = String::new();
+    for i in 0..(near + far) as u64 {
+        let x = if (i as usize) < near { 1000.0 } else { 6.5e9 };
+        let b = 9000 + i * 10;
+        s.push_str(&format!(
+            "#{b}=IFCCARTESIANPOINT(({x}.,{x}.,0.));\n#{r}=IFCSHAPEREPRESENTATION($,'Annotation','Point',(#{b}));\n#{d}=IFCPRODUCTDEFINITIONSHAPE($,$,(#{r}));\n#{a}=IFCANNOTATION('g{i}',$,'P{i}',$,$,#7,#{d});\n",
+            r = b + 1,
+            d = b + 2,
+            a = b + 3
+        ));
+    }
+    s
+}
+
+#[test]
+fn a_second_pass_that_finds_less_is_not_used() {
+    // Three points near the origin and four far away: the middle of the two groups is out of
+    // range for both, so a shift to the middle would lose all seven. The first result stays.
+    let (ed, r) = run(&annotation_points(3, 4), &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 3, "{r:?}");
+    assert!(
+        !r.notes
+            .iter()
+            .any(|n| n.contains("read again with a shift")),
+        "{:?}",
+        r.notes
+    );
+    assert_eq!(r.skipped_total(), 4, "{:?}", r.skipped);
+}
+
+#[test]
+fn a_second_pass_that_finds_more_is_used() {
+    let (ed, r) = run(&annotation_points(0, 4), &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 4, "{r:?}");
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("read again with a shift")),
+        "{:?}",
+        r.notes
+    );
+}
+
+#[test]
+fn projected_coordinates_in_a_profile_with_placements_at_the_origin_are_found() {
+    // The coordinates are in the profile (6.5e9 mm), the placements are at the origin: the
+    // limit of a profile is the one of the overlay, not 10 km, and the second pass moves the file.
+    let profile = "IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#30)";
+    let pts = "#31=IFCCARTESIANPOINT((6500000000.,6500000000.));\n#32=IFCCARTESIANPOINT((6500002000.,6500000000.));\n#33=IFCCARTESIANPOINT((6500002000.,6500002000.));\n#34=IFCCARTESIANPOINT((6500000000.,6500002000.));\n#30=IFCPOLYLINE((#31,#32,#33,#34,#31));\n";
+    let data = format!("{pts}{}{}", extr(20, profile, 3000.0), slab(40, "#21"));
+    let (ed, r) = run(&data, &IfcImportOptions::default());
+    assert_eq!(objs(&ed).len(), 1, "{r:?}");
+    assert!(ed.doc().georef.is_some(), "{r:?}");
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("read again with a shift")),
+        "{:?}",
+        r.notes
+    );
+}
+
+#[test]
+fn faces_with_numbers_beyond_the_overlay_are_counted_not_dropped_silently() {
+    // A surface model whose polyloop has a hole with a point at 1E15: the face is left out and the
+    // report says so.
+    let data = "#110=IFCCARTESIANPOINT((0.,0.,0.));\n#111=IFCCARTESIANPOINT((4000.,0.,0.));\n#112=IFCCARTESIANPOINT((4000.,4000.,0.));\n#113=IFCCARTESIANPOINT((0.,4000.,0.));\n\
+#114=IFCCARTESIANPOINT((1.E15,1000.,0.));\n#115=IFCCARTESIANPOINT((2000.,1000.,0.));\n#116=IFCCARTESIANPOINT((2000.,2000.,0.));\n\
+#120=IFCPOLYLOOP((#110,#111,#112,#113));\n#121=IFCPOLYLOOP((#114,#115,#116));\n#122=IFCFACEOUTERBOUND(#120,.T.);\n#123=IFCFACEBOUND(#121,.T.);\n#124=IFCFACE((#122,#123));\n\
+#125=IFCOPENSHELL((#124));\n#126=IFCSHELLBASEDSURFACEMODEL((#125));\n";
+    let data = format!(
+        "{data}{}",
+        product(30, "IFCBUILDINGELEMENTPROXY", "#126", "$,@,$,$")
+    );
+    let (_, r) = run(&data, &IfcImportOptions::default());
+    let said = r
+        .skipped
+        .iter()
+        .any(|s| s.reason.contains("faces with numbers out of range"))
+        || r.notes
+            .iter()
+            .any(|n| n.contains("faces with numbers out of range"));
+    assert!(said, "{:?} {:?}", r.skipped, r.notes);
+}
+
+/// A far site (650,000 m, 6,500,000 m) turned by about 0.6435 radians, with one product placed
+/// relative to it. `application`: the name in the `IfcApplication`; `sites`: how many sites.
+fn turned_site(application: &str, sites: usize) -> String {
+    let mut s = String::from(
+        "#200=IFCCARTESIANPOINT((650000123.,6500000456.,0.));\n#201=IFCDIRECTION((0.8,0.6,0.));\n#202=IFCAXIS2PLACEMENT3D(#200,$,#201);\n#203=IFCLOCALPLACEMENT($,#202);\n#204=IFCSITE('s',$,'Site',$,$,#203,$,$,.ELEMENT.,$,$,$,$,$);\n#205=IFCLOCALPLACEMENT(#203,#5);\n",
+    );
+    if sites > 1 {
+        s.push_str("#206=IFCSITE('s2',$,'Second',$,$,#203,$,$,.ELEMENT.,$,$,$,$,$);\n");
+    }
+    s.push_str(&format!(
+        "#207=IFCORGANIZATION($,'{application}',$,$,$);\n#208=IFCAPPLICATION(#207,'1','{application}','{application}');\n"
+    ));
+    s.push_str(&extr(
+        20,
+        "IFCRECTANGLEPROFILEDEF(.AREA.,$,$,200.,100.)",
+        10.0,
+    ));
+    s.push_str(&product(30, "IFCBUILDINGELEMENTPROXY", "#21", "$,@,$,$").replace("#7,", "#205,"));
+    s
+}
+
+#[test]
+fn only_a_file_of_kadakas_has_its_turned_site_turned_back() {
+    let origin_of = |application: &str, sites: usize| {
+        let (ed, r) = run(
+            &turned_site(application, sites),
+            &IfcImportOptions::default(),
+        );
+        assert_eq!(objs(&ed).len(), 1, "{r:?}");
+        let g = ed.doc().georef.clone().expect("a georeference");
+        (g.rotation, g.origin, r.notes.clone())
+    };
+    // Written by Kadakas: the turn is the rotation of the georeference, the origin is in whole meters.
+    let (rotation, origin, notes) = origin_of("Kadakas", 1);
+    assert!((rotation - 0.6f64.atan2(0.8)).abs() < 1e-9, "{rotation}");
+    assert_eq!(
+        (origin.x.fract(), origin.y.fract()),
+        (0.0, 0.0),
+        "{origin:?}"
+    );
+    assert!(notes.iter().any(|n| n.contains("turned")), "{notes:?}");
+    // The same file from another program: the shift is in the georeference, the turn stays in the
+    // geometry (the rotation of the georeference is zero).
+    let (rotation, _, notes) = origin_of("Revit", 1);
+    assert_eq!(rotation, 0.0);
+    assert!(!notes.iter().any(|n| n.contains("turned")), "{notes:?}");
+    // Several sites: no turn back either, also for Kadakas.
+    let (rotation, _, _) = origin_of("Kadakas", 2);
+    assert_eq!(rotation, 0.0);
 }
 
 #[test]

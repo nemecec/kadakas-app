@@ -223,7 +223,7 @@ pub fn import_file(
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
-    guarded(|| import_file_unguarded(path, doc, opts))
+    guarded(|| import_file_with(path, doc, opts, true))
 }
 
 /// Plans the import of IFC bytes (STEP or ifcZIP). A panic inside is caught.
@@ -232,15 +232,26 @@ pub fn import_bytes(
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
-    guarded(|| import_bytes_unguarded(data, doc, opts))
+    guarded(|| import_bytes_with(data, doc, opts, true))
 }
 
-/// [`import_file`] without the catch of panics, for the tests that look for them.
+/// [`import_file`] without the catch of panics (also none per product), for the tests that look
+/// for them.
 #[doc(hidden)]
 pub fn import_file_unguarded(
     path: &Path,
     doc: &Document,
     opts: &IfcImportOptions,
+) -> Result<ImportResult, IfcImportError> {
+    import_file_with(path, doc, opts, false)
+}
+
+/// `catch`: a panic in one product skips that product (see `Importer::run`).
+fn import_file_with(
+    path: &Path,
+    doc: &Document,
+    opts: &IfcImportOptions,
+    catch: bool,
 ) -> Result<ImportResult, IfcImportError> {
     use std::io::{Read, Seek};
     let mut file = std::fs::File::open(path)
@@ -251,7 +262,7 @@ pub fn import_file_unguarded(
         Container::Step => {
             drop(file);
             let index = StepIndex::from_file(path, opts.limits.clone())?;
-            import_index(index, doc, opts, Vec::new())
+            import_index(index, doc, opts, Vec::new(), catch)
         }
         Container::Zip => {
             let len = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -260,7 +271,7 @@ pub fn import_file_unguarded(
             }
             file.rewind()
                 .map_err(|e| IfcImportError::Io(e.to_string()))?;
-            import_zip(std::io::BufReader::new(file), doc, opts)
+            import_zip(std::io::BufReader::new(file), doc, opts, catch)
         }
         other => Err(container::refusal(other)),
     }
@@ -270,25 +281,36 @@ fn import_zip<R: std::io::Read + std::io::Seek>(
     r: R,
     doc: &Document,
     opts: &IfcImportOptions,
+    catch: bool,
 ) -> Result<ImportResult, IfcImportError> {
     let unpacked = container::unpack(r, opts.limits.max_bytes)?;
     let index = StepIndex::from_bytes(unpacked.data, opts.limits.clone())?;
-    import_index(index, doc, opts, unpacked.notes)
+    import_index(index, doc, opts, unpacked.notes, catch)
 }
 
-/// [`import_bytes`] without the catch of panics, for the tests that look for them.
+/// [`import_bytes`] without the catch of panics (also none per product), for the tests that look
+/// for them.
 #[doc(hidden)]
 pub fn import_bytes_unguarded(
     data: Vec<u8>,
     doc: &Document,
     opts: &IfcImportOptions,
 ) -> Result<ImportResult, IfcImportError> {
+    import_bytes_with(data, doc, opts, false)
+}
+
+fn import_bytes_with(
+    data: Vec<u8>,
+    doc: &Document,
+    opts: &IfcImportOptions,
+    catch: bool,
+) -> Result<ImportResult, IfcImportError> {
     match container::sniff(&data[..data.len().min(64)]) {
         Container::Step => {
             let index = StepIndex::from_bytes(data, opts.limits.clone())?;
-            import_index(index, doc, opts, Vec::new())
+            import_index(index, doc, opts, Vec::new(), catch)
         }
-        Container::Zip => import_zip(std::io::Cursor::new(data), doc, opts),
+        Container::Zip => import_zip(std::io::Cursor::new(data), doc, opts, catch),
         other => Err(container::refusal(other)),
     }
 }
@@ -298,6 +320,7 @@ fn import_index(
     doc: &Document,
     opts: &IfcImportOptions,
     notes: Vec<String>,
+    catch: bool,
 ) -> Result<ImportResult, IfcImportError> {
     let schemas = index.schemas();
     if !schemas.is_empty()
@@ -315,6 +338,8 @@ fn import_index(
     }
     let ctx = Context::of(doc);
     let schema = schemas.first().cloned().unwrap_or_default();
+    // One budget of work for the whole import, also when the file is read again.
+    let fuel = Rc::new(csg::Fuel::new(opts.boolean_work));
     let make = || {
         let cx = Ctx::new(&index);
         let multi_site = cx.x.ids_of("IFCSITE").len() > 1;
@@ -338,7 +363,8 @@ fn import_index(
             triangles: 0,
             geometry_notes: BTreeMap::new(),
             z_dropped: 0,
-            fuel: csg::Fuel::new(opts.boolean_work),
+            fuel: fuel.clone(),
+            catch,
             brep_cache: Default::default(),
             internal_count: 0,
             internal_errors: Vec::new(),
@@ -369,7 +395,10 @@ fn import_index(
     }
     imp.run();
     // Last resort: the coordinates were far, but the samples did not show it (products out of range
-    // were skipped). The geometry itself says where the file is: a pass that only measures.
+    // were skipped). The geometry itself says where the file is: a pass that only measures, then a
+    // pass with the shift. So the geometry is evaluated up to three times, and the budget of work
+    // is one for all of them. The result of the second pass replaces the first only when it has
+    // more objects (the middle of a file with two far groups can lose both).
     // Only when most of the file is out of range: one object far away from the rest is skipped, with
     // a line in the report, and the rest stays where it is.
     let out_of_range: usize = imp
@@ -377,7 +406,7 @@ fn import_index(
         .report
         .skipped
         .iter()
-        .filter(|s| s.reason.contains("out of range"))
+        .filter(|s| s.reason.contains("coordinate is out of range"))
         .map(|s| s.count)
         .sum();
     if out_of_range > 0
@@ -386,10 +415,16 @@ fn import_index(
         && doc.georef.is_none()
         && imp.shift == DVec2::ZERO
     {
+        let first = {
+            let imp = imp;
+            imp.b.finish()
+        };
         let mut probe = make();
         probe.b.set_probe();
         probe.run();
-        if let Some((lo, hi)) = probe.b.bounds() {
+        let bounds = probe.b.bounds();
+        drop(probe);
+        if let Some((lo, hi)) = bounds {
             let c = (lo + hi) / 2.0;
             if c.is_finite() && c.abs().max_element() < 1.0e12 {
                 let mut again = make();
@@ -399,9 +434,13 @@ fn import_index(
                 }
                 again.b.report.note("the geometry was far from the origin and out of range: the file was read again with a shift");
                 again.run();
-                return Ok(again.b.finish());
+                let second = again.b.finish();
+                if second.report.total() > first.report.total() {
+                    return Ok(second);
+                }
             }
         }
+        return Ok(first);
     }
     Ok(imp.b.finish())
 }
@@ -410,6 +449,30 @@ fn import_index(
 thread_local! {
     /// A test sets it to N to make the Nth product panic (see `run`).
     static PANIC_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// A test sets it to make the next product panic after it added its objects.
+    static PANIC_AFTER_ADD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The message of a caught panic with the place cut to the name of the file and the line: the
+/// absolute path of a source file (or of a library in the cache of cargo) is not for a report.
+fn place_only(detail: &str) -> String {
+    let (message, place) = match detail.rsplit_once(" at ") {
+        Some((m, p)) => (m, Some(p)),
+        None => (detail, None),
+    };
+    let message: String = message
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect();
+    match place {
+        Some(p) => {
+            let name = p.rsplit(['/', '\\']).next().unwrap_or(p);
+            let name: String = name.chars().filter(|c| !c.is_control()).take(60).collect();
+            format!("{message} at {name}")
+        }
+        None => message,
+    }
 }
 
 /// Hosts with openings that were not all cut, for one reason.
@@ -473,7 +536,9 @@ struct Importer<'a> {
     z_dropped: usize,
     /// Openings that were cut from their host, and openings whose cut failed.
     /// The work budget for the booleans of the whole import.
-    fuel: csg::Fuel,
+    fuel: Rc<csg::Fuel>,
+    /// A panic in one product skips that product (false in the tests that look for panics).
+    catch: bool,
     /// Advanced breps that were read already.
     brep_cache: geom::BrepCache,
     /// Products that were skipped after a panic: how many, and the first messages.
@@ -557,18 +622,38 @@ impl<'a> Importer<'a> {
         }
         // A site that is far and turned (a georeference without a CRS, written by Kadakas, turns
         // the site): the turn is the rotation of the georeference and the geometry is turned back.
-        let turn = if from_placements && model::file_georef(&self.cx).is_none() {
+        let turn = if from_placements
+            && !self.multi_site
+            && self.written_by_kadakas()
+            && model::file_georef(&self.cx).is_none()
+        {
             self.cx.x.ids_of("IFCSITE").first().and_then(|id| {
                 let site = self.cx.ent(*id)?;
                 let m = self.cx.placement(attr(&site, 5).as_ref_id()?);
                 let at = DVec2::new(m.translation.x, m.translation.y) * mm;
                 let angle = m.matrix3.x_axis.y.atan2(m.matrix3.x_axis.x);
+                // Whole meters, like the shift: the georeference origin is a round number.
+                let at = (at / 1000.0).round() * 1000.0;
                 (at.abs().max_element() > FAR_MM && angle.abs() > 1e-9).then_some((at, angle))
             })
         } else {
             None
         };
         Some(((c / 1000.0).round() * 1000.0, turn))
+    }
+
+    /// True when the file says that Kadakas wrote it (an `IfcApplication` named Kadakas). Only such
+    /// a file has the site turned on purpose: the export writes the rotation of a georeference
+    /// without a CRS as the turn of the `IfcSite`, and the import turns it back. A file of another
+    /// program keeps the turn of its site in the geometry.
+    fn written_by_kadakas(&self) -> bool {
+        self.cx.x.ids_of("IFCAPPLICATION").iter().any(|id| {
+            self.cx.ent(*id).is_some_and(|e| {
+                e.attrs
+                    .iter()
+                    .any(|a| text(a).is_some_and(|t| t.eq_ignore_ascii_case("Kadakas")))
+            })
+        })
     }
 
     fn run(&mut self) {
@@ -621,11 +706,32 @@ impl<'a> Importer<'a> {
             // Every product with a representation is read; it either gives objects or has a line
             // in `skipped`, so the accounting is exact (`entities_read` = imported + skipped).
             let (objects, skipped) = (self.b.report.total(), self.b.report.skipped_total());
-            // A panic in the geometry of one product skips that product, not the file.
-            if let Err(detail) = kadakas_crash::ring::catch(|| self.product(&e, &rep)) {
+            // A panic in the geometry of one product skips that product, not the file. What the
+            // product had added before the panic is taken back, so the counts agree.
+            let outcome = if self.catch {
+                let cp = self.b.checkpoint();
+                let r = kadakas_crash::ring::catch(|| {
+                    self.product(&e, &rep);
+                    #[cfg(test)]
+                    PANIC_AFTER_ADD.with(|c| {
+                        if c.replace(false) {
+                            panic!("a bug after the objects of a product were added");
+                        }
+                    });
+                });
+                r.map_err(|detail| (cp, detail))
+            } else {
+                self.product(&e, &rep);
+                Ok(())
+            };
+            if let Err((cp, detail)) = outcome {
+                self.b.rollback(cp);
                 self.b.report.skip(&class, "internal error in this product");
                 if self.internal_errors.len() < 3 {
-                    self.internal_errors.push(detail);
+                    self.internal_errors.push(place_only(&detail));
+                }
+                if self.b.report.handled_panics.len() < 3 {
+                    self.b.report.handled_panics.push(detail);
                 }
                 self.internal_count += 1;
             }
@@ -1375,12 +1481,13 @@ impl<'a> Importer<'a> {
             &self.cx,
             self.opts.max_triangles.saturating_sub(self.triangles),
         );
-        ev.fuel = Some(&self.fuel);
+        ev.fuel = Some(&*self.fuel);
         ev.brep_cache = Some(&self.brep_cache);
         if instancing && self.opts.instances {
             ev.instancing = Some(&ok);
         }
         let annotation = e.name == "IFCANNOTATION";
+        geom::take_range_drops();
         for r in reps {
             if !self.wanted_rep(r, annotation) {
                 continue;
@@ -1390,6 +1497,13 @@ impl<'a> Importer<'a> {
                     ev.item(i, &placement, 0);
                 }
             }
+        }
+        // Faces with numbers beyond the range of the overlay were left out: say so.
+        let dropped = geom::take_range_drops();
+        if dropped > 0 {
+            ev.issues.push(format!(
+                "{dropped} faces with numbers out of range (beyond 1e12) were left out"
+            ));
         }
         EvalOut {
             pieces: ev.pieces,

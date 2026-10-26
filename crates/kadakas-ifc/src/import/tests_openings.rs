@@ -271,7 +271,7 @@ fn walls_with_a_void_in_their_profile_are_closed_and_take_their_openings() {
 #[test]
 fn a_cut_result_that_is_not_closed_is_marked_and_counted() {
     // With the healing of T-junctions turned off, the cut wall is an open mesh: the import says so.
-    super::csg::HEAL_LIMIT.with(|c| c.set(0));
+    let limit = super::csg::HealLimitGuard::set(0);
     let doc = Document::with_sequential_ids();
     let r = import_bytes(
         fixture("wall_with_openings.ifc"),
@@ -279,7 +279,7 @@ fn a_cut_result_that_is_not_closed_is_marked_and_counted() {
         &IfcImportOptions::default(),
     )
     .unwrap();
-    super::csg::HEAL_LIMIT.with(|c| c.set(400_000_000));
+    drop(limit);
     let mut ed = Editor::new(doc);
     ed.execute(&r.command).unwrap();
     let wall = objs(&ed)
