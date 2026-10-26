@@ -9,6 +9,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      only_msi:
+        description: "Rehearsal: build and test only the Windows MSI (no other package, no web build)"
+        type: boolean
+        default: false
 
 # Jobs get read access only. The publish job asks for more.
 permissions:
@@ -30,32 +35,48 @@ env:
 # the least recently used caches go first when the 10 GB limit of the repository is full.
 
 jobs:
+  # The matrices of `package` and `smoke`. A manual start with only_msi builds and tests the
+  # Windows MSI alone (a cheap rehearsal). Every other start has all legs.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      package: ${{ steps.matrix.outputs.package }}
+      smoke: ${{ steps.matrix.outputs.smoke }}
+    steps:
+      - id: matrix
+        env:
+          ONLY_MSI: ${{ inputs.only_msi }}
+        run: |
+          set -euo pipefail
+          package='[
+            {"os":"macos-14","formats":"app,dmg","config":"packager-macos.toml","name":"macos-arm64","platform":"macos-aarch64"},
+            {"os":"macos-15-intel","formats":"app,dmg","config":"packager-macos.toml","name":"macos-x86_64","platform":"macos-x86_64"},
+            {"os":"windows-latest","formats":"nsis,wix","config":"packager.toml","name":"windows-x86_64","platform":"windows-x86_64"},
+            {"os":"ubuntu-22.04","formats":"appimage,deb","config":"packager.toml","name":"linux-x86_64","platform":"linux-x86_64"}
+          ]'
+          smoke='[
+            {"os":"ubuntu-22.04","artifact":"linux-x86_64","kind":"deb","pattern":"*.deb"},
+            {"os":"ubuntu-22.04","artifact":"linux-x86_64","kind":"appimage","pattern":"*.AppImage"},
+            {"os":"windows-latest","artifact":"windows-x86_64","kind":"msi","pattern":"*.msi"},
+            {"os":"windows-latest","artifact":"windows-x86_64","kind":"nsis","pattern":"*.exe"},
+            {"os":"macos-14","artifact":"macos-arm64","kind":"dmg","pattern":"*.dmg"},
+            {"os":"macos-15-intel","artifact":"macos-x86_64","kind":"dmg","pattern":"*.dmg"}
+          ]'
+          if [ "$ONLY_MSI" = "true" ]; then
+            package=$(echo "$package" | jq -c '[.[] | select(.name == "windows-x86_64")]')
+            smoke=$(echo "$smoke" | jq -c '[.[] | select(.kind == "msi")]')
+          fi
+          echo "package=$(echo "$package" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "smoke=$(echo "$smoke" | jq -c .)" >> "$GITHUB_OUTPUT"
+
   package:
+    needs: plan
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-14 # Apple silicon
-            formats: app,dmg
-            config: packager-macos.toml
-            name: macos-arm64
-            platform: macos-aarch64
-          - os: macos-15-intel # Intel
-            formats: app,dmg
-            config: packager-macos.toml
-            name: macos-x86_64
-            platform: macos-x86_64
-          - os: windows-latest
-            formats: nsis,wix
-            config: packager.toml
-            name: windows-x86_64
-            platform: windows-x86_64
-          - os: ubuntu-22.04
-            formats: appimage,deb
-            config: packager.toml
-            name: linux-x86_64
-            platform: linux-x86_64
+        include: ${{ fromJSON(needs.plan.outputs.package) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -176,18 +197,12 @@ jobs:
   # dialog), started again, and the app answers a JSON-RPC ping. A failed test blocks `publish`.
   # The screenshots and logs are kept as artifacts; a failed screenshot never fails the job.
   smoke:
-    needs: package
+    needs: [plan, package]
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-22.04, artifact: linux-x86_64, kind: deb, pattern: "*.deb" }
-          - { os: ubuntu-22.04, artifact: linux-x86_64, kind: appimage, pattern: "*.AppImage" }
-          - { os: windows-latest, artifact: windows-x86_64, kind: msi, pattern: "*.msi" }
-          - { os: windows-latest, artifact: windows-x86_64, kind: nsis, pattern: "*.exe" }
-          - { os: macos-14, artifact: macos-arm64, kind: dmg, pattern: "*.dmg" }
-          - { os: macos-15-intel, artifact: macos-x86_64, kind: dmg, pattern: "*.dmg" }
+        include: ${{ fromJSON(needs.plan.outputs.smoke) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -246,6 +261,7 @@ jobs:
           retention-days: 14
 
   web:
+    if: ${{ !inputs.only_msi }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
