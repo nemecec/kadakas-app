@@ -311,13 +311,43 @@ pub fn read_for_load(path: &Path) -> std::io::Result<Option<(Vec<u8>, bool)>> {
 /// lock (one line on stderr): the write goes on without a lock. A writer waits up to a second for
 /// another holder; the holders keep the lock for a few milliseconds.
 pub fn lock(path: &Path) -> std::io::Result<Option<fsio::FileLock>> {
-    fsio::lock_file_or_skip(&fsio::sibling(path, "", ".lock"), LOCK_WAIT)
+    lock_for(path, LOCK_WAIT)
+}
+
+/// Like [`lock`], with the wait given. The poll inside is 20 ms. When the wait runs out the error
+/// is `ErrorKind::WouldBlock` with a text that names the file: the caller shows it and tries
+/// again later (a slow disk or a virus scanner can hold a write for longer than the wait).
+pub fn lock_for(path: &Path, wait: Duration) -> std::io::Result<Option<fsio::FileLock>> {
+    fsio::lock_file_or_skip(&fsio::sibling(path, "", ".lock"), wait).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::WouldBlock {
+            std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!(
+                    "{} is locked by another program (waited {} ms)",
+                    path.display(),
+                    wait.as_millis()
+                ),
+            )
+        } else {
+            e
+        }
+    })
 }
 
 /// Reads the file under its lock, lets `change` edit the object, and writes it again (the
 /// previous file stays as `<name>.bak`).
 pub fn update(path: &Path, change: impl FnOnce(&mut Map<String, Value>)) -> std::io::Result<()> {
-    let _guard = lock(path)?;
+    update_with_wait(path, LOCK_WAIT, change)
+}
+
+/// Like [`update`], with the wait for the lock given (the tests give a long one, so that a slow
+/// machine does not decide the result).
+pub fn update_with_wait(
+    path: &Path,
+    wait: Duration,
+    change: impl FnOnce(&mut Map<String, Value>),
+) -> std::io::Result<()> {
+    let _guard = lock_for(path, wait)?;
     let (mut object, before) = read_for_update_ex(path)?;
     change(&mut object);
     let text = serde_json::to_vec_pretty(&Value::Object(object)).map_err(std::io::Error::other)?;
@@ -623,7 +653,7 @@ mod tests {
         };
         rx.recv().unwrap();
         // Without the lock this would read the empty file, and the key "a" would be lost.
-        update(&p, |o| {
+        update_with_wait(&p, Duration::from_secs(120), |o| {
             o.insert("b".into(), json!(2));
         })
         .unwrap();
@@ -642,7 +672,8 @@ mod tests {
                 let p = p.clone();
                 std::thread::spawn(move || {
                     for _ in 0..10 {
-                        update(&p, |o| {
+                        // A long wait: no timing decides this test, also on a slow runner.
+                        update_with_wait(&p, Duration::from_secs(120), |o| {
                             o.insert(format!("k{i}"), json!(i));
                         })
                         .unwrap();
@@ -652,6 +683,30 @@ mod tests {
             .collect();
         handles.into_iter().for_each(|h| h.join().unwrap());
         assert_eq!(read_object(&p).len(), 8);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_writer_that_runs_out_of_wait_gets_a_clear_error_and_the_file_is_untouched() {
+        let d = tmp("wait-out");
+        let p = d.join("p.json");
+        std::fs::write(&p, r#"{"a": 1}"#).unwrap();
+        let held = lock(&p).unwrap();
+        let e = update_with_wait(&p, Duration::from_millis(50), |o| {
+            o.insert("b".into(), json!(2));
+        })
+        .unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::WouldBlock);
+        let text = e.to_string();
+        assert!(text.contains("p.json") && text.contains("locked"), "{text}");
+        assert_eq!(std::fs::read(&p).unwrap(), br#"{"a": 1}"#);
+        drop(held);
+        // Free again: the same call works.
+        update_with_wait(&p, Duration::from_millis(50), |o| {
+            o.insert("b".into(), json!(2));
+        })
+        .unwrap();
+        assert_eq!(read_object(&p).len(), 2);
         let _ = std::fs::remove_dir_all(&d);
     }
 
