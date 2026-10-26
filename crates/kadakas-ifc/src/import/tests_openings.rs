@@ -305,3 +305,87 @@ fn a_cut_result_that_is_not_closed_is_marked_and_counted() {
     .unwrap();
     assert!(!r.report.notes.iter().any(|n| n.contains("not closed")));
 }
+
+#[test]
+fn a_panic_after_a_wall_cut_its_openings_leaves_no_cut_and_no_wall() {
+    // The wall is the first product. It cuts its two openings, is added, and panics: the wall is
+    // taken back with the counts of the cut, so no note says that openings were cut from it.
+    super::PANIC_AFTER_ADD.with(|c| c.set(true));
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(
+        fixture("wall_with_openings.ifc"),
+        &doc,
+        &IfcImportOptions::default(),
+    )
+    .unwrap();
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).expect("the batch runs");
+    assert!(
+        !r.report
+            .notes
+            .iter()
+            .any(|n| n.contains("were cut from their walls")),
+        "{:?}",
+        r.report.notes
+    );
+    assert!(
+        !objs(&ed).iter().any(|o| o.data["ifc_class"] == "IfcWall"),
+        "the wall is gone"
+    );
+    assert_eq!(r.report.handled_panics.len(), 1);
+    // The openings, whose host is gone, are skipped with their reason, and no layer is left empty.
+    assert!(objs(&ed).is_empty(), "{:?}", r.report);
+    assert!(
+        r.report
+            .skipped
+            .iter()
+            .any(|s| s.entity == "IfcOpeningElement" && s.count == 2),
+        "{:?}",
+        r.report.skipped
+    );
+    assert!(r.report.layers_created.is_empty(), "{:?}", r.report);
+    assert_eq!(
+        r.report.entities_read,
+        r.report.entities_imported + r.report.entities_skipped
+    );
+}
+
+#[test]
+fn the_probe_pass_cuts_no_openings() {
+    // The wall and its openings are far away, in the points of their solids, with every placement
+    // at the origin: the first pass skips all, the probe measures, the second pass imports.
+    // The probe makes no cut (3 passes would cut twice more): two passes cut, the probe does not.
+    let text = String::from_utf8(fixture("wall_with_openings.ifc"))
+        .unwrap()
+        .replace(
+            "#101=IFCCARTESIANPOINT((2000.,100.,0.))",
+            "#101=IFCCARTESIANPOINT((6500002000.,6500000100.,0.))",
+        )
+        .replace(
+            "#201=IFCCARTESIANPOINT((1000.,100.,0.))",
+            "#201=IFCCARTESIANPOINT((6500001000.,6500000100.,0.))",
+        )
+        .replace(
+            "#301=IFCCARTESIANPOINT((3000.,-50.,1500.))",
+            "#301=IFCCARTESIANPOINT((6500003000.,6499999950.,1500.))",
+        );
+    super::CUT_CALLS.with(|c| c.set(0));
+    let doc = Document::with_sequential_ids();
+    let r = import_bytes(text.into_bytes(), &doc, &IfcImportOptions::default()).unwrap();
+    let calls = super::CUT_CALLS.with(|c| c.get());
+    assert!(
+        r.report
+            .notes
+            .iter()
+            .any(|n| n.contains("read again with a shift")),
+        "{:?}",
+        r.report.notes
+    );
+    assert_eq!(
+        calls, 2,
+        "first pass and second pass cut, the probe does not"
+    );
+    let mut ed = Editor::new(doc);
+    ed.execute(&r.command).unwrap();
+    assert_eq!(objs(&ed).len(), 1, "{:?}", r.report);
+}

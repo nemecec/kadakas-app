@@ -378,7 +378,8 @@ impl Node {
 fn polygons_of(m: &MeshData, fuel: &Fuel) -> Result<Vec<Polygon>, CsgError> {
     let mut mesh = m.clone();
     mesh.weld(EPS);
-    heal_t_junctions(&mut mesh, fuel);
+    // An operand that cannot be healed is not used: the budget is used up.
+    heal_t_junctions(&mut mesh, fuel, HEAL_CELLS)?;
     if mesh.t.is_empty() {
         return Err(CsgError::Empty);
     }
@@ -455,7 +456,9 @@ fn mesh_of(polys: &[Polygon], fuel: &Fuel) -> MeshData {
     }
     m.weld(EPS);
     m.compact();
-    heal_t_junctions(&mut m, fuel);
+    // A result that cannot be healed (the budget is used up) is kept as it is, not closed: the
+    // caller checks `is_closed` and the import says so.
+    let _ = heal_t_junctions(&mut m, fuel, heal_limit());
     m
 }
 
@@ -470,11 +473,11 @@ fn mesh_of(polys: &[Polygon], fuel: &Fuel) -> MeshData {
 /// the budget of the import). It gives up, with the mesh unchanged, when they pass the fuel or
 /// [`HEAL_CELLS`] for one mesh; the caller finds out with `is_closed` (a result that is not closed is
 /// marked and counted). The budget is counted, not timed.
-fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel) {
+fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel, cap: u64) -> Result<(), CsgError> {
     use std::collections::HashMap;
     let n = m.v.len();
     let Some((lo, hi)) = m.bounds() else {
-        return;
+        return Ok(());
     };
     let extent = hi - lo;
     let longest = extent.max_element().max(1e-9);
@@ -511,9 +514,9 @@ fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel) {
             );
             let count = ((c1.0 - c0.0 + 1) * (c1.1 - c0.1 + 1) * (c1.2 - c0.2 + 1)).max(1) as u64;
             visited += count;
-            if visited > heal_limit() || count > fuel.left() {
-                fuel.spend(visited);
-                return;
+            // The cells of the edges before this one are charged already: giving up costs no more.
+            if visited > cap || count > fuel.left() {
+                return Err(CsgError::OutOfFuel);
             }
             fuel.spend(count);
             let mut extra: Vec<(f64, u32)> = Vec::new();
@@ -561,6 +564,7 @@ fn heal_t_junctions(m: &mut MeshData, fuel: &Fuel) {
     }
     m.v.extend(centres);
     m.t = out;
+    Ok(())
 }
 
 /// Cells that the healing of T-junctions may look at (a cell with a few vertices costs a few steps).
@@ -970,13 +974,29 @@ mod budget_tests {
         let (wall, _) = wall_with(3, 7000.0, DVec3::ZERO);
         let fuel = Fuel::new(IMPORT_FUEL);
         let mut m = wall.clone();
-        heal_t_junctions(&mut m, &fuel);
-        assert!(fuel.left() < IMPORT_FUEL, "the healing used no fuel");
+        heal_t_junctions(&mut m, &fuel, HEAL_CELLS).unwrap();
+        let used = IMPORT_FUEL - fuel.left();
+        assert!(used > 0, "the healing used no fuel");
         // Without fuel it gives up and the mesh stays as it was.
         let none = Fuel::new(0);
         let mut m = wall.clone();
-        heal_t_junctions(&mut m, &none);
+        assert!(matches!(
+            heal_t_junctions(&mut m, &none, HEAL_CELLS),
+            Err(CsgError::OutOfFuel)
+        ));
         assert_eq!(m, wall);
+        // A budget that is too small: it gives up with the mesh unchanged, and what it spent is
+        // the cells of the edges before the one that did not fit, never more than the budget
+        // and less than the whole healing needs.
+        let small = Fuel::new(used / 2);
+        let mut m = wall.clone();
+        assert!(heal_t_junctions(&mut m, &small, HEAL_CELLS).is_err());
+        assert_eq!(m, wall);
+        let spent = used / 2 - small.left();
+        assert!(
+            spent > 0 && spent <= used / 2 && small.left() < used,
+            "{spent}"
+        );
     }
 
     #[test]
