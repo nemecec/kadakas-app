@@ -12,7 +12,7 @@ description = "The ZIP container of a Kadakas file (DOC-20): a bounded reader wi
 flate2 = "1.1.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 thiserror = "2.0.21"
 
 [dev-dependencies]

@@ -11,7 +11,7 @@ description = "The property model of a Kadakas document: things by Uid with prop
 [dependencies]
 kadakas-core = { path = "../kadakas-core" }
 serde = { version = "1.0.229", features = ["derive"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
 

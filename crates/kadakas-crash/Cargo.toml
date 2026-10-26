@@ -16,7 +16,7 @@ capture = ["dep:crash-handler", "dep:libc"]
 kadakas-feedback = { path = "../kadakas-feedback" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kadakas-sys = { path = "../kadakas-sys" }

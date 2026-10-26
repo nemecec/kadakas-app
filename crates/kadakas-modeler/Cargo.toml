@@ -28,7 +28,7 @@ kadakas-units = { path = "../kadakas-units" }
 kadakas-update = { path = "../kadakas-update" }
 kadakas-view3d = { path = "../kadakas-view3d" }
 resvg = { version = "0.48.1", default-features = false }
-rfd = { version = "0.15", features = ["file-handle-inner"] }
+rfd = { version = "0.17", features = ["file-handle-inner"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sys-locale = "0.3.2"

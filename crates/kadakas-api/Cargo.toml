@@ -15,7 +15,7 @@ default = ["script-js"]
 script-js = ["kadakas-script-js/engine"]
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 kadakas-annot = { path = "../kadakas-annot" }
 kadakas-collab = { path = "../kadakas-collab" }
 kadakas-core = { path = "../kadakas-core" }
@@ -33,7 +33,7 @@ kadakas-review = { path = "../kadakas-review" }
 kadakas-sheet = { path = "../kadakas-sheet" }
 kadakas-site = { path = "../kadakas-site" }
 glam = { version = "0.34.1", features = ["serde"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 # The parameters of every method are structs: serde parses them, schemars makes their JSON Schema,

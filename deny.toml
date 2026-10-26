@@ -67,9 +67,6 @@ yanked = "deny"
 ignore = [
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained (a notice, not a bug). It comes through ab_glyph in kadakas-print, which reads fonts that ship with the program. Move the PDF text code to skrifa later." },
   { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (a notice, not a bug). It is pulled in only by egui_dock; no maintained upgrade." },
-  { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained (a notice, not a bug): it moved into zbus 6. It comes through rfd -> ashpd -> zbus 5, the Linux file dialog. Remove this when rfd uses zbus 6." },
-  { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained (a notice, not a bug): it moved into zbus 6. Same path as RUSTSEC-2026-0370." },
-  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained (a notice, not a bug): it moved into zbus 6. Same path as RUSTSEC-2026-0370." },
 ]
 
 [sources]

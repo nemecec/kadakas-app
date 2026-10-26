@@ -36,6 +36,16 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "wasmtime*"
         update-types: ["version-update:semver-major"]
+      # wasm-encoder and wasmparser follow wasmtime: wasmtime 49 depends on the same 0.258
+      # version, and a different direct version would give two copies in the tree.
+      - dependency-name: "wasm-encoder"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "wasmparser"
+        update-types: ["version-update:semver-major"]
+      # epaint_default_fonts follows egui: it must be the version that epaint uses, or the
+      # fonts of the UI would exist twice.
+      - dependency-name: "epaint_default_fonts"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
