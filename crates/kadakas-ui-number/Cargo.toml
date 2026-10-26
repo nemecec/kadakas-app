@@ -1,0 +1,12 @@
+[package]
+name = "kadakas-ui-number"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Number widgets of egui that follow the number format of the person (PLAT-26): a decimal point or comma, digit grouping, and a tolerant reading of typed numbers. Wasm-compatible."
+
+[dependencies]
+egui = "0.35.0"
+kadakas-units = { version = "0.1.0", path = "../kadakas-units" }

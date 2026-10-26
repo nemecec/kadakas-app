@@ -181,7 +181,7 @@ impl Settings {
     /// app writes the update part) keeps what another program changed in the other part.
     ///
     /// The file is locked while this runs. A file that cannot be parsed is first copied to
-    /// `launcher.json.bak`. A read error other than "not found" stops the write: the file is not
+    /// `launcher.json.damaged-<seconds>`. A read error other than "not found" stops the write: the file is not
     /// replaced by defaults.
     pub fn update(root: &Path, change: impl FnOnce(&mut Settings)) -> std::io::Result<Settings> {
         std::fs::create_dir_all(root)?;
@@ -342,10 +342,9 @@ mod tests {
         let root = tmp("settings-bak");
         std::fs::write(Settings::path(&root), b"{ nope").unwrap();
         Settings::update(&root, |s| s.keep_older = 3).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.join("launcher.json.bak")).unwrap(),
-            "{ nope"
-        );
+        let kept = kadakas_sys::jsonfile::damaged_copies(&Settings::path(&root));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{ nope");
         assert_eq!(Settings::load(&root).keep_older, 3);
         // A folder in place of the file is a read error: nothing is replaced.
         let root2 = tmp("settings-eio");

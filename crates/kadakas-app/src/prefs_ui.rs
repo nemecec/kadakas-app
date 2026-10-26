@@ -5,10 +5,10 @@ use crate::autosave_ui::AutosaveUi;
 use crate::icon_size::IconSize;
 use crate::locale::LanguageChoice;
 use kadakas_l10n::tr;
+use kadakas_ui_number::UiNumber;
 use kadakas_units::{
     AngleFormat, AreaUnit, Date, DateFormat, Decimal, Grouping, LengthUnit, Settings,
 };
-use kadakas_view3d::numfmt::UiNumber;
 
 /// The name of a navigation style.
 pub fn nav_style_label(n: kadakas_ui_core::nav3d::NavStyle) -> String {

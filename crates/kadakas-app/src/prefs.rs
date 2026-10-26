@@ -31,6 +31,7 @@ fn nav_style_or_default<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    #[serde(deserialize_with = "kadakas_units::lenient")]
     pub theme: ThemeChoice,
     pub snap: Settings,
     /// Show the SmartCursor cue label at the pointer.
@@ -133,13 +134,6 @@ pub fn load_from(dir: &std::path::Path) -> (Prefs, Option<String>) {
     }
 }
 
-pub fn load() -> (Prefs, Option<String>) {
-    match dir() {
-        Some(d) => load_from(&d),
-        None => (Prefs::default(), None),
-    }
-}
-
 /// Writes a file of the prefs folder. The file is written whole in a temporary file first, so a
 /// crash cannot leave half a file.
 pub fn write_file(dir: &std::path::Path, name: &str, text: &str) -> Result<(), String> {
@@ -172,13 +166,6 @@ pub fn save_changes_to(dir: &std::path::Path, saved: &Prefs, now: &Prefs) -> Res
         .map_err(|e| tr!("prefs-cannot-write", path = path.display(), e = e))
 }
 
-pub fn save_changes(saved: &Prefs, now: &Prefs) -> Result<(), String> {
-    match dir() {
-        Some(d) => save_changes_to(&d, saved, now),
-        None => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +195,26 @@ mod tests {
         .unwrap();
         let (p, _) = load_from(&d);
         assert_eq!((p.max_versions, p.max_version_mib), (7, 9));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn values_from_a_newer_version_give_defaults_for_those_fields_only() {
+        let d = temp("newer-values");
+        write_file(
+            &d,
+            "prefs.json",
+            r#"{"theme":"high_contrast","cues":false,"units":{"grouping":"thin","length":"ft_in","decimal":"comma"},"language":"et"}"#,
+        )
+        .unwrap();
+        let (p, w) = load_from(&d);
+        assert_eq!(w, None, "the file is not ignored");
+        assert_eq!(p.theme, ThemeChoice::System);
+        assert!(!p.cues);
+        assert_eq!(p.units.grouping, None);
+        assert_eq!(p.units.length, kadakas_units::LengthUnit::FtIn);
+        assert_eq!(p.units.decimal, Some(kadakas_units::Decimal::Comma));
+        assert_eq!(p.language.tag(), Some("et"));
         let _ = std::fs::remove_dir_all(&d);
     }
 

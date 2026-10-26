@@ -16,7 +16,7 @@ use kadakas_core::surface::{FaceId, PaintSide};
 use kadakas_l10n::tr;
 use kadakas_ui_core::materials::{MaterialEdit, MaterialRow, MaterialsPanel, Request};
 use kadakas_ui_core::modeler::{EntityInfo, Summary};
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 /// Which panels of the tray are open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

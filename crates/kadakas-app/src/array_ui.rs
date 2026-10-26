@@ -9,7 +9,7 @@ use kadakas_core::command::Command;
 use kadakas_core::edit2d::spec::{ArrayLayout, ArrayParams};
 use kadakas_core::model::ObjectId;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 fn len(v: &mut f64) -> DragValue<'_> {
     DragValue::new(v).speed(10.0).range(-1.0e7..=1.0e7).length()

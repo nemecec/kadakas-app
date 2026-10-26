@@ -66,10 +66,15 @@ pub fn prefs_dir_for(os: &str, env: impl Fn(&str) -> Option<OsString>) -> Option
         return Some(d);
     }
     if let Some(k) = var(&env, "KADAKAS_KEYMAP") {
-        return k
-            .parent()
-            .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty());
+        // A relative file name (`keymap.json`) has an empty folder. That is the current folder,
+        // where the keymap itself is looked for.
+        return k.parent().map(|p| {
+            if p.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        });
     }
     config_dir_for(os, env)
 }
@@ -170,6 +175,11 @@ mod tests {
         assert_eq!(prefs_dir_for("linux", both), Some(PathBuf::from("/p")));
         let keymap = env(&[("KADAKAS_KEYMAP", "/k/keymap.json"), ("HOME", "/h")]);
         assert_eq!(prefs_dir_for("linux", keymap), Some(PathBuf::from("/k")));
+        // A relative keymap: the current folder, as for the keymap itself.
+        let relative = env(&[("KADAKAS_KEYMAP", "keymap.json"), ("HOME", "/h")]);
+        assert_eq!(prefs_dir_for("linux", relative), Some(PathBuf::from(".")));
+        let nested = env(&[("KADAKAS_KEYMAP", "conf/keymap.json")]);
+        assert_eq!(prefs_dir_for("linux", nested), Some(PathBuf::from("conf")));
         let none = env(&[("KADAKAS_PREFS_DIR", ""), ("HOME", "/h")]);
         assert_eq!(
             prefs_dir_for("linux", none),

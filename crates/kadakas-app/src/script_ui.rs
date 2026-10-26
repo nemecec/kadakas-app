@@ -6,7 +6,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use std::path::{Path, PathBuf};
 
 use std::collections::VecDeque;

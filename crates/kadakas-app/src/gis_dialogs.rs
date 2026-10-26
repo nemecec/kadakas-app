@@ -7,7 +7,7 @@
 
 use kadakas_api::Session;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

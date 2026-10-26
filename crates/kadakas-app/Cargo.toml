@@ -39,6 +39,7 @@ kadakas-crash = { path = "../kadakas-crash" }
 kadakas-file = { path = "../kadakas-file" }
 kadakas-sheet = { path = "../kadakas-sheet" }
 kadakas-site = { path = "../kadakas-site" }
+kadakas-ui-number = { path = "../kadakas-ui-number" }
 eframe = { version = "0.35.0", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 egui = "0.35.0"
 egui_dock = { version = "0.20.1", features = ["serde"] }

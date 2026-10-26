@@ -2532,6 +2532,7 @@ dependencies = [
  "kadakas-site",
  "kadakas-sys",
  "kadakas-ui-core",
+ "kadakas-ui-number",
  "kadakas-units",
  "kadakas-update",
  "kadakas-view3d",
@@ -2758,6 +2759,7 @@ dependencies = [
  "kadakas-feedback",
  "kadakas-l10n",
  "kadakas-sys",
+ "kadakas-units",
  "kadakas-update",
  "kadakas-welcome",
  "objc2 0.6.5",
@@ -2793,6 +2795,7 @@ dependencies = [
  "kadakas-render",
  "kadakas-sys",
  "kadakas-ui-core",
+ "kadakas-ui-number",
  "kadakas-units",
  "kadakas-update",
  "kadakas-view3d",
@@ -3009,6 +3012,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kadakas-ui-number"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "kadakas-units",
+]
+
+[[package]]
 name = "kadakas-units"
 version = "0.1.0-beta.1"
 dependencies = [
@@ -3049,7 +3060,7 @@ dependencies = [
  "kadakas-render",
  "kadakas-review",
  "kadakas-ui-core",
- "kadakas-units",
+ "kadakas-ui-number",
  "pollster 1.0.1",
  "serde_json",
 ]

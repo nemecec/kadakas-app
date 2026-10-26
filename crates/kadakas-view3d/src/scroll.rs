@@ -50,17 +50,37 @@ pub fn wheel_events(events: &[egui::Event]) -> Vec<WheelEvent> {
 /// What this frame of scroll and pinch does to the view of the canvas `id` in the style `style`.
 /// Call it when the pointer is over the canvas.
 pub fn frame_motion(ctx: &egui::Context, id: egui::Id, style: NavStyle) -> ScrollMotion {
-    let (events, smooth, pinch) = ctx.input(|i| {
+    let (events, smooth, pinch, now) = ctx.input(|i| {
         (
             i.events.clone(),
             Vec2::new(i.smooth_scroll_delta.x, i.smooth_scroll_delta.y),
             i.zoom_delta(),
+            i.time,
         )
     });
     let mut latch: ScrollLatch = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
-    let motion = scroll_motion(style, &mut latch, &wheel_events(&events), smooth, pinch);
+    let motion = scroll_motion(
+        style,
+        &mut latch,
+        &wheel_events(&events),
+        smooth,
+        pinch,
+        now,
+    );
     ctx.data_mut(|d| d.insert_temp(id, latch));
     motion
+}
+
+/// The pointer is not over the canvas: the gesture that was going on is forgotten, so a Shift
+/// choice does not wait for the next time the pointer comes back.
+pub fn pointer_left(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| {
+        if let Some(latch) = d.get_temp::<ScrollLatch>(id) {
+            let mut latch = latch;
+            latch.forget();
+            d.insert_temp(id, latch);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -174,6 +194,39 @@ mod tests {
             NavStyle::Trackpad,
         );
         assert_eq!((m.pan, m.orbit), (Vec2::new(5.0, 30.0), Vec2::ZERO));
+    }
+
+    #[test]
+    fn the_gesture_is_forgotten_when_the_pointer_leaves_the_canvas() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("c");
+        motion(
+            &ctx,
+            vec![wheel(
+                egui::MouseWheelUnit::Point,
+                0.0,
+                0.0,
+                true,
+                egui::TouchPhase::Start,
+            )],
+            NavStyle::Trackpad,
+        );
+        pointer_left(&ctx, id);
+        // Back on the canvas, a Move without Shift is a pan: the Shift of the old gesture is gone.
+        let m = motion(
+            &ctx,
+            vec![wheel(
+                egui::MouseWheelUnit::Point,
+                0.0,
+                12.0,
+                false,
+                egui::TouchPhase::Move,
+            )],
+            NavStyle::Trackpad,
+        );
+        assert_eq!(m.pan, Vec2::new(0.0, 12.0));
+        // Nothing to forget: no panic.
+        pointer_left(&egui::Context::default(), id);
     }
 
     #[test]

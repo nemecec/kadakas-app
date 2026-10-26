@@ -30,3 +30,6 @@ welcome-use-defaults = Use defaults
 welcome-save = Save
 welcome-cancel = Cancel
 welcome-failed = Some settings could not be saved: { $problems }
+welcome-keys-first = Enter starts. Esc uses the defaults.
+welcome-keys-update = Enter starts. Esc cancels.
+welcome-keys-manual = Enter saves. Esc cancels.

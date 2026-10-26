@@ -179,6 +179,8 @@ pub struct ModelerApp {
     pub prefs: Prefs,
     /// The settings as they are on disk. A change is written when the two differ.
     prefs_saved: Prefs,
+    /// When a save failed, the pause before the next try.
+    prefs_retry: kadakas_ui_core::retry::Retry,
     /// Where the settings are written. `None` writes nothing (the tests).
     prefs_dir: Option<PathBuf>,
     theme_applied: Option<ThemeChoice>,
@@ -258,6 +260,7 @@ impl ModelerApp {
             info_cache: None,
             keys: Profile::sketchup().keymap,
             prefs_saved: prefs.clone(),
+            prefs_retry: Default::default(),
             prefs,
             prefs_dir: None,
             theme_applied: None,
@@ -1621,7 +1624,7 @@ impl ModelerApp {
 
     /// Makes the theme and the language of the settings current, and writes a change to disk.
     fn apply_prefs(&mut self, ctx: &egui::Context) {
-        if self.launch.take_welcome_applied(ctx.input(|i| i.time)) {
+        if self.launch.take_settings_changed(ctx.input(|i| i.time)) {
             self.reload_prefs(ctx);
         }
         if self.language_applied.as_ref() != Some(&self.prefs.language) {
@@ -1633,13 +1636,24 @@ impl ModelerApp {
             ctx.set_theme(self.prefs.theme.preference());
             self.theme_applied = Some(self.prefs.theme);
         }
-        if self.prefs != self.prefs_saved {
-            if let Some(dir) = &self.prefs_dir
-                && let Err(e) = prefs::save_changes_to(dir, &self.prefs_saved, &self.prefs)
-            {
-                self.status = e;
+        // A failed save keeps the changes unsaved and is tried again after a pause that grows.
+        // The status line says what failed at each try.
+        let now = ctx.input(|i| i.time);
+        if self.prefs != self.prefs_saved && self.prefs_retry.due(now) {
+            let result = match &self.prefs_dir {
+                Some(dir) => prefs::save_changes_to(dir, &self.prefs_saved, &self.prefs),
+                None => Ok(()),
+            };
+            match result {
+                Ok(()) => {
+                    self.prefs_saved = self.prefs.clone();
+                    self.prefs_retry.succeeded();
+                }
+                Err(e) => {
+                    self.status = e;
+                    self.prefs_retry.failed(now);
+                }
             }
-            self.prefs_saved = self.prefs.clone();
         }
     }
 

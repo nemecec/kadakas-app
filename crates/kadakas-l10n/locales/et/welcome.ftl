@@ -30,3 +30,6 @@ welcome-use-defaults = Kasuta vaikeväärtusi
 welcome-save = Salvesta
 welcome-cancel = Katkesta
 welcome-failed = Mõnda seadet ei saanud salvestada: { $problems }
+welcome-keys-first = Enter alustab. Esc kasutab vaikeväärtusi.
+welcome-keys-update = Enter alustab. Esc katkestab.
+welcome-keys-manual = Enter salvestab. Esc katkestab.

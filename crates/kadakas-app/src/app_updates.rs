@@ -12,10 +12,10 @@
 //! window and draws.
 
 use kadakas_l10n::tr;
+use kadakas_ui_number::UiNumber;
 use kadakas_update::handshake::{AppLink, Notice, RunStatus, SkipReason, notice};
 use kadakas_update::settings::{MAX_KEEP_OLDER, valid_site};
 use kadakas_update::{Channel, Settings, UpdateMode};
-use kadakas_view3d::numfmt::UiNumber;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -122,7 +122,7 @@ impl Updates {
         let settings = root.as_deref().map(Settings::load).unwrap_or_default();
         let welcome_seen = root
             .as_deref()
-            .map(kadakas_update::welcome::applied_stamp)
+            .map(kadakas_update::welcome::changed_stamp)
             .unwrap_or_default();
         Updates {
             _heartbeat: link.as_ref().map(AppLink::start_heartbeat),
@@ -185,7 +185,7 @@ impl Updates {
 
     /// True once when the welcome dialog stored choices since this run last looked. Looks twice a
     /// second at most.
-    pub fn take_welcome_applied(&mut self, now: f64) -> bool {
+    pub fn take_settings_changed(&mut self, now: f64) -> bool {
         let Some(root) = self.root.as_deref().filter(|_| self.link.is_some()) else {
             return false;
         };
@@ -193,11 +193,16 @@ impl Updates {
             return false;
         }
         self.next_welcome_poll = now + OPEN_POLL_SECONDS;
-        let stamp = kadakas_update::welcome::applied_stamp(root);
+        let stamp = kadakas_update::welcome::changed_stamp(root);
         if stamp == self.welcome_seen {
             return false;
         }
         self.welcome_seen = stamp;
+        // The dialog may have stored the update mode: read the settings again, so that a later
+        // change in Preferences starts from what is in the file.
+        self.settings = Settings::load(root);
+        self.saved = self.settings.clone();
+        self.site_text = self.settings.site.clone();
         true
     }
 
@@ -300,20 +305,26 @@ impl Updates {
         if self.settings == self.saved {
             return;
         }
-        let want = self.settings.clone();
+        // Only the fields that this window changed: the copy in memory can be older than the
+        // file (the welcome dialog stored a mode), and the other fields must stay as they are.
+        let (want, old) = (self.settings.clone(), self.saved.clone());
         match Settings::update(&root, |s| {
-            s.mode = want.mode;
-            s.channel = want.channel;
-            s.keep_older = want.keep_older;
-            s.site = want.site.clone();
+            if want.mode != old.mode {
+                s.mode = want.mode;
+            }
+            if want.channel != old.channel {
+                s.channel = want.channel;
+            }
+            if want.keep_older != old.keep_older {
+                s.keep_older = want.keep_older;
+            }
+            if want.site != old.site {
+                s.site = want.site.clone();
+            }
         }) {
             Ok(saved) => {
-                self.settings = Settings {
-                    flavor: saved.flavor.clone(),
-                    profile: saved.profile.clone(),
-                    ..self.settings.clone()
-                };
-                self.saved = self.settings.clone();
+                self.settings = saved.clone();
+                self.saved = saved;
             }
             Err(e) => {
                 self.error = Some(tr!("app-updates-save-failed", error = e.to_string()));
@@ -609,19 +620,54 @@ mod tests {
     }
 
     #[test]
+    fn a_change_in_preferences_does_not_undo_the_mode_that_the_dialog_stored() {
+        let d = tmp("welcome-mode");
+        Settings::default().save(&d).unwrap();
+        let mut u = Updates::from_env(&env_of(&d));
+        assert_eq!(u.settings.mode, UpdateMode::AutoUpdate);
+        // The dialog stores a mode and moves the stamp.
+        Settings::update(&d, |s| s.mode = UpdateMode::NotifyOnly).unwrap();
+        kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
+        // Before the window looks at the stamp: the person changes Keep older. The mode in the
+        // file stays, because this window did not change it.
+        u.settings.keep_older = 4;
+        u.save_if_changed();
+        let s = Settings::load(&d);
+        assert_eq!((s.mode, s.keep_older), (UpdateMode::NotifyOnly, 4));
+        assert_eq!(
+            u.settings.mode,
+            UpdateMode::NotifyOnly,
+            "the window shows the file now"
+        );
+        // After the stamp: the window reads the mode too.
+        Settings::update(&d, |s| s.mode = UpdateMode::AutoDownload).unwrap();
+        kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
+        assert!(u.take_settings_changed(10.0));
+        assert_eq!(u.settings.mode, UpdateMode::AutoDownload);
+        u.settings.keep_older = 2;
+        u.save_if_changed();
+        let s = Settings::load(&d);
+        assert_eq!((s.mode, s.keep_older), (UpdateMode::AutoDownload, 2));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn a_stored_welcome_choice_is_seen_once() {
         let d = tmp("welcome-stamp");
         let mut u = Updates::from_env(&env_of(&d));
-        assert!(!u.take_welcome_applied(0.0));
+        assert!(!u.take_settings_changed(0.0));
         kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
-        assert!(!u.take_welcome_applied(0.1), "looks twice a second at most");
-        assert!(u.take_welcome_applied(1.0));
-        assert!(!u.take_welcome_applied(2.0), "once");
+        assert!(
+            !u.take_settings_changed(0.1),
+            "looks twice a second at most"
+        );
+        assert!(u.take_settings_changed(1.0));
+        assert!(!u.take_settings_changed(2.0), "once");
         kadakas_update::welcome::write_mark(&d, 1, true).unwrap();
-        assert!(u.take_welcome_applied(3.0));
+        assert!(u.take_settings_changed(3.0));
         // Without the launcher nothing is looked at.
         let mut alone = Updates::new(None, Some(d.clone()));
-        assert!(!alone.take_welcome_applied(10.0));
+        assert!(!alone.take_settings_changed(10.0));
         std::fs::remove_dir_all(&d).unwrap();
     }
 

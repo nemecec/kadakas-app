@@ -9,7 +9,7 @@ use kadakas_core::command::Command;
 use kadakas_core::model::{Attributes, Document, Object, Shape};
 use kadakas_core::resource::ResourceId;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 use crate::canvas::{Style, color32};
 use crate::view::{View, ViewExt as _};

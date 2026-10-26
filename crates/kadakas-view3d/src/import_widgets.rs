@@ -2,9 +2,9 @@
 //! `kadakas-modeler`: the unit and the up axis of the file, and the question "Soften edges
 //! under an angle?". The logic is in `kadakas_ui_core::mesh_import`.
 
-use crate::numfmt::UiNumber;
 use kadakas_l10n::tr;
 use kadakas_ui_core::mesh_import::{self, MeshImportForm, SoftenPref};
+use kadakas_ui_number::UiNumber;
 
 /// The unit and the up axis of the file, and moving the model to the origin. `salt` makes the ids
 /// of the combo boxes different for two windows.

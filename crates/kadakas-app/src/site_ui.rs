@@ -17,7 +17,7 @@ use kadakas_l10n::tr;
 use kadakas_site::draw::shown_surfaces;
 use kadakas_site::{SiteCache, Surface};
 use kadakas_ui_core::tools::ToolSettings;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use serde_json::json;
 
 use crate::canvas::color32;

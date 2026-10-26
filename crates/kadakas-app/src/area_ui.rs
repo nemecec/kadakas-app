@@ -4,7 +4,7 @@
 
 use crate::units_ui::DragValueExt as _;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};

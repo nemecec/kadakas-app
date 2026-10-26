@@ -3,7 +3,7 @@
 format of the person (decimal symbol and digit grouping), through one helper:
 
 * a `DragValue` or a `Slider` of egui has a unit extension (`.length()`, `.degrees()`, ...) or
-  `.ui_number()` (crates/kadakas-view3d/src/numfmt.rs), which writes the number in the format of
+  `.ui_number()` (crates/kadakas-ui-number), which writes the number in the format of
   the person and reads both `.` and `,`;
 * a decimal number in a label goes through `kadakas_units::num` and its relatives, not through
   `format!("{:.2}", x)`.
@@ -22,9 +22,17 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CRATES = ["kadakas-app", "kadakas-modeler", "kadakas-view3d", "kadakas-ui-core"]
+CRATES = [
+    "kadakas-app",
+    "kadakas-modeler",
+    "kadakas-view3d",
+    "kadakas-ui-core",
+    "kadakas-launcher",
+    "kadakas-update",
+    "kadakas-welcome",
+]
 ALLOW = ROOT / "scripts" / "number-format-allow.txt"
-IMPORT = "use kadakas_view3d::numfmt::UiNumber;"
+IMPORT = "use kadakas_ui_number::UiNumber;"
 
 # A widget that has one of these in its builder chain is fine.
 MARKERS = (
@@ -41,7 +49,12 @@ MARKERS = (
     "show_value(false)",
 )
 WIDGET = re.compile(r"\b(?:egui::)?(DragValue|Slider)::new\(")
-RAW_FLOAT = re.compile(r'format!\(\s*"[^"]*\{[a-z_0-9.\[\]]*:\.[1-9]\}')
+# A macro that writes text, and a placeholder with a precision in its text: `{:.2}`, `{x:.10}`,
+# `{:>6.1}`, `{:.prec$}`, `{:.*}`. A precision of 0 writes a whole number and is fine.
+MACRO = re.compile(r"\b(?:format|write|writeln|print|println|eprint|eprintln|panic)!\(")
+PLACEHOLDER = re.compile(
+    r"\{(?:[A-Za-z_][\w.\[\]]*)?:[^{}]*\.(?:[1-9]\d*|[A-Za-z_]\w*\$|\*)[^{}]*\}"
+)
 
 
 def code_part(text):
@@ -87,6 +100,18 @@ def widgets(text):
     for m in WIDGET.finditer(text):
         end = chain_end(text, m.end() - 1)
         out.append((m.start(), end, text[m.start() : end]))
+    return out
+
+
+def raw_floats(code):
+    """(position, text of the macro call) for each text macro (format!, write!, println!, ...)
+    that has a placeholder with a precision."""
+    out = []
+    for m in MACRO.finditer(code):
+        end = skip_group(code, m.end() - 1)
+        call = code[m.start() : end]
+        if PLACEHOLDER.search(call):
+            out.append((m.start(), call))
     return out
 
 
@@ -138,7 +163,7 @@ def main(argv):
     problems = []
     for p in files():
         rel = p.relative_to(ROOT).as_posix()
-        if rel.endswith("kadakas-view3d/src/numfmt.rs") or rel.endswith("units_ui.rs"):
+        if rel.startswith("crates/kadakas-ui-number/") or rel.endswith("units_ui.rs"):
             continue
         text = p.read_text(encoding="utf-8")
         code = code_part(text)
@@ -158,14 +183,15 @@ def main(argv):
                 f"{rel}:{line_of(code, start)}: a number widget without `.ui_number()` or a unit "
                 "extension (it writes a point and reads only a point)"
             )
-        for m in RAW_FLOAT.finditer(code):
-            line_start = code.rfind("\n", 0, m.start()) + 1
-            line = code[line_start : code.find("\n", m.start())]
-            if line.strip().startswith("//") or allowed(rules, rel, line):
+        for pos, text in raw_floats(code):
+            line_start = code.rfind("\n", 0, pos) + 1
+            line = code[line_start : code.find("\n", pos)]
+            if line.strip().startswith("//") or allowed(rules, rel, line) or allowed(rules, rel, text):
                 continue
             problems.append(
-                f"{rel}:{line_of(code, m.start())}: a decimal number in format! with a fixed "
-                "decimal point; use kadakas_units::num (or the allow list, with a reason)"
+                f"{rel}:{line_of(code, pos)}: a decimal number with a fixed precision in a "
+                "format string (`{:.2}`, `{:>6.1}`, `{:.prec$}`); use kadakas_units::num "
+                "(or the allow list, with a reason)"
             )
     if not fix:
         for r in rules:

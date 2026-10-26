@@ -218,6 +218,10 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         }
     }
 
+    if !resp.hovered() {
+        kadakas_view3d::scroll::pointer_left(ui.ctx(), egui::Id::new("scroll"));
+    }
+
     // Drags. What a drag does is decided once, when it starts, from the tool, the button and the
     // keys held at that moment. Letting go of a key later does not change the drag.
     for (button, egui_button) in [

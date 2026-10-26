@@ -101,6 +101,10 @@ pub struct KadakasApp {
     /// The preferences of the window and the copy that was saved last.
     prefs: Prefs,
     prefs_saved: Prefs,
+    /// Where the preferences are written (`prefs::dir()`; the tests use a temporary folder).
+    prefs_dir: Option<std::path::PathBuf>,
+    /// When a save of the preferences failed, the pause before the next try.
+    prefs_retry: kadakas_ui_core::retry::Retry,
     theme_applied: Option<ThemeChoice>,
     /// The language and the units that the program uses now (see `locale`), and the tag of the
     /// language.
@@ -324,7 +328,11 @@ impl KadakasApp {
             rs.renderer.write().callback_resources.insert(gpu);
             app.gpu_ready = true;
         }
-        let (prefs, prefs_warning) = prefs::load();
+        app.prefs_dir = prefs::dir();
+        let (prefs, prefs_warning) = match &app.prefs_dir {
+            Some(d) => prefs::load_from(d),
+            None => (Prefs::default(), None),
+        };
         app.prefs = prefs;
         app.prefs_saved = prefs;
         app.session.snap = prefs.snap;
@@ -532,6 +540,8 @@ impl KadakasApp {
             snap_hit: None,
             prefs: Prefs::default(),
             prefs_saved: Prefs::default(),
+            prefs_dir: None,
+            prefs_retry: Default::default(),
             theme_applied: None,
             locale_applied: (
                 crate::locale::LanguageChoice::SYSTEM,
@@ -1498,7 +1508,7 @@ impl KadakasApp {
             self.status = note;
         }
         // The welcome dialog stored choices (Help > Show welcome): read the preferences again.
-        if self.updates.take_welcome_applied(ctx.input(|i| i.time)) {
+        if self.updates.take_settings_changed(ctx.input(|i| i.time)) {
             self.reload_prefs(ctx);
         }
         self.updates.save_if_changed();
@@ -1517,7 +1527,10 @@ impl KadakasApp {
     /// that are not written yet are dropped: they are written in every frame.
     #[cfg(not(target_arch = "wasm32"))]
     fn reload_prefs(&mut self, ctx: &egui::Context) {
-        let (prefs, warning) = prefs::load();
+        let (prefs, warning) = match &self.prefs_dir {
+            Some(d) => prefs::load_from(d),
+            None => (Prefs::default(), None),
+        };
         self.prefs = prefs;
         self.prefs_saved = prefs;
         self.session.snap = prefs.snap;
@@ -3295,16 +3308,25 @@ impl KadakasApp {
 
     /// Saves the preferences and the layout when they changed.
     fn persist(&mut self, now: f64) {
-        let _ = now;
+        let _ = now; // used by the desktop build only
         self.prefs.snap = self.session.snap;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.prefs != self.prefs_saved {
-                match prefs::save_changes(&self.prefs_saved, &self.prefs) {
-                    Ok(()) => self.prefs_saved = self.prefs,
+            // A failed save keeps the changes unsaved and is tried again after a pause that
+            // grows. The status line says what failed at each try.
+            if self.prefs != self.prefs_saved && self.prefs_retry.due(now) {
+                let result = match &self.prefs_dir {
+                    Some(d) => prefs::save_changes_to(d, &self.prefs_saved, &self.prefs),
+                    None => Ok(()),
+                };
+                match result {
+                    Ok(()) => {
+                        self.prefs_saved = self.prefs;
+                        self.prefs_retry.succeeded();
+                    }
                     Err(e) => {
                         self.status = e;
-                        self.prefs_saved = self.prefs;
+                        self.prefs_retry.failed(now);
                     }
                 }
             }
@@ -4168,6 +4190,61 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn a_failed_save_of_the_preferences_is_tried_again_and_a_stale_copy_does_not_undo_the_dialog() {
+        let d = std::env::temp_dir().join(format!("kadakas-app-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut app = KadakasApp::blank();
+        app.prefs_dir = Some(d.clone());
+        app.prefs.cues = !app.prefs.cues;
+        // prefs.json is a folder: the write fails.
+        std::fs::create_dir_all(d.join("prefs.json")).unwrap();
+        app.persist(1.0);
+        assert_ne!(app.prefs, app.prefs_saved, "the change is still unsaved");
+        assert!(
+            app.status.contains("prefs.json"),
+            "the failure is shown: {}",
+            app.status
+        );
+        // Inside the pause nothing is tried; the status line is not repeated.
+        app.status.clear();
+        app.persist(1.5);
+        assert!(app.status.is_empty());
+        // The problem goes away. After the pause the change is written.
+        std::fs::remove_dir_all(d.join("prefs.json")).unwrap();
+        app.persist(2.5);
+        assert_eq!(app.prefs, app.prefs_saved);
+        let (back, _) = prefs::load_from(&d);
+        assert_eq!(back.cues, app.prefs.cues);
+        // Each failure shows again at the next try.
+        app.prefs.cues = !app.prefs.cues;
+        std::fs::remove_file(d.join("prefs.json")).unwrap();
+        std::fs::create_dir_all(d.join("prefs.json")).unwrap();
+        app.persist(10.0);
+        let first = app.status.clone();
+        assert!(first.contains("prefs.json"));
+        app.status.clear();
+        app.persist(20.0);
+        assert!(
+            app.status.contains("prefs.json"),
+            "shown again at the next try"
+        );
+        std::fs::remove_dir_all(d.join("prefs.json")).unwrap();
+        // The welcome dialog stored a theme; this window holds the old copy and saves a toggle.
+        std::fs::write(d.join("prefs.json"), r#"{"theme":"dark","future":1}"#).unwrap();
+        app.persist(100.0);
+        let text: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.join("prefs.json")).unwrap()).unwrap();
+        assert_eq!(text["theme"], "dark");
+        assert_eq!(text["future"], 1);
+        // Reloading takes the dialog's values.
+        app.reload_prefs(&egui::Context::default());
+        assert_eq!(app.prefs.theme, crate::theme::ThemeChoice::Dark);
+        assert_eq!(app.prefs, app.prefs_saved);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

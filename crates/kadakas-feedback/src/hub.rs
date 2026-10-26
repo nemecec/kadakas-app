@@ -68,8 +68,23 @@ pub struct Settings {
     #[serde(default)]
     pub omit_installation: bool,
     /// What happens to a crash report (PLAT-20).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_policy")]
     pub crash_policy: CrashPolicy,
+}
+
+/// A policy that this version does not know (a newer version added one) gives the default of this
+/// field only. The other settings (the installation ID, the server, `send`) stay readable.
+fn lenient_policy<'de, D: serde::Deserializer<'de>>(d: D) -> Result<CrashPolicy, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Known {
+        Value(CrashPolicy),
+        Unknown(serde::de::IgnoredAny),
+    }
+    Ok(match Known::deserialize(d)? {
+        Known::Value(p) => p,
+        Known::Unknown(_) => CrashPolicy::default(),
+    })
 }
 
 /// Preferences > Privacy > Crash reports (PLAT-20).
@@ -256,8 +271,24 @@ impl Hub {
             .unwrap_or_default()
     }
 
+    /// Writes the settings. The keys of the file that this version does not know stay (a newer
+    /// version or another program wrote them): the known keys are put over the file as it is.
     fn save_settings(&mut self, s: &Settings) -> Result<(), FeedbackError> {
-        let b = serde_json::to_vec(s).map_err(|e| FeedbackError::Store(e.to_string()))?;
+        let mut object = self
+            .storage
+            .read(SETTINGS)
+            .filter(|b| b.len() < 64 << 10)
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| match v {
+                serde_json::Value::Object(o) => Some(o),
+                _ => None,
+            })
+            .unwrap_or_default();
+        if let Ok(serde_json::Value::Object(known)) = serde_json::to_value(s) {
+            object.extend(known);
+        }
+        let b = serde_json::to_vec(&serde_json::Value::Object(object))
+            .map_err(|e| FeedbackError::Store(e.to_string()))?;
         self.storage
             .write(SETTINGS, &b)
             .map_err(FeedbackError::Store)
@@ -1663,6 +1694,38 @@ mod tests {
         assert!(v.get("installation").is_none(), "{v}");
         a.set_include_installation(true).unwrap();
         assert_eq!(a.report_installation_id().as_deref(), Some(second.as_str()));
+    }
+
+    #[test]
+    fn a_policy_that_this_version_does_not_know_does_not_reset_the_other_settings() {
+        let mut h = Hub::in_memory();
+        let file = br#"{"send":true,"url":"https://x.example/f","installation":"abc",
+            "omit_installation":true,"crash_policy":"ask_later","from_the_future":{"a":[1]}}"#;
+        h.storage.write(SETTINGS, file).unwrap();
+        // Read: the unknown policy is the default, everything else is as written.
+        let s = h.settings();
+        assert_eq!(s.crash_policy, CrashPolicy::Ask);
+        assert_eq!(s.send, Some(true));
+        assert_eq!(s.url.as_deref(), Some("https://x.example/f"));
+        assert_eq!(s.installation.as_deref(), Some("abc"));
+        assert!(s.omit_installation);
+        // Write the policy: the other keys and the unknown key stay.
+        h.set_crash_policy(CrashPolicy::Always).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&h.storage.read(SETTINGS).unwrap()).unwrap();
+        assert_eq!(raw["crash_policy"], "always");
+        assert_eq!(raw["send"], true);
+        assert_eq!(raw["url"], "https://x.example/f");
+        assert_eq!(raw["installation"], "abc");
+        assert_eq!(raw["omit_installation"], true);
+        assert_eq!(raw["from_the_future"]["a"][0], 1);
+        // Another setter keeps the unknown key too.
+        h.set_include_installation(true).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&h.storage.read(SETTINGS).unwrap()).unwrap();
+        assert_eq!(raw["from_the_future"]["a"][0], 1);
+        assert_eq!(raw["omit_installation"], false);
+        assert_eq!(h.crash_policy(), CrashPolicy::Always);
     }
 
     #[test]

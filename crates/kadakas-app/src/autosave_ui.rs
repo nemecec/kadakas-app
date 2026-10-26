@@ -2,7 +2,7 @@
 
 use kadakas_core::model::Document;
 use kadakas_l10n::tr;
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 use crate::autosave::{AutosaveSettings, Scheduler};
 

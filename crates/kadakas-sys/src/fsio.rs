@@ -99,6 +99,12 @@ pub fn write_atomic_with(
     write_replacing(path, Box::new(fill), true, false)
 }
 
+/// Like [`write_atomic`], without the `.bak` copy of the old file. The permissions of the old file
+/// stay. For a file whose old content is damaged or empty: it must not replace a good `.bak`.
+pub fn write_atomic_no_backup(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_replacing(path, Box::new(|w| w.write_all(bytes)), false, false)
+}
+
 /// Like [`write_atomic`], with no backup and owner-only permissions (Unix).
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_replacing(path, Box::new(|w| w.write_all(bytes)), false, true)
@@ -331,10 +337,31 @@ impl Drop for FileLock {
     }
 }
 
-/// Takes the lock on the file `path` (made when it is missing; its folder too). Waits up to
-/// `wait` for another holder. An error: the folder cannot be made, the file cannot be opened, or
-/// the wait ran out (`ErrorKind::WouldBlock`).
-pub fn lock_file(path: &Path, wait: std::time::Duration) -> std::io::Result<FileLock> {
+/// True when the file system cannot lock files at all (some network shares, NFS without a lock
+/// service): "not supported", "no locks available" and the like. Such a lock can never be taken,
+/// so waiting does not help.
+pub fn lock_unsupported(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Some(code) = e.raw_os_error() {
+        return [libc::ENOLCK, libc::ENOTSUP, libc::EOPNOTSUPP, libc::ENOSYS].contains(&code);
+    }
+    #[cfg(windows)]
+    if let Some(code) = e.raw_os_error() {
+        // ERROR_NOT_SUPPORTED, ERROR_INVALID_FUNCTION (a share without byte range locks).
+        return [50, 1].contains(&code);
+    }
+    false
+}
+
+/// Takes the lock with `attempt` (`try_lock` of the file, or a stand-in in tests).
+fn lock_with(
+    path: &Path,
+    wait: std::time::Duration,
+    attempt: &dyn Fn(&std::fs::File) -> Result<(), std::fs::TryLockError>,
+) -> std::io::Result<FileLock> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -346,7 +373,7 @@ pub fn lock_file(path: &Path, wait: std::time::Duration) -> std::io::Result<File
         .open(path)?;
     let start = std::time::Instant::now();
     loop {
-        match file.try_lock() {
+        match attempt(&file) {
             Ok(()) => return Ok(FileLock(file)),
             Err(std::fs::TryLockError::WouldBlock) => {
                 if start.elapsed() >= wait {
@@ -357,14 +384,129 @@ pub fn lock_file(path: &Path, wait: std::time::Duration) -> std::io::Result<File
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(if lock_unsupported(&e) {
+                    std::io::Error::new(std::io::ErrorKind::Unsupported, e)
+                } else {
+                    e
+                });
+            }
         }
+    }
+}
+
+/// Takes the lock on the file `path` (made when it is missing; its folder too). Waits up to
+/// `wait` for another holder. An error: the folder cannot be made, the file cannot be opened, the
+/// file system cannot lock (`ErrorKind::Unsupported`), or the wait ran out
+/// (`ErrorKind::WouldBlock`).
+pub fn lock_file(path: &Path, wait: std::time::Duration) -> std::io::Result<FileLock> {
+    lock_with(path, wait, &|f| f.try_lock())
+}
+
+/// Like [`lock_file`], but a file system that cannot lock gives `Ok(None)` and one line on
+/// stderr: the caller goes on without a lock, as it did before locks existed. The other errors
+/// are returned.
+pub fn lock_file_or_skip(
+    path: &Path,
+    wait: std::time::Duration,
+) -> std::io::Result<Option<FileLock>> {
+    skip_unsupported(path, lock_file(path, wait))
+}
+
+fn skip_unsupported(
+    path: &Path,
+    result: std::io::Result<FileLock>,
+) -> std::io::Result<Option<FileLock>> {
+    match result {
+        Ok(l) => Ok(Some(l)),
+        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
+            eprintln!(
+                "kadakas: {} cannot be locked on this file system ({e}); going on without a lock",
+                path.display()
+            );
+            Ok(None)
+        }
+        Err(e) => Err(e),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run by the test below as a child process: takes the lock named by the variable, tells the
+    /// parent with a marker file, and holds it until it is killed.
+    #[test]
+    #[ignore = "a child of a test"]
+    fn lock_holder() {
+        let Some(p) = std::env::var_os("KADAKAS_TEST_LOCK_FILE").map(PathBuf::from) else {
+            return;
+        };
+        let _held = lock_file(&p, std::time::Duration::from_secs(5)).unwrap();
+        std::fs::write(p.with_extension("held"), b"x").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn the_lock_of_a_program_that_is_killed_is_free_at_once() {
+        let d = temp_dir("lock-crash");
+        let p = d.join("l.lock");
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fsio::tests::lock_holder",
+                "--ignored",
+                "--quiet",
+            ])
+            .env("KADAKAS_TEST_LOCK_FILE", &p)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let held = p.with_extension("held");
+        let start = std::time::Instant::now();
+        while !held.exists() {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(60),
+                "the child never locked"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The child holds it: a second program waits and gives up.
+        let busy = lock_file(&p, std::time::Duration::from_millis(60)).unwrap_err();
+        assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+        // The child dies with the lock held (a crash). The system frees the lock; no program
+        // has to decide that it is stale.
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(lock_file(&p, std::time::Duration::from_secs(5)).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_file_system_that_cannot_lock_gives_an_unsupported_error_and_can_be_skipped() {
+        let d = temp_dir("lock-unsupported");
+        let p = d.join("l.lock");
+        let wait = std::time::Duration::from_millis(10);
+        // Injected: the file system answers "no locks available".
+        #[cfg(unix)]
+        let err = || std::io::Error::from_raw_os_error(libc::ENOLCK);
+        #[cfg(not(unix))]
+        let err = || std::io::Error::from(std::io::ErrorKind::Unsupported);
+        let e = lock_with(&p, wait, &|_| Err(std::fs::TryLockError::Error(err()))).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::Unsupported);
+        assert!(lock_unsupported(&err()));
+        assert!(skip_unsupported(&p, Err(e)).unwrap().is_none());
+        // Another error is not skipped, and a busy lock is not "unsupported".
+        let other = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(!lock_unsupported(&other));
+        assert!(skip_unsupported(&p, Err(other)).is_err());
+        let busy = lock_with(&p, wait, &|_| Err(std::fs::TryLockError::WouldBlock)).unwrap_err();
+        assert_eq!(busy.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(skip_unsupported(&p, Err(busy)).is_err());
+        // The real thing works.
+        assert!(lock_file_or_skip(&p, wait).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kadakas-fsio-{name}-{}", std::process::id()));

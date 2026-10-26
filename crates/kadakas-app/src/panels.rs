@@ -9,7 +9,7 @@ use kadakas_core::command::{Command, Outcome};
 use kadakas_core::model::{Attributes, Color, ObjectId, Shape, Vertex, VertexKind};
 use kadakas_l10n::tr;
 use kadakas_render::{Projection, RenderMode, StandardView, ViewSettings};
-use kadakas_view3d::numfmt::UiNumber;
+use kadakas_ui_number::UiNumber;
 
 use kadakas_core::plants::tree::{DEFAULT_RPZ_CAP, DEFAULT_RPZ_FACTOR, TreeAction, TreeCondition};
 

@@ -28,6 +28,13 @@ pub struct WelcomeState {
     /// The 3D modeler is installed. Without it only Landscape CAD can be chosen.
     pub modeler_installed: bool,
     focus_pending: bool,
+    /// The number format is not stored: the programs follow the language for it. A change of the
+    /// language then changes the number style that the dialog shows, so that it shows what the
+    /// programs will use. A pick of the person ends this.
+    number_follows_language: bool,
+    /// What could not be written, shown above the buttons. The dialog stays open until the
+    /// person presses a button again.
+    pub problem: Option<String>,
 }
 
 impl WelcomeState {
@@ -46,6 +53,35 @@ impl WelcomeState {
             system,
             modeler_installed,
             focus_pending: true,
+            number_follows_language: false,
+            problem: None,
+        }
+    }
+
+    /// The number format is not stored, so the programs follow the language for it.
+    pub fn follow_language_for_numbers(mut self, follows: bool) -> WelcomeState {
+        self.number_follows_language = follows;
+        self
+    }
+
+    /// The person picked a language. When the number format follows the language, the style that
+    /// the dialog shows follows too (and counts as unchanged: the programs do the same).
+    pub fn set_language(&mut self, tag: &str) {
+        self.choices.language = Some(tag.to_string());
+        if self.number_follows_language {
+            let style = kadakas_welcome::NumberStyle::nearest(kadakas_units::number_convention(
+                self.language_tag(),
+            ));
+            self.choices.number = style;
+            self.initial.number = style;
+        }
+    }
+
+    /// The person picked a number style: it is stored from now on.
+    pub fn set_number(&mut self, style: kadakas_welcome::NumberStyle) {
+        self.choices.number = style;
+        if style != self.initial.number {
+            self.number_follows_language = false;
         }
     }
 
@@ -106,6 +142,15 @@ fn units_text(u: UnitSystem) -> String {
     }
 }
 
+/// What Enter and Esc do, as a line in the dialog (it must agree with the buttons).
+pub fn keys_text(kind: Kind) -> String {
+    match kind {
+        Kind::FirstRun => tr!("welcome-keys-first"),
+        Kind::Update => tr!("welcome-keys-update"),
+        Kind::Manual => tr!("welcome-keys-manual"),
+    }
+}
+
 /// The names of the two buttons for a kind of dialog.
 pub fn button_texts(kind: Kind) -> (String, String) {
     match kind {
@@ -130,8 +175,15 @@ fn card(
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), sense);
-    response
-        .widget_info(|| WidgetInfo::selected(WidgetType::RadioButton, enabled, selected, title));
+    // The reader says the title with its description, or the reason that the card is off.
+    response.widget_info(|| {
+        WidgetInfo::selected(
+            WidgetType::RadioButton,
+            enabled,
+            selected,
+            format!("{title}. {hint}"),
+        )
+    });
     let visuals = ui.visuals();
     let fill = if selected {
         visuals.selection.bg_fill.gamma_multiply(0.5)
@@ -201,6 +253,9 @@ pub fn show(ui: &mut egui::Ui, st: &mut WelcomeState) -> Option<Button> {
                 content(ui, st);
             });
         ui.separator();
+        if let Some(problem) = &st.problem {
+            ui.colored_label(ui.visuals().error_fg_color, problem);
+        }
         let size = Vec2::new(140.0, 28.0);
         ui.horizontal(|ui| {
             let gap = ui.spacing().item_spacing.x;
@@ -279,10 +334,18 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                     for l in kadakas_l10n::languages() {
                         let on = l.tag == st.language_tag();
                         if ui.selectable_label(on, l.native_name).clicked() {
-                            st.choices.language = Some(l.tag.to_string());
+                            st.set_language(l.tag);
                             ui.ctx().request_repaint();
                         }
                     }
+                })
+                .response
+                .widget_info(|| {
+                    WidgetInfo::labeled(
+                        WidgetType::ComboBox,
+                        true,
+                        format!("{}: {}", tr!("welcome-language"), shown),
+                    )
                 });
             ui.end_row();
 
@@ -299,8 +362,25 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                 .selected_text(st.choices.number.example())
                 .show_ui(ui, |ui| {
                     for n in NumberStyle::ALL {
-                        ui.selectable_value(&mut st.choices.number, n, n.example());
+                        if ui
+                            .selectable_label(st.choices.number == n, n.example())
+                            .clicked()
+                        {
+                            st.set_number(n);
+                        }
                     }
+                })
+                .response
+                .widget_info(|| {
+                    WidgetInfo::labeled(
+                        WidgetType::ComboBox,
+                        true,
+                        format!(
+                            "{}: {}",
+                            tr!("welcome-number-format"),
+                            st.choices.number.example()
+                        ),
+                    )
                 });
             ui.end_row();
         });
@@ -331,6 +411,18 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                             for t in Theme::ALL {
                                 ui.selectable_value(&mut st.choices.theme, t, theme_text(t));
                             }
+                        })
+                        .response
+                        .widget_info(|| {
+                            WidgetInfo::labeled(
+                                WidgetType::ComboBox,
+                                true,
+                                format!(
+                                    "{}: {}",
+                                    tr!("welcome-theme"),
+                                    theme_text(st.choices.theme)
+                                ),
+                            )
                         });
                     ui.end_row();
 
@@ -341,6 +433,18 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                             for n in Navigation::ALL {
                                 ui.selectable_value(&mut st.choices.navigation, n, nav_text(n));
                             }
+                        })
+                        .response
+                        .widget_info(|| {
+                            WidgetInfo::labeled(
+                                WidgetType::ComboBox,
+                                true,
+                                format!(
+                                    "{}: {}",
+                                    tr!("welcome-navigation"),
+                                    nav_text(st.choices.navigation)
+                                ),
+                            )
                         });
                     ui.end_row();
 
@@ -351,6 +455,18 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                             for p in CrashPolicy::ALL {
                                 ui.selectable_value(&mut st.choices.crash, p, crash_text(p));
                             }
+                        })
+                        .response
+                        .widget_info(|| {
+                            WidgetInfo::labeled(
+                                WidgetType::ComboBox,
+                                true,
+                                format!(
+                                    "{}: {}",
+                                    tr!("welcome-crash"),
+                                    crash_text(st.choices.crash)
+                                ),
+                            )
                         });
                     ui.end_row();
 
@@ -361,6 +477,18 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
                             for m in UpdateMode::ALL {
                                 ui.selectable_value(&mut st.choices.updates, m, updates_text(m));
                             }
+                        })
+                        .response
+                        .widget_info(|| {
+                            WidgetInfo::labeled(
+                                WidgetType::ComboBox,
+                                true,
+                                format!(
+                                    "{}: {}",
+                                    tr!("welcome-updates"),
+                                    updates_text(st.choices.updates)
+                                ),
+                            )
                         });
                     ui.end_row();
                 });
@@ -374,6 +502,7 @@ fn content(ui: &mut egui::Ui, st: &mut WelcomeState) {
     ui.add_space(12.0);
     ui.label(tr!("welcome-later"));
     ui.label(egui::RichText::new(tr!("welcome-later-help")).weak());
+    ui.label(egui::RichText::new(keys_text(st.kind)).weak());
     if st.kind != Kind::FirstRun {
         ui.label(egui::RichText::new(tr!("welcome-applies-later")).weak());
     }
@@ -492,6 +621,131 @@ mod tests {
         }
     }
 
+    /// The names that a screen reader gets: the labels of the nodes of the access tree.
+    fn reader_labels(h: &mut Harness) -> Vec<String> {
+        h.ctx.enable_accesskit();
+        let tag = h.st.language_tag();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, h.screen)),
+            ..Default::default()
+        };
+        let st = &mut h.st;
+        let mut labels = Vec::new();
+        for _ in 0..3 {
+            let out = h.ctx.run_ui(input.clone(), |ui| {
+                kadakas_l10n::with_language(tag, || {
+                    show(ui, st);
+                });
+            });
+            if let Some(update) = out.platform_output.accesskit_update {
+                labels = update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, n)| n.label().map(str::to_string))
+                    .collect();
+            }
+        }
+        labels
+    }
+
+    #[test]
+    fn a_screen_reader_gets_names_for_the_cards_and_the_drop_downs() {
+        let mut h = Harness::new(Kind::FirstRun);
+        h.st.modeler_installed = false;
+        h.st.choices.mode = Mode::Landscape;
+        let labels = reader_labels(&mut h);
+        let has = |t: &str| labels.iter().any(|l| l == t);
+        assert!(has("3D Modeler. Not installed"), "{labels:#?}");
+        assert!(
+            has("Landscape CAD. Plans, sheets and plants."),
+            "{labels:#?}"
+        );
+        assert!(
+            labels.iter().any(|l| l.starts_with("Language: English")),
+            "{labels:#?}"
+        );
+        assert!(
+            labels.iter().any(|l| l.starts_with("Number format: ")),
+            "{labels:#?}"
+        );
+        // Estonian names, with the value.
+        let mut et = Harness::new(Kind::FirstRun);
+        et.st.choices.language = Some("et".into());
+        let labels = reader_labels(&mut et);
+        assert!(
+            labels.iter().any(|l| l.starts_with("Keel: Eesti")),
+            "{labels:#?}"
+        );
+        assert!(
+            labels.iter().any(|l| l.starts_with("3D-modelleerija. ")),
+            "{labels:#?}"
+        );
+    }
+
+    #[test]
+    fn a_problem_with_a_file_is_shown_in_the_dialog() {
+        let mut h = Harness::new(Kind::FirstRun);
+        h.st.problem = Some("Some settings could not be saved: prefs.json: no".into());
+        h.settle();
+        assert!(h.has("Some settings could not be saved: prefs.json: no"));
+        assert!(h.visible("Start"));
+        h.st.problem = None;
+        h.settle();
+        assert!(!h.seen.iter().any(|s| s.text.starts_with("Some settings")));
+    }
+
+    #[test]
+    fn the_number_style_follows_the_language_while_the_programs_do() {
+        use kadakas_welcome::stores;
+        let base =
+            std::env::temp_dir().join(format!("kadakas-welcome-ui-style-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = kadakas_welcome::Dirs {
+            launcher: base.join("launcher"),
+            prefs: Some(base.join("config")),
+            feedback: None,
+        };
+        let system = vec!["en-US".to_string()];
+        let c = stores::current(&dirs, &system, true);
+        assert_eq!(c.number, NumberStyle::CommaDot);
+        assert!(stores::number_follows_language(&dirs));
+        let detected = detect(&SystemLocale::from_languages(system.clone()), true);
+        let mut st = WelcomeState::new(Kind::Manual, c, detected, system, true)
+            .follow_language_for_numbers(stores::number_follows_language(&dirs));
+        // Estonian: the app will write 1 234,56, so the dialog shows it, and it is no change.
+        st.set_language("et");
+        assert_eq!(st.choices.number, NumberStyle::SpaceComma);
+        assert_eq!(st.initial.number, NumberStyle::SpaceComma);
+        assert!(stores::apply(&dirs, &st.choices, Some(&st.initial)).is_empty());
+        let prefs: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(base.join("config/prefs.json")).unwrap())
+                .unwrap();
+        assert_eq!(prefs["language"], "et");
+        assert!(
+            prefs.get("units").is_none(),
+            "decimal and grouping stay unstored: {prefs}"
+        );
+        // Back to English, and to German: the style follows each time.
+        st.set_language("en-US");
+        assert_eq!(st.choices.number, NumberStyle::CommaDot);
+        // A pick of the person ends it.
+        st.set_number(NumberStyle::DotComma);
+        st.set_language("et");
+        assert_eq!(st.choices.number, NumberStyle::DotComma);
+        // A first start never follows the language: the system formats were detected.
+        let c2 = stores::current(&dirs, &["en-US".to_string()], true);
+        let mut first = WelcomeState::new(Kind::FirstRun, c2.clone(), c2, vec![], true);
+        first.choices.number = NumberStyle::ApostropheDot;
+        first.set_language("et");
+        assert_eq!(first.choices.number, NumberStyle::ApostropheDot);
+        // Once the format is stored, the programs do not follow the language any more.
+        let mut shown = st.choices.clone();
+        shown.number = NumberStyle::PlainDot;
+        stores::apply(&dirs, &shown, Some(&st.initial));
+        assert!(!stores::number_follows_language(&dirs));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn the_first_screen_is_calm_and_the_fold_is_closed() {
         let mut h = Harness::new(Kind::FirstRun);
@@ -556,6 +810,29 @@ mod tests {
         let mut h = Harness::new(Kind::FirstRun);
         h.settle();
         assert_eq!(h.frame(vec![]), None);
+    }
+
+    #[test]
+    fn the_text_about_the_keys_agrees_with_the_buttons() {
+        for (kind, line) in [
+            (Kind::FirstRun, "Enter starts. Esc uses the defaults."),
+            (Kind::Update, "Enter starts. Esc cancels."),
+            (Kind::Manual, "Enter saves. Esc cancels."),
+        ] {
+            let mut h = Harness::new(kind);
+            h.settle();
+            assert!(h.has(line), "{kind:?}: {:#?}", h.seen);
+            // Esc does what the line says: on a first start it is the second button.
+            assert_eq!(h.tap(Key::Escape), Some(Button::Secondary));
+            let (_, second) = button_texts(kind);
+            assert_eq!(line.contains("defaults"), second == "Use defaults");
+        }
+        for tag in ["en-US", "et"] {
+            for kind in [Kind::FirstRun, Kind::Update, Kind::Manual] {
+                let t = kadakas_l10n::with_language(tag, || keys_text(kind));
+                assert!(t.contains("Enter") && t.contains("Esc"), "{t}");
+            }
+        }
     }
 
     #[test]
