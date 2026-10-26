@@ -198,9 +198,13 @@ pub use part::{Absorber, Selection};
 pub use query::{closest_on_segment, faces_near, ray_faces};
 pub use solid::{OpenEdge, OpenKind, Operand, Shell, ShellState, SolidError, SolidOp, SolidReport};
 
-/// The version of the saved form of a surface model (the field `v`). A file with a higher number
-/// is from a newer program: it is kept as it is and cannot be edited (`Shape::Unknown`).
-pub const FORMAT: u32 = 1;
+/// The highest version of the saved form of a surface model (the field `v`) that this program
+/// reads. A file with a higher number is from a newer program: it is kept as it is and cannot be
+/// edited (`Shape::Unknown`). Version 2 (MOD-15) adds circle descriptions of curves
+/// (`curve_geometry`) and tolerant entries of the log. A model is written as version 2 only when it
+/// uses one of them, else as version 1, so a program from before MOD-15 keeps reading all other
+/// models and keeps a model of version 2 as it is, unchanged.
+pub const FORMAT: u32 = 2;
 /// Smallest length tolerance in mm (see the module documentation).
 pub const LENGTH_TOLERANCE: f64 = 0.01;
 /// Length tolerance as a share of the size of the coordinates.
@@ -421,6 +425,11 @@ pub struct SurfaceModel {
     /// The exact circle of some curves (MOD-15, see [`analytic`]): never for a curve whose points
     /// are not on it.
     analytic: BTreeMap<CurveId, Analytic>,
+    /// Rows of `curve_geometry` that this version cannot read (a newer program wrote them): kept
+    /// as they are and written back while the chain is as it was at the load (see [`analytic`]).
+    analytic_raw: BTreeMap<CurveId, analytic::RawRow>,
+    /// What the load left out or repaired, for the person. The document takes it at the load.
+    load_notes: Vec<String>,
     /// The number of edits so far (each edit adds one).
     rev: u64,
     /// The recent edits as replayable intents (see [`sync`]).
@@ -473,6 +482,8 @@ impl SurfaceModel {
             edge_attrs: BTreeMap::new(),
             curves: BTreeMap::new(),
             analytic: BTreeMap::new(),
+            analytic_raw: BTreeMap::new(),
+            load_notes: Vec::new(),
             rev: 0,
             log: Vec::new(),
             extra: serde_json::Map::new(),
@@ -491,6 +502,7 @@ impl SurfaceModel {
     pub fn apply_with_notes(&mut self, edit: &Edit) -> Result<Vec<String>, SurfaceError> {
         let intent = sync::Intent::of(self, edit);
         let mut work = self.clone();
+        work.load_notes.clear();
         let notes = edit::run(&mut work, edit, self)?;
         // An edit that changes nothing leaves the model as it was (also its id counter), so it
         // is no revision and no undo step.
@@ -510,6 +522,36 @@ impl SurfaceModel {
             && self.edge_attrs == o.edge_attrs
             && self.curves == o.curves
             && self.analytic == o.analytic
+            && self.analytic_raw == o.analytic_raw
+    }
+
+    /// What the load of this model left out or repaired (circle descriptions that did not fit
+    /// their chain, log entries that were damaged or written by another version). A document
+    /// lists these notes when it loads (`Document::load_notes`). The first edit clears them.
+    pub fn load_notes(&self) -> &[String] {
+        &self.load_notes
+    }
+
+    /// The version that a save of this model writes (see [`FORMAT`]): 2 if it uses circle
+    /// descriptions or a log entry that a program from before MOD-15 cannot read, else 1.
+    pub(crate) fn format_needed(&self) -> u32 {
+        let new_entry = self.log.iter().any(|e| {
+            matches!(
+                e.intent,
+                sync::Intent::SegmentsAt { .. } | sync::Intent::Unknown(_)
+            ) || matches!(
+                &e.intent,
+                sync::Intent::AddCurve {
+                    analytic: Some(_),
+                    ..
+                }
+            )
+        });
+        if self.analytic.is_empty() && self.analytic_raw.is_empty() && !new_entry {
+            1
+        } else {
+            FORMAT
+        }
     }
 
     /// The number of edits so far.
@@ -882,6 +924,8 @@ impl SurfaceModel {
             edge_attrs: BTreeMap::new(),
             curves: BTreeMap::new(),
             analytic: BTreeMap::new(),
+            analytic_raw: BTreeMap::new(),
+            load_notes: Vec::new(),
             rev: 0,
             log: Vec::new(),
             extra: serde_json::Map::new(),
@@ -898,11 +942,17 @@ impl SurfaceModel {
 /// True if `raw` is the JSON of a surface model from a newer format (a higher `v`). Such a shape is
 /// kept as it is (`Shape::Unknown`).
 pub fn is_newer(raw: &serde_json::Value) -> bool {
+    is_newer_than(raw, FORMAT)
+}
+
+/// Like [`is_newer`] for a program that reads versions up to `reads` (a test uses 1 for a program
+/// from before MOD-15).
+pub fn is_newer_than(raw: &serde_json::Value, reads: u32) -> bool {
     raw.get("kind").and_then(serde_json::Value::as_str) == Some("surface_model")
         && raw
             .get("v")
             .and_then(serde_json::Value::as_u64)
-            .is_some_and(|v| v > u64::from(FORMAT))
+            .is_some_and(|v| v > u64::from(reads))
 }
 
 /// Projects 3D points into the 2D basis of a plane (for callers that draw a face in its plane).

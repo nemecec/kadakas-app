@@ -16,3 +16,4 @@ uic-curve-refused-loop = A face uses the curve in a way that cannot be rebuilt.
 uic-curve-refused-invalid = The new segments would make the model invalid, for example edges that are too short.
 uic-curve-refused-unknown-kind = This circle has a kind that this program does not know, so it does not change it.
 uic-curve-note-unknown-kind = A circle of a kind that this program does not know lost its description, because the curve changed.
+uic-curve-note-broken = A circle or arc lost its exact description, because its edges are not one chain any more. The curve itself stays.

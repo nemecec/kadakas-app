@@ -246,7 +246,7 @@ fn a_newer_format_is_kept_as_it_is() {
     edit(&mut ed, id, square(1000.0)).unwrap();
     let mut v = serde_json::to_value(ed.doc()).unwrap();
     let objects = v["objects"].as_array_mut().unwrap();
-    objects[0]["shape"]["v"] = serde_json::json!(2);
+    objects[0]["shape"]["v"] = serde_json::json!(3);
     objects[0]["shape"]["curves"] = serde_json::json!([{"edges": [5, 6]}]);
     let text = serde_json::to_vec(&v).unwrap();
     let doc = Document::from_slice(&text).unwrap();

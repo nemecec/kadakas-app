@@ -758,7 +758,7 @@ fn bad_files_are_refused() {
     let base = serde_json::json!({"v": 1, "next_id": 9, "vertices": [[1, 0, 0, 0]]});
     assert!(parse(base.clone()).is_ok());
     for (key, value) in [
-        ("v", serde_json::json!(2)),
+        ("v", serde_json::json!(3)),
         ("v", serde_json::json!(0)),
         ("vertices", serde_json::json!([[1, 0, 0, 0], [1, 1, 0, 0]])),
         ("edges", serde_json::json!([[2, 1, 1], [2, 1, 1]])),
@@ -775,7 +775,15 @@ fn bad_files_are_refused() {
         assert!(parse(v).is_err(), "{key}");
     }
     assert!(is_newer(
+        &serde_json::json!({"kind": "surface_model", "v": 3})
+    ));
+    assert!(!is_newer(
         &serde_json::json!({"kind": "surface_model", "v": 2})
+    ));
+    // A program from before MOD-15 reads version 1 only and keeps a version 2 model as it is.
+    assert!(is_newer_than(
+        &serde_json::json!({"kind": "surface_model", "v": 2}),
+        1
     ));
     assert!(!is_newer(
         &serde_json::json!({"kind": "surface_model", "v": 1})

@@ -117,8 +117,9 @@ A circle or an arc is made by `edit_surface` with the action `add_curve`: a chai
 The Circle, Arc and Polygon tools give the curve its exact circle: center, normal, radius and, for an arc, the start and end angle.
 The field is optional and sits next to the chain of edges. The number of segments is the number of edges. The core is `kadakas_core::surface::analytic`.
 
-**Entity Info.** Select one edge of a curve, or all edges of it. The panel shows the shape (circle, arc or regular polygon), the true radius and the center in the drawing.
-For an arc it also shows the sweep angle. It shows the circumference of a circle and the length of the chain for an arc or a polygon. The field Segments takes a number from 3 to 1,000.
+**Entity Info.** Select one edge of a curve, or all edges of it. The panel shows the shape (circle, arc or polygon), the true radius and the center in the drawing.
+For an arc it also shows the sweep angle. It shows the circumference of a circle and the length of the chain for an arc or a polygon. In a model that is placed with unequal scales (a remap of the plan with a height scale) the circle is an ellipse in the drawing. Entity Info then says so and shows no radius, sweep or length.
+The field Segments takes a number from 3 to 1,000.
 The button Set segments rebuilds the chain on the same circle, in one undo step. The status line says what happened or why it was refused.
 
 **Set segments** (`edit_surface` with `set_curve_segments {curve, segments}`). The ends of an arc and the first vertex of a circle stay.
@@ -136,7 +137,7 @@ A vertex that another edge meets and that lies on a chord between two vertices o
 | Edit | The field |
 |---|---|
 | Move, rotate, mirror, uniform scale | follows the chain, with the new center and radius |
-| Scale with unequal factors, move of single points | dropped, with a note. The chain stays a curve |
+| Scale with unequal factors, move of single points | dropped, with a note. The chain stays a curve. A corner that slides along the circle keeps the field, and a polygon stays a polygon |
 | Erase that cuts a circle | each piece is an arc on the same circle with its own angles |
 | Erase at the end of an arc | the arc is shorter, the angles are updated, the note says so |
 | Push/Pull, Follow Me, copy | the copy gets its own circle at the new place |
@@ -152,10 +153,12 @@ The notes of an edit are told in the language of the window and show in the stat
 **Snap.** The center of a circle or an arc is an inference point (`Center`) from the field, also for an arc and for a chain that another edge cut.
 The Vectorworks-like app offers it in its snap list too (`snap_geometry` of the plan).
 
-**File.** The model field `curve_geometry` is a list of `[curve id, {description}]`. A file without it loads as before.
-An older program keeps the field it does not know.
-A program from before MOD-15 cannot read a log entry of a set of segments, so it cannot open a file that has one among its last 64 edits.
-From this version on, a log entry that the program does not know is kept as it is and written back. It is never replayed. A row whose curve is gone, or whose points are off the circle, is left out on load.
+**File.** The model field `curve_geometry` is a list of `[curve id, {description}]`. A model that has it is saved as version 2 (`v`). Other models stay version 1.
+A program from before MOD-15 keeps a model of version 2 as it is and cannot edit it. A file without the field loads as before.
+The load never drops a row without a word. A row that does not fit its chain, or that belongs to a missing curve, is left out and the load notes say so.
+A row of a kind that this version does not know is read only. It is kept as it is and written back while its chain is untouched.
+A row that cannot be read at all is kept the same way. Any change of the chain drops it, with a note.
+A damaged log entry, or one written by another version, is kept and not replayed. The load notes tell the two cases apart.
 The API is `mesh.curve_info` and `mesh.set_segments` (`docs/mesh-api.md`).
 
 **Export.** DXF export keeps the mesh of a surface model. A true CIRCLE or ARC entity is a later step, as are STEP and IFC circles.

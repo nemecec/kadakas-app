@@ -18,9 +18,11 @@
 //! - Chain vertices moved (more than the tolerance) and the chain is a similar copy of the old
 //!   one (same ratios of all lengths, which is move, rotate, mirror and uniform scale): the
 //!   circle is fitted again, on the vertices that are on the circle. This is checked first.
-//! - The chain did not move and all vertices are on the circle: the field stays. The kind and the
-//!   angles follow the chain: a circle that lost an edge is an arc, and an arc that lost edges at
-//!   its ends has new start and end angles (the centre and the radius stay).
+//! - Else, if all vertices are on the circle (also when some of them moved along it), the field
+//!   stays. The kind and the angles follow the chain: a circle that lost an edge is an arc, and
+//!   an arc that lost edges at its ends has new start and end angles (the centre and the radius
+//!   stay). A polygon whose corner slid along the circle stays a polygon: the kind says that the
+//!   corners are corners, and the sides need not be equal.
 //! - Else the field is dropped, with a note in the result.
 //!
 //! A description with a kind that this version does not know (a file of a newer program) is read
@@ -501,7 +503,7 @@ fn turns(a: &Analytic, pts: &[DVec3]) -> Vec<f64> {
 
 /// A chain of two edges or more goes one way round the circle and each edge turns less than half
 /// a turn (a chain of one edge cannot tell, see [`follow_chain`]).
-fn goes_one_way(a: &Analytic, pts: &[DVec3]) -> bool {
+pub(super) fn goes_one_way(a: &Analytic, pts: &[DVec3]) -> bool {
     if pts.len() < 3 {
         return true;
     }
@@ -683,6 +685,51 @@ impl SurfaceModel {
     }
 }
 
+/// A row of `curve_geometry` that this version cannot read (for example a kind of a newer program
+/// with other fields). It is kept as it is and written back while the chain is as it was at the
+/// load (the same edges at the same places). Any change of the chain drops it, with a note.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RawRow {
+    pub(super) value: Value,
+    edges: Vec<EdgeId>,
+    points: Vec<DVec3>,
+}
+
+impl RawRow {
+    /// A row for the chain of curve `id` as it is now. `None` if the curve has no chain.
+    pub(super) fn of(m: &SurfaceModel, id: CurveId, value: Value) -> Option<RawRow> {
+        let edges = m.curves.get(&id)?.clone();
+        let points = positions(m, &chain_vertices(m, &edges)?)?;
+        Some(RawRow {
+            value,
+            edges,
+            points,
+        })
+    }
+}
+
+/// Drops the unreadable rows whose chain changed, with a note each.
+fn reconcile_raw(m: &mut SurfaceModel, notes: &mut Vec<String>) {
+    let ids: Vec<CurveId> = m.analytic_raw.keys().copied().collect();
+    for id in ids {
+        let Some(es) = m.curves.get(&id) else {
+            m.analytic_raw.remove(&id);
+            continue;
+        };
+        let row = &m.analytic_raw[&id];
+        let same = *es == row.edges
+            && chain_vertices(m, es)
+                .and_then(|vs| positions(m, &vs))
+                .is_some_and(|p| p == row.points);
+        if !same {
+            m.analytic_raw.remove(&id);
+            notes.push(format!(
+                "curve {id} lost its circle description: its kind is not known to this program, so it cannot follow the change"
+            ));
+        }
+    }
+}
+
 /// Where the description of a new curve comes from.
 pub(super) enum Shape<'a> {
     /// Given by a tool.
@@ -748,6 +795,7 @@ pub(super) fn derive(m: &mut SurfaceModel, id: CurveId, from: &Analytic) -> bool
 /// Keeps the descriptions in step with the chains after an edit (see the module documentation).
 /// `before` is the model as it was. Notes name each description that was dropped or changed.
 pub(super) fn reconcile(m: &mut SurfaceModel, before: &SurfaceModel, notes: &mut Vec<String>) {
+    reconcile_raw(m, notes);
     if m.analytic.is_empty() {
         return;
     }
@@ -855,35 +903,74 @@ pub(super) fn copy_to(m: &mut SurfaceModel, from: CurveId, to: CurveId) {
     }
 }
 
-/// Drops the descriptions of curves that do not exist or whose points are off the circle (a file
-/// that an older program changed), and brings the kind and the angles in step with the chain (an
-/// older program may have erased an edge of a circle). This is quiet: a load has no notes.
-pub(super) fn validate_loaded(m: &mut SurfaceModel) {
+/// Checks the descriptions of a loaded model against their chains. `unread` are the rows that
+/// could not be parsed. A row that does not fit its chain is left out, and the model keeps a note
+/// of each (`SurfaceModel::take_load_notes`). A description of a kind that this version does not
+/// know is read only: it is kept as it is, whatever its numbers say. The kind and the angles of a
+/// known description are brought in step with the chain (an older program may have erased an edge
+/// of a circle). Nothing is dropped without a note.
+pub(super) fn validate_loaded(m: &mut SurfaceModel, unread: Vec<(u32, Value)>) {
+    let mut notes: Vec<String> = Vec::new();
+    let gone = |id: CurveId, why: &str| {
+        format!("the file has a circle description for curve {id} that was left out: {why}")
+    };
     let ids: Vec<CurveId> = m.analytic.keys().copied().collect();
     let mut chains: Vec<(CurveId, Vec<VertexId>, Vec<DVec3>)> = Vec::new();
     for id in ids {
         let chain = m
             .curves
             .get(&id)
-            .and_then(|es| chain_vertices(m, es))
-            .and_then(|vs| positions(m, &vs).map(|p| (vs, p)));
+            .map(|es| chain_vertices(m, es))
+            .map(|c| c.and_then(|vs| positions(m, &vs).map(|p| (vs, p))));
         match chain {
-            Some((vs, p)) if m.analytic[&id].is_valid() => chains.push((id, vs, p)),
-            _ => {
+            None => {
                 m.analytic.remove(&id);
+                notes.push(gone(id, "the model has no such curve"));
             }
+            Some(None) => {
+                m.analytic.remove(&id);
+                notes.push(gone(id, "the edges of the curve are not a chain"));
+            }
+            Some(Some((vs, p))) if is_known_kind(&m.analytic[&id].kind) => {
+                if m.analytic[&id].is_valid() {
+                    chains.push((id, vs, p));
+                } else {
+                    m.analytic.remove(&id);
+                    notes.push(gone(id, "its numbers are not valid"));
+                }
+            }
+            // A kind of a newer program: kept as it is.
+            Some(Some(_)) => {}
         }
     }
     let all: BTreeSet<VertexId> = chains.iter().flat_map(|c| c.1.iter().copied()).collect();
     let deg = degrees_of(m, &all);
     for (id, vs, pts) in chains {
         let shared = shared_flags(&vs, &deg);
-        if !holds(&m.analytic[&id], &pts, &shared) {
+        if holds(&m.analytic[&id], &pts, &shared) {
+            if let Some(a) = m.analytic.get_mut(&id) {
+                follow_chain(a, &pts, is_closed(&vs));
+            }
+        } else {
             m.analytic.remove(&id);
-        } else if let Some(a) = m.analytic.get_mut(&id)
-            && is_known_kind(&a.kind)
-        {
-            follow_chain(a, &pts, is_closed(&vs));
+            notes.push(gone(
+                id,
+                "its points are not on the circle (the chain was changed)",
+            ));
         }
     }
+    for (id, value) in unread {
+        let id = CurveId(id);
+        match RawRow::of(m, id, value) {
+            Some(row) if !m.analytic.contains_key(&id) => {
+                m.analytic_raw.insert(id, row);
+            }
+            Some(_) => notes.push(gone(id, "the curve has two descriptions")),
+            None => notes.push(gone(
+                id,
+                "the model has no such curve or its edges are not a chain",
+            )),
+        }
+    }
+    m.load_notes.extend(notes);
 }

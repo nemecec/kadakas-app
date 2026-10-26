@@ -1884,6 +1884,30 @@ impl Document {
         // An instance that cannot be drawn (a definition that is missing, is not a component,
         // contains itself or is over the limits) stays in the file and is reported.
         notes.extend(crate::component::load_findings(self));
+        // What the load of a surface model left out or kept as it was (MOD-15).
+        for o in self.objects.values() {
+            if let Shape::SurfaceModel(m) = &o.shape {
+                notes.extend(
+                    m.load_notes()
+                        .iter()
+                        .map(|n| format!("surface model {}: {n}", o.id)),
+                );
+            }
+        }
+        for r in self.resources.iter() {
+            let Some(d) = self.resources.symbol(r.id).filter(|d| d.is_component()) else {
+                continue;
+            };
+            for p in &d.parts {
+                if let Shape::SurfaceModel(m) = &p.shape {
+                    notes.extend(
+                        m.load_notes()
+                            .iter()
+                            .map(|n| format!("component '{}' ({}): {n}", r.name, r.id)),
+                    );
+                }
+            }
+        }
         self.load_notes = notes;
         let mut seen = std::collections::HashSet::new();
         let ids = self

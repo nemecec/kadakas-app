@@ -192,3 +192,27 @@ fn the_whole_new_chain_stays_selected_after_the_segments_change() {
         assert!(now.iter().all(|e| chosen.contains(&Item::Edge(id, *e))));
     }
 }
+
+#[test]
+fn entity_info_of_a_model_with_unequal_scales_says_the_circle_is_not_true() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    let (id, curve) = circle_model(&mut app, 12);
+    app.session
+        .editor
+        .execute(&Command::TransformObjects3d {
+            ids: vec![id],
+            matrix: glam::DAffine3::from_scale(glam::DVec3::new(2.0, 1.0, 1.0)).to_cols_array(),
+            copy: false,
+            count: 1,
+        })
+        .unwrap();
+    select_edge(&mut app, id, curve);
+    let _ = frame(&ctx, &mut app, vec![], 0.0);
+    let shown = texts(&frame(&ctx, &mut app, vec![], 0.1)).join("\n");
+    assert!(shown.contains(&tr!("modeler-curve-not-true")), "{shown}");
+    assert!(
+        !shown.contains(&tr!("modeler-curve-circumference")),
+        "{shown}"
+    );
+}

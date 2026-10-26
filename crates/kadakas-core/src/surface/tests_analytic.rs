@@ -633,6 +633,7 @@ fn rows_that_cannot_be_trusted_are_left_out_on_load() {
         v["curve_geometry"][0][1] = serde_json::json!({"kind": "circle"});
     });
     assert!(back.curve_geometry(the_curve(&back)).is_none());
+    assert!(back.load_notes().is_empty());
     // A row of a curve that is gone.
     let back = with_geometry(&m, |v| {
         let row = v["curve_geometry"][0].clone();
@@ -642,12 +643,18 @@ fn rows_that_cannot_be_trusted_are_left_out_on_load() {
             .push(serde_json::json!([999, row[1]]));
     });
     assert_eq!(back.curve_geometries().count(), 1);
+    assert!(back.load_notes().iter().any(|n| n.contains("curve 999")));
     // A circle that an older program moved without the row.
     let back = with_geometry(&m, |v| {
         v["curve_geometry"][0][1]["center"] = serde_json::json!([5000.0, 0.0, 0.0]);
     });
     assert_eq!(back.curve_geometries().count(), 0);
     assert_eq!(back.curves().count(), 1);
+    assert!(
+        back.load_notes()
+            .iter()
+            .any(|n| n.contains("not on the circle"))
+    );
 }
 
 // ---- the number of segments ---------------------------------------------------------------------
@@ -1859,4 +1866,345 @@ fn an_arc_of_one_edge_loses_the_field_when_it_moves_and_says_so() {
     .unwrap();
     let notes = transform(&mut m, DAffine3::from_translation(DVec3::X * 500.0));
     assert!(dropped(&notes), "{notes:?}");
+}
+
+// ---- the second review: loads that tell, unreadable rows, versions ---------------------------------
+
+/// The JSON of a document that holds `m` as its only object, and the id of the object.
+fn doc_json(m: SurfaceModel) -> (serde_json::Value, crate::model::ObjectId) {
+    let (ed, id) = editor_with(m);
+    (serde_json::to_value(ed.doc()).unwrap(), id)
+}
+
+fn load_doc(v: &serde_json::Value) -> crate::model::Document {
+    crate::model::Document::from_slice(&serde_json::to_vec(v).unwrap()).unwrap()
+}
+
+fn shape_in(doc: &crate::model::Document, id: crate::model::ObjectId) -> SurfaceModel {
+    match &doc.object(id).unwrap().shape {
+        crate::model::Shape::SurfaceModel(m) => (**m).clone(),
+        _ => panic!("not a surface model"),
+    }
+}
+
+#[test]
+fn a_load_reports_every_row_it_leaves_out() {
+    let (mut v, id) = doc_json(circle([0.0; 3], 300.0, 12));
+    let rows = v["objects"][0]["shape"]["curve_geometry"]
+        .as_array_mut()
+        .unwrap();
+    let good = rows[0].clone();
+    // The circle is somewhere else than its chain, a row has a curve that is not there, a curve
+    // has two rows, and one row has numbers that are not valid.
+    rows[0][1]["center"] = serde_json::json!([5000.0, 0.0, 0.0]);
+    rows.push(serde_json::json!([999, good[1]]));
+    let doc = load_doc(&v);
+    let notes = doc.load_notes();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("curve") && n.contains("not on the circle")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("curve 999") && n.contains("no such curve")),
+        "{notes:?}"
+    );
+    assert_eq!(shape_in(&doc, id).curve_geometries().count(), 0);
+    // Two rows for one curve, and a radius below zero.
+    let (mut v, id) = doc_json(circle([0.0; 3], 300.0, 12));
+    let rows = v["objects"][0]["shape"]["curve_geometry"]
+        .as_array_mut()
+        .unwrap();
+    let again = rows[0].clone();
+    rows.push(again);
+    let doc = load_doc(&v);
+    assert!(
+        doc.load_notes()
+            .iter()
+            .any(|n| n.contains("two circle descriptions"))
+    );
+    assert_eq!(shape_in(&doc, id).curve_geometries().count(), 1);
+    let (mut v, _) = doc_json(circle([0.0; 3], 300.0, 12));
+    v["objects"][0]["shape"]["curve_geometry"][0][1]["radius"] = serde_json::json!(-1.0);
+    let doc = load_doc(&v);
+    assert!(
+        doc.load_notes()
+            .iter()
+            .any(|n| n.contains("numbers are not valid"))
+    );
+    // A file that is right has no note of this kind.
+    let (v, _) = doc_json(circle([0.0; 3], 300.0, 12));
+    assert!(load_doc(&v).load_notes().is_empty());
+}
+
+/// The same JSON, where a number is its value (`1` and `1.0` are the same number).
+fn same_numbers(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    use serde_json::Value::*;
+    match (a, b) {
+        (Number(x), Number(y)) => x.as_f64() == y.as_f64(),
+        (Array(x), Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_numbers(p, q))
+        }
+        (Object(x), Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| same_numbers(v, w)))
+        }
+        _ => a == b,
+    }
+}
+
+fn ellipse_model() -> SurfaceModel {
+    // Twelve points on an ellipse (300 by 150): not on any circle.
+    let pts: Vec<P> = (0..12)
+        .map(|i| {
+            let a = std::f64::consts::TAU * f64::from(i) / 12.0;
+            [300.0 * a.cos(), 150.0 * a.sin(), 0.0]
+        })
+        .collect();
+    let mut m = SurfaceModel::new();
+    m.apply(&Edit::AddCurve {
+        points: pts,
+        closed: true,
+        faceted: false,
+        analytic: None,
+    })
+    .unwrap();
+    m
+}
+
+#[test]
+fn a_row_of_an_unknown_kind_survives_a_load_even_when_the_points_are_off_any_circle() {
+    let (mut v, id) = doc_json(ellipse_model());
+    let curve = shape_in(&load_doc(&v), id).curves().next().unwrap().0;
+    let row = serde_json::json!({"kind": "ellipse", "center": [0, 0, 0], "normal": [0, 0, 1],
+        "axis": [1, 0, 0], "radius": 300, "minor_radius": 150});
+    v["objects"][0]["shape"]["curve_geometry"] = serde_json::json!([[curve.0, row]]);
+    let doc = load_doc(&v);
+    assert!(doc.load_notes().is_empty(), "{:?}", doc.load_notes());
+    let m = shape_in(&doc, id);
+    assert_eq!(geom_of(&m, curve).kind, "ellipse");
+    // It is written back as it was.
+    let back = serde_json::to_value(&doc).unwrap();
+    assert!(
+        same_numbers(
+            &back["objects"][0]["shape"]["curve_geometry"],
+            &v["objects"][0]["shape"]["curve_geometry"]
+        ),
+        "{back}"
+    );
+    // An edit elsewhere keeps it. A change of the chain drops it, with a note.
+    let mut m = m;
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[5000.0, 5000.0, 0.0], [6000.0, 5000.0, 0.0]]],
+    })
+    .unwrap();
+    assert!(m.curve_geometry(curve).is_some());
+    let notes = transform(&mut m, DAffine3::from_translation(DVec3::X * 10.0));
+    assert!(
+        notes.iter().any(|n| n.contains("kind is not known")),
+        "{notes:?}"
+    );
+    assert!(m.curve_geometry(curve).is_none());
+}
+
+#[test]
+fn a_row_that_this_version_cannot_read_is_kept_and_written_back() {
+    let (mut v, id) = doc_json(ellipse_model());
+    let curve = shape_in(&load_doc(&v), id).curves().next().unwrap().0;
+    let row = serde_json::json!({"kind": "spline", "knots": [0, 1, 2, 3], "degree": 3});
+    v["objects"][0]["shape"]["curve_geometry"] = serde_json::json!([[curve.0, row]]);
+    let doc = load_doc(&v);
+    assert!(doc.load_notes().is_empty(), "{:?}", doc.load_notes());
+    let back = serde_json::to_value(&doc).unwrap();
+    assert_eq!(
+        back["objects"][0]["shape"]["curve_geometry"],
+        v["objects"][0]["shape"]["curve_geometry"]
+    );
+    assert_eq!(back["objects"][0]["shape"]["v"], 2);
+    let mut m = shape_in(&doc, id);
+    // It follows the model through a clone, an edit elsewhere and a group copy.
+    m.apply(&Edit::AddEdges {
+        edges: vec![[[5000.0, 5000.0, 0.0], [6000.0, 5000.0, 0.0]]],
+    })
+    .unwrap();
+    assert!(serde_json::to_string(&m).unwrap().contains("spline"));
+    let sel = m
+        .select(&[], &m.curve_edges(curve).unwrap().to_vec())
+        .unwrap();
+    assert!(
+        serde_json::to_string(&m.extract(&sel))
+            .unwrap()
+            .contains("spline")
+    );
+    // A change of the chain drops it, with a note.
+    let notes = transform(&mut m, DAffine3::from_translation(DVec3::X * 10.0));
+    assert!(
+        notes.iter().any(|n| n.contains("kind is not known")),
+        "{notes:?}"
+    );
+    assert!(!serde_json::to_string(&m).unwrap().contains("spline"));
+    // A row of a curve that is not there is told at the load.
+    let mut v2 = v.clone();
+    v2["objects"][0]["shape"]["curve_geometry"] = serde_json::json!([[4242, {"kind": "spline"}]]);
+    assert!(
+        load_doc(&v2)
+            .load_notes()
+            .iter()
+            .any(|n| n.contains("curve 4242"))
+    );
+}
+
+#[test]
+fn a_model_with_descriptions_is_version_two_and_an_older_program_keeps_it() {
+    let plain = ellipse_model();
+    assert_eq!(serde_json::to_value(&plain).unwrap()["v"], 1);
+    let m = circle([0.0; 3], 300.0, 12);
+    let v = serde_json::to_value(&m).unwrap();
+    assert_eq!(v["v"], 2);
+    let mut shape = v.clone();
+    shape["kind"] = serde_json::json!("surface_model");
+    assert!(!is_newer(&shape));
+    // A program that reads version 1 keeps the model as it is and does not edit it.
+    assert!(is_newer_than(&shape, 1));
+    // The version stays 2 while the log holds an entry that an older program cannot read.
+    let mut gone = m.clone();
+    transform(&mut gone, DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)));
+    assert_eq!(gone.curve_geometries().count(), 0);
+    assert!(gone.log().iter().any(|e| matches!(
+        e.intent,
+        sync::Intent::AddCurve {
+            analytic: Some(_),
+            ..
+        }
+    )));
+    assert_eq!(serde_json::to_value(&gone).unwrap()["v"], 2);
+    // A newer version than this one is kept as it is.
+    shape["v"] = serde_json::json!(3);
+    assert!(is_newer(&shape));
+}
+
+#[test]
+fn a_log_entry_that_is_damaged_or_from_another_version_is_told_at_the_load() {
+    let (mut v, id) = doc_json(circle([0.0; 3], 300.0, 12));
+    v["objects"][0]["shape"]["log"] = serde_json::json!([
+        {"stamp": 11, "base": 10, "n": 1, "do": "from_the_future", "x": 1},
+        {"stamp": 12, "base": 11, "n": 2, "do": "add_edges", "edges": "not a list"}
+    ]);
+    let doc = load_doc(&v);
+    let notes = doc.load_notes();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("edit 1") && n.contains("another version")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("edit 2") && n.contains("damaged")),
+        "{notes:?}"
+    );
+    assert_eq!(shape_in(&doc, id).log().len(), 2);
+}
+
+#[test]
+fn a_copy_of_a_circle_with_a_bending_map_says_so_and_a_plain_move_does_not() {
+    let mut m = circle([0.0; 3], 300.0, 12);
+    let face = m.faces().next().unwrap().0;
+    let notes = m
+        .apply_with_notes(&Edit::CopyGeometry {
+            faces: vec![face],
+            edges: Vec::new(),
+            matrix: mat(DAffine3::from_translation(DVec3::X * 1000.0)
+                * DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0))),
+            count: 1,
+        })
+        .unwrap();
+    assert!(dropped(&notes), "{notes:?}");
+    // The copy is a curve without the description. The original keeps it.
+    assert_eq!(m.curves().count(), 2);
+    assert_eq!(m.curve_geometries().count(), 1);
+}
+
+#[test]
+fn remove_and_absorb_hand_on_their_notes() {
+    // Taking an edge of a circle out of a model, with a selection that does not take the whole
+    // curve with it, shortens the circle: the notes say so.
+    let mut m = circle([0.0; 3], 300.0, 12);
+    let face = m.faces().next().unwrap().0;
+    m.apply(&Edit::EraseFaces { faces: vec![face] }).unwrap();
+    let e = m.curve_edges(the_curve(&m)).unwrap()[3];
+    let sel = Selection {
+        edges: [e].into_iter().collect(),
+        ..Selection::default()
+    };
+    let notes = m.remove(&sel).unwrap();
+    assert!(
+        notes.iter().any(|n| n.contains("is now an arc")),
+        "{notes:?}"
+    );
+    // An absorb that bends a circle.
+    let part = circle([0.0; 3], 300.0, 12);
+    let mut host = SurfaceModel::new();
+    let notes = host
+        .absorb(&part, Some(DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0))))
+        .unwrap();
+    assert!(dropped(&notes), "{notes:?}");
+}
+
+#[test]
+fn a_corner_that_slides_along_the_circle_keeps_the_field_and_the_kind() {
+    for (kind_edit, kind) in [
+        (
+            Edit::AddCurve {
+                points: ring([0.0; 3], 300.0, 6),
+                closed: true,
+                faceted: true,
+                analytic: Some(Analytic::polygon(DVec3::ZERO, DVec3::Z, DVec3::X, 300.0)),
+            },
+            KIND_POLYGON,
+        ),
+        (circle_edit([0.0; 3], 300.0, 6), KIND_CIRCLE),
+    ] {
+        let mut m = SurfaceModel::new();
+        m.apply(&kind_edit).unwrap();
+        let id = the_curve(&m);
+        let v = m.curve_vertices(id).unwrap()[2];
+        let notes = m
+            .apply_with_notes(&Edit::TransformVertices {
+                vertices: vec![v],
+                faces: Vec::new(),
+                edges: Vec::new(),
+                matrix: mat(DAffine3::from_quat(DQuat::from_axis_angle(DVec3::Z, 0.2))),
+            })
+            .unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(geom_of(&m, id).kind, kind);
+        assert_invariant(&m);
+    }
+}
+
+#[test]
+fn a_chain_that_turns_back_is_not_a_chain_on_the_circle() {
+    let a = Analytic::circle(DVec3::ZERO, DVec3::Z, DVec3::X, 100.0);
+    let at = |deg: f64| a.point_at(deg.to_radians());
+    let ok = [at(0.0), at(40.0), at(80.0), at(120.0)];
+    assert!(analytic::goes_one_way(&a, &ok));
+    assert!(analytic::holds(&a, &ok, &[false; 4]));
+    // Turns back.
+    let back = [at(0.0), at(40.0), at(20.0), at(60.0)];
+    assert!(!analytic::goes_one_way(&a, &back));
+    assert!(!analytic::holds(&a, &back, &[false; 4]));
+    // An edge over half a turn.
+    let far = [at(0.0), at(40.0), at(230.0)];
+    assert!(!analytic::goes_one_way(&a, &far));
+    // Clockwise is one way, too.
+    let cw = [at(0.0), at(-40.0), at(-80.0)];
+    assert!(analytic::goes_one_way(&a, &cw));
+    // Two points cannot turn back.
+    assert!(analytic::goes_one_way(&a, &[at(0.0), at(300.0)]));
 }

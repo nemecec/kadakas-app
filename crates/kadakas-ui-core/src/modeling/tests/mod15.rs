@@ -312,3 +312,54 @@ fn an_arc_drawn_on_a_mirrored_model_keeps_its_angles_true_and_says_nothing() {
         arc.sweep
     );
 }
+
+#[test]
+fn a_model_placed_with_unequal_scales_shows_no_true_radius() {
+    let mut r = circle_rig(12);
+    let id = r.model_id();
+    let curve = only_curve(&r);
+    let shape = |r: &Rig| curve_shape(r.ed.doc(), id, curve).unwrap();
+    assert!(shape(&r).uniform);
+    // Equal scales (and a turn) keep true circles.
+    r.ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: (glam::DAffine3::from_rotation_z(0.6)
+            * glam::DAffine3::from_scale(DVec3::splat(2.0)))
+        .to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    let s = shape(&r);
+    assert!(s.uniform);
+    assert!((s.radius - 600.0).abs() < 1e-6, "{}", s.radius);
+    // A scale along one axis of the drawing (a remap of the plan with a height scale) bends the
+    // circle into an ellipse: no true radius.
+    r.ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: glam::DAffine3::from_scale(DVec3::new(1.0, 1.0, 3.0)).to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    assert!(!shape(&r).uniform);
+    r.ed.execute(&Command::TransformObjects3d {
+        ids: vec![id],
+        matrix: glam::DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)).to_cols_array(),
+        copy: false,
+        count: 1,
+    })
+    .unwrap();
+    assert!(!shape(&r).uniform);
+}
+
+#[test]
+fn the_note_that_the_chain_is_broken_has_its_own_text() {
+    let broken = messages::localize("curve 3 lost its circle description: the chain is broken");
+    let off = messages::localize(
+        "curve 3 lost its circle description: its points are not on one circle any more",
+    );
+    assert_eq!(broken, kadakas_l10n::tr!("uic-curve-note-broken"));
+    assert_ne!(broken, off);
+    assert_eq!(off, kadakas_l10n::tr!("uic-curve-note-dropped"));
+}
