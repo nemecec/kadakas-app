@@ -278,17 +278,25 @@ fn remove_run_files(root: &Path, id: &str) {
     }
 }
 
-/// True while the file is locked by somebody.
-fn is_locked(path: &Path) -> bool {
-    let Ok(f) = std::fs::OpenOptions::new().write(true).open(path) else {
-        return false;
+/// True while the file is locked by somebody. A file that is not there is not locked. Any other
+/// error (a full disk, too many open files) is returned: the answer is not known.
+fn is_locked(path: &Path) -> std::io::Result<bool> {
+    let f = match std::fs::OpenOptions::new().write(true).open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
     };
-    matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    match f.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
 }
 
-/// True while the supervisor or the app of the run lives (one of the two locks is held).
-fn is_alive(root: &Path, id: &str) -> bool {
-    is_locked(&run_file(root, id, "lock")) || is_locked(&run_file(root, id, "app.lock"))
+/// True while the supervisor or the app of the run lives (one of the two locks is held). An error
+/// means that it is not known.
+fn is_alive(root: &Path, id: &str) -> std::io::Result<bool> {
+    Ok(is_locked(&run_file(root, id, "lock"))? || is_locked(&run_file(root, id, "app.lock"))?)
 }
 
 fn read_record(root: &Path, id: &str) -> Option<RunRecord> {
@@ -466,7 +474,8 @@ impl Store {
     pub fn running_slots(&self) -> Vec<Slot> {
         read_records(self.root())
             .into_iter()
-            .filter_map(|(id, r)| r.filter(|_| is_alive(self.root(), &id)))
+            // A run whose state is not known counts as running: it is not settled as a crash.
+            .filter_map(|(id, r)| r.filter(|_| is_alive(self.root(), &id).unwrap_or(true)))
             .map(|r| r.slot)
             .collect()
     }
@@ -474,23 +483,49 @@ impl Store {
     /// Settles the runs whose supervisor and app are gone: reads the clean-exit mark, records
     /// the result and deletes the files. Call it when the launcher starts. Each record is
     /// settled under the install lock and read again there, so two launchers that start at the
-    /// same time count a run once.
-    pub fn settle_runs(&self) {
+    /// same time count a run once. Returns what went wrong (a lock that could not be taken, a
+    /// state that could not be read or written): a run with a problem stays for the next try.
+    #[must_use]
+    pub fn settle_runs(&self) -> Vec<String> {
+        self.settle_runs_at(now_seconds())
+    }
+
+    /// Like [`Store::settle_runs`], with the time in seconds that the length of a run is
+    /// measured against (a test sets it).
+    #[must_use]
+    pub fn settle_runs_at(&self, now: u64) -> Vec<String> {
+        let mut problems = Vec::new();
         for (id, _) in read_records(self.root()) {
-            let Ok(_guard) = self.lock(true) else {
-                continue;
+            let _guard = match self.lock(true) {
+                Ok(g) => g,
+                Err(e) => {
+                    problems.push(format!("run {id}: the install lock was not taken: {e}"));
+                    continue;
+                }
             };
             // Another launcher may have settled it while we waited for the lock.
             let record = read_record(self.root(), &id);
-            if is_alive(self.root(), &id)
-                || (record.is_none() && !run_file(self.root(), &id, "json").exists())
-            {
+            match is_alive(self.root(), &id) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => {
+                    problems.push(format!("run {id}: the lock files were not read: {e}"));
+                    continue;
+                }
+            }
+            if record.is_none() && !run_file(self.root(), &id, "json").exists() {
                 continue;
             }
             if let Some(r) = record {
                 let clean = run_file(self.root(), &id, "clean").is_file();
-                let seconds = now_seconds().saturating_sub(r.started);
-                let _ = self.note_run_end_locked(&r.slot, clean, seconds);
+                let seconds = now.saturating_sub(r.started);
+                if let Err(e) = self.note_run_end_locked(&r.slot, clean, seconds) {
+                    // The result is not recorded: the files stay and the next launcher tries again.
+                    problems.push(format!(
+                        "run {id}: the end of the run was not recorded: {e}"
+                    ));
+                    continue;
+                }
                 if !clean {
                     keep_crash(self, &id, &r.slot, &ProcessEnd::default(), seconds);
                 }
@@ -498,6 +533,7 @@ impl Store {
             remove_run_files(self.root(), &id);
             let _ = std::fs::remove_file(run_file(self.root(), &id, "lock"));
         }
+        problems
     }
 }
 
@@ -575,6 +611,7 @@ mod tests {
     fn a_run_whose_supervisor_died_is_settled_by_the_next_launcher() {
         let root = tmp("run-settle");
         let s = store(&root);
+        let before = now_seconds();
         // Run 1: the supervisor died, the app had written the mark.
         let g1 = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
         std::fs::write(run_file(s.root(), g1.id(), "clean"), b"").unwrap();
@@ -585,7 +622,10 @@ mod tests {
         let (id1, id2) = (g1.id().to_string(), g2.id().to_string());
         drop(g1);
         drop(g2);
-        s.settle_runs();
+        // The clock is a part of the call: `before` is earlier than every start, so every run is
+        // short (0 seconds) whatever the load of the computer that runs the test.
+        let later = before;
+        assert_eq!(s.settle_runs_at(later), Vec::<String>::new());
         assert_eq!(
             s.crashed_slots().into_iter().collect::<Vec<_>>(),
             [slot("1.2.0")]
@@ -598,7 +638,7 @@ mod tests {
         std::fs::write(runs_dir(s.root()).join("1f.json"), b"{ nope").unwrap();
         std::fs::write(runs_dir(s.root()).join("notes.txt"), b"x").unwrap();
         std::fs::write(runs_dir(s.root()).join("zz.json"), b"{}").unwrap();
-        s.settle_runs();
+        assert_eq!(s.settle_runs_at(later), Vec::<String>::new());
         assert!(!runs_dir(s.root()).join("1f.json").exists());
         assert!(runs_dir(s.root()).join("notes.txt").exists());
         assert!(runs_dir(s.root()).join("zz.json").exists());
@@ -691,16 +731,41 @@ mod tests {
         // The launcher dies.
         drop(g);
         assert_eq!(s.running_slots(), [slot("1.1.0")]);
-        s.settle_runs();
+        assert!(s.settle_runs().is_empty());
         assert!(s.crashed_slots().is_empty(), "a running app is no crash");
         assert!(run_file(s.root(), &id, "json").is_file());
         // The app ends without the mark: now the next launcher settles it.
         drop(app_lock);
         assert!(s.running_slots().is_empty());
-        s.settle_runs();
+        assert!(s.settle_runs().is_empty());
         assert!(s.crashed_slots().contains(&slot("1.1.0")));
         assert!(!run_file(s.root(), &id, "json").exists());
         assert!(!run_file(s.root(), &id, "app.lock").exists());
+        crate::store::tests::rm_dir(&root);
+    }
+
+    #[test]
+    fn a_lock_file_that_cannot_be_read_is_reported_and_the_run_stays() {
+        let root = tmp("run-settle-error");
+        let s = store(&root);
+        let g = RunGuard::begin(&s, &slot("1.1.0")).unwrap();
+        let id = g.id().to_string();
+        drop(g);
+        // The lock file is a directory: opening it for writing fails with an error that is not
+        // "not found". The state of the run is not known, so it is not settled, and it is reported.
+        let lock = run_file(s.root(), &id, "lock");
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::create_dir(&lock).unwrap();
+        let problems = s.settle_runs_at(0);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains(&id), "{problems:?}");
+        assert!(run_file(s.root(), &id, "json").exists(), "the run stays");
+        assert!(s.crashed_slots().is_empty());
+        // A run whose state is not known counts as running.
+        assert_eq!(s.running_slots(), [slot("1.1.0")]);
+        std::fs::remove_dir(&lock).unwrap();
+        assert!(s.settle_runs_at(0).is_empty());
+        assert!(!run_file(s.root(), &id, "json").exists());
         crate::store::tests::rm_dir(&root);
     }
 
@@ -717,7 +782,8 @@ mod tests {
             .map(|_| {
                 let (r, root) = (r.clone(), root.clone());
                 std::thread::spawn(move || {
-                    Store::new(r, Some(bundled(&root, "1.0.0"))).settle_runs();
+                    let problems = Store::new(r, Some(bundled(&root, "1.0.0"))).settle_runs();
+                    assert!(problems.is_empty(), "{problems:?}");
                 })
             })
             .collect();

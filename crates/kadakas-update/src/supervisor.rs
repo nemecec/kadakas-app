@@ -320,7 +320,9 @@ impl Supervisor {
         let settings = Settings::load(&self.root);
         let updater = (self.make_updater)(&settings);
         updater.store().recover();
-        updater.store().settle_runs();
+        for problem in updater.store().settle_runs() {
+            eprintln!("kadakas-launcher: {problem}");
+        }
         let mut reports = Vec::new();
         let mut files = files;
         loop {
@@ -1076,7 +1078,7 @@ mod tests {
         let mut f = kadakas_crash::CrashFile::new(kadakas_crash::CrashKind::Panic);
         f.message = "left behind".into();
         std::fs::write(kadakas_crash::queue::live_path(&root, "ab-cd"), f.to_json()).unwrap();
-        st.settle_runs();
+        assert!(st.settle_runs().is_empty());
         let kept = kadakas_crash::queue::list(&root);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].file.message, "left behind");
