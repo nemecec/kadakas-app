@@ -17,14 +17,35 @@
     });
     return e;
   }
-  function toast(msg) { var t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 3500); }
-  function api(path, body) {
+  function toast(msg, undo) {
+    var t = $('toast'); t.textContent = msg; t.hidden = false;
+    if (undo) { t.appendChild(h('button', { class: 'link', style: 'color:inherit', onclick: function () { t.hidden = true; undo(); } }, 'Undo')); }
+    clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, undo ? 8000 : 3500);
+  }
+  var TOKEN = (document.querySelector('meta[name="l10n-token"]') || {}).content || '';
+  function request(path, body) {
     var q = 'target=' + encodeURIComponent(S.target);
     var url = '/api/' + path + (path.indexOf('?') < 0 ? '?' : '&') + q;
-    var opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-    return fetch(url, opt).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); });
+    var headers = { 'X-L10n-Token': TOKEN };
+    var opt = { headers: headers };
+    if (body !== undefined) { opt.method = 'POST'; headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    return fetch(url, opt);
+  }
+  function api(path, body) {
+    return request(path, body).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); });
   }
   function fail(e) { toast(e.message || String(e)); }
+
+  // Never rebuild the panel while the owner types in it.
+  function editing() {
+    var a = document.activeElement;
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#detail-cell'));
+  }
+  function renderSafe() {
+    if (editing()) { S.pendingRender = true; return; }
+    S.pendingRender = false; counts(); renderRows(); fillDetail();
+  }
+  document.addEventListener('focusout', function () { setTimeout(function () { if (S.pendingRender && !editing()) renderSafe(); }, 0); });
 
   // ---- loading
   function load() {
@@ -92,7 +113,13 @@
     if (!m.tr) { box.textContent = '(missing)'; return box; }
     O.segments(text, m.highlights).forEach(function (s) {
       var el = h(s.hl ? 'mark' : 'span', { 'data-s': String(s.start), 'data-len': String(s.end - s.start) }, s.text);
-      if (s.hl) { el.title = 'Click to remove'; el.addEventListener('click', function (ev) { ev.stopPropagation(); post('highlight', { id: m.id, remove: true, start: s.start, end: s.end }); }); }
+      if (s.hl) { el.title = 'Click to remove'; el.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          if (!window.getSelection().isCollapsed) return;   // the click ends a drag-select
+          post('highlight', { id: m.id, remove: true, start: s.start, end: s.end }).then(function () {
+            toast('Highlight removed', function () { post('highlight', { id: m.id, start: s.start, end: s.end }); });
+          });
+        }); }
       box.appendChild(el);
     });
     return box;
@@ -114,7 +141,7 @@
     loadUsage(id);
   }
   function post(path, body) {
-    return api(path, body).then(function (it) { if (it && it.id) apply(it); counts(); renderRows(); fillDetail(); return it; }).catch(fail);
+    return api(path, body).then(function (it) { if (it && it.id) apply(it); renderSafe(); return it; }).catch(fail);
   }
 
   // ---- detail panel
@@ -173,11 +200,11 @@
   }
   function actionsBlock(m) {
     var wrap = h('div');
-    wrap.appendChild(h('textarea', { class: 'cm', placeholder: 'Comment (what is wrong?)', onchange: function (e) { post('comment', { id: m.id, comment: e.target.value }); } }, m.comment));
+    wrap.appendChild(h('textarea', { class: 'cm', placeholder: 'Comment (what is wrong?)', oninput: function (e) { saveComment(m.id, e.target.value); }, onchange: function (e) { saveComment(m.id, e.target.value, true); } }, m.comment));
     var busy = S.queue && S.queue.status === 'running';
     var a = h('div', { class: 'actions' }, [
       h('button', { onclick: weird, title: 'Select words in the target text first (key w)' }, 'Weird'),
-      h('button', { onclick: toggleFlag }, m.status === 'unreviewed' ? 'Flag' : 'Unflag'),
+      h('button', { disabled: m.status !== 'unreviewed' && m.status !== 'flagged', onclick: toggleFlag }, m.status === 'unreviewed' ? 'Flag' : 'Unflag'),
       h('button', { class: 'primary', disabled: busy || !m.tr, onclick: function () { suggest([m.id], false); } }, 'Suggest'),
       h('button', { disabled: busy || !m.suggestions.length, onclick: function () { suggest([m.id], true); } }, 'More options'),
       h('button', { class: 'link', onclick: copyPrompt }, 'Copy prompt'),
@@ -185,9 +212,17 @@
     wrap.appendChild(a);
     return wrap;
   }
+  function saveComment(id, value, now) {
+    clearTimeout(saveComment.t);
+    var m = S.byId[id]; if (m) m.comment = value;
+    var send = function () { api('comment', { id: id, comment: value }).then(function (it) { var o = S.byId[id]; if (o) { o.status = it.status; } counts(); }).catch(fail); };
+    if (now) send(); else saveComment.t = setTimeout(send, 600);
+  }
   function toggleFlag() {
     var m = S.byId[S.sel]; if (!m) return;
-    post('status', { id: m.id, status: m.status === 'unreviewed' ? 'flagged' : 'unreviewed' });
+    if (m.status === 'unreviewed') post('status', { id: m.id, status: 'flagged' });
+    else if (m.status === 'flagged') post('status', { id: m.id, status: 'unreviewed' });
+    else toast('The status is ' + m.status + '. Flag and unflag only switch between unreviewed and flagged.');
   }
   function weird() {
     var m = S.byId[S.sel]; if (!m || !m.tr) return toast('Select a row first');
@@ -216,7 +251,7 @@
     var wrap = h('div', { class: 'cards' });
     var q = S.queue;
     if (q && q.status === 'running' && q.current === m.id) {
-      wrap.appendChild(h('div', { class: 'card' }, [h('span', { class: 'spin' }), ' Asking Claude (' + q.model + '), ' + q.item_elapsed + ' s']));
+      wrap.appendChild(h('div', { class: 'card' }, [h('span', { class: 'spin' }), h('span', { id: 'spin-text' }, ' Asking Claude (' + q.model + '), ' + q.item_elapsed + ' s')]));
     }
     var je = S.jobErrors[m.id];
     if (je) {
@@ -281,13 +316,17 @@
       $('queue-progress').max = j.total || 1; $('queue-progress').value = j.done || 0;
       $('queue-status').textContent = running ? 'Asking ' + (j.done + 1) + ' of ' + j.total + ' (' + j.model + ', ' + j.elapsed + ' s)' : (j.status === 'idle' ? '' : j.status);
       $('btn-all').disabled = running;
-      Object.keys(j.errors || {}).forEach(function (k) { S.jobErrors[k] = j.errors[k]; });
-      var fresh = (j.finished || []).filter(function (id) { return !prev || (prev.finished || []).indexOf(id) < 0 || prev === j; });
-      var todo = (j.finished || []).filter(function (id) { return !(S.seenFinished || {})[id + ':' + j.started]; });
+      var errNew = false;
+      Object.keys(j.errors || {}).forEach(function (k) { if (!S.jobErrors[k]) errNew = true; S.jobErrors[k] = j.errors[k]; });
       S.seenFinished = S.seenFinished || {};
+      var todo = (j.finished || []).filter(function (id) { return !S.seenFinished[id + ':' + j.started]; });
+      var changed = todo.length > 0 || errNew || !prev || prev.current !== j.current || prev.status !== j.status || prev.started !== j.started;
       var chain = Promise.resolve();
       todo.forEach(function (id) { S.seenFinished[id + ':' + j.started] = 1; chain = chain.then(function () { return api('item?id=' + encodeURIComponent(id)).then(apply); }); });
-      chain.then(function () { counts(); renderRows(); fillDetail(); });
+      chain.then(function () {
+        if (changed) renderSafe();
+        else { var sp = document.getElementById('spin-text'); if (sp) sp.textContent = ' Asking Claude (' + j.model + '), ' + j.item_elapsed + ' s'; }
+      });
       if (running) pollQueue.t = setTimeout(pollQueue, 1000);
     }).catch(fail);
   }
@@ -360,16 +399,22 @@
       });
       var ok = pv.changes.filter(function (c) { return !c.error; }).length;
       var chk = h('input', { type: 'checkbox' });
-      if (pv.dirty && pv.dirty.length) d.appendChild(h('p', { class: 'errbox' }, ['The target files have uncommitted changes: ' + pv.dirty.join(', ') + '. ', h('label', {}, [chk, ' I know, apply anyway'])]));
+      var risky = pv.dirty_unknown || (pv.dirty && pv.dirty.length);
+      if (risky) d.appendChild(h('p', { class: 'errbox' }, [(pv.dirty_unknown ? 'Git cannot tell whether the target files have uncommitted changes. ' : 'The target files have uncommitted changes: ' + pv.dirty.join(', ') + '. '), h('label', {}, [chk, ' I know, apply anyway'])]));
       d.appendChild(h('div', { class: 'actions' }, [
         h('button', { class: 'primary', disabled: !ok, onclick: function () {
-          if (pv.dirty && pv.dirty.length && !chk.checked) return toast('Tick the box to apply over uncommitted changes');
-          api('apply', { confirm_dirty: chk.checked }).then(function (r) { d.close(); toast((r.applied || []).length + ' messages written'); load(); }).catch(fail);
+          if (risky && !chk.checked) return toast('Tick the box to apply over uncommitted changes');
+          api('apply', { confirm_dirty: chk.checked, expect: pv.digest }).then(function (r) { d.close(); if (r.refused) toast(r.refused === 'changed' ? 'The files or suggestions changed since the preview. Open Apply again.' : 'Refused: ' + r.refused); else toast((r.applied || []).length + ' messages written'); load(); }).catch(fail);
         } }, 'Apply ' + ok + ' changes'), h('button', { onclick: function () { d.close(); } }, 'Close')]));
       d.showModal();
     }).catch(fail);
   });
-  $('btn-export').addEventListener('click', function (e) { e.target.href = '/api/export?target=' + encodeURIComponent(S.target); e.target.download = 'review-' + S.target + '.md'; });
+  $('btn-export').addEventListener('click', function () {
+    request('export').then(function (r) { return r.blob(); }).then(function (b) {
+      var a = h('a', { href: URL.createObjectURL(b), download: 'review-' + S.target + '.md' });
+      document.body.appendChild(a); a.click(); a.remove();
+    }).catch(fail);
+  });
 
   // ---- wiring
   function setTab(t) {
@@ -386,14 +431,14 @@
   $('target').addEventListener('change', function (e) { S.target = e.target.value; S.sel = null; load(); });
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || S.tab !== 'list') return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || S.tab !== 'list' || $('dlg').open) return;
     var i = S.filtered.findIndex(function (m) { return m.id === S.sel; });
     if (e.key === 'j' || e.key === 'k') {
       var n = Math.min(S.filtered.length - 1, Math.max(0, i + (e.key === 'j' ? 1 : -1)));
-      if (S.filtered[n]) { S.sel = null; select(S.filtered[n].id, true); }
+      if (S.filtered[n]) { if (n >= S.shown) S.shown = n + 20; S.sel = null; select(S.filtered[n].id, true); }
     } else if (e.key === 'f') toggleFlag();
     else if (e.key === 'c') { var t = document.querySelector('textarea.cm'); if (t) { e.preventDefault(); t.focus(); } }
-    else if (e.key === 'a') { var m = S.byId[S.sel]; if (m && m.tr) suggest([m.id], false); }
+    else if (e.key === 'a') { var m = S.byId[S.sel]; if (m && m.tr && ($('no-ask').checked || confirm('Ask Claude for this message? This uses your Claude usage.'))) suggest([m.id], false); }
     else if (e.key === 'w') weird();
     else return;
   });

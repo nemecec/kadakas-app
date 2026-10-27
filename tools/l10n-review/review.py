@@ -1,9 +1,10 @@
 """Joins the parsed locales, the state and the usage index. No HTTP here."""
 import os
 import re
+import threading
 
 import apply as applymod
-import fluent
+import ftl
 import prompt as promptmod
 import terms
 from state import ReviewState, default_state_path, hash_text, msg_id, STATUSES
@@ -35,6 +36,8 @@ class Review:
         self.source = source
         self.claude_bin = claude_bin
         self.locales_root = os.path.join(self.repo, "crates", "kadakas-l10n", "locales")
+        self.lock = threading.RLock()
+        self._sig = None
         self.state = ReviewState(state_path or default_state_path(target), target)
         if self.state.glossary() is None:
             self.state.data["glossary"] = [dict(g) for g in promptmod.SEED_GLOSSARY]
@@ -47,12 +50,31 @@ class Review:
     def target_dir(self):
         return os.path.join(self.locales_root, self.target)
 
-    def reload(self):
-        self.src = fluent.parse_locale(os.path.join(self.locales_root, self.source))
-        self.tgt = fluent.parse_locale(self.target_dir())
-        self.parity = fluent.key_parity(self.src, self.tgt)
-        self._build_order()
-        self._terms_cache = None
+    def _signature(self):
+        sig = []
+        for d in (os.path.join(self.locales_root, self.source), self.target_dir()):
+            try:
+                for fn in sorted(os.listdir(d)):
+                    if fn.endswith(".ftl"):
+                        st = os.stat(os.path.join(d, fn))
+                        sig.append((d, fn, st.st_mtime_ns, st.st_size))
+            except OSError:
+                pass
+        return sig
+
+    def reload(self, force=True):
+        """Parse the locales again. The new maps are built first and swapped in under the lock."""
+        sig = self._signature()
+        if not force and sig == self._sig:
+            return
+        src = ftl.parse_locale(os.path.join(self.locales_root, self.source))
+        tgt = ftl.parse_locale(self.target_dir())
+        parity = ftl.key_parity(src, tgt)
+        with self.lock:
+            self.src, self.tgt, self.parity = src, tgt, parity
+            self._build_order()
+            self._terms_cache = None
+            self._sig = sig
 
     def _build_order(self):
         self.order = []      # ids in file/key order
@@ -98,6 +120,10 @@ class Review:
         return d
 
     def item(self, mid, brief=False):
+        with self.lock:
+            return self._item(mid, brief)
+
+    def _item(self, mid, brief=False):
         info = self.index[mid]
         st = self.state.view(mid)
         tg = info["tgt"]
@@ -112,7 +138,7 @@ class Review:
         if info["en"] is not None and tg is not None:
             if set(info["en"].variables) != set(tg.variables):
                 problems.append("variables differ")
-            if fluent.structure_signature(info["en"].raw)[:2] != fluent.structure_signature(tg.raw)[:2]:
+            if ftl.structure_signature(info["en"].raw)[:2] != ftl.structure_signature(tg.raw)[:2]:
                 problems.append("selector differs")
         d = {"id": mid, "file": fn, "key": info["key"], "pos": info["pos"],
              "en": self._msg_dict(info["en"], True), "tr": self._msg_dict(tg),
@@ -130,11 +156,15 @@ class Review:
         return d
 
     def list(self):
+        with self.lock:
+            return self._list()
+
+    def _list(self):
         files = []
         for fn in sorted(set(self.src) | set(self.tgt)):
             files.append({"name": fn, "group": self.src[fn].group if fn in self.src else "",
                           "group_tr": self.tgt[fn].group if fn in self.tgt else ""})
-        items = [self.item(m, brief=True) for m in self.order]
+        items = [self._item(m, brief=True) for m in self.order]
         counts = {s: 0 for s in STATUSES}
         for it in items:
             counts[it["status"]] += 1
@@ -161,7 +191,10 @@ class Review:
 
     def add_suggestion(self, mid, text, source="owner", why=""):
         text = text.strip("\n")
-        return self.state.add_suggestion(mid, text, source, why, self.validate(mid, text))
+        info = self.index[mid]
+        base = hash_text(info["tgt"].raw) if info["tgt"] else None
+        en_h = hash_text(info["en"].raw) if info["en"] else None
+        return self.state.add_suggestion(mid, text, source, why, self.validate(mid, text), base, en_h)
 
     def edit_suggestion(self, mid, sid, text):
         text = text.strip("\n")
@@ -206,26 +239,32 @@ class Review:
         for mid, sug in self.state.accepted():
             if mid in self.index and self.index[mid]["tgt"] is not None:
                 i = self.index[mid]
-                items.append({"id": mid, "file": i["file"], "key": i["key"], "text": sug["text"]})
+                items.append({"id": mid, "file": i["file"], "key": i["key"], "text": sug["text"],
+                              "base_hash": sug.get("base_hash"), "en_hash": sug.get("en_hash")})
         return items
 
     def apply_preview(self):
         self.reload()
         changes = applymod.plan(self.target_dir(), self.src, self.accepted_items())
         dirty = applymod.git_dirty(self.repo, self.target_dir())
-        return {"changes": changes, "dirty": dirty}
+        return {"changes": changes, "dirty": dirty, "dirty_unknown": dirty is None,
+                "digest": applymod.digest(changes)}
 
-    def apply(self, confirm_dirty=False):
-        pre = self.apply_preview()
-        if pre["dirty"] and not confirm_dirty:
-            return {"refused": "dirty", **pre}
-        outcome = applymod.write_changes(self.target_dir(), self.src, pre["changes"])
-        for c in pre["changes"]:
-            c["error"] = outcome[c["id"]]
-        done = [c["id"] for c in pre["changes"] if not c["error"]]
-        self.state.mark_fixed(done)
-        self.reload()
-        return {"changes": pre["changes"], "applied": done, "dirty": pre["dirty"]}
+    def apply(self, expect, confirm_dirty=False):
+        """Write what the preview showed. `expect` is the digest of the preview. Any difference refuses."""
+        with self.lock:
+            pre = self.apply_preview()
+            if pre["digest"] != expect:
+                return {"refused": "changed", **pre}
+            if (pre["dirty"] or pre["dirty_unknown"]) and not confirm_dirty:
+                return {"refused": "dirty", **pre}
+            outcome = applymod.write_changes(self.target_dir(), self.src, pre["changes"])
+            for c in pre["changes"]:
+                c["error"] = outcome[c["id"]]
+            done = [c["id"] for c in pre["changes"] if not c["error"]]
+            self.state.mark_fixed(done)
+            self.reload()
+            return {"changes": pre["changes"], "applied": done, "dirty": pre["dirty"]}
 
     # export
     def export_markdown(self):

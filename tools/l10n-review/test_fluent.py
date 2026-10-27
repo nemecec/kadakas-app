@@ -3,7 +3,7 @@ import os
 import re
 import unittest
 
-import fluent
+import ftl
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 LOCALES = os.path.join(REPO, "crates", "kadakas-l10n", "locales")
@@ -35,7 +35,7 @@ demo-literal = a{ " " }b
 
 class ParserTest(unittest.TestCase):
     def setUp(self):
-        self.f = fluent.parse_text(SAMPLE, "demo.ftl")
+        self.f = ftl.parse_text(SAMPLE, "demo.ftl")
         self.m = {m.key: m for m in self.f.messages}
 
     def test_group_and_comment(self):
@@ -81,12 +81,12 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(self.m["demo-literal"].variables, [])
 
     def test_extract_variables(self):
-        self.assertEqual(fluent.extract_variables("{ $a } { $b-c } { $a }"), ["a", "b-c"])
+        self.assertEqual(ftl.extract_variables("{ $a } { $b-c } { $a }"), ["a", "b-c"])
 
     def test_parity(self):
-        a = fluent.parse_text("x = 1\ny = 2\n", "f.ftl")
-        b = fluent.parse_text("x = 1\nz = 3\n", "f.ftl")
-        p = fluent.key_parity({"f.ftl": a}, {"f.ftl": b, "g.ftl": b})
+        a = ftl.parse_text("x = 1\ny = 2\n", "f.ftl")
+        b = ftl.parse_text("x = 1\nz = 3\n", "f.ftl")
+        p = ftl.key_parity({"f.ftl": a}, {"f.ftl": b, "g.ftl": b})
         self.assertEqual(p["missing"], [("f.ftl", "y")])
         self.assertEqual(p["extra"], [("f.ftl", "z"), ("g.ftl", "x"), ("g.ftl", "z")])
         self.assertEqual(p["extra_files"], ["g.ftl"])
@@ -100,18 +100,18 @@ class RealFilesTest(unittest.TestCase):
             with open(p, encoding="utf-8") as f:
                 text = f.read()
             expected = len(re.findall(r"^[a-z][a-z0-9-]* =", text, re.M))
-            got = fluent.parse_file(p)
+            got = ftl.parse_file(p)
             self.assertEqual(len(got.messages), expected, p)
             for m in got.messages:
                 self.assertTrue(m.raw.strip(), "%s %s has no value" % (p, m.key))
 
     def test_real_variable_sets_match_between_locales(self):
-        en = fluent.parse_locale(os.path.join(LOCALES, "en-US"))
+        en = ftl.parse_locale(os.path.join(LOCALES, "en-US"))
         for loc in os.listdir(LOCALES):
             if loc == "en-US":
                 continue
-            tg = fluent.parse_locale(os.path.join(LOCALES, loc))
-            self.assertEqual(fluent.key_parity(en, tg)["missing"], [])
+            tg = ftl.parse_locale(os.path.join(LOCALES, loc))
+            self.assertEqual(ftl.key_parity(en, tg)["missing"], [])
             for fn, f in tg.items():
                 emap = {m.key: m for m in en[fn].messages}
                 for m in f.messages:

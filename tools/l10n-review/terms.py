@@ -31,6 +31,31 @@ def tr_stems(raw):
     return {w[:STEM] for w in words(raw)}
 
 
+def _close(a, b):
+    """Stems that are one form of the same word: same first 4 letters or edit distance 1."""
+    if a[:4] == b[:4]:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) <= 1
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _merge(cands):
+    """Merge close stems. cands: [(dice, stem, count)] best first. Returns [(stem, [stems])]."""
+    groups = []
+    for dice, stem, c in cands:
+        for g in groups:
+            if any(_close(stem, x) for x in g[1]):
+                g[1].append(stem)
+                break
+        else:
+            groups.append((stem, [stem]))
+    return groups
+
+
 def find_inconsistent(pairs, min_msgs=3, limit=200):
     """pairs: list of (id, english raw, target raw). Returns list of English words with several renderings."""
     en_sets = []
@@ -67,18 +92,20 @@ def find_inconsistent(pairs, min_msgs=3, limit=200):
             if dice >= 0.25:
                 cands.append((dice, s, c))
         cands.sort(reverse=True)
-        cands = cands[:4]
+        cands = cands[:8]
         if len(cands) < 2:
             continue
         # two renderings count as different when many messages have one without the other
         groups = []
-        for dice, s, c in cands:
-            ms = [i for i in idxs if s in tr_sets[i]]
-            groups.append((s, ms))
+        for lead, stems in _merge(cands):
+            ms = [i for i in idxs if any(x in tr_sets[i] for x in stems)]
+            groups.append((lead, ms))
+        groups.sort(key=lambda g: -len(g[1]))   # the widest rendering first
         top = groups[0]
         others = []
         for s, ms in groups[1:]:
-            only = [i for i in ms if top[0] not in tr_sets[i]]
+            top_stems = [x for _, x, _ in cands if _close(x, top[0])] or [top[0]]
+            only = [i for i in ms if not any(x in tr_sets[i] for x in top_stems)]
             if len(only) >= 2:
                 others.append((s, only))
         if not others:

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Local review tool for translations. Binds to 127.0.0.1 only. Standard library only."""
 import argparse
+import hmac
 import json
 import os
+import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -31,45 +34,44 @@ class Job:
         self.done = 0
         self.current = None
         self.started = time.time()
+        self.item_started = self.started
         self.status = "running"
         self.errors = {}
         self.finished_ids = []
         self.cancelled = False
-        self.procs = []
+        self.handle = promptmod.Handle()
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
     def run(self):
-        for mid in self.ids:
-            if self.cancelled:
-                break
-            self.current = mid
-            self.item_started = time.time()
-            try:
-                self.review.suggest(mid, self.model, self.timeout, self.more, self.procs)
-            except promptmod.AskError as e:
-                if not self.cancelled:
-                    self.errors[mid] = {"message": str(e), "code": e.code, "stderr": e.stderr}
-            except Exception as e:  # keep the queue going
-                self.errors[mid] = {"message": "Unexpected error: %s" % e, "code": None, "stderr": ""}
-            self.done += 1
-            self.finished_ids.append(mid)
-        self.current = None
-        self.status = "cancelled" if self.cancelled else "done"
+        try:
+            for mid in self.ids:
+                if self.cancelled:
+                    break
+                self.current = mid
+                self.item_started = time.time()
+                try:
+                    self.review.suggest(mid, self.model, self.timeout, self.more, self.handle)
+                except promptmod.AskError as e:
+                    if not self.cancelled:
+                        self.errors[mid] = {"message": str(e), "code": e.code, "stderr": e.stderr}
+                except Exception as e:  # keep the queue going
+                    self.errors[mid] = {"message": "Unexpected error: %s" % e, "code": None, "stderr": ""}
+                self.done += 1
+                self.finished_ids.append(mid)
+        finally:
+            self.current = None
+            self.status = "cancelled" if self.cancelled else "done"
 
     def cancel(self):
         self.cancelled = True
-        for p in list(self.procs):
-            try:
-                p.kill()
-            except OSError:
-                pass
+        self.handle.cancel()
 
     def info(self):
         now = time.time()
         return {"status": self.status, "done": self.done, "total": len(self.ids), "current": self.current,
                 "elapsed": int(now - self.started),
-                "item_elapsed": int(now - getattr(self, "item_started", now)) if self.current else 0,
+                "item_elapsed": int(now - self.item_started) if self.current else 0,
                 "errors": self.errors, "finished": self.finished_ids, "model": self.model,
                 "started": int(self.started * 1000)}
 
@@ -83,7 +85,9 @@ class App:
         self.timeout = timeout
         self.reviews = {}
         self.lock = threading.Lock()
+        self.job_lock = threading.Lock()
         self.job = None
+        self.token = secrets.token_hex(16)
         self.review(target)
 
     def review(self, target):
@@ -95,6 +99,34 @@ class App:
                 self.reviews[target] = r
             return self.reviews[target]
 
+    def start_job(self, rv, ids, model, more):
+        with self.job_lock:
+            if self.job and self.job.status == "running":
+                return None
+            self.job = Job(rv, ids, model, self.timeout, more)
+            return self.job
+
+    def stop_job(self):
+        with self.job_lock:
+            job = self.job
+        if job:
+            job.cancel()
+            job.thread.join(6)
+        promptmod.kill_all()
+
+
+MAX_BODY = 5_000_000
+POST_OPS = ("accept", "reject", "delete", "pending", "add", "edit")
+
+
+def need(body, key, kind):
+    """A field of the right type, or a StateError (HTTP 400) that names the field."""
+    v = body.get(key)
+    ok = isinstance(v, kind) and not (kind is int and isinstance(v, bool))
+    if not ok:
+        raise StateError("Field '%s' must be %s" % (key, {str: "a string", int: "a whole number", list: "a list"}[kind]))
+    return v
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "l10n-review"
@@ -104,7 +136,6 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("L10N_REVIEW_LOG"):
             super().log_message(fmt, *args)
 
-    # helpers
     def send(self, code, body, ctype="application/json; charset=utf-8"):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False)
@@ -117,16 +148,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def origins(self):
+        port = self.server.server_address[1]
+        return ("http://127.0.0.1:%d" % port, "http://localhost:%d" % port)
+
     def host_ok(self):
-        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
-        if host not in ("127.0.0.1", "localhost"):
-            return False
+        return (self.headers.get("Host") or "") in [o[len("http://"):] for o in self.origins()]
+
+    def origin_ok(self):
         origin = self.headers.get("Origin")
-        if origin:
-            o = urllib.parse.urlparse(origin).hostname
-            if o not in ("127.0.0.1", "localhost"):
-                return False
-        return True
+        return origin is None or origin in self.origins()
+
+    def token_ok(self):
+        sent = self.headers.get("X-L10n-Token") or ""
+        return hmac.compare_digest(sent.encode("utf-8"), self.app.token.encode("utf-8"))
 
     def do_GET(self):
         self.handle_request("GET")
@@ -134,49 +169,72 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.handle_request("POST")
 
+    def do_OPTIONS(self):
+        # No CORS: a preflight is never answered with permission.
+        self.send(405, {"error": "Method not allowed"})
+
     def handle_request(self, method):
         if not self.host_ok():
             return self.send(403, {"error": "Forbidden host"})
+        if not self.origin_ok():
+            return self.send(403, {"error": "Forbidden origin"})
         u = urllib.parse.urlparse(self.path)
         q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
-        body = {}
-        if method == "POST":
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 4_000_000:
-                return self.send(413, {"error": "Too large"})
-            raw = self.rfile.read(n) if n else b""
-            try:
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-            except ValueError:
-                return self.send(400, {"error": "Bad JSON"})
         try:
             if u.path in STATIC and method == "GET":
                 name, ctype = STATIC[u.path]
                 with open(os.path.join(HERE, "static", name), "rb") as f:
-                    return self.send(200, f.read(), ctype)
+                    data = f.read()
+                if name == "index.html":
+                    data = data.replace(b"__TOKEN__", self.app.token.encode("ascii"))
+                return self.send(200, data, ctype)
             if not u.path.startswith("/api/"):
                 return self.send(404, {"error": "Not found"})
+            if not self.token_ok():
+                return self.send(403, {"error": "Missing or wrong token"})
+            body = {}
+            if method == "POST":
+                ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype != "application/json":
+                    return self.send(403, {"error": "Content-Type must be application/json"})
+                try:
+                    n = max(0, int(self.headers.get("Content-Length") or 0))
+                except ValueError:
+                    return self.send(400, {"error": "Bad Content-Length"})
+                if n > MAX_BODY:
+                    return self.send(413, {"error": "Too large"})
+                raw = self.rfile.read(n) if n else b""
+                try:
+                    body = json.loads(raw.decode("utf-8")) if raw else {}
+                except ValueError:
+                    return self.send(400, {"error": "Bad JSON"})
+                if not isinstance(body, dict):
+                    return self.send(400, {"error": "The JSON body must be an object"})
             target = q.get("target") or body.get("target") or self.app.default_target
-            if target not in Review.locales_available(self.app.repo) and target != self.app.default_target:
-                return self.send(404, {"error": "Unknown locale"})
+            if not isinstance(target, str) or (target != self.app.default_target and
+                                               target not in Review.locales_available(self.app.repo)):
+                return self.send(400, {"error": "Unknown locale"})
             rv = self.app.review(target)
             return self.route(method, u.path[5:], q, body, rv)
         except StateError as e:
             return self.send(400, {"error": str(e)})
-        except KeyError as e:
-            return self.send(404, {"error": "Unknown message: %s" % e})
         except Exception as e:
             return self.send(500, {"error": "%s: %s" % (type(e).__name__, e)})
 
     def route(self, method, path, q, body, rv):
         app = self.app
-        mid = body.get("id") or q.get("id")
-        if mid is not None and mid not in rv.index:
-            return self.send(404, {"error": "Unknown message"})
+        mid = body.get("id") if method == "POST" else q.get("id")
+        if mid is not None:
+            if not isinstance(mid, str):
+                raise StateError("Field 'id' must be a string")
+            if mid not in rv.index:
+                return self.send(404, {"error": "Unknown message: %s" % mid})
         if method == "GET":
             if path == "list":
-                rv.reload()
+                rv.reload(force=False)
                 return self.send(200, rv.list())
+            if path in ("item", "usage", "prompt") and mid is None:
+                raise StateError("Field 'id' is required")
             if path == "item":
                 return self.send(200, rv.item(mid))
             if path == "usage":
@@ -190,40 +248,48 @@ class Handler(BaseHTTPRequestHandler):
             if path == "queue":
                 return self.send(200, app.job.info() if app.job else {"status": "idle"})
             return self.send(404, {"error": "Not found"})
-        # POST
+        needs_id = ("status", "comment", "highlight", "suggestion")
+        if path in needs_id and mid is None:
+            raise StateError("Field 'id' is required")
         if path == "status":
-            rv.state.set_status(mid, body.get("status"))
+            rv.state.set_status(mid, need(body, "status", str))
         elif path == "comment":
-            rv.state.set_comment(mid, body.get("comment", ""))
+            rv.state.set_comment(mid, need(body, "comment", str))
         elif path == "highlight":
             tg = rv.index[mid]["tgt"]
             if tg is None:
                 raise StateError("The message has no text in this language")
+            start, end = need(body, "start", int), need(body, "end", int)
             if body.get("remove"):
-                rv.state.remove_highlight(mid, body["start"], body["end"])
+                rv.state.remove_highlight(mid, start, end)
             else:
-                rv.state.add_highlight(mid, tg.raw, body.get("start"), body.get("end"))
+                rv.state.add_highlight(mid, tg.raw, start, end)
         elif path == "suggestion":
-            op = body.get("op")
+            op = need(body, "op", str)
+            if op not in POST_OPS:
+                raise StateError("Unknown op: %s" % op)
             if op == "add":
-                rv.add_suggestion(mid, body.get("text", ""), "owner")
+                rv.add_suggestion(mid, need(body, "text", str), "owner")
             elif op == "edit":
-                rv.edit_suggestion(mid, body.get("sid"), body.get("text", ""))
+                rv.edit_suggestion(mid, need(body, "sid", str), need(body, "text", str))
             else:
-                rv.state.decide_suggestion(mid, body.get("sid"), op)
+                rv.state.decide_suggestion(mid, need(body, "sid", str), op)
         elif path == "glossary":
-            return self.send(200, {"glossary": rv.state.set_glossary(body.get("items", []))})
+            items = need(body, "items", list)
+            if not all(isinstance(i, dict) for i in items):
+                raise StateError("Each glossary item must be an object")
+            return self.send(200, {"glossary": rv.state.set_glossary(items)})
         elif path == "queue":
-            if app.job and app.job.status == "running":
-                return self.send(409, {"error": "A request is already running."})
-            ids = [i for i in body.get("ids", []) if i in rv.index]
+            ids = [i for i in need(body, "ids", list) if isinstance(i, str) and i in rv.index]
             if not ids:
-                return self.send(400, {"error": "No messages"})
+                raise StateError("No messages")
             model = body.get("model", "sonnet")
             if model not in promptmod.MODELS:
-                return self.send(400, {"error": "Unknown model"})
-            app.job = Job(rv, ids, model, app.timeout, bool(body.get("more")))
-            return self.send(200, app.job.info())
+                raise StateError("Unknown model")
+            job = app.start_job(rv, ids, model, bool(body.get("more")))
+            if job is None:
+                return self.send(409, {"error": "A request is already running."})
+            return self.send(200, job.info())
         elif path == "queue/cancel":
             if app.job:
                 app.job.cancel()
@@ -231,10 +297,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "apply/preview":
             return self.send(200, rv.apply_preview())
         elif path == "apply":
-            return self.send(200, rv.apply(bool(body.get("confirm_dirty"))))
+            expect = need(body, "expect", list)
+            return self.send(200, rv.apply(expect, bool(body.get("confirm_dirty"))))
         else:
             return self.send(404, {"error": "Not found"})
-        return self.send(200, rv.item(mid) if mid else {"ok": True})
+        return self.send(200, rv.item(mid))
 
 
 def make_server(app, port=8765):
@@ -263,7 +330,14 @@ def main(argv=None):
     ap.add_argument("--timeout", type=int, default=120, help="seconds for one claude call")
     a = ap.parse_args(argv)
     repo = a.repo or find_repo(HERE)
-    app = App(repo, a.target, a.state, a.claude_bin, a.timeout)
+    try:
+        app = App(repo, a.target, a.state, a.claude_bin, a.timeout)
+    except StateError as e:
+        sys.exit("Error: %s" % e)
+
+    def on_term(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, on_term)
     srv = make_server(app, a.port)
     rv = app.review(a.target)
     print("Reviewing %s in %s" % (a.target, repo))
@@ -274,6 +348,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
+        app.stop_job()
         srv.server_close()
 
 

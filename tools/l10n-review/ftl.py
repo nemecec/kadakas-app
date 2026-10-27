@@ -29,7 +29,8 @@ class Message:
     raw: str = ""         # value text, continuation lines dedented
     inline_first: bool = False   # the value starts on the key line
     indent: int = 4       # common indent of the continuation lines
-    variables: list = field(default_factory=list)
+    variables: list = field(default_factory=list)        # value and attributes
+    value_variables: list = field(default_factory=list)  # value only
     selector: str = ""    # selector expression text, "" when none
     variants: list = field(default_factory=list)  # {key, default, text}
     attributes: list = field(default_factory=list)  # {name, raw}
@@ -72,8 +73,26 @@ def parse_variants(raw):
     return selector, variants
 
 
-def _depth_delta(line):
-    return line.count("{") - line.count("}")
+def scan_depth(line, depth=0):
+    """Brace depth after `line`. Inside a placeable, "..." is a string literal and its braces do not count."""
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == '"' and depth > 0:
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        i += 1
+    return depth
+
+
+def brace_balance(text):
+    """Open minus close braces of a text, ignoring string literals inside placeables."""
+    return scan_depth(text, 0)
 
 
 def parse_text(text, name="<memory>"):
@@ -111,7 +130,7 @@ def parse_text(text, name="<memory>"):
         mm = m or t
         key, first = mm.group(1), mm.group(2)
         # find the end of the message
-        depth = _depth_delta(first)
+        depth = scan_depth(first, 0)
         j = i + 1
         last = i  # index of last non-blank line of the message
         while j < n:
@@ -120,7 +139,7 @@ def parse_text(text, name="<memory>"):
                 j += 1
                 continue
             if ln[0] in " \t" or depth > 0:
-                depth += _depth_delta(ln)
+                depth = scan_depth(ln, depth)
                 last = j
                 j += 1
                 continue
@@ -154,7 +173,8 @@ def parse_text(text, name="<memory>"):
             msg.comment = "\n".join(p[1] for p in pending)
             msg.comment_start = pending[0][0]
         pending = []
-        msg.variables = extract_variables(raw)
+        msg.value_variables = extract_variables(raw)
+        msg.variables = list(msg.value_variables)
         msg.selector, msg.variants = parse_variants(raw)
         for a in attrs:
             ar = "\n".join(p.strip() if idx else p for idx, p in enumerate(a["parts"])).strip()
@@ -174,7 +194,7 @@ def depth_ok(lines, start, k):
         text = lines[idx]
         if idx == start:
             text = text.split("=", 1)[1] if "=" in text else text
-        depth += _depth_delta(text)
+        depth = scan_depth(text, depth)
     return depth <= 0
 
 
@@ -210,4 +230,42 @@ def structure_signature(msg_or_raw):
     raw = msg_or_raw if isinstance(msg_or_raw, str) else msg_or_raw.raw
     selector, variants = parse_variants(raw)
     return (selector, tuple((v["default"], v["key"]) for v in variants),
-            raw.count("{") - raw.count("}"))
+            brace_balance(raw))
+
+
+def placeables(raw):
+    """Contents of the placeables that are not plain variables, and the empty-placeable count.
+
+    Returns (list of stripped contents, number of empty placeables). A selector counts by the
+    expression before the arrow. String literals are kept whole.
+    """
+    stack = []      # per open brace: list of characters of its own text
+    found, empty = [], 0
+    i, n = 0, len(raw)
+    while i < n:
+        c = raw[i]
+        if c == "{":
+            stack.append([])
+        elif c == "}" and stack:
+            own = "".join(stack.pop())
+            expr = own.split("->", 1)[0] if _has_arrow(own) else own
+            expr = expr.strip()
+            if not expr:
+                empty += 1
+            elif not re.fullmatch(r"\$[A-Za-z][A-Za-z0-9_-]*", expr):
+                found.append(expr)
+        elif stack:
+            if c == '"':
+                j = i + 1
+                while j < n and raw[j] != '"':
+                    j += 2 if raw[j] == "\\" else 1
+                stack[-1].append(raw[i:j + 1])
+                i = j
+            else:
+                stack[-1].append(c)
+        i += 1
+    return found, empty
+
+
+def _has_arrow(own):
+    return "->" in re.sub(r'"[^"]*"', "", own)

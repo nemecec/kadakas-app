@@ -70,13 +70,16 @@ def make_fake_claude(folder):
     with open(path, "w") as f:
         f.write("""#!/bin/sh
 cat > "$FAKE_DIR/stdin.txt"
-echo "$@" > "$FAKE_DIR/args.txt"
+printf '%s\n' "$@" > "$FAKE_DIR/args.txt"
 pwd > "$FAKE_DIR/cwd.txt"
 case "$FAKE_MODE" in
   json) cat "$FAKE_DIR/canned.json" ;;
   fence) printf 'Here you go:\\n```json\\n'; cat "$FAKE_DIR/canned.json"; printf '\\n```\\n' ;;
   bad) echo "I cannot do JSON today" ;;
   slow) exec sleep 20 ;;
+  grand) sleep 300 &
+         echo $! > "$FAKE_DIR/grandchild.pid"
+         wait ;;
   fail) echo "Not logged in. Run claude login." >&2; exit 1 ;;
 esac
 """)

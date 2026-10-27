@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="l10n-token" content="__TOKEN__">
 <title>Kadakas translation review</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -19,7 +20,7 @@
     </nav>
     <span class="grow"></span>
     <button id="btn-apply">Apply accepted to files</button>
-    <a id="btn-export" href="#" class="btn">Export review as Markdown</a>
+    <button id="btn-export">Export review as Markdown</button>
   </div>
   <div class="bar" id="filters">
     <label>File <select id="f-file"></select></label>
@@ -31,6 +32,7 @@
   <div class="bar" id="queue-bar">
     <label>Model <select id="model"><option>sonnet</option><option>opus</option><option>haiku</option></select></label>
     <button id="btn-all">Suggest for all flagged</button>
+    <label class="chk"><input type="checkbox" id="no-ask"> do not ask again for key a</label>
     <span id="queue-status"></span>
     <progress id="queue-progress" max="1" value="0" hidden></progress>
     <button id="btn-cancel" hidden>Cancel</button>

@@ -43,18 +43,25 @@ class ReviewState:
         try:
             with open(self.path, encoding="utf-8") as f:
                 d = json.load(f)
-            if isinstance(d, dict) and isinstance(d.get("messages"), dict):
-                self.data.update(d)
         except FileNotFoundError:
-            pass
+            return
         except (OSError, ValueError) as e:
-            # Never drop the owner's data silently: keep the broken file aside.
-            broken = self.path + ".broken-" + str(int(time.time()))
-            try:
-                os.replace(self.path, broken)
-            except OSError:
-                pass
-            raise StateError("State file is not valid JSON, moved to %s (%s)" % (broken, e))
+            self._quarantine("it is not valid JSON (%s)" % e)
+        ok = (isinstance(d, dict) and isinstance(d.get("messages"), dict)
+              and d.get("target", self.target) == self.target
+              and (d.get("glossary") is None or isinstance(d.get("glossary"), list)))
+        if not ok:
+            self._quarantine("it has the wrong shape or belongs to another language")
+        self.data.update(d)
+
+    def _quarantine(self, why):
+        # Never drop the owner's data silently: keep the file aside and say so.
+        broken = "%s.broken-%d" % (self.path, int(time.time()))
+        try:
+            os.replace(self.path, broken)
+        except OSError:
+            pass
+        raise StateError("State file %s was moved to %s because %s." % (self.path, broken, why))
 
     def save(self):
         with self.lock:
@@ -132,7 +139,7 @@ class ReviewState:
             self.save()
 
     # suggestions
-    def add_suggestion(self, mid, text, source="owner", why="", error=None):
+    def add_suggestion(self, mid, text, source="owner", why="", error=None, base_hash=None, en_hash=None):
         text = text.strip("\n")
         if not text.strip():
             raise StateError("Suggestion is empty")
@@ -141,7 +148,8 @@ class ReviewState:
             if any(s["text"] == text and s["state"] == "pending" for s in e["suggestions"]):
                 return None
             s = {"id": uuid.uuid4().hex[:10], "text": text, "source": source, "state": "pending",
-                 "why": why, "error": error, "time": int(time.time())}
+                 "why": why, "error": error, "time": int(time.time()),
+                 "base_hash": base_hash, "en_hash": en_hash}
             e["suggestions"].append(s)
             if e["status"] in ("unreviewed", "flagged"):
                 e["status"] = "suggested"
