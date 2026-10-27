@@ -133,6 +133,35 @@ Start **Delete release** with the `tag`. It deletes the draft or published relea
 
 The commit `Release <version>` stays on `main`. By then `main` has the next `-dev` version from the second commit. Do not reuse the number. Release a higher version. The next **Prepare release** run works as usual.
 
+### File names of the release
+
+Every installer has one name pattern: `Kadakas-<version>-<os>-<arch>.<ext>`. The version is the exact version of the release, for example `0.1.0-beta.1`. The package job renames the files right after `cargo packager` (`.github/scripts/rename-installers.sh`). The smoke test installs the renamed files.
+
+Only the file name changes. The version inside the MSI and the deb keeps its form (see "Version forms"). The deb file name has a dash, because GitHub turns a tilde into a dot.
+
+| Package | File name of `0.1.0-beta.1` |
+|---|---|
+| macOS, Apple silicon | `Kadakas-0.1.0-beta.1-macos-arm64.dmg` |
+| macOS, Intel | `Kadakas-0.1.0-beta.1-macos-x64.dmg` |
+| Windows installer | `Kadakas-0.1.0-beta.1-windows-x64.exe` |
+| Windows MSI | `Kadakas-0.1.0-beta.1-windows-x64.msi` |
+| Linux AppImage | `Kadakas-0.1.0-beta.1-linux-x64.AppImage` |
+| Linux deb | `Kadakas-0.1.0-beta.1-linux-x64.deb` |
+
+The values of `<os>` are `macos`, `windows` and `linux`. The values of `<arch>` are `arm64` and `x64`.
+
+Two kinds of files keep their names, because the launcher and **Update manifest** read them. They are `kadakas-update-<os>-<arch>.tar.gz` (four files) and `kadakas-web.tar.gz`. No other workflow reads an installer name.
+
+### Notes of the release
+
+The draft release starts with the table "Which file do I download?". It has one row for each installer, with a link. The job `publish` makes the table from the real files (`.github/scripts/release-notes-table.sh`). A missing file or an installer without a row stops the job. A sentence under the table says that the `kadakas-update-*` files and `kadakas-web.tar.gz` are for the launcher and for hosting. A pre-release adds a note that the installers are not signed. It names the warnings: macOS cannot check the app (press Open Anyway in Privacy & Security) and Windows SmartScreen protects the PC (press More info, then Run anyway). The section of the version in `CHANGELOG.md` follows.
+
+`.github/scripts/test-release-assets.sh` tests both scripts. CI runs it in the job `version`.
+
+### Retention of the build files
+
+The artifacts `kadakas-<platform>` and `kadakas-web` of a run are kept for 7 days. The job `publish` runs in the same run and reads them, so it does not need more. The release has the real copies. The smoke artifacts (screenshots, logs) are kept for 14 days.
+
 ### Version forms
 
 The workspace version in `Cargo.toml` is the only truth. Each package format gets the form it takes. `scripts/packager-version.sh` is the one place for the mappings.
@@ -149,9 +178,9 @@ The workspace version in `Cargo.toml` is the only truth. Each package format get
 
 The numbers of the MSI keep the order: alpha is N, beta is 10000+N, dev is 20000, rc is 30000+N (N below 10000). Major and minor go up to 255 for an MSI.
 
-`release.yml` builds the MSI and the `.deb` with a copy of the packager config that has the mapped version. `crates/kadakas-update/tests/package_versions.rs` runs the same semver conversion as cargo-packager 0.11.8 on every mapped value. `python/tests/test_version_forms.py` checks the PEP 440 order. Only CI confirms the real MSI and `.deb` builds. The MSI file name has `0.1.0.10001`. Windows Installer ignores the fourth number when it compares versions, so `0.1.0-beta.1` and `0.1.0` look the same to it. Beta users update through the launcher, not through the MSI.
+`release.yml` builds the MSI and the `.deb` with a copy of the packager config that has the mapped version. `crates/kadakas-update/tests/package_versions.rs` runs the same semver conversion as cargo-packager 0.11.8 on every mapped value. `python/tests/test_version_forms.py` checks the PEP 440 order. Only CI confirms the real MSI and `.deb` builds. The MSI file name has the release version, and the MSI inside has `0.1.0.10001`. Windows Installer ignores the fourth number when it compares versions, so `0.1.0-beta.1` and `0.1.0` look the same to it. Beta users update through the launcher, not through the MSI.
 
-GitHub renames some uploaded assets. A character such as `~` in the name of the `.deb` becomes a dot. The package inside keeps its version.
+GitHub renames some uploaded assets. A character such as `~` becomes a dot. So the file name of the `.deb` uses a dash. The package inside keeps its version.
 
 ## Smoke test of the installers (PLAT-28)
 

@@ -54,10 +54,10 @@ jobs:
         run: |
           set -euo pipefail
           package='[
-            {"os":"macos-14","formats":"app,dmg","config":"packager-macos.toml","name":"macos-arm64","platform":"macos-aarch64"},
-            {"os":"macos-15-intel","formats":"app,dmg","config":"packager-macos.toml","name":"macos-x86_64","platform":"macos-x86_64"},
-            {"os":"windows-latest","formats":"nsis,wix","config":"packager.toml","name":"windows-x86_64","platform":"windows-x86_64"},
-            {"os":"ubuntu-22.04","formats":"appimage,deb","config":"packager.toml","name":"linux-x86_64","platform":"linux-x86_64"}
+            {"os":"macos-14","formats":"app,dmg","config":"packager-macos.toml","name":"macos-arm64","platform":"macos-aarch64","inst_os":"macos","inst_arch":"arm64"},
+            {"os":"macos-15-intel","formats":"app,dmg","config":"packager-macos.toml","name":"macos-x86_64","platform":"macos-x86_64","inst_os":"macos","inst_arch":"x64"},
+            {"os":"windows-latest","formats":"nsis,wix","config":"packager.toml","name":"windows-x86_64","platform":"windows-x86_64","inst_os":"windows","inst_arch":"x64"},
+            {"os":"ubuntu-22.04","formats":"appimage,deb","config":"packager.toml","name":"linux-x86_64","platform":"linux-x86_64","inst_os":"linux","inst_arch":"x64"}
           ]'
           smoke='[
             {"os":"ubuntu-22.04","artifact":"linux-x86_64","kind":"deb","pattern":"*.deb"},
@@ -157,6 +157,8 @@ jobs:
         env:
           CONFIG: ${{ matrix.config }}
           FORMATS: ${{ matrix.formats }}
+          INST_OS: ${{ matrix.inst_os }}
+          INST_ARCH: ${{ matrix.inst_arch }}
         run: |
           set -euo pipefail
           ver=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version *=/{gsub(/[" ]/,"",$0); sub(/^version=/,"",$0); print; exit}' Cargo.toml)
@@ -172,6 +174,10 @@ jobs:
             grep -q "^version = \"$mapped\"" "packager-$special.toml"
             cargo packager --release --config "packager-$special.toml" --formats "$special"
           fi
+          # One file name pattern for every installer: Kadakas-<version>-<os>-<arch>.<ext>, with the
+          # exact version of the release in all names. Only the file name changes: the version inside
+          # the MSI and the deb keeps its form. The smoke test installs the renamed files.
+          .github/scripts/rename-installers.sh dist "$ver" "$INST_OS" "$INST_ARCH"
       # TODO (PLAT-19): this archive is the bundle before signing. A release must sign it inside-out
       # (the programs, then the bundle) with the hardened runtime, notarize it and staple the
       # ticket, then pack it. The launcher does not set com.apple.quarantine on a download: the
@@ -199,6 +205,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
           if-no-files-found: error
+          # The run page keeps these files for a short time. The release has the real copies.
+          retention-days: 7
 
   # Smoke test of the installers (PLAT-28, scripts/smoke/, docs/release.md). Every package is
   # installed on a clean runner of its own system, started for the first time (the welcome
@@ -308,6 +316,7 @@ jobs:
         with:
           name: kadakas-web
           path: kadakas-web.tar.gz
+          retention-days: 7
 
   publish:
     needs: [package, web, smoke]
@@ -318,25 +327,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The notes of the release are the section of this version in CHANGELOG.md. A pre-release
-      # without a section gets generated notes. A stable release without a section is an error.
-      - name: Release notes from CHANGELOG.md
-        id: notes
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${TAG#v}"
-          if .github/scripts/extract-changelog-section.sh "$version" > "$RUNNER_TEMP/notes.md"; then
-            echo "has=true" >> "$GITHUB_OUTPUT"
-            echo "path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
-          elif [[ "$version" == *-* ]]; then
-            echo "::warning::CHANGELOG.md has no section for $version. The notes are generated."
-            echo "has=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::CHANGELOG.md has no section for $version."
-            exit 1
-          fi
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
@@ -359,6 +349,30 @@ jobs:
           done < <(find artifacts -type f | sort)
           [ "$n" -gt 0 ] || { echo "::error::no release files"; exit 1; }
           echo "$n release files"
+      # The notes of the release: the table "Which file do I download?" (made from the real files),
+      # then the section of this version in CHANGELOG.md. A pre-release without a section gets
+      # generated notes below the table. A stable release without a section is an error.
+      - name: Release notes
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          out="$RUNNER_TEMP/notes.md"
+          .github/scripts/release-notes-table.sh artifacts "$version" "$REPO" "$TAG" > "$out"
+          if .github/scripts/extract-changelog-section.sh "$version" > "$RUNNER_TEMP/section.md"; then
+            { echo; cat "$RUNNER_TEMP/section.md"; } >> "$out"
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$version" == *-* ]]; then
+            echo "::warning::CHANGELOG.md has no section for $version. The notes are generated."
+            echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::CHANGELOG.md has no section for $version."
+            exit 1
+          fi
+          echo "path=$out" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           draft: true

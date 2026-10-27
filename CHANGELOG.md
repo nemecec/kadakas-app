@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Release files have one name pattern, `Kadakas-<version>-<os>-<arch>.<ext>`, with the exact version in every name. The notes of a release start with a table that tells which file to download.
+
 ## [0.1.0-alpha.1] - 2026-10-27
 
 First public build. Kadakas is a CAD program for landscape architects. It is not stable yet.
