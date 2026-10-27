@@ -314,23 +314,6 @@ pub(super) fn transform_vertices(
     before: &SurfaceModel,
     notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
-    transform_vertices_with(m, vertices, faces, edges, matrix, before, notes, false)
-}
-
-/// Like [`transform_vertices`]. With `allow_overlaps` a move may put faces over each other in one
-/// plane (the solid tools snap vertices onto the face of the other solid in a scratch copy, and
-/// their cut resolves the overlap, MOD-19). The other refusals stay.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn transform_vertices_with(
-    m: &mut SurfaceModel,
-    vertices: &[VertexId],
-    faces: &[FaceId],
-    edges: &[EdgeId],
-    matrix: &[f64; 12],
-    before: &SurfaceModel,
-    notes: &mut Vec<String>,
-    allow_overlaps: bool,
-) -> Result<(), SurfaceError> {
     let xf = affine(matrix)?;
     let s = moved_set(m, vertices, faces, edges)?;
     if s.is_empty() || is_identity(&xf) {
@@ -588,7 +571,7 @@ pub(super) fn transform_vertices_with(
     let candidates: Vec<FaceId> = flat_now.into_iter().collect();
     fold::unfold(&mut w, &candidates, &folded, notes);
     drop(w);
-    finish(before, m, &survivors, &fold_verts, allow_overlaps)
+    finish(before, m, &survivors, &fold_verts)
 }
 
 /// A work on `m` whose topology index holds only the part of the model around `seeds` (the
@@ -878,7 +861,6 @@ fn finish(
     m: &mut SurfaceModel,
     survivors: &BTreeSet<VertexId>,
     folded: &BTreeSet<VertexId>,
-    allow_overlaps: bool,
 ) -> Result<(), SurfaceError> {
     check_limits(m)?;
     let invalid = |p: &Problem| bad(format!("the move would make the model invalid: {p}"));
@@ -941,9 +923,7 @@ fn finish(
     if let Some(p) = new_distance_problem(before, m, &edges, &verts) {
         return Err(invalid(&p));
     }
-    if !allow_overlaps {
-        new_overlap(before, m, &cv, &ce, &cf)?;
-    }
+    new_overlap(before, m, &cv, &ce, &cf)?;
     if let Some(p) = check::curves(m) {
         return Err(invalid(&p));
     }

@@ -790,6 +790,12 @@ impl StepRun<'_, '_> {
         &self.out.created
     }
 
+    /// The notes of the commands so far (see [`Outcome::notes`]), in order. A caller that runs
+    /// one command reads what that command added from the length before and after.
+    pub fn notes(&self) -> &[String] {
+        &self.out.notes
+    }
+
     /// Runs one command. An error ends the step and the editor takes back the commands that ran.
     pub fn run(&mut self, cmd: &Command) -> Result<(), CommandError> {
         check_picture_limits(self.limits, cmd)?;

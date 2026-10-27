@@ -13,20 +13,21 @@
 //! # The snap
 //!
 //! [`snap`] moves each such vertex onto the plane along the normal of the face. The move is at
-//! most the length tolerance. Faces of one plane count as one. A vertex that is near the planes of
-//! faces that are not one plane (a corner) is not moved: it would stay near the other plane. The faces that use the vertex follow: a face that stays flat keeps
-//! its id, and a face that does not stay flat is cut into triangles by the move of the model
+//! most the length tolerance. Faces of one plane count as one. A vertex that is near the plane of
+//! another face too, or on the plane of another face that the move would take it off by more than
+//! the plane tolerance, is not moved. The faces that use the vertex follow: a face that stays flat
+//! keeps its id, and a face that does not stay flat is cut into triangles by the move of the model
 //! (the move of `Edit::TransformVertices`, with its fold). The snap is refused, with a typed reason
 //! ([`SnapRefusal`]), when
 //!
 //! - a vertex is used by geometry outside the operation,
 //! - a face would shrink to nothing (an edge shorter than the length tolerance or an area
 //!   smaller than its square),
-//! - the move is refused by the model (a face would overlap another in one plane, and so on),
-//!   or a moved vertex would not land where the snap puts it (it would weld to another vertex),
-//! - a solid would not be closed after the move, or
-//! - the move would leave or make a near-touch (a vertex that is near the planes of two faces
-//!   that are not one plane).
+//! - the model refuses the move (a face ends over another in one plane, and so on), or a moved
+//!   vertex does not land where the snap puts it (it welds to another vertex),
+//! - a solid is not closed after the move, or
+//! - the move leaves or makes a near-touch (a vertex near the planes of two faces that are not
+//!   one plane, or a vertex on a plane that the move takes it off).
 //!
 //! The module knows nothing of the operations. It works on a scratch model that holds the two
 //! solids, given as two sets of faces, and returns what it moved and the two sets after the move
@@ -76,11 +77,12 @@ pub struct SnapMove {
     pub from: [f64; 3],
     pub to: [f64; 3],
     /// How far the vertex moved, in mm.
+    #[serde(rename = "distance_mm")]
     pub distance: f64,
 }
 
 impl SnapMove {
-    /// The note of the result for this move.
+    /// The note of the result for this move. The numbers have four decimals (0.1 micrometer).
     pub fn note(&self) -> String {
         let faces: Vec<String> = self.faces.iter().map(ToString::to_string).collect();
         let onto = match faces.as_slice() {
@@ -88,9 +90,48 @@ impl SnapMove {
             many => format!("the planes of faces {}", many.join(", ")),
         };
         format!(
-            "{SNAP_NOTE_START}{} from ({:.4}, {:.4}, {:.4}) mm onto {onto}: moved {:.4} mm",
-            self.vertex, self.from[0], self.from[1], self.from[2], self.distance
+            "{SNAP_NOTE_START}{} from ({:.4}, {:.4}, {:.4}) mm to ({:.4}, {:.4}, {:.4}) mm onto {onto}: moved {:.4} mm",
+            self.vertex,
+            self.from[0],
+            self.from[1],
+            self.from[2],
+            self.to[0],
+            self.to[1],
+            self.to[2],
+            self.distance
         )
+    }
+
+    /// Reads the move back from its note (see [`SnapMove::note`]), with the numbers to four
+    /// decimals. The note may have a prefix, such as the name of the object. `None` for any other
+    /// text. The API uses it to list the moves of an edit that ran.
+    pub fn from_note(note: &str) -> Option<SnapMove> {
+        let rest = &note[note.find(SNAP_NOTE_START)? + SNAP_NOTE_START.len()..];
+        let (vertex, rest) = rest.split_once(" from (")?;
+        let (from, rest) = rest.split_once(") mm to (")?;
+        let (to, rest) = rest.split_once(") mm onto ")?;
+        let (onto, moved) = rest.split_once(": moved ")?;
+        let point = |t: &str| -> Option<[f64; 3]> {
+            let v: Vec<f64> = t
+                .split(", ")
+                .map(|x| x.parse().ok())
+                .collect::<Option<_>>()?;
+            v.try_into().ok()
+        };
+        let list = onto
+            .strip_prefix("the plane of face ")
+            .or_else(|| onto.strip_prefix("the planes of faces "))?;
+        let faces: Vec<FaceId> = list
+            .split(", ")
+            .map(|x| x.parse().ok().map(FaceId))
+            .collect::<Option<_>>()?;
+        Some(SnapMove {
+            vertex: VertexId(vertex.parse().ok()?),
+            faces,
+            from: point(from)?,
+            to: point(to)?,
+            distance: moved.strip_suffix(" mm")?.parse().ok()?,
+        })
     }
 }
 
@@ -99,21 +140,23 @@ impl SnapMove {
 pub enum SnapRefusal {
     /// "shared"
     #[error(
-        "vertex {vertex} is used by geometry outside the operation, so it cannot be moved: make the solids a group first"
+        "vertex {vertex} is used by geometry outside the operation, so it stays: make the solids a group first"
     )]
     Shared { vertex: VertexId },
     /// "degenerate"
-    #[error("the snap would make face {face} degenerate: {reason}")]
+    #[error("the snap makes face {face} degenerate: {reason}")]
     Degenerate { face: FaceId, reason: String },
     /// "refused move"
-    #[error("the snap moves vertices in a way that the model refuses: {reason}")]
+    #[error(
+        "the snap moves vertices in a way that the model refuses: {reason}. Faces of two solids that end in one plane and overlap are a limit of the solid tools (backlog row MOD-20)"
+    )]
     MoveRefused { reason: String },
     /// "opens a solid"
-    #[error("the snap would leave the {which} solid not closed: {reason}")]
+    #[error("the snap leaves the {which} solid not closed: {reason}")]
     OpensSolid { which: Operand, reason: String },
     /// "new near-touch"
     #[error(
-        "the snap would leave vertex {vertex} {distance:.4} mm from the plane of face {face}: a new near-touch"
+        "the snap leaves vertex {vertex} {distance:.4} mm from the plane of face {face}: a new near-touch"
     )]
     NewNearTouch {
         vertex: VertexId,
@@ -181,14 +224,22 @@ fn in_face(m: &SurfaceModel, f: FaceId, p: DVec3, tol: f64) -> bool {
     })
 }
 
-/// The near-touches of the vertices of the solid `from` with the faces of the solid `to`.
+/// A vertex of one solid and a face of the other that it is near or on.
+struct Contact {
+    touch: NearTouch,
+    /// Within the plane tolerance of the plane of the face: on it, no near-touch.
+    on: bool,
+}
+
+/// The contacts of the vertices of the solid `from` with the faces of the solid `to`: the
+/// near-touches, and the faces that a vertex is on (within the plane tolerance, in the face).
 fn one_way(
     m: &SurfaceModel,
     topo: &Topo,
     from: &BTreeSet<FaceId>,
     to: &BTreeSet<FaceId>,
     operand: Operand,
-) -> Vec<NearTouch> {
+) -> Vec<Contact> {
     let items: Vec<(DVec3, DVec3, u32)> = to
         .iter()
         .filter_map(|f| {
@@ -223,12 +274,13 @@ fn one_way(
         for f in near {
             let face = &m.faces[&f];
             let d = face.plane.distance(p);
-            if d.abs() <= plane_tol || d.abs() > tol {
+            let on = d.abs() <= plane_tol;
+            if d.abs() > tol {
                 continue;
             }
             let foot = p - face.plane.normal * d;
             let mut hit = in_face(m, f, foot, tol);
-            if !hit {
+            if !hit && !on {
                 // An edge from the vertex that crosses the plane inside the face.
                 hit = reach.iter().any(|q| {
                     let dq = face.plane.distance(*q);
@@ -240,11 +292,14 @@ fn one_way(
                 });
             }
             if hit {
-                out.push(NearTouch {
-                    vertex: v,
-                    operand,
-                    face: f,
-                    distance: d,
+                out.push(Contact {
+                    touch: NearTouch {
+                        vertex: v,
+                        operand,
+                        face: f,
+                        distance: d,
+                    },
+                    on,
                 });
             }
         }
@@ -252,25 +307,36 @@ fn one_way(
     out
 }
 
+fn contacts(m: &SurfaceModel, a: &BTreeSet<FaceId>, b: &BTreeSet<FaceId>) -> Vec<Contact> {
+    let topo = Topo::of(m);
+    let mut out = one_way(m, &topo, a, b, Operand::First);
+    out.extend(one_way(m, &topo, b, a, Operand::Second));
+    out.sort_by_key(|c| (c.touch.vertex, c.touch.face));
+    out.dedup_by_key(|c| (c.touch.vertex, c.touch.face));
+    out
+}
+
 /// The near-touches between the two solids: the vertices of each that lie off a face plane of the
 /// other by more than the plane tolerance but not more than the length tolerance, with the face.
 /// Sorted by vertex, then face.
 pub fn find(m: &SurfaceModel, a: &BTreeSet<FaceId>, b: &BTreeSet<FaceId>) -> Vec<NearTouch> {
-    let topo = Topo::of(m);
-    let mut out = one_way(m, &topo, a, b, Operand::First);
-    out.extend(one_way(m, &topo, b, a, Operand::Second));
-    out.sort_by_key(|t| (t.vertex, t.face));
-    out.dedup_by_key(|t| (t.vertex, t.face));
-    out
+    contacts(m, a, b)
+        .into_iter()
+        .filter(|c| !c.on)
+        .map(|c| c.touch)
+        .collect()
 }
 
 /// Where `p` goes to be on the plane of its near-touches `ts` (all of one vertex): along the
 /// normal of the nearest face. Faces in one plane count once, and the displacement and all of them
-/// are given. A face in another plane is a refusal: the vertex would stay near it.
+/// are given. A face in another plane is a refusal: the vertex stays near it. So is a face in
+/// `ons` that the vertex is on, when the move takes the vertex off it by more than the plane
+/// tolerance.
 fn displacement(
     m: &SurfaceModel,
     p: DVec3,
     ts: &[&NearTouch],
+    ons: &[&NearTouch],
 ) -> Result<(DVec3, Vec<FaceId>), SnapRefusal> {
     let plane_tol = geom::plane_tolerance_at(geom::size(p));
     let first = ts[0];
@@ -291,7 +357,18 @@ fn displacement(
         faces.push(t.face);
     }
     faces.sort();
-    Ok((-n * first.distance, faces))
+    let delta = -n * first.distance;
+    for h in ons {
+        let after = h.distance + m.faces[&h.face].plane.normal.dot(delta);
+        if after.abs() > plane_tol {
+            return Err(SnapRefusal::NewNearTouch {
+                vertex: h.vertex,
+                face: h.face,
+                distance: after,
+            });
+        }
+    }
+    Ok((delta, faces))
 }
 
 /// Why a face would be degenerate when `vertices` stand at the positions `to`, or `None`.
@@ -312,7 +389,7 @@ fn degenerate(m: &SurfaceModel, to: &BTreeMap<VertexId, DVec3>) -> Option<(FaceI
                 return Some((
                     *id,
                     format!(
-                        "the edge between vertices {x} and {y} would be {len:.4} mm long, shorter than the length tolerance ({tol} mm)"
+                        "the edge between vertices {x} and {y} gets {len:.4} mm long, shorter than the length tolerance ({tol} mm)"
                     ),
                 ));
             }
@@ -320,7 +397,7 @@ fn degenerate(m: &SurfaceModel, to: &BTreeMap<VertexId, DVec3>) -> Option<(FaceI
         let area = f.outer.iter().map(&at).collect::<Vec<_>>();
         let a = geom::newell(&area).length() / 2.0;
         if a < tol * tol {
-            return Some((*id, format!("its area would be {a:.6} mm²")));
+            return Some((*id, format!("its area gets {a:.6} mm²")));
         }
     }
     None
@@ -347,6 +424,23 @@ fn ensure_closed(
     Ok(())
 }
 
+/// After the move no near-touch is left, and none is new. A move can tilt a face (it is cut into
+/// triangles), so a vertex of the other solid that was on it can be off it now.
+pub(in crate::surface) fn no_near_touch_left(
+    m: &SurfaceModel,
+    a: &BTreeSet<FaceId>,
+    b: &BTreeSet<FaceId>,
+) -> Result<(), SnapRefusal> {
+    match find(m, a, b).first() {
+        Some(t) => Err(SnapRefusal::NewNearTouch {
+            vertex: t.vertex,
+            face: t.face,
+            distance: t.distance,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Moves every near-touch vertex of the solids `a` and `b` in the scratch model `m` onto the
 /// plane of its face. `pinned` holds the vertices that geometry outside the operation uses.
 ///
@@ -359,10 +453,12 @@ pub fn snap(
     b: &BTreeSet<FaceId>,
     pinned: &BTreeSet<VertexId>,
 ) -> Result<Snapped, SnapRefusal> {
-    let touches = find(m, a, b);
+    let all = contacts(m, a, b);
     let mut by_vertex: BTreeMap<VertexId, Vec<&NearTouch>> = BTreeMap::new();
-    for t in &touches {
-        by_vertex.entry(t.vertex).or_default().push(t);
+    let mut on_faces: BTreeMap<VertexId, Vec<&NearTouch>> = BTreeMap::new();
+    for c in &all {
+        let map = if c.on { &mut on_faces } else { &mut by_vertex };
+        map.entry(c.touch.vertex).or_default().push(&c.touch);
     }
     if by_vertex.is_empty() {
         return Ok(Snapped {
@@ -386,7 +482,8 @@ pub fn snap(
                 .then(x.face.cmp(&y.face))
         });
         let p = m.vertices[v];
-        let (delta, faces) = displacement(m, p, ts)?;
+        let ons = on_faces.get(v).map_or(&[][..], Vec::as_slice);
+        let (delta, faces) = displacement(m, p, ts, ons)?;
         target.insert(*v, p + delta);
         moves.push(SnapMove {
             vertex: *v,
@@ -437,7 +534,7 @@ pub fn snap(
             _ => {
                 return Err(SnapRefusal::MoveRefused {
                     reason: format!(
-                        "vertex {v} would not stay where the snap puts it (it lands on other geometry)"
+                        "vertex {v} does not stay where the snap puts it (it lands on other geometry)"
                     ),
                 });
             }
@@ -459,14 +556,7 @@ pub fn snap(
         }
     }
     ensure_closed(m, &na, &nb)?;
-    // No near-touch is left, and none is new.
-    if let Some(t) = find(m, &na, &nb).first() {
-        return Err(SnapRefusal::NewNearTouch {
-            vertex: t.vertex,
-            face: t.face,
-            distance: t.distance,
-        });
-    }
+    no_near_touch_left(m, &na, &nb)?;
     Ok(Snapped {
         moves,
         a: na,

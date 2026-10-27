@@ -2370,7 +2370,7 @@ fn a_near_touch_is_refused_and_the_error_names_the_snap() {
         assert_eq!(data["flag"], "snap_near");
         let vs = data["vertices"].as_array().unwrap();
         assert_eq!(vs.len(), 1);
-        assert!((vs[0]["distance"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
+        assert!((vs[0]["distance_mm"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
         assert!(vs[0]["vertex"].is_u64());
         assert_eq!(vs[0]["faces"].as_array().unwrap().len(), 1);
         assert!((vs[0]["from"][1].as_f64().unwrap() - 1_000.005_793_7).abs() < 1e-6);
@@ -2410,8 +2410,8 @@ fn snap_near_moves_the_vertex_and_is_one_undo_step_with_the_operation() {
         let snapped = r["snapped"].as_array().unwrap();
         assert_eq!(snapped.len(), 1, "{op}: {r}");
         assert!(snapped[0]["vertex"].is_u64());
-        assert!((snapped[0]["distance"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
-        assert!((snapped[0]["from"][1].as_f64().unwrap() - 1_000.005_793_7).abs() < 1e-6);
+        assert!((snapped[0]["distance_mm"].as_f64().unwrap() - 0.0058).abs() < 1e-4);
+        assert!((snapped[0]["from"][1].as_f64().unwrap() - 1_000.005_8).abs() < 1e-4);
         assert!((snapped[0]["to"][1].as_f64().unwrap() - 1000.0).abs() < 1e-9);
         let notes = r["notes"].as_array().unwrap();
         assert!(

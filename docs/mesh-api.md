@@ -156,17 +156,32 @@ A solid that is not closed is refused. The refusal names the edge to fix. Use `m
 
 A vertex of one solid can lie off a face plane of the other solid. The distance is above 0.0025 mm and at most 0.01 mm. The cut is refused then. The tool never moves the vertex on its own.
 
-When a snap resolves the refusal, the error id is `near_touch_snap_available`. The data has `vertices` and `flag`. Each vertex has `vertex`, `faces`, `from`, `to` and `distance`. `flag` is `snap_near`. `max_distance_mm` is the largest move. Nothing changes.
+Limit of the solid tools: they do not cut overlapping faces of two solids in one plane (backlog row MOD-20). A snap that leads there is refused with `snap_move_refused` or `snap_still_refused`.
+
+When a snap resolves the refusal, the error id is `near_touch_snap_available`. The data has `vertices` and `flag`. Each vertex has `vertex`, `faces`, `from`, `to` and `distance_mm`. `flag` is `snap_near`. `max_distance_mm` is the largest move. Nothing changes. Before this change the refusal had the id `solid_cut`. An agent that matches `solid_cut` must match `near_touch_snap_available` too.
 
 Repeat the call with `snap_near: true`. The tool moves the vertices onto the planes along the face normals. Then it runs the operation. The move and the operation are one undo step.
 
-The answer lists each moved vertex in `snapped` and in `notes`. `snapped` is an empty list when nothing was moved. A call without `snap_near` is as before.
+The answer lists each moved vertex in `snapped` and in `notes`. The positions have four decimals. `snapped` is an empty list when nothing was moved. A call without `snap_near` gives the same geometry as before. Only the id of a refusal that a snap resolves is new.
 
 ```json
 {"method": "mesh.solid", "params": {"id": "<model>", "op": "union", "first_face": 25, "second_face": 41, "snap_near": true}}
 ```
 
-A snap that cannot be done is refused with its own id. The model is unchanged. See the table of error ids.
+The tool refuses a snap that fails, with its own id. The model is unchanged. See the table of error ids.
+
+Cost. Measured once (release build, one run each, other load not controlled, `perf_near_touch_in_a_big_model` in `surface/tests_solid.rs`, run with `cargo test --release -- --ignored`). The model has two balls of 20,480 triangles each (40,960 faces in all) and a pair of boxes. The tool times include the full check of the model.
+
+| What | Time |
+|---|---|
+| Union of a pair without a near-touch | 0.83 s |
+| Union refused for a near-touch, no flag (includes the test of the snap) | 0.39 s |
+| Union with `snap_near` | 0.82 s |
+| Split of a pair without a near-touch | 0.81 s |
+| Split refused for a near-touch, no flag | 0.38 s |
+| Split with `snap_near` | 0.82 s |
+
+So a refusal is cheaper than a successful operation, and the snap adds no measurable time to it. The check of the model dominates. This is one measurement on one model, not a campaign.
 
 ## Batch
 
@@ -236,7 +251,7 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `snap_degenerate_face` | The snap leaves a face with a very short edge or no area. | `face` |
 | `snap_move_refused` | The model refuses the move of the vertices. | |
 | `snap_breaks_solid` | A solid is not closed after the snap. | `operand` |
-| `snap_new_near_touch` | A vertex stays near the plane of another face. | `vertex`, `face`, `distance_mm` |
+| `snap_new_near_touch` | A vertex stays near another plane, or the move takes it off a plane it is on. | `vertex`, `face`, `distance_mm` |
 | `snap_still_refused` | The operation is still refused after the snap. | |
 | `solid_result_open` | The result is not a closed solid. | |
 | `solid_result_volume` | The volume of the result does not fit. | |

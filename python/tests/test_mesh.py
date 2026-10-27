@@ -237,7 +237,7 @@ def test_a_near_touch_is_refused_until_the_agent_allows_the_snap(doc):
         api.mesh_solid(id=model, op="union", first_face=first, second_face=second)
     assert e.value.data["error_id"] == "near_touch_snap_available"
     assert e.value.data["flag"] == "snap_near"
-    assert e.value.data["vertices"][0]["distance"] == pytest.approx(0.0058, abs=1e-4)
+    assert e.value.data["vertices"][0]["distance_mm"] == pytest.approx(0.0058, abs=1e-4)
     assert geometry(doc, model) == before
     done = api.mesh_solid(id=model, op="union", first_face=first, second_face=second, snap_near=True)
     assert len(done["snapped"]) == 1
