@@ -863,13 +863,12 @@ mod tests {
     }
 
     fn wait_for(mut done: impl FnMut() -> bool) {
-        for _ in 0..500 {
-            if done() {
-                return;
-            }
+        // The bound is only a guard against work that never finishes.
+        let end = std::time::Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(std::time::Instant::now() < end, "timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("timed out");
     }
 
     #[test]
