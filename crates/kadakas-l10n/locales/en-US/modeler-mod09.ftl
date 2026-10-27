@@ -10,3 +10,5 @@ modeler-entity-open-edges-value = { $count ->
         [one] One edge
        *[other] { $count } edges
     }; use Edit > Solid Tools > Check Solid
+modeler-solid-snap-retry = Snap and retry
+modeler-solid-snap-retry-tip = Move the vertices onto the face planes and run the operation again. It is one undo step.

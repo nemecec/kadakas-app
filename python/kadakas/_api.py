@@ -937,6 +937,7 @@ if TYPE_CHECKING:
         'op': Required[Literal['union', 'subtract', 'intersect', 'trim', 'split']],
         'second': list[int] | None,
         'second_face': int | None,
+        'snap_near': bool | None,
     }, total=False)
 
     MeshMakeGroupParams = TypedDict("MeshMakeGroupParams", {
@@ -4254,7 +4255,7 @@ class Api:
         return self._call("mesh3d.retessellate", params or None)
 
     def mesh_solid(self, **params: "Unpack[MeshSolidParams]") -> Any:
-        """A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). Returns the change.
+        """A boolean operation of two closed solids of the model. params: {id, op (union | subtract | intersect | trim | split), first?, second? (the faces of each solid) or first_face?, second_face? (one face of each solid: the solid that holds it), snap_near? (default false)}. Subtract and trim take the second from the first. Trim keeps the second, cut along the first. Split makes three solids. A solid that is not closed is refused, with the edge to fix (see mesh.solid_report). A vertex of one solid that lies more than 0.0025 mm but not more than 0.01 mm off a face plane of the other refuses the cut (a near-touch). When a snap would resolve it, the error id is near_touch_snap_available, and its data names the vertices (vertex, faces, from, to, distance) and the flag. Repeat the call with snap_near true to move those vertices onto the planes along the face normals, in the same undo step. The answer then lists them in snapped and in notes. A snap that cannot be done is refused with a stable error_id: snap_vertex_shared, snap_degenerate_face, snap_move_refused, snap_breaks_solid, snap_new_near_touch or snap_still_refused. Without the flag the result is as before. Returns the change.
 
         JSON-RPC method ``mesh.solid``."""
         return self._call("mesh.solid", params or None)

@@ -2303,3 +2303,229 @@ fn the_length_of_a_polygon_is_its_perimeter_and_input_is_checked_for_kind_and_fi
     let info = ok(&mut s, "mesh.curve_info", json!({"id": other}));
     assert_eq!(info["total"], 0);
 }
+
+// ---- snap near-touches with consent (MOD-19) -------------------------------------------------
+
+/// The 12 edges of a box turned about the vertical axis and tilted, with its center at `d`.
+fn turned_edges(angle: f64, tilt: f64, d: [f64; 3]) -> Value {
+    let (sin, cos) = angle.sin_cos();
+    let (st, ct) = tilt.sin_cos();
+    let corners: Vec<[f64; 3]> = (0..8usize)
+        .map(|i| {
+            let p = |bit: usize| if i & bit == 0 { -400.0 } else { 400.0 };
+            let (x, y, z) = (p(1), p(2), p(4));
+            let (zx, zy) = (x * cos - y * sin, x * sin + y * cos);
+            let (ty, tz) = (zy * ct - z * st, zy * st + z * ct);
+            [zx + d[0], ty + d[1], tz + d[2]]
+        })
+        .collect();
+    let mut edges = Vec::new();
+    for i in 0..8usize {
+        for bit in [1usize, 2, 4] {
+            if i & bit == 0 {
+                edges.push(json!([corners[i], corners[i | bit]]));
+            }
+        }
+    }
+    json!(edges)
+}
+
+/// A model with the box `[0, 1000]^3` and a turned, tilted box whose corner lies 0.0058 mm off
+/// the plane `y = 1000`, inside its face: every solid operation is refused. Gives the model and
+/// one face of each solid.
+fn near_touch(s: &mut Session) -> (String, u64, u64) {
+    let id = new_model(s);
+    draw_boxes(s, &id, &[([0.0; 3], [1000.0; 3])]);
+    ok(
+        s,
+        "mesh.add_edges",
+        json!({"id": id, "edges": turned_edges(1.539_623_148_363_857_6, 0.394_573_062_789_783_6, [200.0, 796.195_805_697_005_2, 200.0])}),
+    );
+    draw_boxes(s, &id, &[]);
+    let report = ok(s, "mesh.solid_report", json!({"id": id}));
+    let shells = report["shells"].as_array().unwrap();
+    assert_eq!(shells.len(), 2, "{report}");
+    let (a, b) = (
+        shells[0]["faces"][0].as_u64().unwrap(),
+        shells[1]["faces"][0].as_u64().unwrap(),
+    );
+    (id, a, b)
+}
+
+#[test]
+fn a_near_touch_is_refused_and_the_error_names_the_snap() {
+    for op in ["union", "subtract", "intersect", "trim", "split"] {
+        let mut s = Session::with_sequential_ids();
+        let (id, a, b) = near_touch(&mut s);
+        let before = snapshot(&mut s, &id);
+        let d = depth(&s);
+        let e = err(
+            &mut s,
+            "mesh.solid",
+            json!({"id": id, "op": op, "first_face": a, "second_face": b}),
+        );
+        assert_eq!(e.kind, "validation", "{op}");
+        assert_eq!(error_id(&e), "near_touch_snap_available", "{op}");
+        let data = e.details.as_ref().unwrap();
+        assert_eq!(data["flag"], "snap_near");
+        let vs = data["vertices"].as_array().unwrap();
+        assert_eq!(vs.len(), 1);
+        assert!((vs[0]["distance"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
+        assert!(vs[0]["vertex"].is_u64());
+        assert_eq!(vs[0]["faces"].as_array().unwrap().len(), 1);
+        assert!((vs[0]["from"][1].as_f64().unwrap() - 1_000.005_793_7).abs() < 1e-6);
+        assert!((vs[0]["to"][1].as_f64().unwrap() - 1000.0).abs() < 1e-9);
+        assert!((data["max_distance_mm"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
+        assert!(
+            e.message.contains("lies 0.0058 mm from the plane"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.contains("snap_near"), "{}", e.message);
+        // `false` is the same as no flag. Nothing changed, no undo step.
+        let e = err(
+            &mut s,
+            "mesh.solid",
+            json!({"id": id, "op": op, "first_face": a, "second_face": b, "snap_near": false}),
+        );
+        assert_eq!(error_id(&e), "near_touch_snap_available", "{op}");
+        assert_eq!(snapshot(&mut s, &id), before, "{op}");
+        assert_eq!(depth(&s), d, "{op}");
+    }
+}
+
+#[test]
+fn snap_near_moves_the_vertex_and_is_one_undo_step_with_the_operation() {
+    for op in ["union", "subtract", "intersect", "trim", "split"] {
+        let mut s = Session::with_sequential_ids();
+        let (id, a, b) = near_touch(&mut s);
+        let before = snapshot(&mut s, &id);
+        let d = depth(&s);
+        let r = ok(
+            &mut s,
+            "mesh.solid",
+            json!({"id": id, "op": op, "first_face": a, "second_face": b, "snap_near": true}),
+        );
+        assert_eq!(depth(&s), d + 1, "{op}");
+        let snapped = r["snapped"].as_array().unwrap();
+        assert_eq!(snapped.len(), 1, "{op}: {r}");
+        assert!(snapped[0]["vertex"].is_u64());
+        assert!((snapped[0]["distance"].as_f64().unwrap() - 0.005_793_7).abs() < 1e-6);
+        assert!((snapped[0]["from"][1].as_f64().unwrap() - 1_000.005_793_7).abs() < 1e-6);
+        assert!((snapped[0]["to"][1].as_f64().unwrap() - 1000.0).abs() < 1e-9);
+        let notes = r["notes"].as_array().unwrap();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("snapped vertex")),
+            "{notes:?}"
+        );
+        let report = ok(&mut s, "mesh.solid_report", json!({"id": id}));
+        assert_eq!(report["closed"], true, "{op}");
+        ok(&mut s, "undo", json!({}));
+        assert_eq!(depth(&s), d, "{op}");
+        assert_eq!(
+            snapshot(&mut s, &id),
+            before,
+            "{op}: one undo brings the vertex back"
+        );
+    }
+}
+
+#[test]
+fn snap_near_works_in_a_batch_and_a_model_without_a_near_touch_is_as_before() {
+    let mut s = Session::with_sequential_ids();
+    let (id, a, b) = near_touch(&mut s);
+    let r = ok(
+        &mut s,
+        "mesh.batch",
+        json!({"edits": [
+            {"method": "mesh.solid", "id": id, "op": "union", "first_face": a, "second_face": b, "snap_near": true}
+        ]}),
+    );
+    let first = &r["edits"][0];
+    assert_eq!(first["snapped"].as_array().unwrap().len(), 1, "{r}");
+    // No near-touch: the answer is the same with and without the flag, and `snapped` is empty.
+    let mut plain = Session::with_sequential_ids();
+    let mut flagged = Session::with_sequential_ids();
+    let mut answers = Vec::new();
+    for (s, flag) in [(&mut plain, false), (&mut flagged, true)] {
+        let id = new_model(s);
+        draw_boxes(
+            s,
+            &id,
+            &[([0.0; 3], [1000.0; 3]), ([500.0; 3], [1500.0; 3])],
+        );
+        let a = face_facing(s, &id, [0.0, 0.0, -1.0]);
+        let b = face_facing(s, &id, [0.0, 0.0, 1.0]);
+        let mut p = json!({"id": id, "op": "union", "first_face": a, "second_face": b});
+        if flag {
+            p["snap_near"] = json!(true);
+        }
+        let mut r = ok(s, "mesh.solid", p);
+        assert_eq!(r.get("snapped").is_some(), flag);
+        if flag {
+            assert_eq!(r["snapped"], json!([]));
+            r.as_object_mut().unwrap().remove("snapped");
+        }
+        answers.push((r, snapshot(s, &id)));
+    }
+    assert_eq!(answers[0], answers[1]);
+}
+
+#[test]
+fn a_snap_that_cannot_be_done_is_refused_with_a_stable_id() {
+    let mut s = Session::with_sequential_ids();
+    let id = new_model(&mut s);
+    // A plate of 0.012 mm that pokes 0.005 mm out of the top: the snap would flatten it.
+    draw_boxes(
+        &mut s,
+        &id,
+        &[
+            ([0.0; 3], [1000.0; 3]),
+            ([250.0, 250.0, 999.993], [750.0, 750.0, 1000.005]),
+        ],
+    );
+    let report = ok(&mut s, "mesh.solid_report", json!({"id": id}));
+    let (a, b) = (
+        report["shells"][0]["faces"][0].clone(),
+        report["shells"][1]["faces"][0].clone(),
+    );
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
+    let e = err(
+        &mut s,
+        "mesh.solid",
+        json!({"id": id, "op": "union", "first_face": a, "second_face": b, "snap_near": true}),
+    );
+    assert_eq!(error_id(&e), "snap_degenerate_face");
+    assert!(e.details.as_ref().unwrap()["face"].is_u64());
+    assert!(e.message.contains("degenerate"), "{}", e.message);
+    // Without the flag the plain refusal stays.
+    let e = err(
+        &mut s,
+        "mesh.solid",
+        json!({"id": id, "op": "union", "first_face": a, "second_face": b}),
+    );
+    assert_eq!(error_id(&e), "solid_cut");
+    assert_eq!(snapshot(&mut s, &id), before);
+    assert_eq!(depth(&s), d);
+}
+
+#[test]
+fn describe_documents_the_snap_flag() {
+    let mut s = Session::with_sequential_ids();
+    let m = ok(&mut s, "describe", json!({"method": "mesh.solid"}));
+    let text = m.to_string();
+    for needle in [
+        "snap_near",
+        "near_touch_snap_available",
+        "snap_vertex_shared",
+        "snap_degenerate_face",
+        "snap_breaks_solid",
+        "snap_new_near_touch",
+        "0.0025",
+    ] {
+        assert!(text.contains(needle), "{needle}: {text}");
+    }
+}

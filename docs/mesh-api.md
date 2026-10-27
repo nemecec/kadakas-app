@@ -53,7 +53,7 @@ Edits. Each one is one undo step.
 | `mesh.to_surface` | Turn a mesh object (from `import.file`) into a surface model. It can soften the edges under an angle. See `docs/interop.md`. |
 | `mesh3d.exact_info` | The true radii, axes and normals that a mesh from a STEP import keeps. See `docs/exact-solids.md`. |
 | `mesh3d.retessellate` | Cut the triangles of such a mesh again at another tolerance. One undo step. |
-| `mesh.solid` | Union, subtract, intersect, trim or split two solids. |
+| `mesh.solid` | Union, subtract, intersect, trim or split two solids. With `snap_near` it also snaps near-touches. |
 | `mesh.make_group` | Make a group. |
 | `mesh.make_component` | Make a component. |
 | `mesh.explode` | Explode groups and component instances. |
@@ -152,6 +152,22 @@ An edge between two faces at an angle below 20 degrees becomes soft and smooth. 
 
 A solid that is not closed is refused. The refusal names the edge to fix. Use `mesh.solid_report` to see all open edges first.
 
+### Snap near-touches
+
+A vertex of one solid can lie off a face plane of the other solid. The distance is above 0.0025 mm and at most 0.01 mm. The cut is refused then. The tool never moves the vertex on its own.
+
+When a snap resolves the refusal, the error id is `near_touch_snap_available`. The data has `vertices` and `flag`. Each vertex has `vertex`, `faces`, `from`, `to` and `distance`. `flag` is `snap_near`. `max_distance_mm` is the largest move. Nothing changes.
+
+Repeat the call with `snap_near: true`. The tool moves the vertices onto the planes along the face normals. Then it runs the operation. The move and the operation are one undo step.
+
+The answer lists each moved vertex in `snapped` and in `notes`. `snapped` is an empty list when nothing was moved. A call without `snap_near` is as before.
+
+```json
+{"method": "mesh.solid", "params": {"id": "<model>", "op": "union", "first_face": 25, "second_face": 41, "snap_near": true}}
+```
+
+A snap that cannot be done is refused with its own id. The model is unchanged. See the table of error ids.
+
 ## Batch
 
 `mesh.batch` runs many edits as one undo step. All edits work or none does.
@@ -215,6 +231,13 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `solid_attached` | A solid is stuck to other geometry. Make a group first. | `operand` |
 | `solid_no_result` | The result is empty. | `solid_op` |
 | `solid_cut` | The solids are not cut cleanly. | |
+| `near_touch_snap_available` | A near-touch refused the cut. A snap resolves it. Repeat with `snap_near`. | `vertices`, `flag`, `max_distance_mm` |
+| `snap_vertex_shared` | A vertex to snap is used by geometry outside the operation. | `vertex` |
+| `snap_degenerate_face` | The snap leaves a face with a very short edge or no area. | `face` |
+| `snap_move_refused` | The model refuses the move of the vertices. | |
+| `snap_breaks_solid` | A solid is not closed after the snap. | `operand` |
+| `snap_new_near_touch` | A vertex stays near the plane of another face. | `vertex`, `face`, `distance_mm` |
+| `snap_still_refused` | The operation is still refused after the snap. | |
 | `solid_result_open` | The result is not a closed solid. | |
 | `solid_result_volume` | The volume of the result does not fit. | |
 | `solid_result_invalid` | The result makes the model invalid. | |

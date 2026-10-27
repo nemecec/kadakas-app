@@ -870,10 +870,18 @@ impl Edit3d {
                 self.modeling.committed(ran.used, session.editor.revision());
                 // What the edit changed that was not asked for (a material of a merged face),
                 // else what the tool says about it (the Paint Bucket tells what it painted).
-                self.message = if ran.notes.is_empty() {
+                // The notes of a snap (MOD-19) are in the message of the tool, in the language of
+                // the window.
+                let notes: Vec<&String> = ran
+                    .notes
+                    .iter()
+                    .filter(|n| !n.contains(kadakas_core::surface::SNAP_NOTE_START))
+                    .collect();
+                self.message = if notes.is_empty() {
                     done_message
                 } else {
-                    Some(tr!("modeler-edit-note", note = ran.notes.join("; ")))
+                    let joined: Vec<&str> = notes.iter().map(|n| n.as_str()).collect();
+                    Some(tr!("modeler-edit-note", note = joined.join("; ")))
                 };
                 // The copies of a Move or Rotate become the selection: the next one moves them.
                 if !ran.objects.is_empty() {

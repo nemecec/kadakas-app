@@ -293,3 +293,171 @@ fn a_preview_is_made_once_for_each_operation_and_the_click_reuses_it() {
     );
     assert_eq!(app.solid_runs.get(), 6);
 }
+
+// ---- snap near-touches with consent (MOD-19) -------------------------------------------------
+
+/// The box `[0, 1000]^3` and a turned, tilted box whose corner lies 0.0058 mm off the plane
+/// `y = 1000`, inside its face: every solid operation is refused.
+fn near_touch(app: &mut ModelerApp) -> (ObjectId, Vec<FaceId>, Vec<FaceId>) {
+    let id = app
+        .session
+        .editor
+        .execute(&Command::AddObject {
+            shape: ModelShape::SurfaceModel(Box::default()),
+            layer: None,
+            class: None,
+            attrs: Attributes::default(),
+        })
+        .map(|o| ObjectId(o.created[0]))
+        .unwrap();
+    edit(
+        app,
+        id,
+        Edit::AddEdges {
+            edges: cuboid([0.0; 3], [1000.0; 3]),
+        },
+    );
+    let (angle, tilt, d): (f64, f64, P) = (
+        1.539_623_148_363_857_6,
+        0.394_573_062_789_783_6,
+        [200.0, 796.195_805_697_005_2, 200.0],
+    );
+    let (sin, cos) = angle.sin_cos();
+    let (st, ct) = tilt.sin_cos();
+    let corners: Vec<P> = (0..8usize)
+        .map(|i| {
+            let p = |bit: usize| if i & bit == 0 { -400.0 } else { 400.0 };
+            let (x, y, z) = (p(1), p(2), p(4));
+            let (zx, zy) = (x * cos - y * sin, x * sin + y * cos);
+            let (ty, tz) = (zy * ct - z * st, zy * st + z * ct);
+            [zx + d[0], ty + d[1], tz + d[2]]
+        })
+        .collect();
+    let mut edges = Vec::new();
+    for i in 0..8usize {
+        for bit in [1usize, 2, 4] {
+            if i & bit == 0 {
+                edges.push([corners[i], corners[i | bit]]);
+            }
+        }
+    }
+    edit(app, id, Edit::AddEdges { edges });
+    let inward: Vec<FaceId> = surface(app)
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    edit(app, id, Edit::ReverseFaces { faces: inward });
+    let r = surface(app).solid_report();
+    let s: Vec<_> = r.solids().collect();
+    (id, s[0].faces.clone(), s[1].faces.clone())
+}
+
+#[test]
+fn a_near_touch_refusal_has_a_snap_and_retry_button_that_runs_in_one_undo_step() {
+    let (ctx, mut app, mut t) = top_view();
+    let (id, a, b) = near_touch(&mut app);
+    select_faces(&mut app, id, &[a[0], b[0]]);
+    let before = surface(&app).clone();
+    let depth = app.session.editor.undo_depth();
+    // The refusal names the distance, changes nothing and offers the snap.
+    app.run(Cmd::Solid(SolidOp::Union), size(&app));
+    assert_eq!(
+        app.status,
+        tr!(
+            "uic-solid-refused-near-touch",
+            count = 1,
+            distance = "0.0058"
+        )
+    );
+    assert_eq!(app.solid_snap_offer(), Some(SolidOp::Union));
+    assert_eq!(app.session.editor.undo_depth(), depth);
+    assert_eq!(surface(&app), &before);
+    // The button is on the status bar. A click on it runs the operation with the snap.
+    let _ = frame(&ctx, &mut app, vec![], t);
+    t += 0.1;
+    let out = frame(&ctx, &mut app, vec![], t);
+    let label = tr!("modeler-solid-snap-retry");
+    let at = text_at(&out, &label).expect("the Snap and retry button");
+    click_at(&ctx, &mut app, at, &mut t);
+    assert!(
+        app.status
+            .starts_with("Snapped one vertex by 0.0058 mm at most."),
+        "{}",
+        app.status
+    );
+    assert_eq!(app.session.editor.undo_depth(), depth + 1);
+    assert_eq!(surface(&app).solid_report().solids().count(), 1);
+    assert_eq!(app.solid_snap_offer(), None);
+    // One undo gives the model back.
+    app.run(Cmd::Undo, size(&app));
+    assert_eq!(surface(&app), &before);
+    // The button is gone.
+    t += 0.1;
+    let out = frame(&ctx, &mut app, vec![], t);
+    assert!(text_at(&out, &label).is_none());
+}
+
+#[test]
+fn the_snap_button_goes_when_the_selection_or_the_text_changes() {
+    let (ctx, mut app, mut t) = top_view();
+    let (id, a, b) = near_touch(&mut app);
+    select_faces(&mut app, id, &[a[0], b[0]]);
+    app.run(Cmd::Solid(SolidOp::Subtract), size(&app));
+    assert_eq!(app.solid_snap_offer(), Some(SolidOp::Subtract));
+    // Another order: another key.
+    app.run(Cmd::SolidSwap, size(&app));
+    assert_eq!(app.solid_snap_offer(), None);
+    app.run(Cmd::SolidSwap, size(&app));
+    app.run(Cmd::Solid(SolidOp::Subtract), size(&app));
+    assert_eq!(app.solid_snap_offer(), Some(SolidOp::Subtract));
+    // Another selection.
+    select_faces(&mut app, id, &[a[0]]);
+    assert_eq!(app.solid_snap_offer(), None);
+    select_faces(&mut app, id, &[a[0], b[0]]);
+    app.run(Cmd::Solid(SolidOp::Subtract), size(&app));
+    // Another text on the status line.
+    app.status = "something else".into();
+    assert_eq!(app.solid_snap_offer(), None);
+    t += 0.1;
+    let out = frame(&ctx, &mut app, vec![], t);
+    assert!(text_at(&out, &tr!("modeler-solid-snap-retry")).is_none());
+    // A refusal that no snap resolves has no button, and neither has a successful operation.
+    select_faces(&mut app, id, &[a[0]]);
+    app.run(Cmd::Solid(SolidOp::Union), size(&app));
+    assert_eq!(app.solid_snap_offer(), None);
+}
+
+#[test]
+fn snap_and_retry_without_a_near_touch_or_a_selection_says_why() {
+    let (_ctx, mut app, _t) = top_view();
+    let (id, a, b) = two_solids(&mut app);
+    app.run(Cmd::SolidSnap(SolidOp::Union), size(&app));
+    assert_eq!(app.status, tr!("uic-solid-need-selection"));
+    select_faces(&mut app, id, &[a[0], b[0]]);
+    // The model has no near-touch: the same result as the plain operation.
+    app.run(Cmd::SolidSnap(SolidOp::Union), size(&app));
+    assert_eq!(app.status, tr!("uic-solid-done-union", volume = "1.875"));
+    assert_eq!(surface(&app).solid_report().solids().count(), 1);
+}
+
+#[test]
+fn the_snap_strings_are_in_both_languages() {
+    for key in [
+        "modeler-solid-snap-retry",
+        "modeler-solid-snap-retry-tip",
+        "uic-solid-refused-snap-shared",
+        "uic-solid-refused-snap-degenerate",
+        "uic-solid-refused-snap-move",
+        "uic-solid-refused-snap-open",
+        "uic-solid-refused-snap-new",
+        "uic-solid-refused-snap-still",
+    ] {
+        let en = kadakas_l10n::with_language("en-US", || tr!(key));
+        let et = kadakas_l10n::with_language("et", || tr!(key));
+        assert_ne!(en, et, "{key}");
+        assert!(!et.contains("{ "), "{key}");
+    }
+}

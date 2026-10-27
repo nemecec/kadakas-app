@@ -10,3 +10,5 @@ modeler-entity-open-edges-value = { $count ->
         [one] Üks serv
        *[other] { $count } serva
     }; kasuta Redigeerimine > Tahkkehade tööriistad > Kontrolli tahkkeha
+modeler-solid-snap-retry = Tõmba ja proovi uuesti
+modeler-solid-snap-retry-tip = Tõmba tipud tahkude tasanditele ja tee tegevus uuesti. See on üks samm tagasivõtmiseks.

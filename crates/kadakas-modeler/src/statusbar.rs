@@ -8,8 +8,16 @@ use kadakas_ui_core::modeler::{Measurement, ModelerTool};
 /// The width of the Measurements box in points.
 pub const BOX_WIDTH: f32 = 150.0;
 
-/// Draws the status bar.
-pub fn show(ui: &mut egui::Ui, status: &str, tool: ModelerTool, measurement: &Measurement) {
+/// Draws the status bar. With `snap` (MOD-19) the refusal of a solid tool that a snap would
+/// resolve has the button "Snap and retry" next to it. Gives true when the button was pressed.
+pub fn show(
+    ui: &mut egui::Ui,
+    status: &str,
+    tool: ModelerTool,
+    measurement: &Measurement,
+    snap: bool,
+) -> bool {
+    let mut pressed = false;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // The box first: the instruction at the left gets the room that is left.
@@ -23,6 +31,12 @@ pub fn show(ui: &mut egui::Ui, status: &str, tool: ModelerTool, measurement: &Me
             ui.label(tr_id(measurement));
             ui.separator();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if snap {
+                    pressed = ui
+                        .button(kadakas_l10n::translate("modeler-solid-snap-retry", &[]))
+                        .on_hover_text(kadakas_l10n::translate("modeler-solid-snap-retry-tip", &[]))
+                        .clicked();
+                }
                 let line = if status.is_empty() {
                     tool.hint()
                 } else {
@@ -32,6 +46,7 @@ pub fn show(ui: &mut egui::Ui, status: &str, tool: ModelerTool, measurement: &Me
             });
         });
     });
+    pressed
 }
 
 /// The name in front of the box, in the language of the UI.

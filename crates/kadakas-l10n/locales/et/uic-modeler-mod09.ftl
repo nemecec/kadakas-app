@@ -60,3 +60,17 @@ uic-solid-check-odd = Kõik ei ole suletud: { $count ->
         [one] üks kest vaatab
        *[other] { $count } kesta vaatavad
     } sissepoole, neil pole mahtu või nad läbivad iseennast. Suletud tahkkehi on { $solids }.
+uic-solid-refused-near-touch = Ühe tahkkeha tipp on { $distance } mm kaugusel teise tahkkeha tahust. See on liiga kaugel, et lugeda tipp tahul olevaks, ja liiga lähedal, et lõigata. { $count ->
+        [one] Ühe tipu saab tahule tõmmata.
+       *[other] { $count } tippu saab tahkudele tõmmata.
+    } Midagi ei muudetud.
+uic-solid-refused-snap-shared = Tõmbamine lükati tagasi, sest tipp on ühine geomeetriaga, mis ei kuulu kummagi tahkkeha juurde. Midagi ei muudetud. Tee tahkkehadest enne rühm.
+uic-solid-refused-snap-degenerate = Tõmbamine lükati tagasi, sest see jätaks ühe tahu ilma pindalata. Midagi ei muudetud.
+uic-solid-refused-snap-move = Tõmbamine lükati tagasi, sest mudel ei luba seda liigutust. Midagi ei muudetud.
+uic-solid-refused-snap-open = Tõmbamine lükati tagasi, sest tahkkeha jääks lahtiseks. Midagi ei muudetud.
+uic-solid-refused-snap-new = Tõmbamine lükati tagasi, sest üks tipp jääks teise tahu tasandi lähedale. Midagi ei muudetud.
+uic-solid-refused-snap-still = Tegevus lükati ka pärast tõmbamist tagasi, seega midagi ei muudetud.
+uic-solid-snapped = Tõmmati { $count ->
+        [one] üks tipp
+       *[other] { $count } tippu
+    } kuni { $distance } mm. { $done }

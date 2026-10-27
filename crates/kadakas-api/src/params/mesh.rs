@@ -483,6 +483,12 @@ pub struct MeshSolidParams {
     /// one face of the second solid: the solid that holds it is used
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub second_face: Option<u32>,
+    /// true: when a vertex of one solid lies more than 0.0025 mm but not more than 0.01 mm off a
+    /// face plane of the other and so refuses the cut, move it onto the plane along the face
+    /// normal, in the same undo step. The answer lists the moved vertices. Default false: the
+    /// refusal stands and names the vertices (error id near_touch_snap_available)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snap_near: Option<bool>,
 }
 
 // Parameters of `mesh.make_group`.

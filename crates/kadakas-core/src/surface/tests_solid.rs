@@ -6,8 +6,8 @@ use proptest::prelude::*;
 use super::geom;
 use super::*;
 
-type P = [f64; 3];
-type Box3 = (P, P);
+pub(super) type P = [f64; 3];
+pub(super) type Box3 = (P, P);
 
 // ---- building ------------------------------------------------------------------------------
 
@@ -34,14 +34,14 @@ fn box_corners(lo: P, hi: P) -> [P; 8] {
     std::array::from_fn(c)
 }
 
-fn draw_corners(m: &mut SurfaceModel, c: &[P; 8]) {
+pub(super) fn draw_corners(m: &mut SurfaceModel, c: &[P; 8]) {
     m.apply(&Edit::AddEdges {
         edges: corners_edges(c),
     })
     .unwrap();
 }
 
-fn draw(m: &mut SurfaceModel, b: Box3) {
+pub(super) fn draw(m: &mut SurfaceModel, b: Box3) {
     draw_corners(m, &box_corners(b.0, b.1));
 }
 
@@ -50,21 +50,22 @@ fn op(m: &mut SurfaceModel, o: SolidOp, a: &[FaceId], b: &[FaceId]) -> Result<()
         op: o,
         first: a.to_vec(),
         second: b.to_vec(),
+        snap_near: false,
     })
 }
 
 /// The volumes of the solids of the report, sorted.
-fn volumes(m: &SurfaceModel) -> Vec<f64> {
+pub(super) fn volumes(m: &SurfaceModel) -> Vec<f64> {
     let mut v: Vec<f64> = m.solid_report().solids().map(|s| s.volume).collect();
     v.sort_by(f64::total_cmp);
     v
 }
 
-fn close(a: f64, b: f64) -> bool {
+pub(super) fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)
 }
 
-fn vol(b: Box3) -> f64 {
+pub(super) fn vol(b: Box3) -> f64 {
     (0..3).map(|i| b.1[i] - b.0[i]).product()
 }
 
@@ -130,7 +131,7 @@ fn pair(a: Box3, b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
 }
 
 /// The same without Intersect Faces first (the faces cross).
-fn crossing(a: Box3, b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
+pub(super) fn crossing(a: Box3, b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
     let mut m = SurfaceModel::new();
     draw(&mut m, a);
     draw(&mut m, b);
@@ -149,7 +150,7 @@ fn crossing(a: Box3, b: Box3) -> (SurfaceModel, Vec<FaceId>, Vec<FaceId>) {
     (m, x, y)
 }
 
-fn assert_sound(m: &SurfaceModel) {
+pub(super) fn assert_sound(m: &SurfaceModel) {
     let r = m.check();
     assert!(r.is_valid(), "{:?}", r.problems);
     assert!(m.problem().is_none(), "{:?}", m.problem());
@@ -157,7 +158,7 @@ fn assert_sound(m: &SurfaceModel) {
 
 // ---- the cases ------------------------------------------------------------------------------
 
-const K: f64 = 1000.0;
+pub(super) const K: f64 = 1000.0;
 
 /// The cases: both boxes in one model.
 fn cases() -> Vec<(&'static str, Box3, Box3)> {
@@ -783,7 +784,7 @@ fn grid_box() -> impl Strategy<Value = Box3> {
 }
 
 /// The volume of the result of an operation as the sum of the solids of the model.
-fn total(m: &SurfaceModel) -> f64 {
+pub(super) fn total(m: &SurfaceModel) -> f64 {
     volumes(m).iter().sum()
 }
 
@@ -935,7 +936,18 @@ type Turned = ([P; 8], Vec<Option<f64>>, Vec<String>);
 /// `tilt` and moved by `(dx, dy, dz)`, drawn next to the box `[0, K]^3`; the three operations on
 /// the two solids. Gives the corners, the total volumes of the results (`None` for a refusal,
 /// which changes nothing) and the texts of the refusals. The volume identities are asserted.
-fn turned_box(angle: f64, tilt: f64, dx: f64, dy: f64, dz: f64) -> Result<Turned, TestCaseError> {
+/// The model of `turned_box`, its corners and the faces of the two solids.
+pub(super) type TurnedModel = (SurfaceModel, [P; 8], Vec<FaceId>, Vec<FaceId>);
+
+/// The model of `turned_box`: the box `[0, K]^3` and the turned one, as two solids: the model, the
+/// corners of the turned box and the faces of the two solids.
+pub(super) fn turned_model(
+    angle: f64,
+    tilt: f64,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+) -> Result<TurnedModel, TestCaseError> {
     let a = ([0.0; 3], [K; 3]);
     let (sin, cos) = angle.sin_cos();
     let (st, ct) = tilt.sin_cos();
@@ -965,7 +977,13 @@ fn turned_box(angle: f64, tilt: f64, dx: f64, dy: f64, dz: f64) -> Result<Turned
     if solids.len() != 2 {
         return Err(TestCaseError::reject("not two solids"));
     }
-    let (fa, fb) = (solids[0].faces.clone(), solids[1].faces.clone());
+    Ok((m, corners, solids[0].faces.clone(), solids[1].faces.clone()))
+}
+
+fn turned_box(angle: f64, tilt: f64, dx: f64, dy: f64, dz: f64) -> Result<Turned, TestCaseError> {
+    let (m, corners, fa, fb) = turned_model(angle, tilt, dx, dy, dz)?;
+    let r = m.solid_report();
+    let solids: Vec<Shell> = r.solids().cloned().collect();
     let (va, vb) = (solids[0].volume, solids[1].volume);
     let mut got = Vec::new();
     let mut errors = Vec::new();

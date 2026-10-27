@@ -203,3 +203,45 @@ def test_a_circle_keeps_its_exact_description_and_takes_a_new_segment_count(doc)
     assert "segments_out_of_range" in str(refused.value.data)
     doc.undo()
     assert doc.api.mesh_curve_info(id=model, curve=item["curve"])["items"][0]["segments"] == 12
+
+
+def turned_box(angle, tilt, centre):
+    import math
+
+    sin, cos = math.sin(angle), math.cos(angle)
+    st, ct = math.sin(tilt), math.cos(tilt)
+    corners = []
+    for i in range(8):
+        x, y, z = (400.0 if i >> k & 1 else -400.0 for k in range(3))
+        zx, zy = x * cos - y * sin, x * sin + y * cos
+        corners.append([zx + centre[0], zy * ct - z * st + centre[1], zy * st + z * ct + centre[2]])
+    return [[corners[i], corners[i | bit]] for i in range(8) for bit in (1, 2, 4) if not i & bit]
+
+
+def test_a_near_touch_is_refused_until_the_agent_allows_the_snap(doc):
+    api = doc.api
+    model = api.mesh_create(name="Planter and bench")["id"]
+    corners = [[1000.0 * (i >> k & 1) for k in range(3)] for i in range(8)]
+    box = [[corners[i], corners[i | bit]] for i in range(8) for bit in (1, 2, 4) if not i & bit]
+    api.mesh_add_edges(id=model, edges=box)
+    api.mesh_add_edges(id=model, edges=turned_box(1.5396231483638576, 0.3945730627897836,
+                                                  [200.0, 796.1958056970052, 200.0]))
+    report = api.mesh_solid_report(id=model)
+    inward = [f for s in report["shells"] if s["state"] == "inverted" for f in s["faces"]]
+    if inward:
+        api.mesh_reverse_faces(id=model, faces=inward)
+    shells = api.mesh_solid_report(id=model)["shells"]
+    first, second = shells[0]["faces"][0], shells[1]["faces"][0]
+    before = geometry(doc, model)
+    with pytest.raises(KadakasError) as e:
+        api.mesh_solid(id=model, op="union", first_face=first, second_face=second)
+    assert e.value.data["error_id"] == "near_touch_snap_available"
+    assert e.value.data["flag"] == "snap_near"
+    assert e.value.data["vertices"][0]["distance"] == pytest.approx(0.0058, abs=1e-4)
+    assert geometry(doc, model) == before
+    done = api.mesh_solid(id=model, op="union", first_face=first, second_face=second, snap_near=True)
+    assert len(done["snapped"]) == 1
+    assert api.mesh_solid_report(id=model)["closed"] is True
+    assert "snap_near" in api.mesh_solid.__doc__
+    doc.undo()
+    assert geometry(doc, model) == before

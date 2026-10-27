@@ -2,7 +2,7 @@
 //! with ids (for agents and logs); the window shows the same reason in the language of the UI,
 //! without internal ids. A text that is not known here is shown as it is.
 
-use kadakas_core::surface::{CurveError, Operand, SolidError, SurfaceError};
+use kadakas_core::surface::{CurveError, Operand, SnapRefusal, SolidError, SurfaceError};
 use kadakas_l10n::tr;
 
 /// The number in "at most about 12.5 mm" of a core message.
@@ -126,6 +126,19 @@ fn solid_text(e: &SolidError) -> String {
         SolidError::ResultOpen(_) => tr!("uic-solid-refused-result"),
         SolidError::ResultVolume => tr!("uic-solid-refused-volume"),
         SolidError::ResultInvalid(_) => tr!("uic-solid-refused-invalid"),
+        SolidError::NearTouch { moves, .. } => tr!(
+            "uic-solid-refused-near-touch",
+            count = moves.len(),
+            distance = kadakas_units::num(moves.iter().map(|m| m.distance).fold(0.0, f64::max), 4)
+        ),
+        SolidError::SnapRefused(r) => match r {
+            SnapRefusal::Shared { .. } => tr!("uic-solid-refused-snap-shared"),
+            SnapRefusal::Degenerate { .. } => tr!("uic-solid-refused-snap-degenerate"),
+            SnapRefusal::MoveRefused { .. } => tr!("uic-solid-refused-snap-move"),
+            SnapRefusal::OpensSolid { .. } => tr!("uic-solid-refused-snap-open"),
+            SnapRefusal::NewNearTouch { .. } => tr!("uic-solid-refused-snap-new"),
+            SnapRefusal::StillRefused { .. } => tr!("uic-solid-refused-snap-still"),
+        },
     }
 }
 
