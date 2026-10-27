@@ -207,6 +207,8 @@ Workflows are in `.github/workflows/`. Actions are pinned to commit SHAs.
 
 ### Smoke test of the installers by hand
 
+Before the first beta the owner runs the checklist in `docs/hand-test.md` in a real window.
+
 The scripts in `scripts/smoke/` are what the job `smoke` of `release.yml` runs (PLAT-28, `docs/release.md`). Build the installers first (`docs/release.md`, "Build on your own machine"), then run the script of your system. The second argument is the version of the app, as in `Cargo.toml`.
 
 ```sh
