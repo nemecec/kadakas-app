@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-10-27
+
 First public build. Kadakas is a CAD program for landscape architects. It is not stable yet.
 
 ### Added
@@ -34,4 +36,5 @@ First public build. Kadakas is a CAD program for landscape architects. It is not
 - DWG needs a converter that you install separately.
 - The 3D modeler has no exact solids yet.
 
-[Unreleased]: https://github.com/nemecec/kadakas-app/commits/main
+[Unreleased]: https://github.com/nemecec/kadakas-app/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/nemecec/kadakas-app/releases/tag/v0.1.0-alpha.1

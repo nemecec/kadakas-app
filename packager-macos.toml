@@ -15,7 +15,7 @@
 name = "kadakas"
 product-name = "Kadakas"
 identifier = "net.kadakas.Kadakas"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 description = "CAD for landscape architects"
 authors = ["The Kadakas authors"]
 homepage = "https://github.com/nemecec/kadakas-app"

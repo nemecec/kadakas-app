@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-annot"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-api"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-app"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "bytemuck",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-cli"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "clap",
  "kadakas-api",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-collab"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-core",
  "kadakas-props",
@@ -2579,7 +2579,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-collab-ws"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "js-sys",
  "kadakas-collab",
@@ -2598,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-container"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "flate2",
  "proptest",
@@ -2610,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-core"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "i_overlay",
@@ -2627,7 +2627,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-crash"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "crash-handler",
  "kadakas-crash",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-crs"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-core",
  "proj4rs",
@@ -2651,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-feedback"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "kadakas-sys",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-file"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-container",
@@ -2678,7 +2678,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-gis"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "image",
  "kadakas-core",
@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-ifc"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "i_overlay",
@@ -2716,7 +2716,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-io"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "encoding_rs",
  "i_overlay",
@@ -2733,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-irrigation"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-core",
  "proptest",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-l10n"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "fluent-bundle",
  "fluent-syntax",
@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-launcher"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "eframe",
  "egui",
@@ -2771,7 +2771,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-meshio"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "proptest",
@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-modeler"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "eframe",
  "egui",
@@ -2808,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-plants"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2820,7 +2820,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-plugin"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "js-sys",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-plugin-abi"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-print"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "ab_glyph",
  "base64",
@@ -2872,7 +2872,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-props"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-render"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "glam",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-review"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2915,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-script"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-core",
  "kadakas-sys",
@@ -2927,7 +2927,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-script-js"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-plugin",
  "serde_json",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-sheet"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-core",
  "kadakas-plants",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-sign-manifest"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "getrandom 0.4.3",
  "kadakas-sys",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-site"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2972,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-step"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-core",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-sys"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "libc",
  "serde",
@@ -2993,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-ui-core"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "glam",
  "kadakas-annot",
@@ -3013,7 +3013,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-ui-number"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "egui",
  "kadakas-units",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-units"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "proptest",
  "serde",
@@ -3030,7 +3030,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-update"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "ed25519-dalek",
  "flate2",
@@ -3048,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-view3d"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -3068,7 +3068,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-welcome"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "kadakas-feedback",
  "kadakas-l10n",
@@ -3083,7 +3083,7 @@ dependencies = [
 
 [[package]]
 name = "kadakas-x3d"
-version = "0.1.0-beta.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "glam",
