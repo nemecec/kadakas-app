@@ -49,4 +49,7 @@ sed "${sed_version[@]}" packaging/macos/App-Info.plist > "$app/Contents/Info.pli
 sed "${sed_version[@]}" packaging/macos/Info.plist > "$out/Info.plist"
 # Check that the plist is valid (plutil is part of macOS).
 if command -v plutil >/dev/null 2>&1; then plutil -lint "$app/Contents/Info.plist" "$out/Info.plist" >/dev/null; fi
+# Ad-hoc seal, inside-out (scripts/macos-sign.sh). The update archive is made after this, and the
+# packager copies the signed bundle into the outer one. Do not change a file in it after this line.
+if command -v codesign >/dev/null 2>&1; then scripts/macos-sign.sh inner "$app"; fi
 echo "$app (version $version)"

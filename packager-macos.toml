@@ -7,7 +7,8 @@
 #   cargo packager --release --formats nsis,wix         # Windows
 #   cargo packager --release --formats appimage,deb     # Linux
 #
-# The installers are not signed. Signing is a TODO (docs/release.md). The launcher's update
+# The installers have an ad-hoc seal only (scripts/macos-sign.sh), not a Developer ID signature and
+# no notarization. Signing is a TODO (PLAT-19, docs/release.md). The launcher's update
 # archives are different: the launcher checks them with an ed25519-signed manifest
 # (.github/workflows/update-manifest.yml, docs/release.md).
 
@@ -67,6 +68,11 @@ name = "Kadakas drawing"
 description = "Kadakas drawing"
 mime-type = "application/vnd.kadakas.drawing+zip"
 role = "editor"
+
+# The outer bundle gets its ad-hoc seal after the format `app` and before the format `dmg` copies
+# it (scripts/macos-sign.sh hook). With a signing-identity below, the packager signs and the script
+# does nothing.
+before-each-package-command = "scripts/macos-sign.sh hook"
 
 [macos]
 minimum-system-version = "11.0"

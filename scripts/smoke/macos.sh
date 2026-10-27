@@ -52,6 +52,28 @@ ditto "$src" "$installed"
 hdiutil detach "$mnt" >/dev/null 2>&1 || hdiutil detach "$mnt" -force >/dev/null
 mounted=""
 
+# The seal of the installed bundle must be valid (a broken seal shows "damaged" to a person).
+step "codesign --verify --deep --strict"
+codesign --verify --deep --strict --verbose=2 "$installed" || fail "the installed bundle has an invalid code signature"
+
+# Gatekeeper on a download. The installed copy has no quarantine flag, so a copy gets one here, as
+# a browser sets it. This documents today's expected rejection of an ad-hoc signed beta build:
+# "rejected", the source is unnotarized or the developer is unidentified. The message must not say
+# that the bundle is broken ("invalid", "damaged", "a sealed resource is missing", "code has no
+# resources"): that is the "Kadakas.app is damaged" dialog. With notarization (PLAT-19) this
+# check changes to "accepted".
+step "spctl on a quarantined copy"
+qcopy="$work/quarantine/$name"
+mkdir -p "$work/quarantine"
+ditto "$installed" "$qcopy"
+xattr -w com.apple.quarantine "0181;$(printf %x "$(date +%s)");Safari;" "$qcopy"
+spctl_out="$(spctl --assess --type execute -vv "$qcopy" 2>&1 || true)"
+echo "$spctl_out"
+if printf '%s' "$spctl_out" | grep -Eiq 'invalid|damaged|a sealed resource is missing|code has no resources'; then
+  fail "Gatekeeper calls the bundle broken: $spctl_out"
+fi
+rm -rf "$work/quarantine"
+
 plist="$installed/Contents/Info.plist"
 need_file "$plist" "Info.plist"
 plutil -lint "$plist" >/dev/null || fail "Info.plist is not valid"
