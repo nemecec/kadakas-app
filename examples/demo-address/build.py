@@ -28,7 +28,6 @@ LAYERS = {
 }
 
 RECORD_BUILDING = "Ehitisregister"
-RECORD_EXTENSION = "Laiendus"
 
 PLANTS = [
     # key, common name, botanical name, id code, category, spread mm, height mm, form, fill
@@ -82,8 +81,6 @@ class Builder:
         existing = {f.get("name") for f in self.doc.api.record_format_list().get("formats", [])}
         if RECORD_BUILDING not in existing:
             self._make_building_format()
-        if RECORD_EXTENSION not in existing:
-            self._make_extension_format()
 
     def _make_building_format(self) -> None:
         self.doc.api.record_format_create(name=RECORD_BUILDING, fields=[
@@ -102,32 +99,16 @@ class Builder:
             {"name": "Eeldused", "type": "text"},
         ])
 
-    def _make_extension_format(self) -> None:
-        self.doc.api.record_format_create(name=RECORD_EXTENSION, fields=[
-            {"name": "Autor", "type": "text"},
-            {"name": "Olek", "type": "text"},
-            {"name": "Pindala_m2", "type": "number"},
-            {"name": "Korgus_m", "type": "number"},
-            {"name": "Eeldus", "type": "text"},
-        ])
-
     # ----------------------------------------------------------- shapes
 
-    def prism(self, ring: list[Pt], height_m: float, name: str, layer: str, class_: str | None = None,
-              z0_m: float = 0.0) -> str:
-        """A closed solid: the footprint pushed up by `height_m`. Returns the id of the model."""
-        pts = self.ring_mm(geom.ccw(ring))
-        made = self.doc.api.mesh_create(name=name, layer=layer, **({"class": class_} if class_ else {}))
-        mid = made["id"]
-        n = len(pts)
-        z = round(z0_m * 1000.0, 1)
-        edges = [[[*pts[i], z], [*pts[(i + 1) % n], z]] for i in range(n)]
-        drawn = self.doc.api.mesh_add_edges(id=mid, edges=edges)
-        faces = drawn["created"]["faces"]
-        if not faces:
-            raise RuntimeError("Kontuurist ei tekkinud pinda (ristuvad servad?)")
-        self.doc.api.mesh_push_pull(id=mid, face=faces[0], distance=round(height_m * 1000.0, 1))
-        return mid
+    def massing(self, ring: list[Pt], height_m: float, name: str, layer: str, class_: str | None = None) -> str:
+        """A building block in ONE call (massing.add): one undo step, a closed solid, a flat roof.
+        Returns the id of the object."""
+        params: dict[str, Any] = {"footprint": self.ring_mm(geom.ccw(ring)), "height": round(height_m * 1000.0, 1),
+                                  "roof": "flat", "name": name, "layer": layer}
+        if class_:
+            params["class"] = class_
+        return self.doc.call("massing.add", **params)
 
     def outline(self, ring: list[Pt], layer: str, class_: str | None = None) -> Any:
         kw: dict[str, Any] = {"layer": layer}

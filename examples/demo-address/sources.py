@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,56 +39,103 @@ class FetchError(Exception):
     """The network or the service failed."""
 
 
-class Fetcher:
-    """GET with a disk cache. One file per URL, named by the hash of the URL."""
+def cache_key(url: str) -> str:
+    """The name of a cache entry. The address of an address search is normalised (case, spaces,
+    commas, unicode form), so "Street 1, Place" and "street 1 place" share one entry."""
+    parts = urllib.parse.urlsplit(url)
+    params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    fixed = []
+    for key, value in params:
+        if key == "address":
+            value = unicodedata.normalize("NFC", value).casefold()
+            value = re.sub(r"[\s,;.]+", " ", value).strip()
+        fixed.append((key, value))
+    fixed.sort()
+    canonical = urllib.parse.urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, urllib.parse.urlencode(fixed), ""))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
-    def __init__(self, cache_dir: Path | str, offline: bool = False, timeout: float = 25.0, retries: int = 2):
+
+def _host(url: str) -> str:
+    return urllib.parse.urlsplit(url).netloc or "teenus"
+
+
+class Fetcher:
+    """GET with a disk cache. One file per request, named by `cache_key`.
+
+    A bad answer is never stored: `validate` checks the body first. `log` prints the retry notes.
+    Default timeout 8 s and one retry. A client error (HTTP 4xx) is not retried."""
+
+    def __init__(self, cache_dir: Path | str, offline: bool = False, timeout: float = 8.0, retries: int = 1,
+                 log=None):
         self.cache_dir = Path(cache_dir)
         self.offline = offline
         self.timeout = timeout
         self.retries = retries
+        self.log = log or (lambda text: None)
         self.hits = 0
         self.downloads = 0
 
+    @property
+    def http_dir(self) -> Path:
+        return self.cache_dir / "http"
+
     def _path(self, url: str) -> Path:
-        return self.cache_dir / "http" / (hashlib.sha256(url.encode("utf-8")).hexdigest()[:32] + ".bin")
+        return self.http_dir / (cache_key(url) + ".bin")
 
     def cached(self, url: str) -> bool:
         return self._path(url).exists()
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, validate=None) -> bytes:
         path = self._path(url)
         if path.exists():
-            self.hits += 1
-            return path.read_bytes()
+            data = path.read_bytes()
+            if validate is None or validate(data):
+                self.hits += 1
+                return data
+            path.unlink()  # a bad answer from an older run
         if self.offline:
-            raise OfflineMiss(url)
+            raise OfflineMiss(_host(url))
         last: Exception | None = None
+        data = b""
         for attempt in range(self.retries + 1):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     data = resp.read()
+                last = None
                 break
+            except urllib.error.HTTPError as err:
+                last = err
+                if 400 <= err.code < 500:
+                    break
             except (urllib.error.URLError, TimeoutError, OSError) as err:
                 last = err
-                time.sleep(0.5 * (attempt + 1))
-        else:
-            raise FetchError(f"{url}: {last}")
+            if attempt < self.retries:
+                self.log(f"  {_host(url)} ei vastanud, proovin uuesti ...")
+                time.sleep(0.5)
+        if last is not None:
+            raise FetchError(f"{_host(url)}: {getattr(last, 'reason', last)}")
+        if validate is not None and not validate(data):
+            raise FetchError(f"{_host(url)} andis vigase vastuse")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_bytes(data)
         tmp.replace(path)
-        (path.with_suffix(".url")).write_text(url, encoding="utf-8")
         self.downloads += 1
         return data
 
-    def get_json(self, url: str):
-        data = self.get(url)
-        try:
-            return json.loads(data.decode("utf-8"))
-        except ValueError as err:
-            raise FetchError(f"{url}: not JSON ({err})") from err
+    def get_json(self, url: str, key: str | None = None, nonempty: bool = True):
+        def valid(data: bytes) -> bool:
+            try:
+                body = json.loads(data.decode("utf-8"))
+            except ValueError:
+                return False
+            if not isinstance(body, dict):
+                return False
+            return (bool(body.get(key)) if nonempty else key in body) if key else bool(body)
+
+        data = self.get(url, validate=valid)
+        return json.loads(data.decode("utf-8"))
 
 
 # ---------------------------------------------------------------- numbers
@@ -183,7 +231,7 @@ def rank_candidates(cands: list[Candidate], query: str) -> list[Candidate]:
 
 def search_address(fetcher: Fetcher, text: str, results: int = 5) -> list[Candidate]:
     url = GAZETTEER_URL + "?" + urllib.parse.urlencode({"address": text, "results": results})
-    return parse_candidates(fetcher.get_json(url))
+    return parse_candidates(fetcher.get_json(url, "addresses", nonempty=False))
 
 
 # ---------------------------------------------------------------- building register
@@ -308,9 +356,7 @@ def parse_building(payload: dict, code: str = "") -> Building:
 
 def fetch_building(fetcher: Fetcher, code: str) -> Building:
     url = EHR_URL + "?" + urllib.parse.urlencode({"ehr_code": code})
-    payload = fetcher.get_json(url)
-    if not (payload or {}).get("ehitis"):
-        raise FetchError(f"Ehitisregister ei andnud koodile {code} ühtegi hoonet")
+    payload = fetcher.get_json(url, "ehitis")
     return parse_building(payload, code)
 
 
@@ -328,10 +374,7 @@ def wms_getmap_url(layer: str, bbox: tuple[float, float, float, float], size: in
 
 def fetch_map(fetcher: Fetcher, bbox, layer: str = "of10000", size: int = 1024) -> bytes:
     service = FOTOKAART_URL if layer == "EESTIFOTO" else WMS_URL
-    data = fetcher.get(wms_getmap_url(layer, bbox, size, service))
-    if not data.startswith(b"\x89PNG"):
-        raise FetchError("Kaardiserver ei andnud pilti: " + data[:120].decode("utf-8", "replace"))
-    return data
+    return fetcher.get(wms_getmap_url(layer, bbox, size, service), validate=lambda d: d.startswith(b"\x89PNG"))
 
 
 def write_world_files(png: bytes, bbox, size: int, folder: Path, name: str) -> Path:

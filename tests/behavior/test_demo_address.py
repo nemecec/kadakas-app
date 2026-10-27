@@ -43,17 +43,18 @@ def tiny_png(size: int = 8) -> bytes:
 class FixtureFetcher(src.Fetcher):
     """Answers from the synthetic fixtures. No network."""
 
-    def __init__(self, cache_dir, offline=False):
+    def __init__(self, cache_dir, offline=False, ehr=None):
         super().__init__(cache_dir, offline)
         self.urls: list[str] = []
+        self.ehr = ehr  # replaces the complete building, for tests of bad data
 
-    def get(self, url: str) -> bytes:
+    def get(self, url: str, validate=None) -> bytes:
         self.urls.append(url)
         if url.startswith(src.GAZETTEER_URL):
             return json.dumps(fixture("gazetteer.json")).encode()
         if url.startswith(src.EHR_URL):
             name = "ehr_sparse.json" if "000000002" in url else "ehr_complete.json"
-            return json.dumps(fixture(name)).encode()
+            return json.dumps(self.ehr or fixture(name)).encode()
         if "GetMap" in url:
             return tiny_png()
         raise src.FetchError(url)
@@ -254,10 +255,10 @@ def synthetic_extras() -> da.Extras:
     return da.Extras(plot_boundary, terrain_grid, nearby_features)
 
 
-def run_demo(tmp_path, address, extras, *more):
+def run_demo(tmp_path, address, extras, *more, ehr=None):
     msgs: list[str] = []
     out = da.run([address, "--cache-dir", str(tmp_path / "cache"), "--mode", "headless", "--binary", str(BIN),
-                  "--pause", "0", "--yes", *more], extras=extras, fetcher=FixtureFetcher(tmp_path / "cache"),
+                  "--pause", "0", "--yes", *more], extras=extras, fetcher=FixtureFetcher(tmp_path / "cache", ehr=ehr),
                  say=msgs.append)
     return out, msgs
 
@@ -279,7 +280,8 @@ def test_whole_demo_with_all_steps(tmp_path):
     assert "EPSG:3301" in Path(r["ifc"]).read_text(errors="replace")
     cf = r["cut_fill"]
     assert cf["cut"] > 0 and cf["fill"] > 0
-    assert any("m3" in m and "Mulla" in m for m in msgs)
+    assert any("Mulla mahud" in m for m in msgs) and any("Kaeve" in m and "m3" in m for m in msgs)
+    assert "IFCBUILDING(" in Path(r["ifc"]).read_text(errors="replace")
     assert not out["assumptions"] or all(isinstance(a, str) for a in out["assumptions"])
     doc = open_result(out)
     try:
@@ -288,16 +290,16 @@ def test_whole_demo_with_all_steps(tmp_path):
         names = {layer.name for layer in doc.layers}
         assert {"Hoone", "Krunt", "Taustakaart", "Haljastus", "Laiendus (agent)", "Naabrid", "Maapind"} <= names
         kinds = summary["objects_by_kind"]
-        assert kinds.get("surface_model", 0) >= 4  # building, extension, terrain, neighbour
+        assert kinds.get("massing", 0) >= 3  # building, extension, neighbour
+        assert kinds.get("surface_model", 0) >= 1  # terrain
         assert kinds.get("text", 0) >= 5
         building = out["ids"]["building"]
         rec = doc.call_raw("record.get", {"id": building})["records"]["Ehitisregister"]
         assert rec["EHR_kood"] == "000000001" and rec["Korgus_m"] == 6.5 and rec["Allikas"] == "Ehitisregister"
-        assert doc.api.mesh_solid_report(id=building)["closed"]
-        bounds = doc.api.mesh_bounds(id=building)
-        assert abs(bounds["local"]["max"][2] - 6500.0) < 1.0 if "local" in bounds else True
-        ext = out["ids"]["extension"]
-        assert doc.api.mesh_solid_report(id=ext)["closed"]
+        mass = doc.call_raw("massing.report", {})
+        assert mass  # the building and the extension are massing objects with quantities
+        assert doc.get(building).kind == "massing"
+        assert doc.get(out["ids"]["extension"]).kind == "massing"
     finally:
         doc.close()
 
@@ -353,6 +355,128 @@ def test_offline_run_after_one_online_run(tmp_path):
     assert "error" not in second["results"], msgs
     assert second["ctx"].fetcher.downloads == 0 and second["ctx"].fetcher.hits >= 3
     assert any("vahemälust" in m for m in msgs)
+
+
+def test_extension_is_one_revertible_undo_step(tmp_path):
+    """The review panel reverts a step only when nothing changed its objects later and it made no layer or class.
+    So the extension is one call, and the layer and the class are made in step 3."""
+    out, msgs = run_demo(tmp_path, "Näidistänav 1, Näidislinn", da.Extras(), "--no-extras")
+    assert out["results"].get("extension_revertible") is True, msgs
+    assert any("tagasivõetav" in m for m in msgs)
+    doc = open_result(out)
+    try:
+        pass
+    finally:
+        doc.close()
+
+
+def test_extension_height_text_tells_the_real_values(tmp_path):
+    out, msgs = run_demo(tmp_path, "Näidistänav 1, Näidislinn", da.Extras(), "--no-extras")
+    ext = out["results"]["extension"]
+    assert not ext["clamped"] and ext["height"] == pytest.approx(3.25)
+    assert any("kõrgus 3,3 m" in m or "kõrgus 3,2 m" in m for m in msgs)
+    assert any("üks korrus" in m and "madalam" in m for m in msgs)
+
+
+def test_auto_mode_without_app_warns_loudly(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "no-runtime"))
+    monkeypatch.delenv("KADAKAS_ADDR", raising=False)
+    msgs: list[str] = []
+    da.run(["Näidistänav 1, Näidislinn", "--cache-dir", str(tmp_path / "cache"), "--mode", "auto", "--binary", str(BIN),
+            "--pause", "0", "--yes", "--no-extras"], extras=da.Extras(), fetcher=FixtureFetcher(tmp_path / "cache"),
+           say=msgs.append)
+    assert any("EI OLE RAKENDUSEGA ÜHENDATUD" in m for m in msgs)
+
+
+def test_app_mode_without_app_stops_with_a_clear_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "no-runtime"))
+    monkeypatch.delenv("KADAKAS_ADDR", raising=False)
+    msgs: list[str] = []
+    out = da.run(["Näidistänav 1, Näidislinn", "--cache-dir", str(tmp_path / "cache"), "--mode", "app", "--pause", "0"],
+                 extras=da.Extras(), fetcher=FixtureFetcher(tmp_path / "cache"), say=msgs.append)
+    assert "rakendus ei vasta" in out["results"]["error"]
+
+
+def test_zero_area_footprint_stops_cleanly_without_a_traceback(tmp_path):
+    bad = fixture("ehr_complete.json")
+    bad["ehitis"]["ehitiseKujud"]["ruumikuju"][0]["geometry"]["coordinates"] = [
+        [[580000.0, 6480000.0], [580005.0, 6480000.0], [580010.0, 6480000.0], [580000.0, 6480000.0]]]
+    out, msgs = run_demo(tmp_path, "Näidistänav 1, Näidislinn", da.Extras(), "--no-extras", ehr=bad)
+    assert "error" in out["results"] or out["results"].get("step_errors")
+    assert any("VIGA" in m for m in msgs)
+
+
+def test_a_failing_optional_step_does_not_stop_the_demo(tmp_path):
+    def boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+
+    extras = da.Extras(plot_boundary=boom, terrain_grid=boom, nearby_features=boom)
+    out, msgs = run_demo(tmp_path, "Näidistänav 1, Näidislinn", extras)
+    assert "error" not in out["results"], msgs
+    assert Path(out["results"]["ifc"]).exists()
+
+
+def test_cache_key_ignores_case_spaces_commas_and_unicode_form():
+    base = src.GAZETTEER_URL + "?address=%s&results=5"
+    keys = {src.cache_key(base % q) for q in (
+        "Näidistänav+1%2C+Näidislinn", "näidistänav 1 näidislinn", "N%C3%A4idist%C3%A4nav%201,Näidislinn",
+        "NÄIDISTÄNAV  1 ;  Näidislinn", "Na\u0308idista\u0308nav 1, Näidislinn")}
+    assert len(keys) == 1
+    assert src.cache_key(base % "Näidistänav 2") != src.cache_key(base % "Näidistänav 1")
+
+
+class _Resp:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_bad_answers_are_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(src.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b"<html>WMS error</html>"))
+    f = src.Fetcher(tmp_path)
+    with pytest.raises(src.FetchError):
+        src.fetch_map(f, (1, 2, 3, 4))
+    assert not list((tmp_path / "http").glob("*.bin")) if (tmp_path / "http").exists() else True
+    monkeypatch.setattr(src.urllib.request, "urlopen", lambda req, timeout=None: _Resp(b"{}"))
+    with pytest.raises(src.FetchError):
+        src.fetch_building(f, "000000001")
+    assert f.downloads == 0
+
+
+def test_http_client_error_is_not_retried_and_a_timeout_is_retried_once(tmp_path, monkeypatch):
+    calls = []
+
+    def not_found(req, timeout=None):
+        calls.append(timeout)
+        raise src.urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
+
+    monkeypatch.setattr(src.urllib.request, "urlopen", not_found)
+    notes: list[str] = []
+    f = src.Fetcher(tmp_path, log=notes.append)
+    with pytest.raises(src.FetchError):
+        f.get("https://example.invalid/x")
+    assert len(calls) == 1 and calls[0] == 8.0
+
+    calls.clear()
+
+    def slow(req, timeout=None):
+        calls.append(timeout)
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(src.urllib.request, "urlopen", slow)
+    monkeypatch.setattr(src.time, "sleep", lambda s: None)
+    with pytest.raises(src.FetchError) as err:
+        f.get("https://example.invalid/y?secret=1")
+    assert len(calls) == 2 and any("proovin uuesti" in n for n in notes)
+    assert "secret" not in str(err.value)  # no full URL in the message
 
 
 def test_cli_dry_and_help():

@@ -78,7 +78,7 @@ def plan_extension(frame: dict, footprint: list[Pt], plot: list[Pt], sides: dict
         free = sides[side]
         if free - EDGE_MARGIN < depth:
             depth = round(free - EDGE_MARGIN, 1)
-            note = "Laiendus on tavalisest madalam, sest krundil pole ruumi."
+            note = "Laiendus on tavalisest väiksema sügavusega, sest krundil pole ruumi."
         if depth < 2.5 or length < 2.5:
             continue
         # touch the building: the facade is the outermost footprint point inside the span
