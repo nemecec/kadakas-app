@@ -11,3 +11,4 @@ __pycache__/
 /tests/data/dxf-public/
 /tests/data/step-public/
 /tests/data/ifc-public/
+/examples/demo-address/.cache/
