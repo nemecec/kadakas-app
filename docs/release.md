@@ -191,6 +191,8 @@ Every start of the test ends with a kill. The app has no quit call, so the launc
 
 A person still checks some points on a real machine. They stay on the human checklist in `docs/welcome.md` ("Check in a real window"). They are real GPU rendering, the double click and the Dock flow, the Gatekeeper and SmartScreen warnings, high DPI scaling and trackpads.
 
+The full step list for the owner is in `docs/hand-test.md`.
+
 ## Launcher and updates
 
 The launcher (`kadakas-launcher`, PLAT-06) keeps the app up to date without a new installer. The installer puts the launcher next to the app. The launcher starts the app, and it can fetch newer versions of the app and the `kadakas` tool.
