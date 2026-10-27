@@ -26,6 +26,9 @@ pub fn rows(ui: &mut egui::Ui, shape: &CurveShape, out: &mut Vec<TrayAction>) {
         ui.end_row();
     };
     row(ui, tr!("modeler-curve-kind"), kind_text(&shape.kind));
+    if !shape.known {
+        return;
+    }
     if shape.uniform {
         row(ui, tr!("modeler-curve-radius"), u.length_text(shape.radius));
     } else {

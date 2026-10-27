@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DAffine3, DVec3};
 
-use super::analytic::Shape;
+use super::analytic::{self, Shape};
 use super::edit::Session;
 use super::geom::tol;
 use super::sync::{self, Intent};
@@ -339,8 +339,19 @@ impl Absorber {
             .collect();
         // The faces that were in the model before are those with an id below this one.
         let first_new = self.s.model().next_id;
+        // The descriptions of the curves of the result follow the edges that cut them, as after
+        // any edit (the plain absorb runs one edit for each edge). The model is copied only when
+        // it has descriptions.
+        let before = self
+            .s
+            .model()
+            .has_descriptions()
+            .then(|| self.s.model().clone());
         for chunk in edges.chunks(MAX_EDIT_EDGES) {
             self.s.add_edges(chunk)?;
+        }
+        if let Some(before) = &before {
+            analytic::reconcile(self.s.model_mut(), before, &mut self.notes);
         }
         let normal_of = |n: DVec3| xf.map_or(n, |x| x.matrix3.inverse().transpose() * n);
         // Several faces of `other` can land on one face of the result (see `absorb_reference`).
@@ -430,12 +441,14 @@ impl Absorber {
                     .s
                     .model_mut()
                     .add_curve_shaped(list, other.analytic.get(c).map(Shape::Like));
-                if let Ok((_, Some(note))) = made {
-                    self.notes.push(note);
-                } else if made.is_ok() && other.analytic_raw.contains_key(c) {
-                    self.notes.push(format!(
-                        "curve {c} lost its circle description: its kind is not known to this program, so it cannot follow the change"
-                    ));
+                // The notes name the new curve (a copy in the same model keeps the ids of the
+                // part, so the id `c` is the original).
+                match made {
+                    Ok((_, Some(note))) => self.notes.push(note),
+                    Ok((new, None)) if other.analytic_raw.contains_key(c) => {
+                        self.notes.push(analytic::unknown_kind_note(new));
+                    }
+                    _ => {}
                 }
             }
         }

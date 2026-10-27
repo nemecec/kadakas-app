@@ -244,7 +244,7 @@ The circle has a kind (`circle`, `arc` or `polygon`), a center, a normal, an axi
 The axis is the direction of the angle 0. Angles run counterclockwise about the normal. The number of segments is the number of edges.
 Coordinates are local, in millimeters and radians.
 
-`mesh.add_curve` takes the circle as `analytic`. The kind must be `circle`, `arc` or `polygon`. Unknown fields are refused. The core keeps it only when every point lies on the circle within the length tolerance.
+`mesh.add_curve` takes the circle as `analytic`. The kind is `circle`, `arc` or `polygon`. Unknown fields are refused. The core keeps it only when every point lies on the circle within the length tolerance.
 Else the curve is drawn without it and the notes say so.
 
 `mesh.curve_info` reads the curves of a model, or one curve with `curve`. Each item has `edges`, `segments`, `closed`, `length_mm` and `geometry`.

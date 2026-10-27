@@ -613,6 +613,11 @@ impl SurfaceModel {
         self.curves.get(&id).map(Vec::len)
     }
 
+    /// True if the model has any description of a curve, also one that this version cannot read.
+    pub(super) fn has_descriptions(&self) -> bool {
+        !self.analytic.is_empty() || !self.analytic_raw.is_empty()
+    }
+
     /// The vertices of a curve in order (a closed curve ends with its first vertex).
     pub fn curve_vertices(&self, id: CurveId) -> Option<Vec<VertexId>> {
         chain_vertices(self, self.curves.get(&id)?)
@@ -671,6 +676,9 @@ impl SurfaceModel {
                 reconcile(&mut work, &before, &mut notes);
                 note = notes.into_iter().next();
             }
+            Some(Shape::Like(a)) if !is_known_kind(&a.kind) => {
+                note = Some(unknown_kind_note(id));
+            }
             Some(Shape::Like(a)) if !derive(&mut work, id, a) => {
                 note = Some(format!(
                     "curve {id} lost its circle description: its points are not on one circle after the change"
@@ -708,6 +716,14 @@ impl RawRow {
     }
 }
 
+/// The note for a description of a kind that this version does not know and that a change of
+/// the chain (or a copy of it) could not take along.
+pub(super) fn unknown_kind_note(id: CurveId) -> String {
+    format!(
+        "curve {id} lost its circle description: its kind is not known to this program, so it cannot follow the change"
+    )
+}
+
 /// Drops the unreadable rows whose chain changed, with a note each.
 fn reconcile_raw(m: &mut SurfaceModel, notes: &mut Vec<String>) {
     let ids: Vec<CurveId> = m.analytic_raw.keys().copied().collect();
@@ -723,9 +739,7 @@ fn reconcile_raw(m: &mut SurfaceModel, notes: &mut Vec<String>) {
                 .is_some_and(|p| p == row.points);
         if !same {
             m.analytic_raw.remove(&id);
-            notes.push(format!(
-                "curve {id} lost its circle description: its kind is not known to this program, so it cannot follow the change"
-            ));
+            notes.push(unknown_kind_note(id));
         }
     }
 }
@@ -962,7 +976,7 @@ pub(super) fn validate_loaded(m: &mut SurfaceModel, unread: Vec<(u32, Value)>) {
     for (id, value) in unread {
         let id = CurveId(id);
         match RawRow::of(m, id, value) {
-            Some(row) if !m.analytic.contains_key(&id) => {
+            Some(row) if !m.analytic.contains_key(&id) && !m.analytic_raw.contains_key(&id) => {
                 m.analytic_raw.insert(id, row);
             }
             Some(_) => notes.push(gone(id, "the curve has two descriptions")),

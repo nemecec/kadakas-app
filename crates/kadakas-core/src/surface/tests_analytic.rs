@@ -2206,3 +2206,244 @@ fn a_chain_that_turns_back_is_not_a_chain_on_the_circle() {
     // Two points cannot turn back.
     assert!(analytic::goes_one_way(&a, &[at(0.0), at(300.0)]));
 }
+
+// ---- the third review: the host of an absorb, copies, definitions, equality ------------------------
+
+/// A model whose only curve has a row that this version cannot read (a spline), and a part with a
+/// line that cuts across that curve.
+fn host_with_unread_row() -> (SurfaceModel, CurveId, SurfaceModel) {
+    let (mut v, id) = doc_json(ellipse_model());
+    let curve = shape_in(&load_doc(&v), id).curves().next().unwrap().0;
+    v["objects"][0]["shape"]["curve_geometry"] =
+        serde_json::json!([[curve.0, {"kind": "spline", "knots": [0, 1, 2]}]]);
+    let host = shape_in(&load_doc(&v), id);
+    let mut part = SurfaceModel::new();
+    part.apply(&Edit::AddEdges {
+        edges: vec![[[37.0, -400.0, 0.0], [37.0, 400.0, 0.0]]],
+    })
+    .unwrap();
+    (host, curve, part)
+}
+
+#[test]
+fn a_line_absorbed_across_a_row_that_is_not_read_drops_it_with_a_note_like_the_plain_absorb() {
+    let (host, curve, part) = host_with_unread_row();
+    assert!(serde_json::to_string(&host).unwrap().contains("spline"));
+    // The public absorb (the Absorber), the plain one and the edit that draws the same line all
+    // end in the same model, and say why the row went.
+    let mut a = host.clone();
+    let notes = a.absorb(&part, None).unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains(&format!("curve {curve} lost")) && n.contains("kind is not known")),
+        "{notes:?}"
+    );
+    assert!(!serde_json::to_string(&a).unwrap().contains("spline"));
+    let mut r = host.clone();
+    r.absorb_reference(&part, None).unwrap();
+    assert_eq!(a, r);
+    let mut e = host.clone();
+    let notes = e
+        .apply_with_notes(&Edit::AddEdges {
+            edges: vec![[[37.0, -400.0, 0.0], [37.0, 400.0, 0.0]]],
+        })
+        .unwrap();
+    assert!(notes.iter().any(|n| n.contains("kind is not known")));
+    // A part that does not touch the curve keeps the row.
+    let mut far = SurfaceModel::new();
+    far.apply(&Edit::AddEdges {
+        edges: vec![[[5000.0, 0.0, 0.0], [6000.0, 0.0, 0.0]]],
+    })
+    .unwrap();
+    let mut kept = host.clone();
+    assert!(kept.absorb(&far, None).unwrap().is_empty());
+    assert!(serde_json::to_string(&kept).unwrap().contains("spline"));
+}
+
+#[test]
+fn the_same_for_a_description_of_an_unknown_kind_that_a_line_cuts() {
+    let m = unknown_kind_model();
+    let curve = the_curve(&m);
+    let mut part = SurfaceModel::new();
+    part.apply(&Edit::AddEdges {
+        edges: vec![[[37.0, -400.0, 0.0], [37.0, 400.0, 0.0]]],
+    })
+    .unwrap();
+    let mut a = m.clone();
+    let notes = a.absorb(&part, None).unwrap();
+    assert!(
+        notes.iter().any(|n| n.contains("kind is not known")),
+        "{notes:?}"
+    );
+    assert!(a.curve_geometry(curve).is_none());
+    let mut r = m.clone();
+    r.absorb_reference(&part, None).unwrap();
+    assert_eq!(a, r);
+}
+
+#[test]
+fn a_copy_of_a_curve_with_a_row_that_is_not_read_names_the_new_curve() {
+    let (mut host, curve, _) = host_with_unread_row();
+    let edges = host.curve_edges(curve).unwrap().to_vec();
+    let notes = host
+        .apply_with_notes(&Edit::CopyGeometry {
+            faces: Vec::new(),
+            edges,
+            matrix: mat(DAffine3::from_translation(DVec3::X * 3000.0)),
+            count: 1,
+        })
+        .unwrap();
+    let newest = host.curves().map(|(c, _)| c).max().unwrap();
+    assert_ne!(newest, curve);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains(&format!("curve {newest} lost")),
+        "{notes:?}"
+    );
+    assert!(
+        !notes[0].contains(&format!("curve {curve} lost")),
+        "{notes:?}"
+    );
+    // The original keeps its row.
+    assert!(serde_json::to_string(&host).unwrap().contains("spline"));
+}
+
+#[test]
+fn a_copy_of_an_unknown_kind_has_its_own_note_and_text() {
+    let mut m = unknown_kind_model();
+    let curve = the_curve(&m);
+    let edges = m.curve_edges(curve).unwrap().to_vec();
+    let notes = m
+        .apply_with_notes(&Edit::CopyGeometry {
+            faces: Vec::new(),
+            edges,
+            matrix: mat(DAffine3::from_translation(DVec3::X * 3000.0)),
+            count: 1,
+        })
+        .unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("kind is not known"), "{notes:?}");
+    assert!(!notes[0].contains("not on one circle"), "{notes:?}");
+}
+
+#[test]
+fn the_notes_of_a_load_are_not_part_of_the_equality() {
+    let (mut v, id) = doc_json(circle([0.0; 3], 300.0, 12));
+    v["objects"][0]["shape"]["curve_geometry"][0][1]["center"] =
+        serde_json::json!([5000.0, 0.0, 0.0]);
+    let loaded = shape_in(&load_doc(&v), id);
+    assert!(!loaded.load_notes().is_empty());
+    let mut same = loaded.clone();
+    same.load_notes.clear();
+    assert_eq!(loaded, same);
+    // Parsed from text, a model equals the one it was written from.
+    let text = serde_json::to_string(&loaded).unwrap();
+    let again: SurfaceModel = serde_json::from_str(&text).unwrap();
+    assert_eq!(again, loaded);
+    // A real difference still counts.
+    let mut other = loaded.clone();
+    other.name = "other".into();
+    assert_ne!(other, loaded);
+}
+
+#[test]
+fn two_unread_rows_for_one_curve_are_told_at_the_load() {
+    let (mut v, id) = doc_json(ellipse_model());
+    let curve = shape_in(&load_doc(&v), id).curves().next().unwrap().0;
+    v["objects"][0]["shape"]["curve_geometry"] = serde_json::json!([
+        [curve.0, {"kind": "spline", "knots": [0, 1]}],
+        [curve.0, {"kind": "nurbs", "knots": [2, 3]}]
+    ]);
+    let doc = load_doc(&v);
+    assert!(
+        doc.load_notes()
+            .iter()
+            .any(|n| n.contains("two descriptions")),
+        "{:?}",
+        doc.load_notes()
+    );
+}
+
+#[test]
+fn the_load_notes_of_a_component_definition_are_listed() {
+    use crate::command::Command;
+    let mut m = circle([0.0; 3], 300.0, 12);
+    let face = m.faces().next().unwrap().0;
+    let (mut ed, id) = editor_with(std::mem::take(&mut m));
+    ed.execute(&Command::MakeComponent {
+        name: "Pond".into(),
+        model: Some(id),
+        faces: vec![face],
+        edges: vec![],
+        objects: vec![],
+        replace: true,
+    })
+    .unwrap();
+    let mut v = serde_json::to_value(ed.doc()).unwrap();
+    // Move the center of the description inside the definition away from its chain.
+    fn bend(v: &mut serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(o) => {
+                if let Some(rows) = o.get_mut("curve_geometry").and_then(|r| r.as_array_mut()) {
+                    rows[0][1]["center"] = serde_json::json!([9000.0, 0.0, 0.0]);
+                    return true;
+                }
+                o.values_mut().any(bend)
+            }
+            serde_json::Value::Array(a) => a.iter_mut().any(bend),
+            _ => false,
+        }
+    }
+    assert!(
+        bend(&mut v),
+        "the definition holds a model with a description"
+    );
+    let doc = load_doc(&v);
+    assert!(
+        doc.load_notes()
+            .iter()
+            .any(|n| n.contains("component 'Pond'") && n.contains("not on the circle")),
+        "{:?}",
+        doc.load_notes()
+    );
+}
+
+#[test]
+fn exploding_a_group_whose_host_has_an_unread_row_says_what_the_absorbed_line_did() {
+    use crate::command::Command;
+    let (_, _, part) = host_with_unread_row();
+    // The document with the row (the first object, so it is the host of the explode).
+    let (mut v, host_id) = doc_json(ellipse_model());
+    let curve = shape_in(&load_doc(&v), host_id).curves().next().unwrap().0;
+    v["objects"][0]["shape"]["curve_geometry"] =
+        serde_json::json!([[curve.0, {"kind": "spline", "knots": [0, 1, 2]}]]);
+    let mut ed = crate::command::Editor::new(load_doc(&v));
+    let other = ed
+        .execute(&Command::AddObject {
+            shape: crate::model::Shape::SurfaceModel(Box::new(part)),
+            layer: None,
+            class: None,
+            attrs: crate::model::Attributes::default(),
+        })
+        .map(|o| crate::model::ObjectId(o.created[0]))
+        .unwrap();
+    let group = ed
+        .execute(&Command::MakeGroup {
+            model: None,
+            faces: vec![],
+            edges: vec![],
+            objects: vec![host_id, other],
+            name: None,
+        })
+        .map(|o| crate::model::ObjectId(o.created[0]))
+        .unwrap();
+    assert!(serde_json::to_string(ed.doc()).unwrap().contains("spline"));
+    let out = ed.execute(&Command::Explode { ids: vec![group] }).unwrap();
+    assert!(
+        out.notes.iter().any(|n| n.contains("kind is not known")),
+        "{:?}",
+        out.notes
+    );
+    assert!(!serde_json::to_string(ed.doc()).unwrap().contains("spline"));
+}
