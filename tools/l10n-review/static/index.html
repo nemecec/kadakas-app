@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kadakas translation review</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="top">
+  <div class="bar">
+    <strong>Translation review</strong>
+    <label>Language <select id="target"></select></label>
+    <nav id="tabs">
+      <button data-tab="list" class="on">Messages</button>
+      <button data-tab="terms">Terms</button>
+      <button data-tab="glossary">Glossary</button>
+      <button data-tab="parity">Key parity</button>
+    </nav>
+    <span class="grow"></span>
+    <button id="btn-apply">Apply accepted to files</button>
+    <a id="btn-export" href="#" class="btn">Export review as Markdown</a>
+  </div>
+  <div class="bar" id="filters">
+    <label>File <select id="f-file"></select></label>
+    <label>Status <select id="f-status"></select></label>
+    <input id="f-text" type="search" placeholder="Search English and target text" size="32">
+    <label class="chk"><input type="checkbox" id="f-diff"> only differences between old and new</label>
+    <span id="counts" class="muted"></span>
+  </div>
+  <div class="bar" id="queue-bar">
+    <label>Model <select id="model"><option>sonnet</option><option>opus</option><option>haiku</option></select></label>
+    <button id="btn-all">Suggest for all flagged</button>
+    <span id="queue-status"></span>
+    <progress id="queue-progress" max="1" value="0" hidden></progress>
+    <button id="btn-cancel" hidden>Cancel</button>
+    <span class="muted">Runs claude -p on this machine and uses your Claude usage.</span>
+  </div>
+</header>
+<main>
+  <section id="tab-list">
+    <table id="rows"><thead><tr><th>File / Key</th><th>English</th><th id="th-target">Target</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <p><button id="more-rows" hidden>Show more rows</button></p>
+    <p class="muted">Keys: j / k next and previous, f flag, c comment, a suggest, w mark selected words as weird.</p>
+  </section>
+  <section id="tab-terms" hidden></section>
+  <section id="tab-glossary" hidden></section>
+  <section id="tab-parity" hidden></section>
+</main>
+<dialog id="dlg"></dialog>
+<div id="toast" hidden></div>
+<script src="/offsets.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
