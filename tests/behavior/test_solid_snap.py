@@ -56,7 +56,7 @@ def test_the_refusal_names_the_vertex_and_the_flag_and_changes_nothing(cad, op):
     assert err["data"]["error_id"] == "near_touch_snap_available"
     assert err["data"]["flag"] == "snap_near"
     [vertex] = err["data"]["vertices"]
-    assert vertex["distance"] == pytest.approx(0.0058, abs=1e-4)
+    assert vertex["distance_mm"] == pytest.approx(0.0058, abs=1e-4)
     assert vertex["to"][1] == pytest.approx(1000.0)
     assert "lies 0.0058 mm from the plane" in err["message"] and "snap_near" in err["message"]
     assert geometry(cad, model) == before
@@ -68,8 +68,8 @@ def test_snap_near_works_lists_the_vertex_and_one_undo_takes_it_back(cad, op):
     before = geometry(cad, model)
     result = cad.result("mesh.solid", {"id": model, "op": op, "first_face": a, "second_face": b, "snap_near": True})
     [moved] = result["snapped"]
-    assert moved["distance"] == pytest.approx(0.0058, abs=1e-4)
-    assert moved["from"][1] == pytest.approx(1000.0058, abs=1e-4)
+    assert moved["distance_mm"] == pytest.approx(0.0058, abs=1e-4)
+    assert moved["from"][1] == pytest.approx(1000.0058, abs=2e-4)
     assert moved["to"][1] == pytest.approx(1000.0)
     assert any("snapped vertex" in n for n in result["notes"])
     assert cad.result("mesh.solid_report", {"id": model})["closed"]

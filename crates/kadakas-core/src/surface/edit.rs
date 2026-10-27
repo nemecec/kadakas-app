@@ -242,10 +242,9 @@ pub(super) fn run(
     Ok(notes)
 }
 
-/// Moves vertices by an affine map in a scratch model like `Edit::TransformVertices`, but a face
-/// may end over another one in one plane (the snap of the solid tools, MOD-19: the cut that
-/// follows resolves the overlap). Every other refusal of the move stays. On an error `m` is left
-/// in an unknown state. Not an edit: nothing is recorded.
+/// Moves vertices by an affine map in a scratch model like `Edit::TransformVertices`, with all its
+/// refusals (the snap of the solid tools, MOD-19). On an error `m` is left in an unknown state.
+/// Not an edit: nothing is recorded.
 pub(super) fn move_vertices(
     m: &mut SurfaceModel,
     vertices: &[VertexId],
@@ -253,7 +252,7 @@ pub(super) fn move_vertices(
 ) -> Result<Vec<String>, SurfaceError> {
     let before = m.clone();
     let mut notes = Vec::new();
-    transform::transform_vertices_with(m, vertices, &[], &[], matrix, &before, &mut notes, true)?;
+    transform::transform_vertices(m, vertices, &[], &[], matrix, &before, &mut notes)?;
     analytic::reconcile(m, &before, &mut notes);
     Ok(notes)
 }

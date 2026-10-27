@@ -1648,6 +1648,90 @@ fn perf_two_big_balls() {
     assert!(close(got["subtract"] + got["intersect"], va), "{got:?}");
 }
 
+/// Timing of the near-touch refusal and the snap (MOD-19, release build): a near-touch pair of
+/// boxes in a model that also holds two balls of 20,480 triangles each (40,960 faces).
+#[test]
+#[ignore = "timing test: run in release mode"]
+fn perf_near_touch_in_a_big_model() {
+    let mut parts = Parts::default();
+    ball(&mut parts, DVec3::new(-5000.0, 0.0, 0.0), 1000.0, 5);
+    ball(&mut parts, DVec3::new(-3000.0, 150.0, 80.0), 800.0, 5);
+    let mut m = parts.build();
+    let big = m.face_count();
+    // The box [0, K]^3 and the turned box of the known near-touch, then the same pair moved to
+    // have none.
+    let mut pairs = Vec::new();
+    for (x0, dy) in [(0.0, 796.195_805_697_005_2), (20_000.0, 700.0)] {
+        draw(&mut m, ([x0, 0.0, 0.0], [x0 + K, K, K]));
+        let (angle, tilt) = (1.539_623_148_363_857_6f64, 0.394_573_062_789_783_6f64);
+        let (sin, cos) = angle.sin_cos();
+        let (st, ct) = tilt.sin_cos();
+        let c: Vec<P> = (0..8usize)
+            .map(|i| {
+                let p = |bit: usize| if i & bit == 0 { -400.0 } else { 400.0 };
+                let (x, y, z) = (p(1), p(2), p(4));
+                let (zx, zy) = (x * cos - y * sin, x * sin + y * cos);
+                [
+                    x0 + zx + 200.0,
+                    zy * ct - z * st + dy,
+                    zy * st + z * ct + 200.0,
+                ]
+            })
+            .collect();
+        draw_corners(&mut m, &c.try_into().unwrap());
+        pairs.push(());
+    }
+    let inward: Vec<FaceId> = m
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+    let r = m.solid_report();
+    let mut solids: Vec<Shell> = r.solids().cloned().collect();
+    solids.sort_by_key(|s| s.faces[0]);
+    assert_eq!(solids.len(), 6);
+    let pick = |i: usize| (solids[i].faces.clone(), solids[i + 1].faces.clone());
+    let (near_a, near_b) = pick(2);
+    let (far_a, far_b) = pick(4);
+    println!("faces {} (balls {big})", m.face_count());
+    let time = |name: &str, f: &mut dyn FnMut() -> String| {
+        let t = std::time::Instant::now();
+        let out = f();
+        println!("{name}: {:?} {out}", t.elapsed());
+    };
+    for o in [SolidOp::Union, SolidOp::Split] {
+        time(&format!("{o} without a near-touch"), &mut || {
+            let mut w = m.clone();
+            format!("{:?}", op(&mut w, o, &far_a, &far_b).is_ok())
+        });
+        time(&format!("{o} refused, no flag"), &mut || {
+            let mut w = m.clone();
+            let e = op(&mut w, o, &near_a, &near_b).unwrap_err();
+            format!("{}", e.to_string().contains("snap_near"))
+        });
+        time(&format!("{o} with the flag"), &mut || {
+            let mut w = m.clone();
+            let ok = w
+                .apply(&Edit::Solid {
+                    op: o,
+                    first: near_a.clone(),
+                    second: near_b.clone(),
+                    snap_near: true,
+                })
+                .is_ok();
+            format!("{ok}")
+        });
+        time(
+            &format!("{o} preview with the flag (solid_run)"),
+            &mut || format!("{}", m.solid_run(o, &near_a, &near_b, true).is_ok()),
+        );
+    }
+    let _ = pairs;
+}
+
 // ---- lines and circles of the person, curves cut in part ----------------------------------------
 
 fn edge_between(m: &SurfaceModel, p: P, q: P) -> bool {

@@ -592,24 +592,40 @@ fn try_snap(
     let mut made_notes = snapped.notes.clone();
     made_notes.extend(snapped.moves.iter().map(SnapMove::note));
     if snap_near {
-        let mut done = finish(m, op, inputs, sub, volumes, notes).map_err(|f| {
-            SurfaceError::Solid(SolidError::SnapRefused(SnapRefusal::StillRefused {
-                reason: f.into_error().to_string(),
-            }))
-        })?;
+        let mut done = finish(m, op, inputs, sub, volumes, notes).map_err(after_snap_error)?;
         notes.extend(made_notes);
         done.snapped = snapped.moves;
         return Ok(done);
     }
-    // Not asked for: find out whether the snap would help, on a copy of the model.
-    let mut trial = m.clone();
+    // Not asked for: find out whether the snap helps. The cut runs on the snapped copy and the
+    // model is not touched. (The checks of the result in the model, step 7, run only when the
+    // snap is allowed.)
     let mut scratch = Vec::new();
-    match finish(&mut trial, op, inputs, sub, volumes, &mut scratch) {
+    match compute(op, sub, volumes, &mut scratch) {
         Ok(_) => Err(SurfaceError::Solid(SolidError::NearTouch {
             reason: cause,
             moves: snapped.moves,
         })),
         Err(_) => Err(cut(cause)),
+    }
+}
+
+/// The refusal when the operation fails after the snap was done: a limit of the model keeps its
+/// own error, any other reason is `StillRefused`.
+fn after_snap_error(f: Fail) -> SurfaceError {
+    match f.into_error() {
+        e @ SurfaceError::Limit { .. } => e,
+        e => {
+            let mut reason = e.to_string();
+            if reason.contains("could not be solved") {
+                reason.push_str(
+                    ". Faces of two solids that end in one plane and overlap are a limit of the solid tools (backlog row MOD-20)",
+                );
+            }
+            SurfaceError::Solid(SolidError::SnapRefused(SnapRefusal::StillRefused {
+                reason,
+            }))
+        }
     }
 }
 
@@ -649,13 +665,33 @@ fn finish(
     m: &mut SurfaceModel,
     op: SolidOp,
     inputs: &Inputs,
-    mut sub: SurfaceModel,
+    sub: SurfaceModel,
     volumes: (f64, f64),
     notes: &mut Vec<String>,
 ) -> Result<Outcome, Fail> {
-    let Inputs {
-        a, b, before, topo, ..
-    } = inputs;
+    let made = compute(op, sub, volumes, notes)?;
+    commit(m, inputs, made.res)?;
+    Ok(Outcome {
+        volumes: made.volumes,
+        snapped: Vec::new(),
+    })
+}
+
+/// What steps 2 to 6 made: the result (the geometry that replaces the two solids) and the volumes
+/// of its solids.
+struct Made {
+    res: SurfaceModel,
+    volumes: Vec<f64>,
+}
+
+/// Steps 2 to 6: cut `sub`, locate, keep, tidy and verify. The model is not touched, so a caller
+/// can ask whether the operation works without a copy of the model.
+fn compute(
+    op: SolidOp,
+    mut sub: SurfaceModel,
+    volumes: (f64, f64),
+    notes: &mut Vec<String>,
+) -> Result<Made, Fail> {
     let (va, vb) = volumes;
 
     // 2. Cut.
@@ -785,20 +821,27 @@ fn finish(
     }
     expect_volumes(op, va, vb, common_volume, &volumes)?;
 
-    // 7. Put in.
+    Ok(Made { res, volumes })
+}
+
+/// Step 7: the result replaces the geometry of the two solids in the model, which must stay valid
+/// and within the limits.
+fn commit(m: &mut SurfaceModel, inputs: &Inputs, res: SurfaceModel) -> Result<(), SurfaceError> {
+    let Inputs {
+        a, b, before, topo, ..
+    } = inputs;
     put_in(m, topo, a, b, res);
     edit::check_limits(m)?;
     if let Some(p) = m.problem() {
-        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p)).into());
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p)));
     }
     let after = m.check();
     if let Some(p) = after.problems.iter().find(|p| !before.problems.contains(p)) {
-        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p.to_string())).into());
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(
+            p.to_string(),
+        )));
     }
-    Ok(Outcome {
-        volumes,
-        snapped: Vec::new(),
-    })
+    Ok(())
 }
 
 /// The volumes of the result must be the exact ones. With `i` the common volume (from the pieces
@@ -1010,6 +1053,27 @@ mod tests {
             assert_eq!(e, SurfaceError::Solid(SolidError::Cut("why".into())));
             assert_eq!(w, m);
             assert!(notes.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_failure_after_the_snap_is_still_refused_but_a_limit_keeps_its_error() {
+        let limit = SurfaceError::Limit {
+            what: "faces",
+            max: 1,
+            count: 2,
+        };
+        assert_eq!(after_snap_error(Fail::Refused(limit.clone())), limit);
+        for f in [Fail::NearTouch("why".into()), Fail::Refused(cut("why"))] {
+            let e = after_snap_error(f);
+            assert!(
+                matches!(
+                    &e,
+                    SurfaceError::Solid(SolidError::SnapRefused(SnapRefusal::StillRefused { reason }))
+                        if reason.contains("why")
+                ),
+                "{e:?}"
+            );
         }
     }
 

@@ -69,15 +69,15 @@ uic-solid-check-odd = Not all closed: { $count ->
         [one] One solid is
        *[other] { $solids } solids are
     } closed.
-uic-solid-refused-near-touch = A vertex of one solid is { $distance } mm off a face of the other solid. That is too far to count as on the face and too close to cut it. { $count ->
-        [one] One vertex can be snapped onto the face.
-       *[other] { $count } vertices can be snapped onto the faces.
-    } Nothing was changed.
+uic-solid-refused-near-touch = A vertex of one solid is { $distance } mm off a face of the other solid. That is too far to count as on the face and too close to cut it. A snap moves { $count ->
+        [one] one vertex
+       *[other] { $count } vertices
+    } onto the faces. Nothing was changed.
 uic-solid-refused-snap-shared = The snap was refused because a vertex is shared with geometry outside the two solids. Nothing was changed. Make a group of the solids first.
-uic-solid-refused-snap-degenerate = The snap was refused because it would make a face degenerate. Nothing was changed.
+uic-solid-refused-snap-degenerate = The snap was refused because it makes a face degenerate. Nothing was changed.
 uic-solid-refused-snap-move = The snap was refused because the model does not allow the move. Nothing was changed.
-uic-solid-refused-snap-open = The snap was refused because it would leave a solid not closed. Nothing was changed.
-uic-solid-refused-snap-new = The snap was refused because a vertex would stay near the plane of another face. Nothing was changed.
+uic-solid-refused-snap-open = The snap was refused because a solid is not closed after the move. Nothing was changed.
+uic-solid-refused-snap-new = The snap was refused because a vertex stays near the plane of another face. Nothing was changed.
 uic-solid-refused-snap-still = The operation is still refused after the snap, so nothing was changed.
 uic-solid-snapped = Snapped { $count ->
         [one] one vertex

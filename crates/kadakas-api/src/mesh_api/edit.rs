@@ -1005,27 +1005,28 @@ fn run(
                 {
                     before.considered = soften_plan(m, edges, *angle, *coplanar).len();
                 }
-                // The vertices that a snap moves (MOD-19) are listed in the answer. The operation
-                // runs once on a copy to find them, and then for real.
-                snapped = match &cmd {
-                    Command::EditSurface {
-                        id,
-                        edit:
-                            Edit::Solid {
-                                op,
-                                first,
-                                second,
-                                snap_near: true,
-                            },
-                    } => model_of(step.doc(), *id)
-                        .ok()
-                        .and_then(|m| m.solid_run(*op, first, second, true).ok())
-                        .map(|o| o.snapped),
-                    _ => snapped,
-                };
+                let notes_before = step.notes().len();
                 if let Err(e) = step.run(&cmd) {
                     failure = Some(refusal(&cmd, &e, index));
                     return Err(e);
+                }
+                // The vertices that a snap moved (MOD-19) are in the notes of the command.
+                if matches!(
+                    &cmd,
+                    Command::EditSurface {
+                        edit: Edit::Solid {
+                            snap_near: true,
+                            ..
+                        },
+                        ..
+                    }
+                ) {
+                    snapped = Some(
+                        step.notes()[notes_before..]
+                            .iter()
+                            .filter_map(|n| SnapMove::from_note(n))
+                            .collect(),
+                    );
                 }
             }
             // The work of a batch is bounded by the edges that its edits make, of any kind.

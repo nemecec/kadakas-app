@@ -574,16 +574,18 @@ The edit changes nothing and gives a reason. The core text is English with ids, 
 
 A near-touch is a vertex of one solid that lies off a face plane of the other solid. The distance is more than the plane tolerance (0.0025 mm) and at most the length tolerance (0.01 mm). The tools refuse it. A snap moves the vertex onto the plane. A snap happens only with consent. The code is in `kadakas_core::surface::solid::snap`. The module knows nothing of the operations. It works on a copy that holds the two solids.
 
+**Limit of the solid tools.** They do not cut overlapping faces of two solids in one plane. Examples are a post on a slab and a box with a side flush with a wall. The snap ends in `snap_move_refused` or `snap_still_refused` there. The same contact at exact distance is refused too. This is a limit of MOD-09, not of the snap. The backlog row is MOD-20. The snap works where the cut works, for example a corner that touches a face.
+
 **Consent.** `Edit::Solid` has the field `snap_near` (default false). The agent API sets it with the parameter `snap_near` of `mesh.solid`, also in `mesh.batch`. The modeler sets it with the button "Snap and retry" (in Estonian "Tõmba ja proovi uuesti") on the status line. Nothing moves without one of these.
 
-**The refusal that offers the snap.** Without consent the tool tries the snap on a copy of the model. If the operation then works, the refusal is `SolidError::NearTouch`. Its text is the old text plus the number of vertices, the largest move and the flag. The API id is `near_touch_snap_available`. Its data lists each vertex with `vertex`, `faces`, `from`, `to` and `distance`. It also names the flag in `flag`. If the snap does not resolve the refusal, the old refusal (`solid_cut`) stays. Nothing changes in both cases.
+**The refusal that offers the snap.** Without consent the tool tries the snap on a copy of the model. If the operation then works, the refusal is `SolidError::NearTouch`. Its text is the old text plus the number of vertices, the largest move and the flag. The API id is `near_touch_snap_available`. Its data lists each vertex with `vertex`, `faces`, `from`, `to` and `distance_mm`. It also has `max_distance_mm` and names the flag in `flag`. A refusal that a snap resolves no longer has the id `solid_cut`. If the snap does not resolve the refusal, the old refusal (`solid_cut`) stays. Nothing changes in both cases.
 
 **What the snap does.**
 
 1. It runs only after a cut was refused for a near-touch. A model without a near-touch gives the same result with and without the flag.
 2. `find` lists the vertices of each solid that are near a face of the other. The foot of the vertex on the plane lies in the face or near its border. Or an edge of the vertex crosses the plane inside the face. Near means within the length tolerance.
-3. Each vertex goes onto the plane along the normal of the face. Faces in one plane count as one plane.
-4. The move is the move of the model (`TransformVertices`) on the copy of the two solids. A face that is not flat after the move is cut into triangles with soft edges, as for Move. One rule is relaxed. A face can end over another face in one plane, because the cut resolves it.
+3. Each vertex goes onto the plane along the normal of the face. Faces in one plane count as one plane. A vertex stays if the move takes it off the plane of another face by more than the plane tolerance.
+4. The move is the move of the model (`TransformVertices`) on the copy of the two solids. A face that is not flat after the move is cut into triangles with soft edges, as for Move. The move keeps all rules of the model. A face that ends over another face in one plane is refused.
 5. The cut and the other steps run on the snapped copy. The volume checks use the volumes of the snapped solids.
 6. The result replaces the two solids. The move and the operation are one edit, so they are one undo step. Undo gives the vertex back at its old place.
 
@@ -595,17 +597,16 @@ A near-touch is a vertex of one solid that lies off a face plane of the other so
 | `snap_degenerate_face` | A face gets an edge shorter than the length tolerance or an area close to zero. |
 | `snap_move_refused` | The model refuses the move, or the vertex lands on other geometry and welds. |
 | `snap_breaks_solid` | A solid is not closed after the move. |
-| `snap_new_near_touch` | A vertex stays near the plane of another face that is in another plane. |
+| `snap_new_near_touch` | A vertex stays near another plane, or the move takes it off a plane it is on. |
 | `snap_still_refused` | The snap worked, but the operation is refused for another reason. The text gives it. |
 
-**Report.** Each moved vertex is a note: `snapped vertex 36 from (612.2729, 1000.0058, 718.1627) mm onto the plane of face 25: moved 0.0058 mm`. The positions are in the coordinates of the surface model. The API answer also has `snapped`, a list with `vertex`, `faces`, `from`, `to` and `distance`. The modeler shows the number of vertices and the largest move in the status line. `SurfaceModel::solid_run` gives the same as `SolidOutcome`.
+**Report.** Each moved vertex is a note: `snapped vertex 36 from (612.2729, 1000.0058, 718.1627) mm onto the plane of face 25: moved 0.0058 mm`. The positions are in the coordinates of the surface model. The API answer also has `snapped`. It is read from the notes, so the numbers have four decimals. Each entry has `vertex`, `faces`, `from`, `to` and `distance_mm`. The modeler shows the number of vertices and the largest move in the status line. `SurfaceModel::solid_run` gives the same as `SolidOutcome`.
 
 **Limits.**
 
 - A vertex is moved only when it is within the length tolerance (0.01 mm) of the plane. No tolerance changes.
-- A vertex near the planes of two faces that are not one plane is not moved. This is a corner near an edge of the other solid.
-- The cut that follows is the normal cut. A face that lies inside a coplanar face of the other solid, without crossing its border, is not cut. The reason names the unsolved faces of a plane. The same contact at exact distance gives the same reason. The result is `snap_still_refused`.
-- A refusal costs one more cut for the test of the snap. The API with `snap_near` runs the operation once more on a copy to list the moved vertices. This is not measured.
+- A vertex near the planes of two faces that are not one plane is not moved. This is a corner near an edge of the other solid. The model welds vertices closer than 0.01 mm to an edge, so such a vertex is rare.
+- A refusal that a snap resolves costs one more cut on the snapped copy. The test runs the cut and the checks of the cut, not the checks of the result in the model. The API reads the moved vertices from the notes and runs nothing twice. The times are in `docs/mesh-api.md`. A refusal with the test of the snap takes about half the time of the operation.
 - Like the other solid tools, the edit is not replayed for collaboration.
 
 **Known limit.** After split and trim the pieces share vertices and edges with the other pieces. A later solid operation on one of them is refused as stuck to other geometry. Make Group on a piece gives it a model of its own. The solid tools do not yet work across models, so this is only a way to keep the piece apart. A tool that unsticks the pieces is not done.
