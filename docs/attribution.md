@@ -200,6 +200,18 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | buildingSMART Certification-datasets: Simple-Scene and ISO Reference View IFC files (commit 80d976a9, fetched at run time into tests/data/ifc-public/, not in the repository, not redistributed) | `ext:bsi-certification-datasets` | buildingSMART International Ltd. | CC-BY-4.0 | https://github.com/buildingSMART/Certification-datasets | test |
 | buildingSMART community Sample-Test-Files: ISO Spec archive, IFC 4.3 RC TIN and georeferencing scenarios, Bentley NURBS samples (commit 7ddf57a2, fetched at run time into tests/data/ifc-public/, not in the repository, not redistributed) | `ext:bsi-community-sample-test-files` | the authors named in each folder (12d Solutions, Bentley Systems, buildingSMART International Ltd. and others); (C) original authors | CC-BY-4.0 | https://github.com/buildingsmart-community/Community-Sample-Test-Files | test |
 | Public IFC corpus list and SHA-256 hashes | `crates/kadakas-ifc/tests/fixtures/ifc_public_*.json` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Estonian Land Board address search (inaadress gazetteer), fetched at run time by examples/demo-address | `ext:maaruum-address-search` | Maa- ja Ruumiamet (Republic of Estonia Land and Spatial Development Board) | LicenseRef-Maaruum-Open-Data | https://geoportaal.maaruum.ee/opendata-licence | test |
+| Estonian Land Board WMS maps (orthophoto of10000, base map MA-ALUS), fetched at run time by examples/demo-address | `ext:maaruum-wms` | Maa- ja Ruumiamet (Republic of Estonia Land and Spatial Development Board) | LicenseRef-Maaruum-Open-Data | https://geoportaal.maaruum.ee/opendata-licence | test |
+| Estonian Building Register (EHR) open API, fetched at run time by examples/demo-address (no licence text found) | `ext:ehr-open-api` | Republic of Estonia, Building Register (EHR) | LicenseRef-EHR-Open-API | https://livekluster.ehr.ee | test |
+| Address demo script, its synthetic fixtures and tests | `examples/demo-address/**` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+
+## Estonian public data (address demo)
+
+The script `examples/demo-address` fetches public data at run time. It stores nothing of it in the repository.
+
+- Maa- ja Ruumiamet (Republic of Estonia Land and Spatial Development Board): address search and WMS maps. The open data licence of 01.01.2025 is at https://geoportaal.maaruum.ee/opendata-licence. It allows free use, derivatives, combination and redistribution, also for commercial use. The licensee names the licensor, the title and the age of the data, and attaches the licence or its address when it passes the data on. The data comes "as is" with no warranty. The Land Board metadata calls the licence the equivalent of CC BY 4.0. We list it as `LicenseRef-Maaruum-Open-Data`, because the text is the Land Board text and not the Creative Commons text. The script prints the source line in this form and writes it into the report object of the model.
+- Ehitisregister (EHR, building register): open API at https://livekluster.ehr.ee. We found no licence text for this API on ehr.ee or in the documents that we could read. We list it as `LicenseRef-EHR-Open-API`. The script names the source in every model. The data describes real buildings of real people. The repository holds only invented test data, and a person who runs the script keeps the fetched cache private.
+- The text of both entries is also in `docs/notices-extra.txt`, so it ships in the notices (Help > About Kadakas > Licenses).
 
 ## Keep this page current
 

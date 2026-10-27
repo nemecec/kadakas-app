@@ -11,3 +11,6 @@ __pycache__/
 /tests/data/dxf-public/
 /tests/data/step-public/
 /tests/data/ifc-public/
+
+# Address demo: real data fetched by examples/demo-address stays local
+examples/demo-address/.cache/

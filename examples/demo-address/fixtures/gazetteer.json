@@ -1,0 +1,35 @@
+{
+ "host": "synthetic",
+ "addresses": [
+  {
+   "pikkaadress": "Näidismaakond, Näidisvald, Kõrvaküla, Näidistee lõik 1",
+   "taisaadress": "Näidismaakond, Näidisvald, Kõrvaküla, Näidistee lõik 1",
+   "liik": "4",
+   "tunnus": "00000:001:0001",
+   "viitepunkt_x": "580100.00",
+   "viitepunkt_y": "6480100.00",
+   "viitepunkt_l": "25.000000",
+   "viitepunkt_b": "58.500000"
+  },
+  {
+   "pikkaadress": "Näidismaakond, Näidisvald, Kõrvaküla, Näidistee 1",
+   "taisaadress": "Näidismaakond, Näidisvald, Kõrvaküla, Näidistee 1",
+   "liik": "E",
+   "tunnus": "000000002",
+   "viitepunkt_x": "580100.00",
+   "viitepunkt_y": "6480100.00",
+   "viitepunkt_l": "25.000000",
+   "viitepunkt_b": "58.500000"
+  },
+  {
+   "pikkaadress": "Näidismaakond, Näidislinn, Näidislinn, Näidistänav 1",
+   "taisaadress": "Näidismaakond, Näidislinn, Näidislinn, Näidistänav 1",
+   "liik": "E",
+   "tunnus": "000000001",
+   "viitepunkt_x": "580006.00",
+   "viitepunkt_y": "6480005.00",
+   "viitepunkt_l": "25.000000",
+   "viitepunkt_b": "58.500000"
+  }
+ ]
+}

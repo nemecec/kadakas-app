@@ -15,3 +15,5 @@ Ubuntu-font-1.0
 Bitstream-Vera
 LicenseRef-EPSG-Terms
 LLVM-exception exception
+LicenseRef-Maaruum-Open-Data test-only
+LicenseRef-EHR-Open-API test-only
