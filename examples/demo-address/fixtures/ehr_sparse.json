@@ -1,0 +1,22 @@
+{
+ "ehitis": {
+  "ehitiseKujud": {
+   "ruumikuju": []
+  },
+  "ehitisePohiandmed": {
+   "korgus": null,
+   "maxKorrusteArv": null,
+   "pikkus": "9.0",
+   "laius": "7.0"
+  },
+  "ehitiseAndmed": {
+   "ehrKood": "000000002",
+   "nimetus": null,
+   "kaosIdTxt": null,
+   "taisaadress": "Näidismaakond, Näidisvald, Näidisküla, Näidistee 1",
+   "esmaneKasutus": null
+  },
+  "ehitiseKatastriyksused": null,
+  "ehitiseTehnilisedNaitajad": null
+ }
+}

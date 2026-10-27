@@ -1,0 +1,91 @@
+{
+ "ehitis": {
+  "ehitiseKujud": {
+   "ruumikuju": [
+    {
+     "nahtus": "HOONE",
+     "pindala": "96.0",
+     "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+       [
+        [
+         580000.0,
+         6480000.0
+        ],
+        [
+         580012.0,
+         6480000.0
+        ],
+        [
+         580012.0,
+         6480006.0
+        ],
+        [
+         580006.0,
+         6480006.0
+        ],
+        [
+         580006.0,
+         6480010.0
+        ],
+        [
+         580000.0,
+         6480010.0
+        ],
+        [
+         580000.0,
+         6480000.0
+        ]
+       ]
+      ]
+     },
+     "tyhistatud_kp": null
+    }
+   ]
+  },
+  "ehitisePohiandmed": {
+   "korgus": "6.5",
+   "maxKorrusteArv": "2",
+   "maaalusteKorrusteArv": "0",
+   "ehitisalunePind": "96.0",
+   "pikkus": "12.0",
+   "laius": "10.0",
+   "kavKasutusKp": "1985-06-01T00:00:00.000"
+  },
+  "ehitiseAndmed": {
+   "ehrKood": "000000001",
+   "nimetus": "Näidiselamu",
+   "kaosIdTxt": "Üksikelamu",
+   "taisaadress": "Näidismaakond, Näidislinn, Näidistänav 1",
+   "esmaneKasutus": "1986-01-01"
+  },
+  "ehitiseKatastriyksused": {
+   "ehitiseKatastriyksus": [
+    {
+     "katastritunnus": "00000:000:0001"
+    }
+   ]
+  },
+  "ehitiseTehnilisedNaitajad": {
+   "tehnilineNaitaja": [
+    {
+     "klKood": "KONS_VUND",
+     "nimetus": "lintvundament"
+    },
+    {
+     "klKood": "KONS_KKONSTR",
+     "nimetus": "tellis"
+    },
+    {
+     "klKood": "KONS_KATUS",
+     "nimetus": "plekk"
+    },
+    {
+     "klKood": "KONS_VSEIN",
+     "nimetus": "tellis"
+    }
+   ]
+  }
+ }
+}

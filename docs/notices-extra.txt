@@ -547,3 +547,19 @@ AutoCAD, DWG and DXF are trademarks of Autodesk, Inc. We name these products onl
 file formats that Kadakas reads or writes, to compare workflows, or to say what a workspace profile
 is like (the built-in "AutoCAD-like" profile). Kadakas is not affiliated with their owners. All
 other names belong to their owners.
+
+--------------------------------------------------------------------------------
+Estonian public data used by the address demo (examples/demo-address)
+--------------------------------------------------------------------------------
+Used by: the example script examples/demo-address, which a user runs on purpose. The data is fetched
+at run time and is not part of the repository or of the installers.
+Maa- ja Ruumiamet (Republic of Estonia Land and Spatial Development Board), open data licence
+of 01.01.2025, https://geoportaal.maaruum.ee/opendata-licence. Used: the address search (inaadress),
+the WMS maps (orthophoto, base map). The licence lets the licensee use the data free of charge, make
+derivatives, combine it with other data and redistribute it, for any purpose. The licensee must name
+the licensor, the title of the data and the age of the data, and must attach the licence or its
+address when it passes the data on. The data is licensed "as is", with no warranty. The Estonian
+metadata of the Land Board calls it the equivalent of Creative Commons BY 4.0.
+Ehitisregister (EHR, building register), https://livekluster.ehr.ee. Used: the open API for building
+data (footprint, height, floors). We found no licence text for this open API. The script names the
+source in every model it makes. Do not publish data of private buildings that the script fetched.
