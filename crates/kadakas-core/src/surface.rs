@@ -406,7 +406,7 @@ pub enum SurfaceError {
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SurfaceModel {
     /// An optional name.
     pub name: String,
@@ -436,6 +436,44 @@ pub struct SurfaceModel {
     log: Vec<sync::Entry>,
     /// Fields of the saved model that this version does not know. They are written back.
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Two models are equal when their content is. The notes of a load are not content (a document
+/// leaves its own load notes out of its equality, too), so a model that was parsed from text is
+/// equal to the one it was written from.
+impl PartialEq for SurfaceModel {
+    fn eq(&self, o: &SurfaceModel) -> bool {
+        // Every field is named, so a new field cannot be forgotten.
+        let SurfaceModel {
+            name,
+            transform,
+            vertices,
+            edges,
+            faces,
+            next_id,
+            edge_attrs,
+            curves,
+            analytic,
+            analytic_raw,
+            load_notes: _,
+            rev,
+            log,
+            extra,
+        } = self;
+        *name == o.name
+            && *transform == o.transform
+            && *vertices == o.vertices
+            && *edges == o.edges
+            && *faces == o.faces
+            && *next_id == o.next_id
+            && *edge_attrs == o.edge_attrs
+            && *curves == o.curves
+            && *analytic == o.analytic
+            && *analytic_raw == o.analytic_raw
+            && *rev == o.rev
+            && *log == o.log
+            && *extra == o.extra
+    }
 }
 
 impl Default for SurfaceModel {

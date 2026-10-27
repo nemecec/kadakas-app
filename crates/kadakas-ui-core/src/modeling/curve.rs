@@ -25,10 +25,13 @@ pub struct CurveShape {
     /// `uniform` is set.
     pub center: [f64; 3],
     pub radius: f64,
-    /// False if the placement of the model scales unequally along its axes (a plan remap with a
-    /// height scale). The circle is an ellipse in the drawing then, so the radius and the length
-    /// are not shown.
+    /// False if the placement of the model bends the plane of the circle: its two axes do not
+    /// keep one length and a right angle (a plan remap with a height scale bends a vertical
+    /// circle and leaves a horizontal one). The circle is an ellipse in the drawing then, so the
+    /// radius, the sweep and the length are not shown.
     pub uniform: bool,
+    /// False for a kind of circle that a newer program wrote. Only the kind is shown then.
+    pub known: bool,
     /// The number of edges of the chain.
     pub segments: usize,
     /// For an arc, the angle it sweeps, in degrees.
@@ -43,16 +46,15 @@ pub fn curve_shape(doc: &Document, model: ObjectId, curve: CurveId) -> Option<Cu
     let m = model_of(doc, model)?;
     let a = m.curve_geometry(curve)?;
     let fr = frame_of(doc, model);
-    // A model placed rigidly or scaled the same in all directions keeps true circles. Else the
-    // placement (not an edit of the model, so the core does not see it) bends them.
-    let (x, y, z) = (fr.matrix3.x_axis, fr.matrix3.y_axis, fr.matrix3.z_axis);
-    let scale = fr.matrix3.determinant().abs().cbrt();
-    let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * scale.max(1e-12);
-    let uniform = close(x.length(), y.length())
-        && close(y.length(), z.length())
-        && close(x.dot(y), 0.0)
-        && close(y.dot(z), 0.0)
-        && close(x.dot(z), 0.0);
+    // The placement is not an edit of the model, so the core does not see it. It keeps the circle
+    // true when it maps the two axes of the circle's own plane to vectors of one length at a
+    // right angle (any scale of the axis that is not in the plane does not matter).
+    let axis = a.axis();
+    let side = a.normal().normalize_or_zero().cross(axis);
+    let (ma, ms) = (fr.matrix3 * axis, fr.matrix3 * side);
+    let scale = ma.length();
+    let close = |p: f64, q: f64| (p - q).abs() <= 1e-9 * scale.max(1e-12);
+    let uniform = close(ma.length(), ms.length()) && close(ma.dot(ms) / scale.max(1e-12), 0.0);
     let center = fr.transform_point3(a.center()).to_array();
     Some(CurveShape {
         model,
@@ -61,6 +63,7 @@ pub fn curve_shape(doc: &Document, model: ObjectId, curve: CurveId) -> Option<Cu
         center,
         radius: a.radius * scale,
         uniform,
+        known: kadakas_core::surface::analytic::is_known_kind(&a.kind),
         segments: m.curve_segments(curve)?,
         sweep_deg: a.sweep().map(f64::to_degrees),
         length: m.curve_length(curve)? * scale,

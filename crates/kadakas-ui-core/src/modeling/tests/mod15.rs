@@ -314,43 +314,62 @@ fn an_arc_drawn_on_a_mirrored_model_keeps_its_angles_true_and_says_nothing() {
 }
 
 #[test]
-fn a_model_placed_with_unequal_scales_shows_no_true_radius() {
+fn the_radius_is_true_when_the_placement_keeps_the_plane_of_the_circle() {
     let mut r = circle_rig(12);
     let id = r.model_id();
-    let curve = only_curve(&r);
-    let shape = |r: &Rig| curve_shape(r.ed.doc(), id, curve).unwrap();
-    assert!(shape(&r).uniform);
-    // Equal scales (and a turn) keep true circles.
-    r.ed.execute(&Command::TransformObjects3d {
-        ids: vec![id],
-        matrix: (glam::DAffine3::from_rotation_z(0.6)
-            * glam::DAffine3::from_scale(DVec3::splat(2.0)))
-        .to_cols_array(),
-        copy: false,
-        count: 1,
-    })
+    let horizontal = only_curve(&r);
+    // A vertical circle (in the plane x z) in the same model.
+    let plane = Plane3::through(v(2000.0, 0.0, 0.0), DVec3::Y).unwrap();
+    run_actions(
+        &mut r.ed,
+        &[Action::AddCurve {
+            target: Target::Model(id),
+            points: circle_points(v(2000.0, 0.0, 500.0), &plane, 100.0, 0.0, 10),
+            closed: true,
+            faceted: false,
+            analytic: Some(kadakas_core::surface::Analytic::circle(
+                v(2000.0, 0.0, 500.0),
+                plane.n,
+                plane.u,
+                100.0,
+            )),
+        }],
+        false,
+    )
     .unwrap();
-    let s = shape(&r);
-    assert!(s.uniform);
-    assert!((s.radius - 600.0).abs() < 1e-6, "{}", s.radius);
-    // A scale along one axis of the drawing (a remap of the plan with a height scale) bends the
-    // circle into an ellipse: no true radius.
-    r.ed.execute(&Command::TransformObjects3d {
-        ids: vec![id],
-        matrix: glam::DAffine3::from_scale(DVec3::new(1.0, 1.0, 3.0)).to_cols_array(),
-        copy: false,
-        count: 1,
-    })
-    .unwrap();
-    assert!(!shape(&r).uniform);
-    r.ed.execute(&Command::TransformObjects3d {
-        ids: vec![id],
-        matrix: glam::DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)).to_cols_array(),
-        copy: false,
-        count: 1,
-    })
-    .unwrap();
-    assert!(!shape(&r).uniform);
+    let vertical = only_curve_of_len(&r, 10);
+    let shape = |r: &Rig, c| curve_shape(r.ed.doc(), id, c).unwrap();
+    let place = |r: &mut Rig, a: glam::DAffine3| {
+        r.ed.execute(&Command::TransformObjects3d {
+            ids: vec![id],
+            matrix: a.to_cols_array(),
+            copy: false,
+            count: 1,
+        })
+        .unwrap();
+    };
+    assert!(shape(&r, horizontal).uniform && shape(&r, vertical).uniform);
+    // Equal scales and a turn keep both true.
+    place(
+        &mut r,
+        glam::DAffine3::from_rotation_z(0.6) * glam::DAffine3::from_scale(DVec3::splat(2.0)),
+    );
+    assert!((shape(&r, horizontal).radius - 600.0).abs() < 1e-6);
+    assert!((shape(&r, vertical).radius - 200.0).abs() < 1e-6);
+    // A height scale (a plan remap) keeps the horizontal circle true and bends the vertical one.
+    place(
+        &mut r,
+        glam::DAffine3::from_scale(DVec3::new(1.0, 1.0, 3.0)),
+    );
+    let h = shape(&r, horizontal);
+    assert!(h.uniform && (h.radius - 600.0).abs() < 1e-6, "{h:?}");
+    assert!(!shape(&r, vertical).uniform);
+    // A scale in the plane of the horizontal circle bends it, and not the vertical one in y.
+    place(
+        &mut r,
+        glam::DAffine3::from_scale(DVec3::new(2.0, 1.0, 1.0)),
+    );
+    assert!(!shape(&r, horizontal).uniform);
 }
 
 #[test]
@@ -362,4 +381,24 @@ fn the_note_that_the_chain_is_broken_has_its_own_text() {
     assert_eq!(broken, kadakas_l10n::tr!("uic-curve-note-broken"));
     assert_ne!(broken, off);
     assert_eq!(off, kadakas_l10n::tr!("uic-curve-note-dropped"));
+}
+
+#[test]
+fn a_circle_of_an_unknown_kind_is_known_as_such_and_its_note_has_its_own_text() {
+    let r = circle_rig(12);
+    let id = r.model_id();
+    let curve = only_curve(&r);
+    let mut v = serde_json::to_value(r.ed.doc()).unwrap();
+    v["objects"][0]["shape"]["curve_geometry"][0][1]["kind"] = serde_json::json!("ellipse");
+    let doc = kadakas_core::model::Document::from_slice(&serde_json::to_vec(&v).unwrap()).unwrap();
+    let s = curve_shape(&doc, id, curve).unwrap();
+    assert!(!s.known);
+    assert_eq!(s.kind, "ellipse");
+    let known = curve_shape(r.ed.doc(), id, curve).unwrap();
+    assert!(known.known);
+    // The note of a copy that could not take the description along.
+    let t = messages::localize(
+        "curve 4 lost its circle description: its kind is not known to this program, so it cannot follow the change",
+    );
+    assert_eq!(t, kadakas_l10n::tr!("uic-curve-note-unknown-kind"));
 }

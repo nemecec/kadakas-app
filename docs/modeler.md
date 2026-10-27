@@ -118,7 +118,7 @@ The Circle, Arc and Polygon tools give the curve its exact circle: center, norma
 The field is optional and sits next to the chain of edges. The number of segments is the number of edges. The core is `kadakas_core::surface::analytic`.
 
 **Entity Info.** Select one edge of a curve, or all edges of it. The panel shows the shape (circle, arc or polygon), the true radius and the center in the drawing.
-For an arc it also shows the sweep angle. It shows the circumference of a circle and the length of the chain for an arc or a polygon. In a model that is placed with unequal scales (a remap of the plan with a height scale) the circle is an ellipse in the drawing. Entity Info then says so and shows no radius, sweep or length.
+For an arc it also shows the sweep angle. It shows the circumference of a circle and the length of the chain for an arc or a polygon. A placement of the model bends a circle in some cases (a remap of the plan with a height scale bends a vertical circle and leaves a horizontal one). Entity Info tests the plane of the circle. If the placement keeps the two axes of that plane at one length and a right angle, the radius is true. Else the circle is an ellipse in the drawing, and Entity Info says so and shows no radius, sweep or length. A circle of a kind from a newer program shows its kind only.
 The field Segments takes a number from 3 to 1,000.
 The button Set segments rebuilds the chain on the same circle, in one undo step. The status line says what happened or why it was refused.
 
@@ -132,7 +132,7 @@ The edit is refused, with a reason in the language of the window, in these cases
 - The new edges are shorter than the length tolerance, or the result is an invalid model.
 
 **What the other edits do.** The model keeps one rule: if a curve has the field, all its vertices lie on the circle within the length tolerance.
-A vertex that another edge meets and that lies on a chord between two vertices on the circle is allowed. A vertex with only the two chain edges is never excused, so a fine circle cannot follow its points off the circle. The rule is kept after every edit.
+A vertex that another edge meets and that lies on a chord between two vertices on the circle is allowed. A vertex with only the two chain edges is never excused, so a fine circle does not follow its points off the circle. The rule is kept after every edit.
 
 | Edit | The field |
 |---|---|
@@ -154,11 +154,11 @@ The notes of an edit are told in the language of the window and show in the stat
 The Vectorworks-like app offers it in its snap list too (`snap_geometry` of the plan).
 
 **File.** The model field `curve_geometry` is a list of `[curve id, {description}]`. A model that has it is saved as version 2 (`v`). Other models stay version 1.
-A program from before MOD-15 keeps a model of version 2 as it is and cannot edit it. A file without the field loads as before.
+A program from before MOD-15 keeps a model of version 2 as it is and does not edit it. A file without the field loads as before.
 The load never drops a row without a word. A row that does not fit its chain, or that belongs to a missing curve, is left out and the load notes say so.
 A row of a kind that this version does not know is read only. It is kept as it is and written back while its chain is untouched.
 A row that cannot be read at all is kept the same way. Any change of the chain drops it, with a note.
-A damaged log entry, or one written by another version, is kept and not replayed. The load notes tell the two cases apart.
+A damaged log entry, or one written by another version, is kept and not replayed. The load notes tell the two cases apart and name them on every load, until the entries leave the log of the last 64 edits.
 The API is `mesh.curve_info` and `mesh.set_segments` (`docs/mesh-api.md`).
 
 **Export.** DXF export keeps the mesh of a surface model. A true CIRCLE or ARC entity is a later step, as are STEP and IFC circles.
