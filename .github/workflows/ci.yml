@@ -177,6 +177,7 @@ jobs:
       - run: scripts/tests/test_versions.sh
       - run: .github/scripts/test-find-tested-commit.sh
       - run: .github/scripts/test-fetch-published-record.sh
+      - run: .github/scripts/test-release-assets.sh
   # Numbers in the UI follow the number format of the person (PLAT-26). No build, python only.
   number-format:
     runs-on: ubuntu-latest
