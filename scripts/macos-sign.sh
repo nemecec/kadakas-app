@@ -27,10 +27,12 @@ sign() { codesign --force --sign - --timestamp=none "$@"; }
 
 # Signs every Mach-O file directly in a folder.
 sign_programs() {
-  local f
+  local f kind
   for f in "$1"/*; do
     [ -f "$f" ] || continue
-    if file -b "$f" | grep -q 'Mach-O'; then sign "$f"; fi
+    # Not `file | grep -q`: with pipefail, grep ending early makes the pipe fail now and then.
+    kind="$(file -b "$f")"
+    case "$kind" in *Mach-O*) sign "$f" ;; esac
   done
 }
 
