@@ -14,8 +14,8 @@ use kadakas_core::command::{Command, CommandError};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::resource::ResourceId;
 use kadakas_core::surface::{
-    CurveError, CurveId, EdgeId, Edit, FaceId, IntersectScope, PaintSide, SolidError, SolidOp,
-    SurfaceError, SurfaceModel, VertexId, soften_plan,
+    CurveError, CurveId, EdgeId, Edit, FaceId, IntersectScope, PaintSide, SnapMove, SnapRefusal,
+    SolidError, SolidOp, SurfaceError, SurfaceModel, VertexId, soften_plan,
 };
 
 use super::{create_command, model_of, object_id, typed};
@@ -98,6 +98,7 @@ enum Step {
         op: SolidOp,
         first: Pick,
         second: Pick,
+        snap_near: bool,
     },
 }
 
@@ -130,6 +131,7 @@ impl Step {
                 op,
                 first,
                 second,
+                snap_near,
             } => {
                 let m = model_of(doc, *id)?;
                 let pick = |p: &Pick| -> Result<Vec<FaceId>, RpcError> {
@@ -144,6 +146,7 @@ impl Step {
                         op: *op,
                         first: pick(first)?,
                         second: pick(second)?,
+                        snap_near: *snap_near,
                     },
                 }
             }
@@ -550,6 +553,7 @@ fn plan(s: &Session, op: &str, p: Value) -> Result<Planned, RpcError> {
                 },
                 first: side(q.first, q.first_face, "first")?,
                 second: side(q.second, q.second_face, "second")?,
+                snap_near: q.snap_near.unwrap_or(false),
             });
         }
         "make_group" => {
@@ -933,6 +937,30 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
                 SolidError::ResultOpen(_) => ("solid_result_open", json!({})),
                 SolidError::ResultVolume => ("solid_result_volume", json!({})),
                 SolidError::ResultInvalid(_) => ("solid_result_invalid", json!({})),
+                SolidError::NearTouch { moves, .. } => (
+                    "near_touch_snap_available",
+                    json!({
+                        "vertices": moves,
+                        "flag": "snap_near",
+                        "max_distance_mm": moves.iter().map(|m| m.distance).fold(0.0, f64::max),
+                    }),
+                ),
+                SolidError::SnapRefused(r) => (
+                    r.code(),
+                    match r {
+                        SnapRefusal::Shared { vertex } => json!({"vertex": vertex}),
+                        SnapRefusal::Degenerate { face, .. } => json!({"face": face}),
+                        SnapRefusal::OpensSolid { which, .. } => json!({"operand": which}),
+                        SnapRefusal::NewNearTouch {
+                            vertex,
+                            face,
+                            distance,
+                        } => json!({"vertex": vertex, "face": face, "distance_mm": distance}),
+                        SnapRefusal::MoveRefused { .. } | SnapRefusal::StillRefused { .. } => {
+                            json!({})
+                        }
+                    },
+                ),
             };
             (Validation, id, facts)
         }
@@ -951,6 +979,7 @@ fn run(
     let outcome = s.editor.execute_stepwise(|step| {
         for (i, item) in items.iter().enumerate() {
             let mut before = Snap::of(step.doc(), item);
+            let mut snapped: Option<Vec<SnapMove>> = None;
             for st in &item.steps {
                 let index = batch.then_some(i);
                 let cmd = match st.build(step.doc()) {
@@ -976,6 +1005,24 @@ fn run(
                 {
                     before.considered = soften_plan(m, edges, *angle, *coplanar).len();
                 }
+                // The vertices that a snap moves (MOD-19) are listed in the answer. The operation
+                // runs once on a copy to find them, and then for real.
+                snapped = match &cmd {
+                    Command::EditSurface {
+                        id,
+                        edit:
+                            Edit::Solid {
+                                op,
+                                first,
+                                second,
+                                snap_near: true,
+                            },
+                    } => model_of(step.doc(), *id)
+                        .ok()
+                        .and_then(|m| m.solid_run(*op, first, second, true).ok())
+                        .map(|o| o.snapped),
+                    _ => snapped,
+                };
                 if let Err(e) = step.run(&cmd) {
                     failure = Some(refusal(&cmd, &e, index));
                     return Err(e);
@@ -989,7 +1036,11 @@ fn run(
                     return Err(CommandError::Invalid("too many edges".into()));
                 }
             }
-            results.push(item_json(step.doc(), item, &before));
+            let mut json = item_json(step.doc(), item, &before);
+            if let Some(moved) = snapped {
+                json["snapped"] = json!(moved);
+            }
+            results.push(json);
         }
         Ok(())
     });

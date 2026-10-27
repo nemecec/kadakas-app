@@ -177,6 +177,8 @@ mod tests_pushpull;
 #[cfg(test)]
 mod tests_review;
 #[cfg(test)]
+mod tests_snap;
+#[cfg(test)]
 mod tests_solid;
 #[cfg(test)]
 mod tests_style;
@@ -196,7 +198,10 @@ pub use frommesh::{
 pub use geom::{Plane, on_plane, plane_tolerance_at, tolerance_at};
 pub use part::{Absorber, Selection};
 pub use query::{closest_on_segment, faces_near, ray_faces};
-pub use solid::{OpenEdge, OpenKind, Operand, Shell, ShellState, SolidError, SolidOp, SolidReport};
+pub use solid::{
+    NearTouch, OpenEdge, OpenKind, Operand, SNAP_NOTE_START, Shell, ShellState, SnapMove,
+    SnapRefusal, SolidError, SolidOp, SolidOutcome, SolidReport,
+};
 
 /// The highest version of the saved form of a surface model (the field `v`) that this program
 /// reads. A file with a higher number is from a newer program: it is kept as it is and cannot be

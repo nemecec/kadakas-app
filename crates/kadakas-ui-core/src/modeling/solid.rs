@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 
 use kadakas_core::model::{Document, ObjectId};
-use kadakas_core::surface::{FaceId, ShellState, SolidOp};
+use kadakas_core::surface::{FaceId, ShellState, SolidError, SolidOp, SurfaceError};
 use kadakas_l10n::tr;
 
 use super::exec::Action;
@@ -43,6 +43,9 @@ pub enum Problem {
     Count(usize),
     /// The core refused the operation; the text is in the language of the window.
     Refused(String),
+    /// The core refused the operation because of a near-touch (MOD-19), and a snap would resolve
+    /// it. The text is in the language of the window. The window offers "Snap and retry".
+    NearTouch(String),
 }
 
 impl Problem {
@@ -52,7 +55,7 @@ impl Problem {
             Problem::NoSelection => tr!("uic-solid-need-selection"),
             Problem::Models => tr!("uic-solid-one-model"),
             Problem::Count(n) => tr!("uic-solid-need-two", found = *n),
-            Problem::Refused(t) => t.clone(),
+            Problem::Refused(t) | Problem::NearTouch(t) => t.clone(),
         }
     }
 }
@@ -116,12 +119,29 @@ fn cubic_metres(mm3: f64) -> String {
 /// What an operation would do, in the language of the window, or why it cannot. The volumes come
 /// from the operation itself, run on a copy.
 pub fn preview(doc: &Document, ops: &Operands, op: SolidOp) -> Result<String, Problem> {
+    preview_with(doc, ops, op, false)
+}
+
+/// Like [`preview`]. With `snap_near` (MOD-19) a near-touch is snapped on the copy, and the text
+/// says how many vertices were moved and how far.
+pub fn preview_with(
+    doc: &Document,
+    ops: &Operands,
+    op: SolidOp,
+    snap_near: bool,
+) -> Result<String, Problem> {
     let m = model_of(doc, ops.model).ok_or(Problem::NoSelection)?;
-    let v = m
-        .solid_preview(op, &ops.first, &ops.second)
-        .map_err(|e| Problem::Refused(localize_error(&e)))?;
+    let run = m
+        .solid_run(op, &ops.first, &ops.second, snap_near)
+        .map_err(|e| match &e {
+            SurfaceError::Solid(SolidError::NearTouch { .. }) => {
+                Problem::NearTouch(localize_error(&e))
+            }
+            _ => Problem::Refused(localize_error(&e)),
+        })?;
+    let v = run.volumes;
     let vol = |i: usize| cubic_metres(v[i]);
-    Ok(match op {
+    let done = match op {
         SolidOp::Union => tr!("uic-solid-done-union", volume = vol(0)),
         SolidOp::Subtract => tr!("uic-solid-done-subtract", volume = vol(0)),
         SolidOp::Intersect => tr!("uic-solid-done-intersect", volume = vol(0)),
@@ -132,7 +152,19 @@ pub fn preview(doc: &Document, ops: &Operands, op: SolidOp) -> Result<String, Pr
             common = vol(1),
             second = vol(2)
         ),
-    })
+    };
+    if run.snapped.is_empty() {
+        return Ok(done);
+    }
+    Ok(tr!(
+        "uic-solid-snapped",
+        count = run.snapped.len(),
+        distance = kadakas_units::num(
+            run.snapped.iter().map(|m| m.distance).fold(0.0, f64::max),
+            4
+        ),
+        done = done
+    ))
 }
 
 /// The preview of an operation on the selection: the text for the status line, or why it cannot
@@ -175,18 +207,36 @@ pub fn out_with(
         Some(r) => r?,
         None => preview(doc, &ops, op)?,
     };
-    Ok(Out {
+    Ok(step(ops, op, message, false))
+}
+
+/// The step of "Snap and retry" (MOD-19): the operation with the snap allowed, as one edit, so one
+/// undo step together with the move of the vertices. The message says what was moved.
+pub fn out_snapped(
+    doc: &Document,
+    sub: &SubSelection,
+    swap: bool,
+    op: SolidOp,
+) -> Result<Out, Problem> {
+    let ops = operands(doc, sub, swap)?;
+    let message = preview_with(doc, &ops, op, true)?;
+    Ok(step(ops, op, message, true))
+}
+
+fn step(ops: Operands, op: SolidOp, message: String, snap_near: bool) -> Out {
+    Out {
         actions: vec![Action::Edit {
             model: ops.model,
             edit: kadakas_core::surface::Edit::Solid {
                 op,
                 first: ops.first,
                 second: ops.second,
+                snap_near,
             },
         }],
         message: Some(message),
         ..Out::default()
-    })
+    }
 }
 
 /// The result of Check Solid.

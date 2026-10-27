@@ -240,6 +240,7 @@ fn a_refusal_is_in_the_language_of_the_window_without_ids() {
         op: SolidOp::Union,
         first: a.iter().copied().filter(|f| *f != a[4]).collect(),
         second: b.clone(),
+        snap_near: false,
     };
     let e = ed
         .execute(&Command::EditSurface { id, edit: ops })
@@ -298,4 +299,186 @@ fn check_solid_says_closed_or_selects_the_open_edges() {
                 .starts_with("Kõik ei ole suletud")
         );
     });
+}
+
+// ---- snap near-touches with consent (MOD-19) -------------------------------------------------
+
+/// The box `[0, 1000]^3` and a turned, tilted box whose corner lies 0.0058 mm off the plane
+/// `y = 1000`, inside its face: every solid operation is refused.
+fn near_touch() -> (Editor, ObjectId, Vec<FaceId>, Vec<FaceId>) {
+    let mut ed = Editor::with_sequential_ids();
+    let id = add_model(&mut ed);
+    edit(
+        &mut ed,
+        id,
+        Edit::AddEdges {
+            edges: cuboid([0.0; 3], [1000.0; 3]),
+        },
+    );
+    let (angle, tilt, d): (f64, f64, P) = (
+        1.539_623_148_363_857_6,
+        0.394_573_062_789_783_6,
+        [200.0, 796.195_805_697_005_2, 200.0],
+    );
+    let (sin, cos) = angle.sin_cos();
+    let (st, ct) = tilt.sin_cos();
+    let corners: Vec<P> = (0..8usize)
+        .map(|i| {
+            let p = |bit: usize| if i & bit == 0 { -400.0 } else { 400.0 };
+            let (x, y, z) = (p(1), p(2), p(4));
+            let (zx, zy) = (x * cos - y * sin, x * sin + y * cos);
+            let (ty, tz) = (zy * ct - z * st, zy * st + z * ct);
+            [zx + d[0], ty + d[1], tz + d[2]]
+        })
+        .collect();
+    let mut edges = Vec::new();
+    for i in 0..8usize {
+        for bit in [1usize, 2, 4] {
+            if i & bit == 0 {
+                edges.push([corners[i], corners[i | bit]]);
+            }
+        }
+    }
+    edit(&mut ed, id, Edit::AddEdges { edges });
+    let inward: Vec<FaceId> = model(&ed, id)
+        .solid_report()
+        .shells
+        .iter()
+        .filter(|s| s.state == ShellState::Inverted)
+        .flat_map(|s| s.faces.clone())
+        .collect();
+    edit(&mut ed, id, Edit::ReverseFaces { faces: inward });
+    let r = model(&ed, id).solid_report();
+    let s: Vec<_> = r.solids().collect();
+    assert_eq!(s.len(), 2);
+    let (a, b) = (s[0].faces.clone(), s[1].faces.clone());
+    (ed, id, a, b)
+}
+
+#[test]
+fn a_near_touch_is_a_refusal_that_offers_the_snap_in_two_languages() {
+    let (ed, id, a, b) = near_touch();
+    let sel = select(id, &[a[0], b[0]]);
+    for lang in ["en-US", "et"] {
+        with_language(lang, || {
+            let p = solid::preview_result(ed.doc(), &sel, false, SolidOp::Union).unwrap_err();
+            let Problem::NearTouch(text) = &p else {
+                panic!("{lang}: {p:?}");
+            };
+            assert_eq!(&p.text(), text);
+            assert_eq!(
+                text,
+                &tr!(
+                    "uic-solid-refused-near-touch",
+                    count = 1,
+                    distance = "0.0058"
+                )
+            );
+            assert!(text.contains("0.0058"), "{text}");
+            // No ids in the text.
+            assert!(!text.contains("vertex 3"), "{text}");
+            // The text of the hint is the same.
+            assert_eq!(
+                &solid::preview_text(ed.doc(), &sel, false, SolidOp::Union),
+                text
+            );
+        });
+    }
+    // The two languages say it differently.
+    let en = with_language("en-US", || {
+        solid::preview_text(ed.doc(), &sel, false, SolidOp::Union)
+    });
+    let et = with_language("et", || {
+        solid::preview_text(ed.doc(), &sel, false, SolidOp::Union)
+    });
+    assert_ne!(en, et);
+}
+
+#[test]
+fn snap_and_retry_is_one_edit_and_the_message_says_what_moved() {
+    let (mut ed, id, a, b) = near_touch();
+    let sel = select(id, &[a[0], b[0]]);
+    let before = model(&ed, id).clone();
+    let depth = ed.undo_depth();
+    for op in SolidOp::ALL {
+        let out = solid::out_snapped(ed.doc(), &sel, false, op).unwrap();
+        assert_eq!(out.actions.len(), 1);
+        let msg = out.message.clone().unwrap();
+        assert!(
+            msg.starts_with("Snapped one vertex by 0.0058 mm at most."),
+            "{msg}"
+        );
+        // The plain step is refused, the snapped one works.
+        assert!(matches!(
+            solid::out(ed.doc(), &sel, false, op),
+            Err(Problem::NearTouch(_))
+        ));
+        let before_run = model(&ed, id).clone();
+        run_actions(&mut ed, &out.actions, false).unwrap();
+        assert_eq!(ed.undo_depth(), depth + 1, "{op}: one undo step");
+        assert!(model(&ed, id).solid_report().is_closed(), "{op}");
+        assert!(ed.undo());
+        assert_eq!(model(&ed, id), &before_run, "{op}");
+        assert_eq!(model(&ed, id), &before, "{op}");
+    }
+    // In Estonian too.
+    let msg = with_language("et", || {
+        solid::out_snapped(ed.doc(), &sel, false, SolidOp::Union)
+            .unwrap()
+            .message
+            .unwrap()
+    });
+    assert!(msg.starts_with("Tõmmati üks tipp kuni 0.0058 mm."), "{msg}");
+}
+
+#[test]
+fn snap_and_retry_without_a_near_touch_changes_nothing_in_the_message() {
+    let (ed, id, a, b) = two_boxes();
+    let sel = select(id, &[a[0], b[0]]);
+    let plain = solid::out(ed.doc(), &sel, false, SolidOp::Union).unwrap();
+    let snapped = solid::out_snapped(ed.doc(), &sel, false, SolidOp::Union).unwrap();
+    assert_eq!(plain.message, snapped.message);
+    // No selection: the same problem as the plain step.
+    assert_eq!(
+        solid::out_snapped(ed.doc(), &SubSelection::default(), false, SolidOp::Union).unwrap_err(),
+        Problem::NoSelection
+    );
+}
+
+#[test]
+fn a_refused_snap_has_a_text_for_every_reason() {
+    use kadakas_core::surface::{Operand, VertexId};
+    use kadakas_core::surface::{SnapRefusal, SolidError, SurfaceError};
+    let all = [
+        SnapRefusal::Shared {
+            vertex: VertexId(1),
+        },
+        SnapRefusal::Degenerate {
+            face: FaceId(1),
+            reason: "x".into(),
+        },
+        SnapRefusal::MoveRefused { reason: "x".into() },
+        SnapRefusal::OpensSolid {
+            which: Operand::First,
+            reason: "x".into(),
+        },
+        SnapRefusal::NewNearTouch {
+            vertex: VertexId(1),
+            face: FaceId(1),
+            distance: 0.005,
+        },
+        SnapRefusal::StillRefused { reason: "x".into() },
+    ];
+    for lang in ["en-US", "et"] {
+        with_language(lang, || {
+            let mut seen = std::collections::BTreeSet::new();
+            for r in &all {
+                let e = SurfaceError::Solid(SolidError::SnapRefused(r.clone()));
+                let text = super::super::messages::localize_error(&e);
+                assert!(!text.chars().any(|c| c.is_ascii_digit()), "{text}");
+                assert!(!text.contains("{ "), "{text}");
+                assert!(seen.insert(text), "{r}");
+            }
+        });
+    }
 }

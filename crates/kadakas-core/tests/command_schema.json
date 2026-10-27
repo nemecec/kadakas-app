@@ -872,7 +872,7 @@
           "type": "object"
         },
         {
-          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both\nsolids use (two boxes through each other in one plane) may be in both lists. The result\nreplaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,\nsplit along the cut and stuck to `first`. Split makes three solids. An input that is not a\nclosed solid, a limit, or a result that is not a closed solid refuses the edit with a\nreason and changes nothing. See the module `solid`.",
+          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both\nsolids use (two boxes through each other in one plane) may be in both lists. The result\nreplaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,\nsplit along the cut and stuck to `first`. Split makes three solids. An input that is not a\nclosed solid, a limit, or a result that is not a closed solid refuses the edit with a\nreason and changes nothing. See the module `solid`.\n\n`snap_near` (MOD-19, default false) allows a snap: a vertex of one solid that lies off a\nface plane of the other by more than the plane tolerance but not more than the length\ntolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of\nthe face, in the same undo step. Without it the refusal stands.",
           "properties": {
             "action": {
               "const": "solid",
@@ -892,6 +892,9 @@
                 "$ref": "#/$defs/FaceId"
               },
               "type": "array"
+            },
+            "snap_near": {
+              "type": "boolean"
             }
           },
           "required": [

@@ -172,10 +172,17 @@ pub enum Edit {
     /// split along the cut and stuck to `first`. Split makes three solids. An input that is not a
     /// closed solid, a limit, or a result that is not a closed solid refuses the edit with a
     /// reason and changes nothing. See the module `solid`.
+    ///
+    /// `snap_near` (MOD-19, default false) allows a snap: a vertex of one solid that lies off a
+    /// face plane of the other by more than the plane tolerance but not more than the length
+    /// tolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of
+    /// the face, in the same undo step. Without it the refusal stands.
     Solid {
         op: super::SolidOp,
         first: Vec<FaceId>,
         second: Vec<FaceId>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        snap_near: bool,
     },
 }
 
@@ -232,6 +239,22 @@ pub(super) fn run(
     let mut notes = Vec::new();
     run_noted(m, edit, before, &mut notes)?;
     analytic::reconcile(m, before, &mut notes);
+    Ok(notes)
+}
+
+/// Moves vertices by an affine map in a scratch model like `Edit::TransformVertices`, but a face
+/// may end over another one in one plane (the snap of the solid tools, MOD-19: the cut that
+/// follows resolves the overlap). Every other refusal of the move stays. On an error `m` is left
+/// in an unknown state. Not an edit: nothing is recorded.
+pub(super) fn move_vertices(
+    m: &mut SurfaceModel,
+    vertices: &[VertexId],
+    matrix: &[f64; 12],
+) -> Result<Vec<String>, SurfaceError> {
+    let before = m.clone();
+    let mut notes = Vec::new();
+    transform::transform_vertices_with(m, vertices, &[], &[], matrix, &before, &mut notes, true)?;
+    analytic::reconcile(m, &before, &mut notes);
     Ok(notes)
 }
 
@@ -293,7 +316,12 @@ fn run_noted(
             toward,
         } => offset::offset_edges(m, edges, *distance, DVec3::from(*toward)),
         Edit::FollowMe { face, path } => followme::follow_me(m, before, *face, path, notes),
-        Edit::Solid { op, first, second } => super::solid::solid_edit(m, *op, first, second, notes),
+        Edit::Solid {
+            op,
+            first,
+            second,
+            snap_near,
+        } => super::solid::solid_edit(m, *op, first, second, *snap_near, notes),
         Edit::SetEdgeStyle {
             edges,
             soft,

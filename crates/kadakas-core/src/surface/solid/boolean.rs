@@ -5,6 +5,8 @@
 //! 2. **Copy.** A model that holds only the faces of the two solids (the same ids, so the pieces
 //!    can be followed) is cut with Intersect Faces. Every face of a solid that the other one
 //!    crosses is split along the crossing. A crossing too small to be cut is a refusal.
+//!    A crossing that a near-touch refuses (MOD-19) is tried again after a snap, see `snap` and
+//!    `run`: with `snap_near` the snapped copy is used, else the refusal names the snap.
 //! 3. **Locate.** Each piece lies wholly in, outside or on the surface of the other solid, because
 //!    no face crosses the surface any more. A few points of the piece (the centroids of its
 //!    triangles) are located by a ray cast; if they disagree, the piece was not cut and the
@@ -37,6 +39,7 @@ use super::super::{
 };
 use super::locate::{Soup, Where, samples};
 use super::shell::{ShellState, crossings_of, measure, state_with};
+use super::snap::{self, SnapMove, SnapRefusal};
 use super::{Operand, SolidError, SolidOp};
 
 /// The attribute that tells a piece which solid it came from, in the copy only.
@@ -49,6 +52,8 @@ fn cut(why: impl Into<String>) -> SurfaceError {
 /// What an operation made: the volumes of its solids in mm³ (see `SurfaceModel::solid_preview`).
 pub(super) struct Outcome {
     pub volumes: Vec<f64>,
+    /// The vertices that a snap moved (MOD-19), if one was asked for and needed.
+    pub snapped: Vec<SnapMove>,
 }
 
 /// The edit `Edit::Solid`.
@@ -57,9 +62,10 @@ pub(in crate::surface) fn solid_edit(
     op: SolidOp,
     first: &[FaceId],
     second: &[FaceId],
+    snap_near: bool,
     notes: &mut Vec<String>,
 ) -> Result<(), SurfaceError> {
-    run(m, op, first, second, notes).map(|_| ())
+    run(m, op, first, second, snap_near, notes).map(|_| ())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -445,10 +451,13 @@ fn tidy(
 /// edge is a vertex that lies off the plane of the face by more than the plane tolerance but not
 /// by more than the length tolerance, the crossing piece is too short to draw and the vertex is
 /// too far off to count as on the face: the text says so and how to move the solid.
-fn not_cut_reason(sub: &SurfaceModel, e: EdgeId, f: FaceId, at: &str) -> String {
+fn not_cut_reason(sub: &SurfaceModel, e: EdgeId, f: FaceId, at: &str) -> (String, bool) {
     let (Some(edge), Some(face)) = (sub.edges.get(&e), sub.faces.get(&f)) else {
-        return format!(
-            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+        return (
+            format!(
+                "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+            ),
+            false,
         );
     };
     let near = edge
@@ -460,22 +469,64 @@ fn not_cut_reason(sub: &SurfaceModel, e: EdgeId, f: FaceId, at: &str) -> String 
     match near {
         Some((v, d)) => {
             let tol = geom::tolerance_at(geom::size(sub.vertices[&v]));
-            format!(
-                "vertex {v} lies {d:.4} mm from the plane of face {f} at {at}: that is too far to count as on the face and too close to cut it. Move one solid by at least {tol} mm along the normal of the face, or set the vertex exactly on the face"
+            (
+                format!(
+                    "vertex {v} lies {d:.4} mm from the plane of face {f} at {at}: that is too far to count as on the face and too close to cut it. Move one solid by at least {tol} mm along the normal of the face, or set the vertex exactly on the face"
+                ),
+                true,
             )
         }
-        None => format!(
-            "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+        None => (
+            format!(
+                "edge {e} still passes through face {f} at {at}: the crossing is too small to cut"
+            ),
+            false,
         ),
     }
 }
 
-/// Runs an operation on `m` (see the module documentation).
+/// Why `finish` stopped.
+enum Fail {
+    /// The edit is refused for this reason.
+    Refused(SurfaceError),
+    /// A near-touch refused the cut (MOD-19): the reason, and a snap can be tried.
+    NearTouch(String),
+}
+
+impl Fail {
+    fn into_error(self) -> SurfaceError {
+        match self {
+            Fail::Refused(e) => e,
+            Fail::NearTouch(why) => cut(why),
+        }
+    }
+}
+
+impl From<SurfaceError> for Fail {
+    fn from(e: SurfaceError) -> Fail {
+        Fail::Refused(e)
+    }
+}
+
+/// What step 1 found out about the two solids of the model.
+struct Inputs {
+    a: BTreeSet<FaceId>,
+    b: BTreeSet<FaceId>,
+    before: super::super::check::Report,
+    topo: Topo,
+    volumes: (f64, f64),
+}
+
+/// Runs an operation on `m` (see the module documentation). With `snap_near` (MOD-19) a cut that
+/// a near-touch refuses is tried again after the vertices went onto the face planes
+/// (module `snap`); without it, a refusal that a snap would resolve says so
+/// ([`SolidError::NearTouch`]) and moves nothing.
 pub(super) fn run(
     m: &mut SurfaceModel,
     op: SolidOp,
     first: &[FaceId],
     second: &[FaceId],
+    snap_near: bool,
     notes: &mut Vec<String>,
 ) -> Result<Outcome, SurfaceError> {
     // 1. Check.
@@ -491,9 +542,123 @@ pub(super) fn run(
     must_be_solid(Operand::First, &sa)?;
     must_be_solid(Operand::Second, &sb)?;
     must_be_free(m, &topo, &a, &b)?;
+    let inputs = Inputs {
+        a,
+        b,
+        before,
+        topo,
+        volumes: (sa.volume, sb.volume),
+    };
+    let sub = copy_of(m, &inputs.topo, &inputs.a, &inputs.b);
+    match finish(m, op, &inputs, sub, inputs.volumes, notes) {
+        Ok(o) => Ok(o),
+        Err(Fail::Refused(e)) => Err(e),
+        Err(Fail::NearTouch(cause)) => try_snap(m, op, &inputs, cause, snap_near, notes),
+    }
+}
 
-    // 2. Copy and cut.
-    let mut sub = copy_of(m, &topo, &a, &b);
+/// A near-touch refused the cut. Moves the vertices onto the face planes in a copy of the two
+/// solids and tries again. With `snap_near` the result is used. Without it, the answer is the
+/// refusal, which says that a snap would work when it does (nothing is moved).
+fn try_snap(
+    m: &mut SurfaceModel,
+    op: SolidOp,
+    inputs: &Inputs,
+    cause: String,
+    snap_near: bool,
+    notes: &mut Vec<String>,
+) -> Result<Outcome, SurfaceError> {
+    let refused = |r: SnapRefusal| {
+        if snap_near {
+            SurfaceError::Solid(SolidError::SnapRefused(r))
+        } else {
+            cut(cause.clone())
+        }
+    };
+    let mut sub = copy_of(m, &inputs.topo, &inputs.a, &inputs.b);
+    let pinned = pinned_vertices(m, &inputs.topo, &inputs.a, &inputs.b);
+    let snapped = snap::snap(&mut sub, &inputs.a, &inputs.b, &pinned).map_err(refused)?;
+    if snapped.moves.is_empty() {
+        return Err(cut(cause));
+    }
+    let volumes = {
+        let topo = Topo::of(&sub);
+        let crossings = crossings_of(&sub.check().warnings);
+        (
+            state_with(&sub, &topo, &snapped.a, &crossings).volume,
+            state_with(&sub, &topo, &snapped.b, &crossings).volume,
+        )
+    };
+    let mut made_notes = snapped.notes.clone();
+    made_notes.extend(snapped.moves.iter().map(SnapMove::note));
+    if snap_near {
+        let mut done = finish(m, op, inputs, sub, volumes, notes).map_err(|f| {
+            SurfaceError::Solid(SolidError::SnapRefused(SnapRefusal::StillRefused {
+                reason: f.into_error().to_string(),
+            }))
+        })?;
+        notes.extend(made_notes);
+        done.snapped = snapped.moves;
+        return Ok(done);
+    }
+    // Not asked for: find out whether the snap would help, on a copy of the model.
+    let mut trial = m.clone();
+    let mut scratch = Vec::new();
+    match finish(&mut trial, op, inputs, sub, volumes, &mut scratch) {
+        Ok(_) => Err(SurfaceError::Solid(SolidError::NearTouch {
+            reason: cause,
+            moves: snapped.moves,
+        })),
+        Err(_) => Err(cut(cause)),
+    }
+}
+
+/// The vertices of the model that faces outside the two solids use.
+fn pinned_vertices(
+    m: &SurfaceModel,
+    topo: &Topo,
+    a: &BTreeSet<FaceId>,
+    b: &BTreeSet<FaceId>,
+) -> BTreeSet<VertexId> {
+    let mut out = BTreeSet::new();
+    for (id, f) in &m.faces {
+        if !a.contains(id) && !b.contains(id) {
+            out.extend(f.loops().flatten().copied());
+        }
+    }
+    // A vertex that an edge outside the solids ends at is pinned too.
+    let own: BTreeSet<VertexId> = a
+        .iter()
+        .chain(b)
+        .flat_map(|f| m.faces[f].loops().flatten().copied())
+        .collect();
+    for v in &own {
+        if topo
+            .edges_at(*v)
+            .any(|e| topo.faces_of(e).all(|f| !a.contains(&f) && !b.contains(&f)))
+        {
+            out.insert(*v);
+        }
+    }
+    out
+}
+
+/// Steps 2 to 7 on `sub`, the copy of the two solids (see the module documentation). `volumes`
+/// are the volumes of the two inputs in `sub`.
+fn finish(
+    m: &mut SurfaceModel,
+    op: SolidOp,
+    inputs: &Inputs,
+    mut sub: SurfaceModel,
+    volumes: (f64, f64),
+    notes: &mut Vec<String>,
+) -> Result<Outcome, Fail> {
+    let Inputs {
+        a, b, before, topo, ..
+    } = inputs;
+    let (va, vb) = volumes;
+
+    // 2. Cut.
     let original = Original::of(&sub);
     match sub.apply(&Edit::IntersectFaces {
         scope: IntersectScope::Model,
@@ -501,19 +666,24 @@ pub(super) fn run(
         edges: Vec::new(),
     }) {
         Ok(()) => {}
-        Err(e @ SurfaceError::Limit { .. }) => return Err(e),
-        Err(e) => return Err(cut(e.to_string())),
+        Err(e @ SurfaceError::Limit { .. }) => return Err(e.into()),
+        Err(e) => return Err(cut(e.to_string()).into()),
     }
     let report = sub.check();
     if let Some(p) = report.problems.first() {
-        return Err(cut(p.to_string()));
+        return Err(cut(p.to_string()).into());
     }
     if let Some(Problem::NotIntersected(e, f, at)) = report
         .warnings
         .iter()
         .find(|p| matches!(p, Problem::NotIntersected(..)))
     {
-        return Err(cut(not_cut_reason(&sub, *e, *f, &at.to_string())));
+        let (why, near) = not_cut_reason(&sub, *e, *f, &at.to_string());
+        return Err(if near {
+            Fail::NearTouch(why)
+        } else {
+            Fail::Refused(cut(why))
+        });
     }
 
     // 3. Locate. A face that both solids use lies on the surface of both, looking the same way.
@@ -596,37 +766,39 @@ pub(super) fn run(
         if set.is_empty() {
             let needed = if op == SolidOp::Split { g == 1 } else { g == 0 };
             if needed {
-                return Err(SurfaceError::Solid(SolidError::NoResult(op)));
+                return Err(SurfaceError::Solid(SolidError::NoResult(op)).into());
             }
             volumes.push(0.0);
             continue;
         }
         let s = state_with(&res, &topo_r, &set, &[]);
         if s.state != ShellState::Solid {
-            return Err(SurfaceError::Solid(SolidError::ResultOpen(
-                match s.open_edges.first() {
+            return Err(
+                SurfaceError::Solid(SolidError::ResultOpen(match s.open_edges.first() {
                     Some(o) => format!("edge {} is open ({})", o.edge, o.kind),
                     None => format!("{:?}", s.state).to_lowercase(),
-                },
-            )));
+                }))
+                .into(),
+            );
         }
         volumes.push(s.volume);
     }
-    expect_volumes(op, sa.volume, sb.volume, common_volume, &volumes)?;
+    expect_volumes(op, va, vb, common_volume, &volumes)?;
 
     // 7. Put in.
-    put_in(m, &topo, &a, &b, res);
+    put_in(m, topo, a, b, res);
     edit::check_limits(m)?;
     if let Some(p) = m.problem() {
-        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p)));
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p)).into());
     }
     let after = m.check();
     if let Some(p) = after.problems.iter().find(|p| !before.problems.contains(p)) {
-        return Err(SurfaceError::Solid(SolidError::ResultInvalid(
-            p.to_string(),
-        )));
+        return Err(SurfaceError::Solid(SolidError::ResultInvalid(p.to_string())).into());
     }
-    Ok(Outcome { volumes })
+    Ok(Outcome {
+        volumes,
+        snapped: Vec::new(),
+    })
 }
 
 /// The volumes of the result must be the exact ones. With `i` the common volume (from the pieces
@@ -782,6 +954,98 @@ mod tests {
             }
         }
         Edit::AddEdges { edges }
+    }
+
+    /// Two crossing boxes as two solids, with the outward faces.
+    fn two_boxes() -> (SurfaceModel, BTreeSet<FaceId>, BTreeSet<FaceId>) {
+        let mut m = SurfaceModel::new();
+        m.apply(&cuboid([0.0; 3], [1000.0; 3])).unwrap();
+        m.apply(&cuboid([500.0; 3], [1500.0; 3])).unwrap();
+        let inward: Vec<FaceId> = m
+            .solid_report()
+            .shells
+            .iter()
+            .filter(|s| s.state == ShellState::Inverted)
+            .flat_map(|s| s.faces.clone())
+            .collect();
+        m.apply(&Edit::ReverseFaces { faces: inward }).unwrap();
+        let r = m.solid_report();
+        let solids: Vec<_> = r.solids().collect();
+        let (a, b) = (
+            solids[0].faces.iter().copied().collect(),
+            solids[1].faces.iter().copied().collect(),
+        );
+        (m, a, b)
+    }
+
+    fn inputs(m: &SurfaceModel, a: &BTreeSet<FaceId>, b: &BTreeSet<FaceId>) -> Inputs {
+        let topo = Topo::of(m);
+        Inputs {
+            a: a.clone(),
+            b: b.clone(),
+            before: m.check(),
+            topo,
+            volumes: (1e9, 1e9),
+        }
+    }
+
+    #[test]
+    fn a_snap_with_nothing_to_snap_gives_the_refusal_back() {
+        // The refusal was for a near-touch, but the solids have none: the refusal stays.
+        let (m, a, b) = two_boxes();
+        let i = inputs(&m, &a, &b);
+        for snap_near in [false, true] {
+            let mut w = m.clone();
+            let mut notes = Vec::new();
+            let e = try_snap(
+                &mut w,
+                SolidOp::Union,
+                &i,
+                "why".into(),
+                snap_near,
+                &mut notes,
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert_eq!(e, SurfaceError::Solid(SolidError::Cut("why".into())));
+            assert_eq!(w, m);
+            assert!(notes.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_vertices_that_other_geometry_uses_are_pinned() {
+        let (mut m, a, b) = two_boxes();
+        let topo = Topo::of(&m);
+        assert!(pinned_vertices(&m, &topo, &a, &b).is_empty());
+        // A loose line from a corner of the first box, and a triangle on another corner.
+        m.apply(&Edit::AddEdges {
+            edges: vec![[[0.0, 0.0, 0.0], [-500.0, -500.0, 0.0]]],
+        })
+        .unwrap();
+        m.apply(&Edit::AddEdges {
+            edges: vec![
+                [[1000.0, 0.0, 1000.0], [1000.0, -500.0, 1000.0]],
+                [[1000.0, -500.0, 1000.0], [1500.0, -500.0, 1000.0]],
+                [[1500.0, -500.0, 1000.0], [1000.0, 0.0, 1000.0]],
+            ],
+        })
+        .unwrap();
+        let topo = Topo::of(&m);
+        let at = |p: DVec3| m.vertices().find(|(_, q)| q.distance(p) < 1e-9).unwrap().0;
+        let pinned = pinned_vertices(&m, &topo, &a, &b);
+        // The corner of the loose line and the corner of the triangle are pinned, and so are the
+        // vertices of the triangle (they are outside the solids).
+        assert!(pinned.contains(&at(DVec3::ZERO)));
+        assert!(pinned.contains(&at(DVec3::new(1000.0, 0.0, 1000.0))));
+        assert!(pinned.contains(&at(DVec3::new(1500.0, -500.0, 1000.0))));
+        // No other vertex of the solids is.
+        let own: BTreeSet<VertexId> = a
+            .iter()
+            .chain(&b)
+            .flat_map(|f| m.faces[f].loops().flatten().copied())
+            .collect();
+        assert_eq!(own.intersection(&pinned).count(), 2);
     }
 
     #[test]

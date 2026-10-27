@@ -47,6 +47,15 @@
 //! model would be passed. It is checked that the result is a valid model and has no problem that the
 //! model did not have before.
 //!
+//! # Snap near-touches (MOD-19)
+//!
+//! A vertex of one solid that lies off a face plane of the other by more than the plane tolerance
+//! but not more than the length tolerance refuses the cut. By default the refusal stands. When the
+//! snap would resolve it, the refusal is [`SolidError::NearTouch`] and names the vertices. With
+//! `snap_near` ([`crate::surface::Edit::Solid`]) the vertices go onto the planes along the face
+//! normals, in a copy of the two solids, and the operation runs on the copy. The move and the
+//! operation are one edit. The module `snap` holds the logic and knows nothing of the operations.
+//!
 //! # Tolerances
 //!
 //! The same as in the module `surface`: points closer than the length tolerance are one point, and
@@ -62,8 +71,10 @@ mod boolean;
 mod locate;
 pub(super) use locate::{closest_on_triangle, ray_hit_distance};
 mod shell;
+pub(super) mod snap;
 
 pub use shell::{OpenEdge, OpenKind, Shell, ShellState, SolidReport};
+pub use snap::{NearTouch, SNAP_NOTE_START, SnapMove, SnapRefusal};
 
 pub(super) use boolean::solid_edit;
 
@@ -112,6 +123,17 @@ impl std::fmt::Display for SolidOp {
     }
 }
 
+/// What a solid operation made (see [`SurfaceModel::solid_run`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SolidOutcome {
+    /// The volumes of the solids it made, in mm³.
+    pub volumes: Vec<f64>,
+    /// The vertices that the snap moved (MOD-19). Empty when nothing was snapped.
+    pub snapped: Vec<SnapMove>,
+    /// The notes of the edit (also the note for each moved vertex).
+    pub notes: Vec<String>,
+}
+
 /// Which of the two inputs of an operation a refusal is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,7 +154,7 @@ impl std::fmt::Display for Operand {
 /// Why a solid operation was refused. The model is unchanged after it. The texts are English, for
 /// agents and logs. The window turns the variant into the language of the UI without ids (see
 /// `kadakas_ui_core::modeling::messages`).
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum SolidError {
     /// "has no faces"
     #[error("the {0} solid has no faces")]
@@ -182,6 +204,21 @@ pub enum SolidError {
     /// The result would give the model a problem that it did not have.
     #[error("the result of the operation would make the model invalid: {0}")]
     ResultInvalid(String),
+    /// A near-touch (MOD-19) refused the cut, and a snap would resolve it. Nothing was moved:
+    /// the person (or the agent) has to agree with `snap_near`. `reason` is the text of the
+    /// refusal, `moves` the vertices that the snap would move.
+    #[error(
+        "{reason}. A snap resolves this (vertices to move: {}, at most {:.4} mm onto the planes of the faces). Repeat the operation with snap_near to allow it",
+        .moves.len(),
+        .moves.iter().map(|m| m.distance).fold(0.0, f64::max)
+    )]
+    NearTouch {
+        reason: String,
+        moves: Vec<SnapMove>,
+    },
+    /// The snap that was asked for (MOD-19) was refused. Nothing was changed.
+    #[error("the snap was refused: {0}")]
+    SnapRefused(SnapRefusal),
 }
 
 impl SurfaceModel {
@@ -225,8 +262,25 @@ impl SurfaceModel {
         first: &[FaceId],
         second: &[FaceId],
     ) -> Result<Vec<f64>, super::SurfaceError> {
+        self.solid_run(op, first, second, false).map(|o| o.volumes)
+    }
+
+    /// Runs an operation on a copy and tells what it made: the volumes (see
+    /// [`SurfaceModel::solid_preview`]), the vertices that a snap moved (MOD-19, only with
+    /// `snap_near`) and the notes. The model is not changed.
+    pub fn solid_run(
+        &self,
+        op: SolidOp,
+        first: &[FaceId],
+        second: &[FaceId],
+        snap_near: bool,
+    ) -> Result<SolidOutcome, super::SurfaceError> {
         let mut work = self.clone();
         let mut notes = Vec::new();
-        boolean::run(&mut work, op, first, second, &mut notes).map(|o| o.volumes)
+        boolean::run(&mut work, op, first, second, snap_near, &mut notes).map(|o| SolidOutcome {
+            volumes: o.volumes,
+            snapped: o.snapped,
+            notes,
+        })
     }
 }

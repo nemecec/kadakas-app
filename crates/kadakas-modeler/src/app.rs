@@ -87,6 +87,9 @@ pub enum Cmd {
     CheckSolid,
     /// Swap the order of the two solids of the solid tools.
     SolidSwap,
+    /// "Snap and retry" (MOD-19): the solid operation again, with the vertices of a near-touch
+    /// snapped onto the face planes, in one undo step.
+    SolidSnap(kadakas_core::surface::SolidOp),
     /// Soften, Smooth or Unsoften the selected edges (MOD-08).
     EdgeStyle(kadakas_ui_core::modeling::EdgeStyle),
     /// Hide the selected objects, or the selected faces and edges (MOD-05).
@@ -231,6 +234,10 @@ pub struct ModelerApp {
     solid_hint: std::cell::RefCell<SolidHints>,
     /// How many times a solid operation was run on a copy to make a preview (for the tests).
     pub solid_runs: std::cell::Cell<usize>,
+    /// A refusal of a solid operation that a snap would resolve (MOD-19): the operation, the key
+    /// of the selection it was refused for and the text on the status line. The status bar shows
+    /// "Snap and retry" while all three still hold.
+    solid_offer: Option<(kadakas_core::surface::SolidOp, SolidKey, String)>,
 }
 
 /// The key of the previews of the solid tools: the revision, the selection (a hash) and the order.
@@ -294,6 +301,7 @@ impl ModelerApp {
             solid_swap: false,
             solid_hint: std::cell::RefCell::default(),
             solid_runs: std::cell::Cell::new(0),
+            solid_offer: None,
         }
     }
 
@@ -710,6 +718,7 @@ impl ModelerApp {
             Cmd::EditSelected => self.edit_selected(),
             Cmd::IntersectFaces(scope) => self.intersect(scope),
             Cmd::Solid(op) => self.solid(op),
+            Cmd::SolidSnap(op) => self.solid_snap(op),
             Cmd::CheckSolid => self.check_solid(),
             Cmd::SolidSwap => {
                 self.solid_swap = !self.solid_swap;
@@ -925,16 +934,28 @@ impl ModelerApp {
         modeling::solid::operands(self.session.editor.doc(), &self.edit.sub, self.solid_swap)
     }
 
+    /// The key of the previews: the revision, the selection and the order.
+    fn solid_key(&self) -> SolidKey {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.edit.sub.hash(&mut h);
+        (self.session.editor.revision(), h.finish(), self.solid_swap)
+    }
+
+    /// The operation whose refusal the status line shows and a snap would resolve (MOD-19), while
+    /// the model, the selection and the order are as they were when it was refused.
+    pub fn solid_snap_offer(&self) -> Option<kadakas_core::surface::SolidOp> {
+        let (op, key, text) = self.solid_offer.as_ref()?;
+        (*key == self.solid_key() && *text == self.status).then_some(*op)
+    }
+
     /// The preview of an operation (what it would do, or why it is refused). It runs the operation
     /// on a copy, once for each revision, selection and order, for each operation.
     fn solid_preview(
         &self,
         op: kadakas_core::surface::SolidOp,
     ) -> Result<String, modeling::solid::Problem> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.edit.sub.hash(&mut h);
-        let key = (self.session.editor.revision(), h.finish(), self.solid_swap);
+        let key = self.solid_key();
         let mut hints = self.solid_hint.borrow_mut();
         if hints.key != Some(key) {
             hints.key = Some(key);
@@ -965,6 +986,7 @@ impl ModelerApp {
     /// A solid operation: one undo step. The status line says what was done, or why not. The
     /// preview that the menu made is used, so the operation does not run twice.
     fn solid(&mut self, op: kadakas_core::surface::SolidOp) {
+        self.solid_offer = None;
         let known = Some(self.solid_preview(op));
         match modeling::solid::out_with(
             self.session.editor.doc(),
@@ -976,6 +998,30 @@ impl ModelerApp {
             Ok(out) => {
                 self.edit.run(&mut self.session, out);
                 // The pieces have new ids: the selection of parts is cleared.
+                self.edit.sub.clear();
+                self.status = self.edit.message.take().unwrap_or_default();
+            }
+            Err(p) => {
+                self.status = p.text();
+                if matches!(p, modeling::solid::Problem::NearTouch(_)) {
+                    self.solid_offer = Some((op, self.solid_key(), self.status.clone()));
+                }
+            }
+        }
+    }
+
+    /// "Snap and retry" (MOD-19): the operation with the snap allowed, as one undo step. The
+    /// status line says how many vertices moved, or why it still does not work.
+    fn solid_snap(&mut self, op: kadakas_core::surface::SolidOp) {
+        self.solid_offer = None;
+        match modeling::solid::out_snapped(
+            self.session.editor.doc(),
+            &self.edit.sub,
+            self.solid_swap,
+            op,
+        ) {
+            Ok(out) => {
+                self.edit.run(&mut self.session, out);
                 self.edit.sub.clear();
                 self.status = self.edit.message.take().unwrap_or_default();
             }
@@ -2038,8 +2084,18 @@ impl ModelerApp {
         } else {
             self.status.clone()
         };
+        let snap_offer = self.solid_snap_offer();
         egui::Panel::bottom("status").show(ui, |ui| {
-            crate::statusbar::show(ui, &status_line, self.tools.active(), &measurement);
+            let snap = crate::statusbar::show(
+                ui,
+                &status_line,
+                self.tools.active(),
+                &measurement,
+                snap_offer.is_some(),
+            );
+            if let (true, Some(op)) = (snap, snap_offer) {
+                cmds.push(Cmd::SolidSnap(op));
+            }
         });
         let mut tag_out: Vec<tags_panel::Outcome> = Vec::new();
         let mut scene_out: Vec<scenes_panel::Action> = Vec::new();
