@@ -651,7 +651,7 @@ fn script_runs_need_a_live_session_and_report_their_output() {
         .as_u64()
         .unwrap();
     let mut status = Value::Null;
-    for _ in 0..1500 {
+    for _ in 0..3000 {
         status = ok(&mut s, "script.status", json!({"run": run}));
         if status["status"] != "running" {
             break;

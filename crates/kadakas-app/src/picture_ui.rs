@@ -396,18 +396,24 @@ mod tests {
         )
     }
 
-    /// Waits until a derivation has finished (a background thread on a desktop).
+    /// Waits until a derivation has finished (a background thread on a desktop). Gives the
+    /// result that was stored, `None` when the derivation failed. The bound is only a guard
+    /// against a derivation that never reports.
     fn wait_for(ctx: &egui::Context, res: &ImageResource) -> Ready {
-        for _ in 0..2000 {
-            if let Some(r) = resolve(ctx, res) {
-                return Some(r);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            // Start the work, if nobody has. The answer is read from the store below, because
+            // `resolve` can answer `None` just before the thread stores a finished picture.
+            let _ = resolve(ctx, res);
+            if let Some(r) = lock(&shared(ctx)).ready.get(&res.sha256) {
+                return r.clone();
             }
-            if lock(&shared(ctx)).ready.contains_key(&res.sha256) {
-                return None;
-            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the derivation did not finish"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        panic!("the derivation did not finish");
     }
 
     #[test]

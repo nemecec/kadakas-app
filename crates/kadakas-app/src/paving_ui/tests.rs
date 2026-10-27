@@ -645,7 +645,8 @@ fn the_check_runs_in_the_background_on_a_copy_and_keeps_its_scope() {
             p.windows(ui.ctx(), s, status)
         });
     };
-    for _ in 0..400 {
+    // The bound is only a guard against a check that never comes back.
+    for _ in 0..12_000 {
         frame(&mut p, &mut s, &mut status);
         if !p.check.running {
             break;

@@ -668,6 +668,32 @@ mod tests {
         assert!(et[2].as_deref().unwrap().starts_with("Joonistatud karbina"));
     }
 
+    /// Waits for something that another process does. The bound is only a guard against a
+    /// process that never does it.
+    #[cfg(unix)]
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !done() {
+            assert!(std::time::Instant::now() < end, "the modeler did not run");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// Starts the modeler. Linux refuses to run a file while a thread of this process (another
+    /// test that starts a program) still holds it open for writing, the error "text file busy".
+    /// That passes as soon as the other thread has closed its copy, so the start is tried again.
+    #[cfg(unix)]
+    fn open_busy_safe(path: Option<&std::path::Path>, exe: &std::path::Path) -> String {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let said = open_in_modeler(path, false, exe, None, "");
+            if !said.contains("busy") || std::time::Instant::now() > end {
+                return said;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn open_in_modeler_says_what_it_needs_and_what_it_did() {
@@ -692,19 +718,19 @@ mod tests {
         );
         // A modeler that starts.
         let modeler = dir.join(MODELER);
-        std::fs::write(&modeler, "#!/bin/sh\necho \"$2\" > opened.txt\n").unwrap();
+        // The script writes a side file and renames it, so a reader never sees a half-written file.
+        std::fs::write(
+            &modeler,
+            "#!/bin/sh\necho \"$2\" > opened.tmp && mv opened.tmp opened.txt\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&modeler, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(
-            open_in_modeler(Some(&file), false, &exe, None, ""),
+            open_busy_safe(Some(&file), &exe),
             "Opening the drawing in the 3D modeler."
         );
         let opened = dir.join("opened.txt");
-        for _ in 0..300 {
-            if opened.exists() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        wait_until(|| opened.exists());
         assert_eq!(
             std::fs::read_to_string(&opened).unwrap().trim(),
             file.to_string_lossy()
@@ -712,16 +738,13 @@ mod tests {
         // A relative path is made whole first: the modeler has a working folder of its own.
         let rel = std::path::Path::new("relative-drawing.kad");
         assert_eq!(
-            open_in_modeler(Some(rel), false, &exe, None, ""),
+            open_busy_safe(Some(rel), &exe),
             "Opening the drawing in the 3D modeler."
         );
         let want = std::env::current_dir().unwrap().join(rel);
-        for _ in 0..300 {
-            if std::fs::read_to_string(&opened).is_ok_and(|t| t.trim() == want.to_string_lossy()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        wait_until(|| {
+            std::fs::read_to_string(&opened).is_ok_and(|t| t.trim() == want.to_string_lossy())
+        });
         assert_eq!(
             std::fs::read_to_string(&opened).unwrap().trim(),
             want.to_string_lossy()

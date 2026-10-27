@@ -628,7 +628,8 @@ mod tests {
             anchor: false,
             seen: None,
         });
-        for _ in 0..2000 {
+        // The bound is only a guard against a write that never finishes.
+        for _ in 0..12_000 {
             if ui.recovery.as_ref().unwrap().completed() >= 1 {
                 break;
             }
