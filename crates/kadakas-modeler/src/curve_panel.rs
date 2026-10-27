@@ -4,6 +4,7 @@
 
 use kadakas_l10n::tr;
 use kadakas_ui_core::modeling::{CurveShape, curve::SEGMENTS};
+use kadakas_ui_number::UiNumber;
 
 use crate::tray::TrayAction;
 
@@ -69,7 +70,7 @@ pub fn rows(ui: &mut egui::Ui, shape: &CurveShape, out: &mut Vec<TrayAction>) {
     let current = shape.segments as u32;
     let mut value: u32 = ui.data_mut(|d| d.get_temp(id)).unwrap_or(current);
     ui.horizontal(|ui| {
-        let drag = egui::DragValue::new(&mut value).range(SEGMENTS);
+        let drag = egui::DragValue::new(&mut value).range(SEGMENTS).ui_number();
         ui.add(drag)
             .on_hover_text(tr!("modeler-curve-segments-hint"));
         if ui.button(tr!("modeler-curve-segments-apply")).clicked() && value != current {
