@@ -154,9 +154,24 @@ Two kinds of files keep their names, because the launcher and **Update manifest*
 
 ### Notes of the release
 
-The draft release starts with the table "Which file do I download?". It has one row for each installer, with a link. The job `publish` makes the table from the real files (`.github/scripts/release-notes-table.sh`). A missing file or an installer without a row stops the job. A sentence under the table says that the `kadakas-update-*` files and `kadakas-web.tar.gz` are for the launcher and for hosting. A pre-release adds a note that the installers are not signed. It names the warnings: macOS cannot check the app (press Open Anyway in Privacy & Security) and Windows SmartScreen protects the PC (press More info, then Run anyway). The section of the version in `CHANGELOG.md` follows.
+The draft release starts with the table "Which file do I download?". It has one row for each installer, with a link. The job `publish` makes the table from the real files (`.github/scripts/release-notes-table.sh`). A missing file or an installer without a row stops the job. A sentence under the table says that the `kadakas-update-*` files and `kadakas-web.tar.gz` are for the launcher and for hosting. A pre-release adds the section "Open an unsigned build" with the warnings of macOS and Windows and the steps to open the app. The section of the version in `CHANGELOG.md` follows.
 
 `.github/scripts/test-release-assets.sh` tests both scripts. CI runs it in the job `version`.
+
+### Open an unsigned Mac build
+
+The beta builds have an ad-hoc seal (`scripts/macos-sign.sh`) and no Developer ID signature. They are not notarized. Without a seal macOS says "Kadakas.app is damaged and can't be opened". With the seal the message is the milder one.
+
+- On macOS 15 the dialog says "Apple could not verify Kadakas is free of malware". Press Done.
+- Open System Settings, Privacy & Security. Press Open Anyway next to the message about Kadakas.
+- Or right-click the app and choose Open.
+- Or run `xattr -cr /Applications/Kadakas.app`. This removes the quarantine flag.
+
+This goes away with notarization (PLAT-19).
+
+The seal is made inside-out, with no `--deep` and no hardened runtime. `scripts/macos-app.sh` seals `Kadakas Engine.app` before the update archive is packed. A hook of cargo-packager (`before-each-package-command` in `packager-macos.toml`) seals the outer bundle after the format `app` and before the format `dmg` copies it. Nothing changes the bundle after that. If `packager-macos.toml` sets a `signing-identity`, the packager signs and the script does nothing.
+
+The smoke test on macOS runs `codesign --verify --deep --strict` on the installed bundle. Then it sets the quarantine flag on a copy and runs `spctl --assess`. Today Gatekeeper rejects the copy as unnotarized. The test fails when the message says "invalid", "damaged", "a sealed resource is missing" or "code has no resources". The update archive holds the same sealed inner bundle.
 
 ### Retention of the build files
 

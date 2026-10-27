@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Release files have one name pattern, `Kadakas-<version>-<os>-<arch>.<ext>`, with the exact version in every name. The notes of a release start with a table that tells which file to download.
+- The macOS app bundles have a valid ad-hoc seal. The browser download no longer says "Kadakas.app is damaged". It shows the normal warning for an app from an unidentified developer, and the release notes tell how to open it.
 
 ## [0.1.0-alpha.1] - 2026-10-27
 

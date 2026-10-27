@@ -57,8 +57,13 @@ while IFS= read -r f; do
 done < <(find "$dir" -type f | sort)
 
 if [[ "$version" == *-* ]]; then
-  echo
-  echo "The installers of a pre-release are not signed yet. macOS says that it cannot check the app for malware."
-  echo "Open System Settings, Privacy & Security, and press Open Anyway. Windows SmartScreen says \"Windows protected your PC\"."
-  echo "Press More info, then Run anyway."
+  cat <<'EOT'
+
+## Open an unsigned build
+
+The installers of a pre-release are not signed or notarized yet. The first start shows a warning.
+
+- **macOS.** The message says "Apple could not verify Kadakas is free of malware". Press Done. Open System Settings, Privacy & Security, and press Open Anyway. Or right-click the app and choose Open. Or run `xattr -cr /Applications/Kadakas.app` in the Terminal.
+- **Windows.** SmartScreen says "Windows protected your PC". Press More info, then Run anyway.
+EOT
 fi
