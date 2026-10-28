@@ -30,8 +30,9 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
 class Job:
     """Runs `claude -p` for a list of messages, one after another."""
 
-    def __init__(self, review, ids, model, timeout, more):
+    def __init__(self, review, ids, model, timeout, more, locale=None):
         self.review, self.ids, self.model, self.timeout, self.more = review, ids, model, timeout, more
+        self.locale = locale
         self.done = 0
         self.current = None
         self.started = time.time()
@@ -52,7 +53,7 @@ class Job:
                 self.current = mid
                 self.item_started = time.time()
                 try:
-                    self.review.suggest(mid, self.model, self.timeout, self.more, self.handle)
+                    self.review.suggest(mid, self.model, self.timeout, self.more, self.handle, self.locale)
                 except promptmod.AskError as e:
                     if not self.cancelled:
                         self.errors[mid] = {"message": str(e), "code": e.code, "stderr": e.stderr}
@@ -100,11 +101,11 @@ class App:
                 self.reviews[target] = r
             return self.reviews[target]
 
-    def start_job(self, rv, ids, model, more):
+    def start_job(self, rv, ids, model, more, locale=None):
         with self.job_lock:
             if self.job and self.job.status == "running":
                 return None
-            self.job = Job(rv, ids, model, self.timeout, more)
+            self.job = Job(rv, ids, model, self.timeout, more, locale)
             return self.job
 
     def stop_job(self):
@@ -117,7 +118,17 @@ class App:
 
 
 MAX_BODY = 5_000_000
-POST_OPS = ("accept", "reject", "delete", "pending", "add", "edit")
+def pick_locale(rv, body):
+    """The locale field of a request: the source or the target. Default the target."""
+    loc = body.get("locale")
+    if loc is None:
+        return rv.target
+    if loc not in (rv.source, rv.target):
+        raise StateError("Field 'locale' must be %s or %s" % (rv.source, rv.target))
+    return loc
+
+
+POST_OPS = ("accept", "reject", "delete", "pending", "add", "edit", "choose")
 
 
 def need(body, key, kind):
@@ -237,7 +248,9 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("item", "usage", "prompt") and mid is None:
                 raise StateError("Field 'id' is required")
             if path == "item":
-                return self.send(200, rv.item(mid))
+                d = rv.item(mid)
+                d["sample_rows"] = rv.sample_rows(mid)
+                return self.send(200, d)
             if path == "usage":
                 return self.send(200, rv.usage.lookup(rv.index[mid]["key"]))
             if path == "terms":
@@ -245,11 +258,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "export":
                 return self.send(200, rv.export_markdown(), "text/markdown; charset=utf-8")
             if path == "prompt":
-                return self.send(200, {"prompt": rv.make_prompt(mid)})
+                loc = q.get("locale") or rv.target
+                if loc not in (rv.source, rv.target):
+                    raise StateError("Unknown locale")
+                return self.send(200, {"prompt": rv.make_prompt(mid, None, loc)})
             if path == "queue":
                 return self.send(200, app.job.info() if app.job else {"status": "idle"})
             return self.send(404, {"error": "Not found"})
-        needs_id = ("status", "comment", "highlight", "suggestion", "validate", "owner-edit")
+        needs_id = ("status", "comment", "highlight", "suggestion", "validate", "owner-edit", "preview-text")
         if path in needs_id and mid is None:
             raise StateError("Field 'id' is required")
         if path == "status":
@@ -270,7 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             if op not in POST_OPS:
                 raise StateError("Unknown op: %s" % op)
             if op == "add":
-                rv.add_suggestion(mid, need(body, "text", str), "owner")
+                rv.add_suggestion(mid, need(body, "text", str), "owner", "", pick_locale(rv, body))
+            elif op == "choose":
+                rv.state.choose(mid, need(body, "sid", str))
             elif op == "edit":
                 rv.edit_suggestion(mid, need(body, "sid", str), need(body, "text", str))
             else:
@@ -284,15 +302,30 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"changed": changed, "count": len(changed)})
         elif path == "validate":
             text = need(body, "text", str)
-            return self.send(200, {"error": rv.validate(mid, text.strip("\n")),
-                                   "unchanged": rv.index[mid]["tgt"] is not None and text.strip("\n") == rv.index[mid]["tgt"].raw})
+            loc = pick_locale(rv, body)
+            res = rv.validate_full(mid, text.strip("\n"), loc)
+            cur = rv._current(rv.index[mid], loc)
+            res["unchanged"] = cur is not None and text.strip("\n") == cur.raw
+            return self.send(200, res)
         elif path == "owner-edit":
             base = body.get("base_hash")
             if base is not None and not isinstance(base, str):
                 raise StateError("Field 'base_hash' must be a string")
-            item, unchanged = rv.owner_edit(mid, need(body, "text", str), base, bool(body.get("accept")))
+            item, unchanged = rv.owner_edit(mid, need(body, "text", str), base, bool(body.get("accept")),
+                                            pick_locale(rv, body))
             item["unchanged"] = unchanged
             return self.send(200, item)
+        elif path == "preview-text":
+            return self.send(200, rv.preview_text(mid, pick_locale(rv, body), need(body, "text", str)))
+        elif path == "preview":
+            ids = [i for i in need(body, "ids", list)[:400] if isinstance(i, str) and i in rv.index]
+            return self.send(200, {"previews": {i: rv.preview_item(i) for i in ids}, "samples": rv.state.samples()})
+        elif path == "samples":
+            rv.state.set_sample(need(body, "name", str), need(body, "value", str))
+            return self.send(200, {"samples": rv.state.samples()})
+        elif path == "samples/reset":
+            rv.state.reset_samples()
+            return self.send(200, {"samples": rv.state.samples()})
         elif path == "glossary":
             items = need(body, "items", list)
             if not all(isinstance(i, dict) for i in items):
@@ -305,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
             model = body.get("model", "sonnet")
             if model not in promptmod.MODELS:
                 raise StateError("Unknown model")
-            job = app.start_job(rv, ids, model, bool(body.get("more")))
+            job = app.start_job(rv, ids, model, bool(body.get("more")), pick_locale(rv, body))
             if job is None:
                 return self.send(409, {"error": "A request is already running."})
             return self.send(200, job.info())

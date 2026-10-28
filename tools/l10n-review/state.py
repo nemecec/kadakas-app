@@ -1,6 +1,7 @@
 """Review state: flags, comments, highlights, suggestions, glossary. One JSON file."""
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -92,14 +93,17 @@ class ReviewState:
         e = self.entry(mid) or {}
         return {"status": e.get("status", "unreviewed"), "comment": e.get("comment", ""),
                 "highlights": e.get("highlights", []), "suggestions": e.get("suggestions", []),
-                "text_hash": e.get("text_hash")}
+                "text_hash": e.get("text_hash"), "chosen": e.get("chosen"), "en_change": e.get("en_change")}
 
     # status and comment
     def set_status(self, mid, status):
         if status not in STATUSES:
             raise StateError("Unknown status: %s" % status)
         with self.lock:
-            self._ensure(mid)["status"] = status
+            e = self._ensure(mid)
+            e["status"] = status
+            if status in ("ok", "fixed"):
+                e.pop("en_change", None)
             self._prune(mid)
             self.save()
 
@@ -160,17 +164,18 @@ class ReviewState:
             self.save()
 
     # suggestions
-    def add_suggestion(self, mid, text, source="owner", why="", error=None, base_hash=None, en_hash=None):
+    def add_suggestion(self, mid, text, source="owner", why="", error=None, base_hash=None, en_hash=None, locale=None):
         text = text.strip("\n")
         if not text.strip():
             raise StateError("Suggestion is empty")
         with self.lock:
             e = self._ensure(mid)
-            if any(s["text"] == text and s["state"] == "pending" for s in e["suggestions"]):
+            if any(s["text"] == text and s["state"] == "pending" and s.get("locale", self.target) == (locale or self.target)
+                   for s in e["suggestions"]):
                 return None
             s = {"id": uuid.uuid4().hex[:10], "text": text, "source": source, "state": "pending",
                  "why": why, "error": error, "time": int(time.time()),
-                 "base_hash": base_hash, "en_hash": en_hash}
+                 "base_hash": base_hash, "en_hash": en_hash, "locale": locale or self.target}
             e["suggestions"].append(s)
             if e["status"] in ("unreviewed", "ok", "flagged"):
                 e["status"] = "suggested"
@@ -189,9 +194,12 @@ class ReviewState:
                 raise StateError("This suggestion is invalid: %s" % sug["error"])
             if decision == "delete":
                 e["suggestions"].remove(sug)
+                if e.get("chosen") == sid:
+                    e.pop("chosen", None)
             elif decision == "accept":
+                loc = sug.get("locale", self.target)
                 for s in e["suggestions"]:
-                    if s["state"] == "accepted":
+                    if s["state"] == "accepted" and s.get("locale", self.target) == loc:
                         s["state"] = "pending"
                 sug["state"] = "accepted"
                 e["status"] = "accepted"
@@ -221,6 +229,68 @@ class ReviewState:
                 e["status"] = "suggested"
             self.save()
 
+    def choose(self, mid, sid):
+        """The candidate suggestion of a row, the one the row-level Accept button takes."""
+        with self.lock:
+            e = self._ensure(mid)
+            sug = next((s for s in e["suggestions"] if s["id"] == sid), None)
+            if sug is None:
+                raise StateError("Unknown suggestion")
+            e["chosen"] = sid
+            self.save()
+
+    def clear_en_change(self, mid):
+        with self.lock:
+            e = self.entry(mid)
+            if e and e.pop("en_change", None) is not None:
+                self.save()
+
+    def finish_apply(self, mid, applied_locales, source_locale, en_old="", en_new="", today=""):
+        """Update the entry after Apply wrote the accepted suggestions in `applied_locales`.
+
+        Only an English change, with no target change in the same run, leaves the target text
+        out of date. Then the message is flagged with an automatic comment.
+        """
+        with self.lock:
+            e = self._ensure(mid)
+            for s in e["suggestions"]:
+                if s["state"] == "accepted" and s.get("locale", self.target) in applied_locales:
+                    s["state"] = "applied"
+            if any(s["state"] == "accepted" for s in e["suggestions"]):
+                e["status"] = "accepted"
+            elif source_locale in applied_locales and self.target not in applied_locales:
+                e["status"] = "flagged"
+                note = "English text changed on %s: %s -> %s" % (today, en_old.replace("\n", " / "), en_new.replace("\n", " / "))
+                e["comment"] = (e["comment"] + "\n" if e["comment"] else "") + note
+                e["en_change"] = {"date": today, "old": en_old, "new": en_new}
+            else:
+                e["status"] = "fixed"
+                if self.target in applied_locales:
+                    e["highlights"] = []
+                    e.pop("en_change", None)
+            self.save()
+
+    # sample values for the preview, one per variable name
+    def samples(self):
+        return dict(self.data.get("samples") or {})
+
+    def set_sample(self, name, value):
+        name, value = str(name).strip(), str(value).strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,60}", name) or len(value) > 100:
+            raise StateError("Bad sample name or value")
+        with self.lock:
+            s = self.data.setdefault("samples", {})
+            if value:
+                s[name] = value
+            else:
+                s.pop(name, None)
+            self.save()
+
+    def reset_samples(self):
+        with self.lock:
+            self.data["samples"] = {}
+            self.save()
+
     def accepted(self):
         """List of (message id, suggestion) with an accepted suggestion and status accepted."""
         out = []
@@ -247,7 +317,7 @@ class ReviewState:
         """Drop an entry that carries no information, so the file stays small."""
         e = self.data["messages"].get(mid)
         if e and e["status"] == "unreviewed" and not e["comment"] and not e["highlights"] \
-                and not e["suggestions"]:
+                and not e["suggestions"] and not e.get("en_change"):
             del self.data["messages"][mid]
 
     # glossary

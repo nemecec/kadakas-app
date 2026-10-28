@@ -214,7 +214,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(r["status"], "accepted")
         self.assertEqual([x["text"] for x in r["suggestions"] if x["state"] == "accepted"], ["Aruanne nr { $n } / { $total }"])
         pv = self.req("/api/apply/preview", {})
-        self.assertIn(mid, [c["id"] for c in pv["changes"] if not c["error"]])
+        self.assertIn(mid, [c["mid"] for c in pv["changes"] if not c["error"]])
         # a field of the wrong type is a 400
         self.assertEqual(self.raw("POST", "/api/owner-edit", {"id": mid, "text": 5})[0], 400)
 
@@ -229,7 +229,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(r["refused"], "changed")
         self.assertIn("taastekoopiad", open(et_path(self.root), encoding="utf-8").read())
         r = self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
-        self.assertEqual(r["applied"], [mid])
+        self.assertEqual(r["applied"], [mid + "|et"])
         self.assertIn("varukoopiad", open(et_path(self.root), encoding="utf-8").read())
 
 

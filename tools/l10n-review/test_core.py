@@ -193,7 +193,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(d["counts"]["flagged"], 0)
         self.assertEqual([x["key"] for x in d["parity"]["extra"]], ["demo-extra"])
         self.assertEqual(d["locales"], ["et"])
-        self.assertEqual(rv.item("demo.ftl::demo-title")["en"]["examples"], {"n": "3", "total": "12"})
+        self.assertEqual(rv.item("demo.ftl::demo-title")["en"]["examples"], {"n": "2", "total": "5"})
 
     def test_export(self):
         root = make_repo()
@@ -538,6 +538,166 @@ class MiscTest(unittest.TestCase):
         pairs += [("b%d" % i, "Close the sheet %d" % i, "Sulge lehte %d" % i) for i in range(3)]
         words = [r["word"] for r in terms.find_inconsistent(pairs)]
         self.assertNotIn("sheet", words)
+
+
+def en_path(root):
+    return os.path.join(root, "crates", "kadakas-l10n", "locales", "en-US", "demo.ftl")
+
+
+class EnglishEditTest(unittest.TestCase):
+    def setUp(self):
+        self.root = make_repo(git=True)
+        self.dir = tempfile.mkdtemp()
+        self.rv = Review(self.root, "et", state_path=os.path.join(self.dir, "s.json"))
+        self.rv.build_usage()
+        self.mid = "demo.ftl::demo-title"
+
+    def read(self, p):
+        with open(p, encoding="utf-8") as f:
+            return f.read()
+
+    def accept(self, mid, text, locale):
+        s = self.rv.add_suggestion(mid, text, "owner edit", "", locale)
+        self.assertIsNone(s["error"], s["error"])
+        self.rv.state.decide_suggestion(mid, s["id"], "accept")
+        return s
+
+    def do_apply(self, confirm=True):
+        pv = self.rv.apply_preview()
+        return self.rv.apply(pv["digest"], confirm)
+
+    def test_validation_rules_for_english(self):
+        v = self.rv.validate_full(self.mid, "Crash report { $n }", "en-US")
+        self.assertIsNone(v["error"])
+        self.assertIn("$total", v["warnings"][0])
+        self.assertIn("Update the target text", v["warnings"][0])
+        err = self.rv.validate(self.mid, "Crash report { $n } { $zzz }", "en-US")
+        self.assertIn("adds $zzz", err)
+        self.assertIn("The code does not pass it", err)
+        err = self.rv.validate(self.mid, "Crash report { $n } of { $total } { $zzz }", "en-US")
+        self.assertIn("a.rs:3", err)   # the call sites of the key
+        self.assertIn("leading or trailing", self.rv.validate(self.mid, " Crash", "en-US"))
+        # the selector of an English message must stay intact
+        self.assertIn("selector", self.rv.validate("demo.ftl::demo-count", "{ $n } layers", "en-US"))
+
+    def test_apply_english_edit_flags_the_target(self):
+        self.rv.state.set_comment(self.mid, "my note")
+        self.accept(self.mid, "Crash report { $n } out of { $total }", "en-US")
+        pv = self.rv.apply_preview()
+        c = pv["changes"][0]
+        self.assertEqual((c["locale"], c["file"], c["error"]), ("en-US", "demo.ftl", None))
+        self.assertEqual(c["new_lines"], ["demo-title = Crash report { $n } out of { $total }"])
+        et_before = self.read(et_path(self.root))
+        r = self.do_apply()
+        self.assertEqual(len(r["applied"]), 1)
+        self.assertIn("out of", self.read(en_path(self.root)))
+        self.assertEqual(self.read(et_path(self.root)), et_before)   # the target file is untouched
+        it = self.rv.item(self.mid)
+        self.assertEqual(it["status"], "flagged")
+        self.assertIn("my note", it["comment"])
+        self.assertIn("English text changed on ", it["comment"])
+        self.assertIn("Crash report { $n } of { $total } -> Crash report { $n } out of { $total }", it["comment"])
+        self.assertEqual(it["en_change"]["old"], "Crash report { $n } of { $total }")
+        self.assertEqual(it["suggestions"][0]["state"], "applied")
+        # an OK mark clears the change note
+        self.rv.state.set_status(self.mid, "ok")
+        self.assertIsNone(self.rv.item(self.mid)["en_change"])
+
+    def test_both_locales_in_one_run_leave_the_row_fixed(self):
+        self.accept(self.mid, "Crash report { $n } out of { $total }", "en-US")
+        self.accept(self.mid, "Aruanne { $n } kokku { $total }", "et")
+        pv = self.rv.apply_preview()
+        self.assertEqual(sorted(c["locale"] for c in pv["changes"]), ["en-US", "et"])
+        self.assertEqual(len(self.do_apply()["applied"]), 2)
+        self.assertEqual(self.rv.item(self.mid)["status"], "fixed")
+        self.assertIn("kokku", self.read(et_path(self.root)))
+
+    def test_removing_a_variable_in_english_applies_with_a_warning(self):
+        self.accept(self.mid, "Crash report { $n }", "en-US")
+        pv = self.rv.apply_preview()
+        self.assertIn("$total", pv["changes"][0]["warnings"][0])
+        self.do_apply()
+        it = self.rv.item(self.mid)
+        self.assertIn("variables differ", it["problems"])   # the target now has a variable the English lacks
+
+    def test_old_english_suggestion_for_the_target_is_stale(self):
+        self.accept(self.mid, "Aruanne { $n } kokku { $total }", "et")
+        # the English changes behind its back
+        new = self.read(en_path(self.root)).replace("Crash report", "Crash log")
+        with open(en_path(self.root), "w", encoding="utf-8") as f:
+            f.write(new)
+        self.rv.reload()
+        s = self.rv.item(self.mid)["suggestions"][0]
+        self.assertTrue(s["stale_en"])
+        pv = self.rv.apply_preview()
+        self.assertIn("English text changed", pv["changes"][0]["error"])
+
+    def test_dirty_check_covers_both_locales(self):
+        self.accept("demo.ftl::demo-recover", "Recovery copies are here.", "en-US")
+        with open(en_path(self.root), "a", encoding="utf-8") as f:
+            f.write("\n")
+        pv = self.rv.apply_preview()
+        self.assertTrue(any("en-US" in d for d in pv["dirty"]))
+        self.assertEqual(self.rv.apply(pv["digest"])["refused"], "dirty")
+
+    def test_chosen_defaults_to_the_newest_valid(self):
+        a = self.rv.add_suggestion(self.mid, "Aruanne { $n } / { $total }!", "owner")
+        bad = self.rv.add_suggestion(self.mid, "Vigane", "owner")
+        self.assertTrue(bad["error"])
+        self.assertEqual(self.rv.item(self.mid)["chosen"], a["id"])
+        b = self.rv.add_suggestion(self.mid, "Aruanne { $n } / { $total }?", "owner")
+        self.assertEqual(self.rv.item(self.mid)["chosen"], b["id"])
+        self.rv.state.choose(self.mid, a["id"])
+        self.assertEqual(self.rv.item(self.mid)["chosen"], a["id"])
+        self.rv.state.decide_suggestion(self.mid, a["id"], "reject")
+        self.assertEqual(self.rv.item(self.mid)["chosen"], b["id"])
+
+    def test_accept_is_per_locale(self):
+        s_en = self.accept(self.mid, "Crash report { $n } out of { $total }", "en-US")
+        s_et = self.accept(self.mid, "Aruanne { $n } kokku { $total }", "et")
+        states = {s["id"]: s["state"] for s in self.rv.item(self.mid)["suggestions"]}
+        self.assertEqual(states[s_en["id"]], "accepted")
+        self.assertEqual(states[s_et["id"]], "accepted")
+
+    def test_english_prompt(self):
+        p = promptmod.build_english_prompt("et", {"raw": "Crash report { $n }", "comment": "", "variables": ["n"], "selector": ""},
+                                           {"raw": "Aruanne { $n }"}, "owner words", [], [{"en": "layer", "tr": "kiht", "note": ""}])
+        self.assertIn("clarity and consistency", p)
+        self.assertIn("for_context_only", p)
+        self.assertIn("Aruanne", p)
+        self.assertNotIn("kiht", p)   # the target side of the glossary is not needed
+        self.assertIn("add no new variable", p)
+
+    def test_suggest_english_with_fake_claude(self):
+        fake = make_fake_claude(self.dir)
+        with open(os.path.join(self.dir, "canned.json"), "w") as f:
+            f.write(json.dumps({"alternatives": [
+                {"text": "Crash report { $n } of { $total }.", "why": "dot"},
+                {"text": "Crash report { $n } { $new }", "why": "adds a variable"}]}))
+        os.environ["FAKE_DIR"] = self.dir
+        os.environ["FAKE_MODE"] = "json"
+        try:
+            self.rv.claude_bin = fake
+            added = self.rv.suggest(self.mid, "haiku", 20, locale="en-US")
+        finally:
+            os.environ.pop("FAKE_MODE")
+        self.assertEqual([s["locale"] for s in added], ["en-US", "en-US"])
+        self.assertIsNone(added[0]["error"])
+        self.assertIn("adds $new", added[1]["error"])
+        self.assertIn("English source", open(os.path.join(self.dir, "stdin.txt")).read())
+
+    def test_samples_and_previews(self):
+        self.rv.state.set_sample("n", "1")
+        p = self.rv.preview_item("demo.ftl::demo-count")
+        self.assertEqual([l["text"] for l in p["en"]["lines"]], ["1 layer"])
+        self.rv.state.reset_samples()
+        p = self.rv.preview_item("demo.ftl::demo-count")
+        self.assertEqual([l["text"] for l in p["tr"]["lines"]], ["1 kiht", "2 kihti"])
+        self.assertIsNone(self.rv.preview_item("demo.ftl::demo-recover")["en"])   # no placeable, no preview
+        rows = {r["name"]: r for r in self.rv.sample_rows(self.mid)}
+        self.assertEqual(rows["n"]["default"], "2")
+        t = self.rv.preview_text(self.mid, "et", "Aruanne { $n } / { $total }")
+        self.assertEqual(t["lines"][0]["text"], "Aruanne 2 / 5")
 
 
 if __name__ == "__main__":

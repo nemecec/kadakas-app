@@ -2,29 +2,18 @@
 import os
 import re
 import threading
+import time
 
 import apply as applymod
+import evaluator
 import ftl
 import prompt as promptmod
+import samples as samplemod
 import terms
 from state import ReviewState, StateError, default_state_path, hash_text, msg_id, STATUSES
 
-EXAMPLES = {
-    "count": "3", "n": "3", "total": "12", "used": "2", "step": "4", "id": "7", "index": "2",
-    "name": "Hedge 1", "names": "Hedge 1, Path", "version": "0.1.0", "channel": "alpha", "kind": "line",
-    "error": "disk is full", "e": "disk is full", "path": "/Users/ann/garden.kad",
-    "file": "garden.kad", "key": "Ctrl+Z", "layer": "Planting", "signature": "a1b2c3", "free": "2",
-    "blocked": "1", "px": "16", "mm": "250", "m": "12.5", "area": "42 m2",
-}
-
-
 def example_for(var):
-    if var in EXAMPLES:
-        return EXAMPLES[var]
-    for k, v in EXAMPLES.items():
-        if var.endswith(k):
-            return v
-    return "..."
+    return samplemod.default_sample(var)
 
 
 class Review:
@@ -72,6 +61,7 @@ class Review:
         parity = ftl.key_parity(src, tgt)
         with self.lock:
             self.src, self.tgt, self.parity = src, tgt, parity
+            self.bundles = {self.source: evaluator.Bundle(self.source, src), self.target: evaluator.Bundle(self.target, tgt)}
             self._build_order()
             self._terms_cache = None
             self._sig = sig
@@ -140,13 +130,27 @@ class Review:
                 problems.append("variables differ")
             if ftl.structure_signature(info["en"].raw)[:2] != ftl.structure_signature(tg.raw)[:2]:
                 problems.append("selector differs")
+        sugs = []
+        en_hash = hash_text(info["en"].raw) if info["en"] else None
+        for s in st["suggestions"]:
+            loc = s.get("locale", self.target)
+            cur = info["en"] if loc == self.source else tg
+            s = dict(s, locale=loc)
+            s["stale_en"] = bool(loc != self.source and s.get("en_hash") and en_hash and s["en_hash"] != en_hash)
+            s["stale_base"] = bool(s.get("base_hash") and cur is not None and s["base_hash"] != hash_text(cur.raw))
+            sugs.append(s)
+        chosen = st.get("chosen")
+        if not any(s["id"] == chosen and s["state"] == "pending" for s in sugs):
+            valid = [s for s in sugs if s["state"] == "pending" and not s.get("error") and not s["stale_base"]]
+            chosen = valid[-1]["id"] if valid else None
         d = {"id": mid, "file": fn, "key": info["key"], "pos": info["pos"],
              "en": self._msg_dict(info["en"], True), "tr": self._msg_dict(tg),
              "parity": parity, "problems": problems,
              "status": st["status"], "comment": st["comment"], "highlights": hl,
-             "highlights_stale": stale, "suggestions": st["suggestions"]}
+             "highlights_stale": stale, "suggestions": sugs, "chosen": chosen, "en_change": st.get("en_change")}
         if not brief:
-            d["chips"] = self.chips(info)
+            d["chips"] = self.chips(info, self.target)
+            d["chips_en"] = self.chips(info, self.source)
             keys = info["keys"]
             p = info["pos"]
             d["neighbours"] = [{"key": k, "en": (e.raw if e else ""), "tr": (t.raw if t else ""),
@@ -177,84 +181,150 @@ class Review:
                     "extra": [{"file": f, "key": k} for f, k in self.parity["extra"]],
                     "missing_files": self.parity["missing_files"],
                     "extra_files": self.parity["extra_files"]},
-                "glossary": self.state.glossary(), "statuses": STATUSES,
+                "glossary": self.state.glossary(), "statuses": STATUSES, "samples": self.state.samples(),
                 "claude": bool(__import__("shutil").which(self.claude_bin))}
 
     # prompt
-    def chips(self, info):
-        """Exact placeables the owner may insert while editing: the English variables, then the
+    def chips(self, info, locale=None):
+        """Exact placeables the owner may insert while editing: the variables, then the
         non-variable placeables (terms, literals, functions) of the current text."""
+        locale = locale or self.target
         out = []
         en, tg = info["en"], info["tgt"]
-        for v in (en.value_variables if en else (tg.value_variables if tg else [])):
+        cur = en if locale == self.source else tg
+        base = en if en else tg
+        for v in (base.value_variables if base else []):
             out.append("{ $%s }" % v)
-        for p in ftl.placeables(tg.raw)[0] if tg else []:
+        for p in ftl.placeables(cur.raw)[0] if cur else []:
             chip = "{ %s }" % p
             if chip not in out:
                 out.append(chip)
         return out
 
-    def owner_edit(self, mid, text, base_hash, accept):
+    def call_sites(self, key):
+        if self.usage is None:
+            return ""
+        u = self.usage.lookup(key)
+        if not u["uses"]:
+            return "No use found in the Rust sources."
+        return "Used in: " + ", ".join("%s:%d" % (x["path"], x["line"]) for x in u["uses"]) + "."
+
+    def _current(self, info, locale):
+        return info["en"] if locale == self.source else info["tgt"]
+
+    def owner_edit(self, mid, text, base_hash, accept, locale=None):
         """Store the owner's edit of the current text as a suggestion. Returns (item, unchanged)."""
+        locale = locale or self.target
         info = self.index[mid]
-        if info["tgt"] is None or info["en"] is None:
+        cur = self._current(info, locale)
+        if info["tgt"] is None or info["en"] is None or cur is None:
             raise StateError("The message is missing in one language.")
         text = text.strip("\n")
-        if text == info["tgt"].raw:
+        if text == cur.raw:
             return self.item(mid), True
-        if base_hash and base_hash != hash_text(info["tgt"].raw):
+        if base_hash and base_hash != hash_text(cur.raw):
             raise StateError("The text changed in the file since you opened the editor. Cancel and edit again.")
-        err = self.validate(mid, text)
+        err = self.validate(mid, text, locale)
         if err:
             raise StateError(err)
-        sug = self.add_suggestion(mid, text, "owner edit")
+        sug = self.add_suggestion(mid, text, "owner edit", "", locale)
         if sug is None:   # the same text is already pending
-            sug = next(s for s in self.state.view(mid)["suggestions"] if s["text"] == text and s["state"] == "pending")
+            sug = next(s for s in self.state.view(mid)["suggestions"]
+                       if s["text"] == text and s["state"] == "pending" and s.get("locale", self.target) == locale)
         if accept:
             self.state.decide_suggestion(mid, sug["id"], "accept")
         return self.item(mid), False
 
-    def validate(self, mid, text):
+    def validate_full(self, mid, text, locale=None):
+        """{error, warnings} for a text in a locale. English edits get warnings for removed variables."""
+        locale = locale or self.target
+        err = self.validate(mid, text, locale)
+        warnings = []
+        info = self.index[mid]
+        if locale == self.source and info["en"] is not None:
+            warnings = applymod.variable_warnings(info["en"].value_variables, text)
+        return {"error": err, "warnings": warnings}
+
+    def validate(self, mid, text, locale=None):
         """Error text for a suggestion, or None when it is safe to apply."""
+        locale = locale or self.target
         info = self.index[mid]
         if info["tgt"] is None or info["en"] is None:
             return "The message is missing in one language."
         if text != text.strip():
             return "The text has a leading or trailing space or line break."
+        if locale == self.source:
+            return applymod.check_replacement(info["en"], info["en"], text, source_edit=True,
+                                              call_sites=self.call_sites(info["key"]))
         return applymod.check_replacement(info["tgt"], info["en"], text)
 
-    def add_suggestion(self, mid, text, source="owner", why=""):
+    def add_suggestion(self, mid, text, source="owner", why="", locale=None):
+        locale = locale or self.target
         text = text.strip("\n")
         info = self.index[mid]
-        base = hash_text(info["tgt"].raw) if info["tgt"] else None
+        cur = self._current(info, locale)
+        base = hash_text(cur.raw) if cur else None
         en_h = hash_text(info["en"].raw) if info["en"] else None
-        return self.state.add_suggestion(mid, text, source, why, self.validate(mid, text), base, en_h)
+        return self.state.add_suggestion(mid, text, source, why, self.validate(mid, text, locale), base, en_h, locale)
 
     def edit_suggestion(self, mid, sid, text):
         text = text.strip("\n")
-        self.state.edit_suggestion(mid, sid, text, self.validate(mid, text))
+        sug = next((s for s in self.state.view(mid)["suggestions"] if s["id"] == sid), None)
+        locale = sug.get("locale", self.target) if sug else self.target
+        self.state.edit_suggestion(mid, sid, text, self.validate(mid, text, locale))
 
-    def suggest(self, mid, model="sonnet", timeout=120, more=False, cancel=None):
+    def suggest(self, mid, model="sonnet", timeout=120, more=False, cancel=None, locale=None):
         """Ask Claude. Stores the alternatives as suggestions (invalid ones with the reason)."""
+        locale = locale or self.target
         avoid = []
         if more:
-            avoid = [s["text"] for s in self.state.view(mid)["suggestions"] if s["state"] == "rejected"]
-        prompt = self.make_prompt(mid, avoid)
+            avoid = [s["text"] for s in self.state.view(mid)["suggestions"]
+                     if s["state"] == "rejected" and s.get("locale", self.target) == locale]
+        prompt = self.make_prompt(mid, avoid, locale)
         alts = promptmod.ask_claude(prompt, self.claude_bin, model, timeout, cancel)
         added = []
         for a in alts:
-            s = self.add_suggestion(mid, a["text"], "claude:" + model, a["why"])
+            s = self.add_suggestion(mid, a["text"], "claude:" + model, a["why"], locale)
             if s:
                 added.append(s)
         return added
 
-    def make_prompt(self, mid, avoid=None):
+    def make_prompt(self, mid, avoid=None, locale=None):
+        locale = locale or self.target
         d = self.item(mid)
         if d["en"] is None:
             raise ValueError("This key has no English message.")
         neigh = [n for n in d["neighbours"] if not n["here"]]
+        if locale == self.source:
+            return promptmod.build_english_prompt(self.target, d["en"], d["tr"], d["comment"], neigh,
+                                                  self.state.glossary() or [], avoid)
         return promptmod.build_prompt(self.target, d["en"], d["tr"], d["highlights"], d["comment"],
                                       neigh, self.state.glossary() or [], avoid)
+
+    # previews with sample values
+    def preview_item(self, mid):
+        info = self.index[mid]
+        owner = self.state.samples()
+        out = {}
+        for key, loc, m in (("en", self.source, info["en"]), ("tr", self.target, info["tgt"])):
+            out[key] = evaluator.previews(m.raw, self.bundles[loc], owner) if m is not None and "{" in m.raw else None
+        return out
+
+    def preview_text(self, mid, locale, text):
+        return evaluator.previews(text, self.bundles[locale], self.state.samples())
+
+    def sample_rows(self, mid):
+        """Variables of a message with their sample values."""
+        info = self.index[mid]
+        owner = self.state.samples()
+        names = []
+        for m, loc in ((info["en"], self.source), (info["tgt"], self.target)):
+            if m is not None:
+                b = self.bundles[loc]
+                for n in evaluator.collect_vars(b.pattern(m.raw), b):
+                    if n not in names:
+                        names.append(n)
+        return [{"name": n, "value": owner.get(n, ""), "default": samplemod.default_sample(n)} for n in names]
 
     # terms
     def term_report(self):
@@ -268,35 +338,57 @@ class Review:
         return self._terms_cache
 
     # apply
+    def _dirs(self):
+        return {self.source: os.path.join(self.locales_root, self.source), self.target: self.target_dir()}
+
     def accepted_items(self):
         items = []
         for mid, sug in self.state.accepted():
-            if mid in self.index and self.index[mid]["tgt"] is not None:
-                i = self.index[mid]
-                items.append({"id": mid, "file": i["file"], "key": i["key"], "text": sug["text"],
-                              "base_hash": sug.get("base_hash"), "en_hash": sug.get("en_hash")})
+            if mid not in self.index:
+                continue
+            i = self.index[mid]
+            loc = sug.get("locale", self.target)
+            if i["tgt"] is None or i["en"] is None:
+                continue
+            items.append({"id": mid + "|" + loc, "mid": mid, "locale": loc, "file": i["file"], "key": i["key"],
+                          "text": sug["text"], "base_hash": sug.get("base_hash"), "en_hash": sug.get("en_hash")})
         return items
 
     def apply_preview(self):
+        pre = self._preview()
+        pre.pop("_files")
+        return pre
+
+    def _preview(self):
         self.reload()
-        changes = applymod.plan(self.target_dir(), self.src, self.accepted_items())
-        dirty = applymod.git_dirty(self.repo, self.target_dir())
+        files = {self.source: self.src, self.target: self.tgt}
+        changes = applymod.plan(self._dirs(), files, self.source, self.accepted_items(), self.call_sites)
+        dirty = applymod.git_dirty(self.repo, list(self._dirs().values()))
         return {"changes": changes, "dirty": dirty, "dirty_unknown": dirty is None,
-                "digest": applymod.digest(changes)}
+                "digest": applymod.digest(changes), "_files": files}
 
     def apply(self, expect, confirm_dirty=False):
         """Write what the preview showed. `expect` is the digest of the preview. Any difference refuses."""
         with self.lock:
-            pre = self.apply_preview()
+            pre = self._preview()
+            files = pre.pop("_files")
             if pre["digest"] != expect:
                 return {"refused": "changed", **pre}
             if (pre["dirty"] or pre["dirty_unknown"]) and not confirm_dirty:
                 return {"refused": "dirty", **pre}
-            outcome = applymod.write_changes(self.target_dir(), self.src, pre["changes"])
+            outcome = applymod.write_changes(self._dirs(), files, self.source, pre["changes"])
             for c in pre["changes"]:
                 c["error"] = outcome[c["id"]]
             done = [c["id"] for c in pre["changes"] if not c["error"]]
-            self.state.mark_fixed(done)
+            today = time.strftime("%Y-%m-%d")
+            by_mid = {}
+            for c in pre["changes"]:
+                if not c["error"]:
+                    by_mid.setdefault(c["mid"], []).append(c)
+            for mid, cs in by_mid.items():
+                en = next((c for c in cs if c["locale"] == self.source), None)
+                self.state.finish_apply(mid, {c["locale"] for c in cs}, self.source,
+                                        en["old_raw"] if en else "", en["new_raw"] if en else "", today)
             self.reload()
             return {"changes": pre["changes"], "applied": done, "dirty": pre["dirty"]}
 

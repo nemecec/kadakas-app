@@ -25,8 +25,18 @@ def rebuild_lines(msg, new_raw):
     return out
 
 
-def check_replacement(old_target, english, new_raw):
-    """Return an error text, or None when the new text is safe."""
+def variable_warnings(old_raw_vars, new_raw):
+    """Warnings for an English edit that removes variables."""
+    gone = sorted(set(old_raw_vars) - set(ftl.extract_variables(new_raw)))
+    return ["The edit removes %s. Update the target text too." % ", ".join("$" + v for v in gone)] if gone else []
+
+
+def check_replacement(old_target, english, new_raw, source_edit=False, call_sites=""):
+    """Return an error text, or None when the new text is safe.
+
+    With source_edit the text is an edit of the English source. It may drop variables but
+    must not add one that the code does not pass.
+    """
     if not new_raw.strip():
         return "The new text is empty."
     if new_raw != new_raw.strip():
@@ -34,7 +44,12 @@ def check_replacement(old_target, english, new_raw):
     en = english if english is not None else old_target
     new_vars = set(ftl.extract_variables(new_raw))
     en_vars = set(en.value_variables)
-    if new_vars != en_vars:
+    if source_edit:
+        added = sorted(new_vars - en_vars)
+        if added:
+            return ("The edit adds %s. The code does not pass it, so the program would show an error. %s"
+                    % (", ".join("$" + v for v in added), call_sites)).strip()
+    elif new_vars != en_vars:
         missing = sorted(en_vars - new_vars)
         extra = sorted(new_vars - en_vars)
         bits = []
@@ -86,58 +101,79 @@ def digest(changes):
             for c in changes if not c["error"]]
 
 
-def plan(target_dir, source_files, items):
-    """items: list of dicts {id, file, key, text}. Returns list of change dicts, not yet written."""
-    results = []
-    cache = {}
-    for it in items:
-        fn, key, text = it["file"], it["key"], it["text"]
-        res = {"id": it["id"], "file": fn, "key": key, "error": None, "old_lines": [],
-               "new_lines": [], "line": 0, "new_raw": text}
+class _Vars:
+    """Stand-in for a message when only its variables matter."""
+
+    def __init__(self, raw):
+        self.value_variables = ftl.extract_variables(raw)
+
+
+def plan(dirs, files, source_locale, items, call_sites=None):
+    """Plan the changes. Nothing is written.
+
+    dirs: {locale: folder}. files: {locale: {file name: FtlFile}}, freshly parsed.
+    items: dicts {id, mid, locale, file, key, text, base_hash, en_hash}.
+    call_sites: optional function key -> text for the error of an added variable.
+    Returns one change dict for each item.
+    """
+    results, by_mid = [], {}
+    # English edits first: a target text is then checked against the new English variables.
+    ordered = sorted(items, key=lambda it: it["locale"] != source_locale)
+    en_new = {}
+    for it in ordered:
+        loc, fn, key, text = it["locale"], it["file"], it["key"], it["text"]
+        res = {"id": it["id"], "mid": it.get("mid", it["id"]), "locale": loc, "file": fn, "key": key,
+               "error": None, "old_lines": [], "new_lines": [], "line": 0, "new_raw": text,
+               "old_raw": "", "warnings": []}
         results.append(res)
-        path = os.path.join(target_dir, fn)
-        if fn not in cache:
-            if not os.path.isfile(path):
-                cache[fn] = None
-            else:
-                cache[fn] = ftl.parse_file(path)
-        parsed = cache[fn]
+        parsed = (files.get(loc) or {}).get(fn)
         if parsed is None:
-            res["error"] = "The file %s does not exist." % fn
+            res["error"] = "The file %s does not exist for %s." % (fn, loc)
             continue
         old = next((m for m in parsed.messages if m.key == key), None)
         if old is None:
             res["error"] = "The key is not in the file any more."
             continue
-        en = None
-        if fn in source_files:
-            en = next((m for m in source_files[fn].messages if m.key == key), None)
+        en_file = (files.get(source_locale) or {}).get(fn)
+        en = next((m for m in en_file.messages if m.key == key), None) if en_file else None
         if en is None:
             res["error"] = "The English message does not exist."
             continue
         if it.get("base_hash") and it["base_hash"] != hash_text(old.raw):
             res["error"] = "The text changed since the suggestion was made."
             continue
-        if it.get("en_hash") and it["en_hash"] != hash_text(en.raw):
+        if loc != source_locale and it.get("en_hash") and it["en_hash"] != hash_text(en.raw):
             res["error"] = "The English text changed since the suggestion was made."
             continue
-        err = check_replacement(old, en, text)
+        if loc == source_locale:
+            sites = call_sites(key) if call_sites else ""
+            err = check_replacement(old, old, text, source_edit=True, call_sites=sites)
+            res["warnings"] = variable_warnings(old.value_variables, text)
+        else:
+            eff = _Vars(en_new[(fn, key)]) if (fn, key) in en_new else en
+            err = check_replacement(old, eff, text)
         if err:
             res["error"] = err
             continue
         if text == old.raw:
             res["error"] = "The text is already in the file."
             continue
+        if loc == source_locale:
+            en_new[(fn, key)] = text
         res["line"] = old.start
+        res["old_raw"] = old.raw
         res["old_lines"] = parsed.lines[old.start - 1:old.value_end]
         res["new_lines"] = rebuild_lines(old, text)
+    # keep the order of the input for the preview
+    pos = {it["id"]: n for n, it in enumerate(items)}
+    results.sort(key=lambda r: pos[r["id"]])
     return results
 
 
-def git_dirty(repo, target_dir):
-    """Names of changed files under target_dir, or None when git cannot tell."""
+def git_dirty(repo, dirs):
+    """Names of changed files under the given folders, or None when git cannot tell."""
     try:
-        r = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--", target_dir],
+        r = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--"] + list(dirs),
                            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -146,15 +182,21 @@ def git_dirty(repo, target_dir):
     return [l[3:] for l in r.stdout.split("\n") if l.strip()]
 
 
-def write_changes(target_dir, source_files, changes):
-    """Write the changes that have no error. Returns {id: error or None}. Verifies each file first."""
-    by_file = {}
+def write_changes(dirs, files, source_locale, changes):
+    """Write the changes that have no error. Returns {id: error or None}.
+
+    Every file is checked before it is written. dirs: {locale: folder}. files: {locale: {name: FtlFile}}
+    as parsed before the changes.
+    """
+    groups = {}
     for c in changes:
         if not c["error"]:
-            by_file.setdefault(c["file"], []).append(c)
+            groups.setdefault((c["locale"], c["file"]), []).append(c)
     outcome = {c["id"]: c["error"] for c in changes}
-    for fn, cs in by_file.items():
-        path = os.path.join(target_dir, fn)
+    en_new = {(c["file"], c["key"]): c["new_raw"] for c in changes
+              if c["locale"] == source_locale and not c["error"]}
+    for (loc, fn), cs in groups.items():
+        path = os.path.join(dirs[loc], fn)
         with open(path, encoding="utf-8", newline="") as f:
             text = f.read()
         if "\r" in text:
@@ -176,7 +218,8 @@ def write_changes(target_dir, source_files, changes):
             continue
         new_text = "\n".join(lines)
         after = ftl.parse_text(new_text, fn)
-        problem = verify(before, after, source_files.get(fn), {c["key"]: c for c in cs})
+        en_file = (files.get(source_locale) or {}).get(fn)
+        problem = verify(before, after, en_file, {c["key"]: c for c in cs}, loc == source_locale, en_new)
         if problem:
             for c in cs:
                 outcome[c["id"]] = problem
@@ -202,8 +245,8 @@ def official_junk(text):
     return sum(isinstance(e, Junk) for e in parse(text).body)
 
 
-def verify(before, after, english, changed):
-    """The file must parse to the same keys, and the variables must equal the English ones."""
+def verify(before, after, english, changed, is_source, en_new):
+    """The file must parse to the same keys, and the variables must fit the English ones."""
     if [m.key for m in before.messages] != [m.key for m in after.messages]:
         return "The rewritten file has other keys. Not written."
     if [t.key for t in before.terms] != [t.key for t in after.terms]:
@@ -213,8 +256,14 @@ def verify(before, after, english, changed):
         if old.key in changed:
             if new.raw != changed[old.key]["new_raw"]:
                 return "The text of %s did not read back the same. Not written." % old.key
-            if old.key in en and set(new.value_variables) != set(en[old.key].value_variables):
-                return "The variables of %s differ from the English text. Not written." % old.key
+            if is_source:
+                if not set(new.value_variables) <= set(old.value_variables):
+                    return "The English text of %s gained a variable. Not written." % old.key
+            else:
+                want = set(ftl.extract_variables(en_new[(new.file, old.key)])) if (new.file, old.key) in en_new \
+                    else set(en[old.key].value_variables) if old.key in en else None
+                if want is not None and set(new.value_variables) != want:
+                    return "The variables of %s differ from the English text. Not written." % old.key
         else:
             if old.raw != new.raw or old.comment != new.comment or old.attributes != new.attributes:
                 return "The message %s changed by accident. Not written." % old.key
