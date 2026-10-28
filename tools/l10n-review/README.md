@@ -44,9 +44,13 @@ Each row shows the file and key, the English text, the target text and the statu
 
 If a highlighted text changes in the file, the highlights of that message are hidden. Their offsets no longer fit.
 
+## Saving
+
+Every action goes to the state file at once. The header shows `Saving...`, then `Saved HH:MM:SS`. If a save fails (network error or server error), it shows a red `NOT SAVED` with the error and a Retry button. A comment is sent 600 ms after you stop typing. It is also sent when you leave the box, change the row or tab, and when the page closes.
+
 ## Edit in place
 
-Press Edit on a row, press `e`, or double-click the target text. The target text turns into a text box. It holds the current value as it is written in the file, with line breaks, selectors and placeables, and without the indentation of the file. The English source is above it. The flagged words are in a read-only line above the box.
+Press the pencil button at the top right of the target text, or press `e`. The pencil shows on hover and on keyboard focus. It is always visible on touch and narrow screens. A double-click on the target text still selects a word, for the Weird button. The target text turns into a text box. It holds the current value as it is written in the file, with line breaks, selectors and placeables, and without the indentation of the file. The English source is above it. The flagged words are in a read-only line above the box.
 
 - While you type, the tool checks the text after a short pause. It uses the same checks as Apply: variables, terms, string literals, functions, selector structure, line count, spaces at the ends and empty braces. The reason shows under the box.
 - The chips under the box hold the variables and the placeables of the message, for example `{ $name }`, `{ -term }` and `{ " " }`. A click inserts the exact text at the cursor.

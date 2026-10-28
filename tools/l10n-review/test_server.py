@@ -141,6 +141,42 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.raw("POST", "/api/comment", {"id": "demo.ftl::demo-title", "comment": "x"},
                                   {"Content-Length": "-5"})[0], 400)
 
+    def test_every_state_change_is_on_disk(self):
+        """After each state-changing call a fresh load of the state file equals the server memory."""
+        from state import ReviewState
+        mem = self.app.review("et").state
+        mid, mid2 = "demo.ftl::demo-title", "demo.ftl::demo-recover"
+
+        def check(label):
+            fresh = ReviewState(mem.path, "et")
+            self.assertEqual(json.loads(json.dumps(fresh.data)), json.loads(json.dumps(mem.data)), label)
+
+        def sid(m, text):
+            return [x for x in self.req("/api/item?id=" + m)["suggestions"] if x["text"] == text][-1]["id"]
+
+        steps = [
+            ("status", lambda: self.req("/api/status", {"id": mid2, "status": "flagged"})),
+            ("comment", lambda: self.req("/api/comment", {"id": mid2, "comment": "kommentaar"})),
+            ("highlight add", lambda: self.req("/api/highlight", {"id": mid2, "start": 0, "end": 5})),
+            ("highlight remove", lambda: self.req("/api/highlight", {"id": mid2, "start": 0, "end": 5, "remove": True})),
+            ("suggestion add", lambda: self.req("/api/suggestion", {"id": mid2, "op": "add", "text": "Alles on need koopiad."})),
+            ("suggestion edit", lambda: self.req("/api/suggestion", {"id": mid2, "op": "edit", "sid": sid(mid2, "Alles on need koopiad."), "text": "Alles on need koopiad!"})),
+            ("suggestion reject", lambda: self.req("/api/suggestion", {"id": mid2, "op": "reject", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion pending", lambda: self.req("/api/suggestion", {"id": mid2, "op": "pending", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion accept", lambda: self.req("/api/suggestion", {"id": mid2, "op": "accept", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion delete", lambda: self.req("/api/suggestion", {"id": mid2, "op": "delete", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("owner edit", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Alles on need varukoopiad."})),
+            ("owner edit accept", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Siin on need varukoopiad.", "accept": True})),
+            ("glossary", lambda: self.req("/api/glossary", {"items": [{"en": "layer", "tr": "kiht", "note": "n"}]})),
+        ]
+        for label, step in steps:
+            step()
+            check(label)
+        pv = self.req("/api/apply/preview", {})
+        self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
+        check("apply")
+        self.assertEqual(self.req("/api/item?id=" + mid2)["status"], "fixed")
+
     def test_owner_edit(self):
         mid = "demo.ftl::demo-title"
         it = self.req("/api/item?id=" + mid)

@@ -23,16 +23,53 @@
     clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, undo ? 8000 : 3500);
   }
   var TOKEN = (document.querySelector('meta[name="l10n-token"]') || {}).content || '';
-  function request(path, body) {
+  function request(path, body, keepalive) {
     var q = 'target=' + encodeURIComponent(S.target);
     var url = '/api/' + path + (path.indexOf('?') < 0 ? '?' : '&') + q;
     var headers = { 'X-L10n-Token': TOKEN };
     var opt = { headers: headers };
     if (body !== undefined) { opt.method = 'POST'; headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    if (keepalive) opt.keepalive = true;
     return fetch(url, opt);
   }
+  // Every request that changes the state file is tracked by the Saved indicator.
+  var STATE_PATHS = ['status', 'comment', 'highlight', 'suggestion', 'owner-edit', 'glossary', 'apply'];
+  var SAVE = { pending: 0, failed: [], last: '', typing: false };
+  function clock() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
+  function showSave() {
+    var el = $('save-ind'); if (!el) return;
+    el.textContent = ''; el.className = 'save-ind';
+    if (SAVE.failed.length) {
+      el.classList.add('bad');
+      el.appendChild(document.createTextNode('NOT SAVED: ' + SAVE.failed[SAVE.failed.length - 1].err + ' '));
+      el.appendChild(h('button', { onclick: retrySave }, 'Retry'));
+    } else if (SAVE.pending > 0 || SAVE.typing) el.textContent = 'Saving...';
+    else if (SAVE.last) el.textContent = 'Saved ' + SAVE.last;
+    else el.textContent = 'Nothing changed yet';
+  }
+  function retrySave() {
+    var items = SAVE.failed; SAVE.failed = []; showSave();
+    items.forEach(function (f) { api(f.path, f.body).catch(fail); });
+  }
   function api(path, body) {
-    return request(path, body).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; }); });
+    var tracked = body !== undefined && STATE_PATHS.indexOf(path) >= 0;
+    if (tracked) { SAVE.pending++; showSave(); }
+    var done = function () { if (tracked) { SAVE.pending--; } };
+    return request(path, body).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) { var e = new Error(j.error || r.status); e.status = r.status; throw e; }
+        done(); if (tracked) { SAVE.last = clock(); showSave(); }
+        return j;
+      });
+    }).catch(function (e) {
+      if (tracked) {
+        done();
+        // A refusal (4xx) is a mistake of the owner, not a failed save. A network error or 5xx is a failed save.
+        if (!e.status || e.status >= 500) SAVE.failed.push({ path: path, body: body, err: e.message || 'network error' });
+        showSave();
+      }
+      throw e;
+    });
   }
   function fail(e) { toast(e.message || String(e)); }
 
@@ -111,7 +148,7 @@
   }
   function trNode(m) {
     var text = m.tr ? m.tr.raw : '';
-    var box = h('div', { class: 'trtext', 'data-len': String(text.length), 'data-id': m.id, ondblclick: function () { openEdit(m.id); } });
+    var box = h('div', { class: 'trtext', 'data-len': String(text.length), 'data-id': m.id });
     if (!m.tr) { box.textContent = '(missing)'; return box; }
     O.segments(text, m.highlights).forEach(function (s) {
       var el = h(s.hl ? 'mark' : 'span', { 'data-s': String(s.start), 'data-len': String(s.end - s.start) }, s.text);
@@ -126,16 +163,33 @@
     });
     return box;
   }
+  var PENCIL = 'M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z';
+  function pencilButton(m) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '15'); svg.setAttribute('height', '15');
+    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+    PENCIL.split(' M').forEach(function (d, i) { var p = document.createElementNS(ns, 'path'); p.setAttribute('d', (i ? 'M' : '') + d); svg.appendChild(p); });
+    var b = h('button', { class: 'pencil', type: 'button', 'aria-label': 'Edit', title: 'Edit this text (e)', onclick: function (ev) { ev.stopPropagation(); openEdit(m.id); } });
+    b.appendChild(svg);
+    return b;
+  }
+  function trCell(m) {
+    var wrap = h('div', { class: 'trwrap' }, [trNode(m)]);
+    if (m.tr) wrap.appendChild(pencilButton(m));
+    return wrap;
+  }
   function rowFor(m) {
     var tr = h('tr', { class: 'msg' + (S.sel === m.id ? ' sel' : ''), 'data-id': m.id, onclick: function () { if (S.sel === m.id || !window.getSelection().isCollapsed) return; select(m.id, false); } }, [
-      h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '',
-        m.tr ? h('div', {}, h('button', { class: 'link', title: 'Edit the text in place (key e)', onclick: function (ev) { ev.stopPropagation(); openEdit(m.id); } }, 'Edit')) : '']),
+      h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '']),
       h('td', { class: 'en' }, m.en ? m.en.raw : '(no English)'),
-      h('td', { class: 'tr' }, S.edit && S.edit.id === m.id ? S.edit.el : trNode(m)),
+      h('td', { class: 'tr' }, S.edit && S.edit.id === m.id ? S.edit.el : trCell(m)),
       h('td', { class: 'st' }, h('span', { class: 'badge ' + m.status }, m.status))]);
     return tr;
   }
   function select(id, scroll) {
+    flushComment();
     S.sel = S.sel === id && !scroll ? S.sel : id;
     renderRows();
     var el = document.querySelector('tr.msg[data-id="' + CSS.escape(id) + '"]');
@@ -326,9 +380,24 @@
   function saveComment(id, value, now) {
     clearTimeout(saveComment.t);
     var m = S.byId[id]; if (m) m.comment = value;
-    var send = function () { api('comment', { id: id, comment: value }).then(function (it) { var o = S.byId[id]; if (o) { o.status = it.status; } counts(); }).catch(fail); };
+    saveComment.pending = { id: id, value: value };
+    SAVE.typing = true; showSave();
+    var send = function () {
+      saveComment.pending = null; SAVE.typing = false;
+      api('comment', { id: id, comment: value }).then(function (it) { var o = S.byId[id]; if (o) { o.status = it.status; } counts(); }).catch(fail);
+    };
     if (now) send(); else saveComment.t = setTimeout(send, 600);
   }
+  // Send a waiting comment at once: on row change, tab change and when the page goes away.
+  function flushComment(keepalive) {
+    var p = saveComment.pending; if (!p) return;
+    clearTimeout(saveComment.t); saveComment.pending = null; SAVE.typing = false;
+    if (keepalive) { request('comment', { id: p.id, comment: p.value }, true).catch(function () {}); return; }
+    api('comment', { id: p.id, comment: p.value }).catch(fail);
+  }
+  window.addEventListener('pagehide', function () { flushComment(true); });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flushComment(true); });
+
   function toggleFlag() {
     var m = S.byId[S.sel]; if (!m) return;
     if (m.status === 'unreviewed') post('status', { id: m.id, status: 'flagged' });
@@ -529,6 +598,7 @@
 
   // ---- wiring
   function setTab(t) {
+    flushComment();
     S.tab = t;
     ['list', 'terms', 'glossary', 'parity'].forEach(function (n) { $('tab-' + n).hidden = n !== t; });
     [].forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.classList.toggle('on', b.dataset.tab === t); });
@@ -539,7 +609,7 @@
   ['f-file', 'f-status', 'f-diff'].forEach(function (id) { $(id).addEventListener('change', function () { S.shown = 300; renderRows(); }); });
   $('f-text').addEventListener('input', function () { S.shown = 300; renderRows(); });
   $('more-rows').addEventListener('click', function () { S.shown += 300; renderRows(); });
-  $('target').addEventListener('change', function (e) { S.target = e.target.value; S.sel = null; S.edit = null; load().then(restoreDraft); });
+  $('target').addEventListener('change', function (e) { flushComment(); S.target = e.target.value; S.sel = null; S.edit = null; load().then(restoreDraft); });
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || S.tab !== 'list' || $('dlg').open) return;
@@ -554,5 +624,6 @@
     else if (e.key === 'e') { if (S.sel) { e.preventDefault(); openEdit(S.sel); } }
     else return;
   });
+  showSave();
   load().then(function () { pollQueue(); restoreDraft(); });
 })();

@@ -72,3 +72,10 @@ dialog::backdrop { background:rgba(0,0,0,.4); }
 .ed-msg { font-size:12px; min-height:1.4em; }
 .ed-msg.err { color:var(--bad); }
 .ed-msg.ok { color:var(--accent); }
+
+.trwrap { position:relative; padding-right:26px; }
+.pencil { position:absolute; top:0; right:0; padding:2px 4px; line-height:0; opacity:0; background:var(--panel); }
+tr.msg:hover .pencil, .pencil:focus, .pencil:focus-visible { opacity:1; }
+@media (hover: none), (max-width: 900px) { .pencil { opacity:1; } }
+.save-ind { font-size:12px; color:var(--muted); min-width:11em; }
+.save-ind.bad { color:var(--bad); background:var(--badbg); border:1px solid var(--bad); border-radius:5px; padding:1px 8px; }
