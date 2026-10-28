@@ -22,6 +22,7 @@ from state import StateError, default_state_path  # noqa: E402
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/dom.js": ("dom.js", "text/javascript; charset=utf-8"),
           "/editing.js": ("editing.js", "text/javascript; charset=utf-8"),
           "/offsets.js": ("offsets.js", "text/javascript; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}

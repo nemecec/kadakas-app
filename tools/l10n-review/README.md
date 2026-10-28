@@ -21,7 +21,7 @@ Options:
 - `--timeout 120` sets the seconds for one Claude call.
 - `--claude-bin claude` sets the name or path of the Claude Code CLI.
 
-The server binds to 127.0.0.1 only. It answers only the Host names `127.0.0.1:<port>` and `localhost:<port>`. A request with another Origin gets 403. Every API call needs a random token that the page carries. Every POST needs `Content-Type: application/json`. The server never answers CORS preflights.
+The server binds to 127.0.0.1 only. It answers only the Host names `127.0.0.1:<port>` and `localhost:<port>`. A request with another Origin gets 403. Every API call needs a random token that the page carries. The page builds all elements through one helper (`static/dom.js`). Texts become text nodes. Attribute names come from a fixed list. There is no `innerHTML`, no style string, no `href` or `src` from data and no string event handler. A node test proves it. Every POST needs `Content-Type: application/json`. The server never answers CORS preflights.
 
 ## State file
 

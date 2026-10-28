@@ -107,3 +107,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:4px; 
 .ed-warn { color:#9a6700; font-size:12px; }
 @media (prefers-color-scheme: dark) { .ed-warn { color:#e3b341; } }
 details > summary { cursor:pointer; color:var(--muted); font-size:12px; text-transform:uppercase; }
+
+.inherit { color:inherit; }
+.prewrap { white-space:pre-wrap; }
+.bold { font-weight:bold; }
+button.link { color:var(--muted); }

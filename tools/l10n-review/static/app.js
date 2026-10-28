@@ -5,21 +5,10 @@
     shown: 300, filtered: [], tab: 'list', prev: {}, sampleVer: 0, queue: null, jobErrors: {}, open: {} };
   var $ = function (id) { return document.getElementById(id); };
 
-  function h(tag, attrs, kids) {
-    var e = document.createElement(tag);
-    Object.keys(attrs || {}).forEach(function (k) {
-      if (k === 'class') e.className = attrs[k];
-      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), attrs[k]);
-      else if (attrs[k] !== false && attrs[k] != null) e.setAttribute(k, attrs[k] === true ? '' : attrs[k]);
-    });
-    [].concat(kids == null ? [] : kids).forEach(function (c) {
-      e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
-    });
-    return e;
-  }
+  var h = window.Dom.makeH(document);
   function toast(msg, undo) {
     var t = $('toast'); t.textContent = msg; t.hidden = false;
-    if (undo) { t.appendChild(h('button', { class: 'link', style: 'color:inherit', onclick: function () { t.hidden = true; undo(); } }, 'Undo')); }
+    if (undo) { t.appendChild(h('button', { class: 'link inherit', onclick: function () { t.hidden = true; undo(); } }, 'Undo')); }
     clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, undo ? 8000 : 3500);
   }
   var TOKEN = (document.querySelector('meta[name="l10n-token"]') || {}).content || '';
@@ -462,7 +451,7 @@
     if (m.en && m.en.comment) { l.appendChild(h('h4', {}, 'Comment above the message')); l.appendChild(h('div', {}, m.en.comment)); }
     if (m.en && m.en.selector) {
       l.appendChild(h('h4', {}, 'Variants of ' + m.en.selector));
-      l.appendChild(h('div', { style: 'white-space:pre-wrap' }, m.en.variants.map(function (v) { return (v.default ? '*' : '') + '[' + v.key + '] ' + v.text; }).join('\n')));
+      l.appendChild(h('div', { class: 'prewrap' }, m.en.variants.map(function (v) { return (v.default ? '*' : '') + '[' + v.key + '] ' + v.text; }).join('\n')));
     }
     var rows = m.sample_rows || [];
     if (rows.length) {
@@ -477,7 +466,7 @@
       l.appendChild(line);
     }
     var nb = (m.neighbours || []).map(function (n) {
-      return h('div', { class: 'muted', style: n.here ? 'font-weight:bold' : '' }, [n.key + ': ' + n.en.replace(/\n/g, ' ') + '  |  ' + n.tr.replace(/\n/g, ' ')]);
+      return h('div', { class: n.here ? 'muted bold' : 'muted' }, [n.key + ': ' + n.en.replace(/\n/g, ' ') + '  |  ' + n.tr.replace(/\n/g, ' ')]);
     });
     r.appendChild(section('neigh', 'Neighbours (' + Math.max(0, (m.neighbours || []).length - 1) + ')', nb));
     r.appendChild(section('usage', 'Used in ... places', [h('div', { id: 'usage-box', class: 'muted' }, 'Searching...')]));
@@ -726,7 +715,7 @@
       t.glossary.forEach(function (g) {
         var row = h('div', {}, g.en + ' -> ' + g.tr + ': ' + g.messages + ' messages, ' + g.missing_count + ' without the fixed term');
         box.appendChild(row);
-        g.missing.slice(0, 8).forEach(function (id) { box.appendChild(h('div', { class: 'muted' }, h('a', { href: '#', onclick: function (e) { e.preventDefault(); jump(id); } }, id))); });
+        g.missing.slice(0, 8).forEach(function (id) { box.appendChild(h('div', { class: 'muted' }, h('button', { class: 'link', type: 'button', onclick: function () { jump(id); } }, id))); });
       });
       box.appendChild(h('h3', {}, 'English words with several target renderings'));
       var tb = h('table'); tb.appendChild(h('tr', {}, [h('th', {}, 'English word'), h('th', {}, 'Messages'), h('th', {}, 'Renderings (stem: messages)')]));
@@ -734,7 +723,7 @@
         tb.appendChild(h('tr', {}, [h('td', {}, r.word), h('td', {}, String(r.messages)),
           h('td', {}, r.renderings.map(function (x) { return x.stem + '...: ' + x.count; }).join('   ') + '   ')]));
         var last = tb.lastChild.lastChild;
-        r.renderings.forEach(function (x) { x.ids.slice(0, 2).forEach(function (id) { last.appendChild(h('a', { href: '#', class: 'muted', onclick: function (e) { e.preventDefault(); jump(id); } }, id + ' ')); }); });
+        r.renderings.forEach(function (x) { x.ids.slice(0, 2).forEach(function (id) { last.appendChild(h('button', { class: 'link', type: 'button', onclick: function () { jump(id); } }, id + ' ')); }); });
       });
       box.appendChild(tb);
     }).catch(fail);
@@ -789,7 +778,9 @@
   });
   $('btn-export').addEventListener('click', function () {
     request('export').then(function (r) { return r.blob(); }).then(function (b) {
-      var a = h('a', { href: URL.createObjectURL(b), download: 'review-' + S.target + '.md' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(b);   // a blob URL made here, never a string from the data
+      a.download = 'review-' + S.target.replace(/[^A-Za-z0-9_-]/g, '') + '.md';
       document.body.appendChild(a); a.click(); a.remove();
     }).catch(fail);
   });
