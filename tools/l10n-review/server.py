@@ -22,6 +22,7 @@ from state import StateError, default_state_path  # noqa: E402
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/editing.js": ("editing.js", "text/javascript; charset=utf-8"),
           "/offsets.js": ("offsets.js", "text/javascript; charset=utf-8"),
           "/style.css": ("style.css", "text/css; charset=utf-8")}
 
@@ -248,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "queue":
                 return self.send(200, app.job.info() if app.job else {"status": "idle"})
             return self.send(404, {"error": "Not found"})
-        needs_id = ("status", "comment", "highlight", "suggestion")
+        needs_id = ("status", "comment", "highlight", "suggestion", "validate", "owner-edit")
         if path in needs_id and mid is None:
             raise StateError("Field 'id' is required")
         if path == "status":
@@ -274,6 +275,17 @@ class Handler(BaseHTTPRequestHandler):
                 rv.edit_suggestion(mid, need(body, "sid", str), need(body, "text", str))
             else:
                 rv.state.decide_suggestion(mid, need(body, "sid", str), op)
+        elif path == "validate":
+            text = need(body, "text", str)
+            return self.send(200, {"error": rv.validate(mid, text.strip("\n")),
+                                   "unchanged": rv.index[mid]["tgt"] is not None and text.strip("\n") == rv.index[mid]["tgt"].raw})
+        elif path == "owner-edit":
+            base = body.get("base_hash")
+            if base is not None and not isinstance(base, str):
+                raise StateError("Field 'base_hash' must be a string")
+            item, unchanged = rv.owner_edit(mid, need(body, "text", str), base, bool(body.get("accept")))
+            item["unchanged"] = unchanged
+            return self.send(200, item)
         elif path == "glossary":
             items = need(body, "items", list)
             if not all(isinstance(i, dict) for i in items):

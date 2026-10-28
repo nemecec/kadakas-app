@@ -39,10 +39,22 @@ Each row shows the file and key, the English text, the target text and the statu
 - Select words in the target text and press Weird (or key `w`). The words get a yellow highlight. Click a highlight to remove it.
 - Write a comment in the box. Press `f` to flag or unflag the message.
 - Statuses are unreviewed, flagged, suggested, accepted and fixed.
-- Keys: `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `w` marks the selected words.
+- Keys: `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` edits in place, `w` marks the selected words.
 - Filters: file, status, text search in both languages, and only messages that have a different suggestion.
 
 If a highlighted text changes in the file, the highlights of that message are hidden. Their offsets no longer fit.
+
+## Edit in place
+
+Press Edit on a row, press `e`, or double-click the target text. The target text turns into a text box. It holds the current value as it is written in the file, with line breaks, selectors and placeables, and without the indentation of the file. The English source is above it. The flagged words are in a read-only line above the box.
+
+- While you type, the tool checks the text after a short pause. It uses the same checks as Apply: variables, terms, string literals, functions, selector structure, line count, spaces at the ends and empty braces. The reason shows under the box.
+- The chips under the box hold the variables and the placeables of the message, for example `{ $name }`, `{ -term }` and `{ " " }`. A click inserts the exact text at the cursor.
+- Save as suggestion stores the text as a suggestion with the source "owner edit". Save and accept does the same and accepts it, so it goes into the next Apply preview. Ctrl/Cmd+Enter is Save and accept.
+- Esc cancels. If you changed the text, the tool asks first.
+- An invalid text is refused with the reason. An unchanged text does nothing. If the file text changed since you opened the editor, the save is refused.
+- The suggestion cards show your text against the current text.
+- An edit in progress survives the one-second refresh and a filter change. It is also saved as a draft in the local storage of the browser, one draft for each message. The draft returns after a reload. It is deleted on save and on cancel. If the file text changed in the meantime, the draft is dropped.
 
 ## Suggest
 

@@ -7,7 +7,7 @@ import apply as applymod
 import ftl
 import prompt as promptmod
 import terms
-from state import ReviewState, default_state_path, hash_text, msg_id, STATUSES
+from state import ReviewState, StateError, default_state_path, hash_text, msg_id, STATUSES
 
 EXAMPLES = {
     "count": "3", "n": "3", "total": "12", "used": "2", "step": "4", "id": "7", "index": "2",
@@ -113,7 +113,7 @@ class Review:
     def _msg_dict(self, m, with_examples=False):
         if m is None:
             return None
-        d = {"raw": m.raw, "comment": m.comment, "variables": m.variables, "selector": m.selector,
+        d = {"raw": m.raw, "hash": hash_text(m.raw), "comment": m.comment, "variables": m.variables, "selector": m.selector,
              "variants": m.variants, "attributes": m.attributes, "start": m.start, "end": m.end}
         if with_examples:
             d["examples"] = {v: example_for(v) for v in m.variables}
@@ -146,6 +146,7 @@ class Review:
              "status": st["status"], "comment": st["comment"], "highlights": hl,
              "highlights_stale": stale, "suggestions": st["suggestions"]}
         if not brief:
+            d["chips"] = self.chips(info)
             keys = info["keys"]
             p = info["pos"]
             d["neighbours"] = [{"key": k, "en": (e.raw if e else ""), "tr": (t.raw if t else ""),
@@ -180,6 +181,39 @@ class Review:
                 "claude": bool(__import__("shutil").which(self.claude_bin))}
 
     # prompt
+    def chips(self, info):
+        """Exact placeables the owner may insert while editing: the English variables, then the
+        non-variable placeables (terms, literals, functions) of the current text."""
+        out = []
+        en, tg = info["en"], info["tgt"]
+        for v in (en.value_variables if en else (tg.value_variables if tg else [])):
+            out.append("{ $%s }" % v)
+        for p in ftl.placeables(tg.raw)[0] if tg else []:
+            chip = "{ %s }" % p
+            if chip not in out:
+                out.append(chip)
+        return out
+
+    def owner_edit(self, mid, text, base_hash, accept):
+        """Store the owner's edit of the current text as a suggestion. Returns (item, unchanged)."""
+        info = self.index[mid]
+        if info["tgt"] is None or info["en"] is None:
+            raise StateError("The message is missing in one language.")
+        text = text.strip("\n")
+        if text == info["tgt"].raw:
+            return self.item(mid), True
+        if base_hash and base_hash != hash_text(info["tgt"].raw):
+            raise StateError("The text changed in the file since you opened the editor. Cancel and edit again.")
+        err = self.validate(mid, text)
+        if err:
+            raise StateError(err)
+        sug = self.add_suggestion(mid, text, "owner edit")
+        if sug is None:   # the same text is already pending
+            sug = next(s for s in self.state.view(mid)["suggestions"] if s["text"] == text and s["state"] == "pending")
+        if accept:
+            self.state.decide_suggestion(mid, sug["id"], "accept")
+        return self.item(mid), False
+
     def validate(self, mid, text):
         """Error text for a suggestion, or None when it is safe to apply."""
         info = self.index[mid]

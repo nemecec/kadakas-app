@@ -62,3 +62,13 @@ dialog::backdrop { background:rgba(0,0,0,.4); }
 .chk input { margin:0; }
 .gl input { width:100%; }
 .gl td { padding:3px; }
+
+.editor { background:var(--panel); border:1px solid var(--accent); border-radius:6px; padding:8px; }
+.ed-en-text { white-space:pre-wrap; margin-bottom:6px; }
+.ed-words { margin-bottom:6px; }
+.ed-ta { width:100%; min-height:48px; font-size:15px; white-space:pre-wrap; resize:vertical; }
+.chips { margin:4px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.chip { font-family:ui-monospace, monospace; font-size:12px; padding:1px 6px; }
+.ed-msg { font-size:12px; min-height:1.4em; }
+.ed-msg.err { color:var(--bad); }
+.ed-msg.ok { color:var(--accent); }

@@ -1,6 +1,6 @@
 'use strict';
 (function () {
-  var O = window.Offsets;
+  var O = window.Offsets, Ed = window.Editing;
   var S = { target: new URLSearchParams(location.search).get('target') || '', data: null, byId: {}, sel: null,
     shown: 300, filtered: [], tab: 'list', queue: null, jobErrors: {}, open: {} };
   var $ = function (id) { return document.getElementById(id); };
@@ -39,7 +39,7 @@
   // Never rebuild the panel while the owner types in it.
   function editing() {
     var a = document.activeElement;
-    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#detail-cell'));
+    return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#detail-cell, .editor'));
   }
   function renderSafe() {
     if (editing()) { S.pendingRender = true; return; }
@@ -103,13 +103,15 @@
   }
   function renderRows() {
     filter();
+    var ta0 = S.edit && S.edit.ta, had = !!(ta0 && document.activeElement === ta0), ss = ta0 ? ta0.selectionStart : 0, se = ta0 ? ta0.selectionEnd : 0;
     var tb = document.querySelector('#rows tbody'); tb.textContent = '';
     S.filtered.slice(0, S.shown).forEach(function (m) { tb.appendChild(rowFor(m)); if (S.sel === m.id) tb.appendChild(detailFor(m)); });
     $('more-rows').hidden = S.filtered.length <= S.shown;
+    if (had && S.edit.ta.isConnected) { S.edit.ta.focus(); S.edit.ta.setSelectionRange(ss, se); }
   }
   function trNode(m) {
     var text = m.tr ? m.tr.raw : '';
-    var box = h('div', { class: 'trtext', 'data-len': String(text.length), 'data-id': m.id });
+    var box = h('div', { class: 'trtext', 'data-len': String(text.length), 'data-id': m.id, ondblclick: function () { openEdit(m.id); } });
     if (!m.tr) { box.textContent = '(missing)'; return box; }
     O.segments(text, m.highlights).forEach(function (s) {
       var el = h(s.hl ? 'mark' : 'span', { 'data-s': String(s.start), 'data-len': String(s.end - s.start) }, s.text);
@@ -126,9 +128,10 @@
   }
   function rowFor(m) {
     var tr = h('tr', { class: 'msg' + (S.sel === m.id ? ' sel' : ''), 'data-id': m.id, onclick: function () { if (S.sel === m.id || !window.getSelection().isCollapsed) return; select(m.id, false); } }, [
-      h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '']),
+      h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '',
+        m.tr ? h('div', {}, h('button', { class: 'link', title: 'Edit the text in place (key e)', onclick: function (ev) { ev.stopPropagation(); openEdit(m.id); } }, 'Edit')) : '']),
       h('td', { class: 'en' }, m.en ? m.en.raw : '(no English)'),
-      h('td', { class: 'tr' }, trNode(m)),
+      h('td', { class: 'tr' }, S.edit && S.edit.id === m.id ? S.edit.el : trNode(m)),
       h('td', { class: 'st' }, h('span', { class: 'badge ' + m.status }, m.status))]);
     return tr;
   }
@@ -142,6 +145,114 @@
   }
   function post(path, body) {
     return api(path, body).then(function (it) { if (it && it.id) apply(it); renderSafe(); return it; }).catch(fail);
+  }
+
+  // ---- in-place editor
+  function store() {
+    try { return window.localStorage || null; } catch (e) { return null; }
+  }
+  var NOSTORE = { length: 0, key: function () { return null; }, getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} };
+  function st() { return store() || NOSTORE; }
+  function openEdit(id) {
+    var m = S.byId[id];
+    if (!m || !m.tr) return toast('Nothing to edit');
+    if (S.edit && S.edit.id === id) { if (S.edit.ta) S.edit.ta.focus(); return; }
+    S.edit = null;   // the draft of another edit stays in localStorage
+    api('item?id=' + encodeURIComponent(id)).then(function (it) {
+      apply(it);
+      var d = Ed.loadDraft(st(), S.target, id, it.tr.raw);
+      startEdit(S.byId[id], d ? d.text : it.tr.raw, !!d);
+    }).catch(fail);
+  }
+  function startEdit(m, text, restored) {
+    S.sel = m.id;
+    S.edit = { id: m.id, orig: m.tr.raw, hash: m.tr.hash, text: text, seq: 0 };
+    S.edit.el = buildEditor(m, text);
+    renderRows(); fillDetail();
+    S.edit.ta.focus();
+    var row = document.querySelector('tr.msg[data-id="' + CSS.escape(m.id) + '"]'); if (row) row.scrollIntoView({ block: 'center' });
+    validateNow();
+    if (restored) toast('Restored your unsaved edit');
+  }
+  function buildEditor(m, text) {
+    var ta = h('textarea', { class: 'ed-ta', lang: S.target, spellcheck: 'true', rows: String(Math.max(2, text.split('\n').length + 1)) });
+    ta.value = text;
+    var msg = h('div', { class: 'ed-msg muted' }, '');
+    var bSug = h('button', { onclick: function () { saveEdit(false); } }, 'Save as suggestion');
+    var bAcc = h('button', { class: 'primary', onclick: function () { saveEdit(true); } }, 'Save and accept');
+    var chips = h('div', { class: 'chips' }, [h('span', { class: 'muted' }, 'Insert: ')].concat((m.chips || []).map(function (c) {
+      return h('button', { class: 'chip', type: 'button', title: 'Insert at the cursor', onmousedown: function (e) { e.preventDefault(); }, onclick: function () { insertChip(c); } }, c);
+    })));
+    var words = (m.highlights || []).map(function (x) { return x.text; });
+    var box = h('div', { class: 'editor', onclick: function (e) { e.stopPropagation(); } }, [
+      h('div', { class: 'ed-en' }, [h('div', { class: 'muted' }, 'English'), h('div', { class: 'ed-en-text' }, m.en ? m.en.raw : '')]),
+      words.length ? wordsLine(words) : '',
+      ta, chips, msg,
+      h('div', { class: 'actions' }, [bSug, bAcc, h('button', { onclick: cancelEdit }, 'Cancel'), h('span', { class: 'muted' }, 'Ctrl/Cmd+Enter saves and accepts, Esc cancels')])]);
+    S.edit.ta = ta; S.edit.msg = msg; S.edit.bSug = bSug; S.edit.bAcc = bAcc;
+    ta.addEventListener('input', onEditInput);
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+      e.stopPropagation();
+    });
+    return box;
+  }
+  function wordsLine(words) {
+    var kids = [h('span', { class: 'muted' }, 'Flagged words: ')];
+    words.forEach(function (w) { kids.push(h('mark', {}, w), ' '); });
+    return h('div', { class: 'ed-words' }, kids);
+  }
+  function onEditInput() {
+    var e = S.edit; if (!e) return;
+    e.text = e.ta.value;
+    Ed.saveDraft(st(), S.target, e.id, e.text, e.orig);
+    e.ta.rows = Math.max(2, e.text.split('\n').length + 1);
+    clearTimeout(onEditInput.t); onEditInput.t = setTimeout(validateNow, 300);
+  }
+  function showEditMsg(text, cls) { if (S.edit) { S.edit.msg.textContent = text; S.edit.msg.className = 'ed-msg ' + cls; } }
+  function validateNow() {
+    var e = S.edit; if (!e) return;
+    var seq = ++e.seq, text = e.ta.value;
+    if (!Ed.isChanged(text, e.orig)) { showEditMsg('No change yet.', 'muted'); e.bSug.disabled = e.bAcc.disabled = true; return; }
+    e.bSug.disabled = e.bAcc.disabled = false;
+    api('validate', { id: e.id, text: text }).then(function (r) {
+      if (!S.edit || S.edit.seq !== seq) return;
+      if (r.error) showEditMsg('Invalid: ' + r.error, 'err'); else showEditMsg('Valid. Variables, placeables and structure fit.', 'ok');
+    }).catch(function (er) { showEditMsg(er.message, 'err'); });
+  }
+  function insertChip(chip) {
+    var e = S.edit; if (!e) return;
+    var r = Ed.insertAtCursor(e.ta.value, e.ta.selectionStart, e.ta.selectionEnd, chip);
+    e.ta.value = r.text; e.ta.focus(); e.ta.setSelectionRange(r.cursor, r.cursor);
+    onEditInput();
+  }
+  function saveEdit(accept) {
+    var e = S.edit; if (!e) return;
+    var text = e.ta.value;
+    if (!Ed.isChanged(text, e.orig)) { toast('No change, nothing saved'); closeEdit(true); return; }
+    api('owner-edit', { id: e.id, text: text, base_hash: e.hash, accept: accept }).then(function (it) {
+      Ed.clearDraft(st(), S.target, e.id);
+      S.edit = null; apply(it); counts(); renderRows(); fillDetail();
+      toast(accept ? 'Saved and accepted' : 'Saved as a suggestion');
+    }).catch(function (er) { showEditMsg(er.message, 'err'); });
+  }
+  function closeEdit(clear) {
+    if (S.edit && clear) Ed.clearDraft(st(), S.target, S.edit.id);
+    S.edit = null; counts(); renderRows(); fillDetail();
+  }
+  function cancelEdit() {
+    var e = S.edit; if (!e) return;
+    if (Ed.isChanged(e.ta.value, e.orig) && !confirm('Discard your edit?')) { e.ta.focus(); return; }
+    closeEdit(true);
+  }
+  function restoreDraft() {
+    var cur = {};
+    S.data.messages.forEach(function (m) { if (m.tr) cur[m.id] = m.tr.raw; });
+    var d = Ed.newestDraft(st(), S.target, cur);
+    if (d && !S.edit) {
+      api('item?id=' + encodeURIComponent(d.id)).then(function (it) { apply(it); startEdit(S.byId[d.id], d.text, true); }).catch(fail);
+    }
   }
 
   // ---- detail panel
@@ -428,7 +539,7 @@
   ['f-file', 'f-status', 'f-diff'].forEach(function (id) { $(id).addEventListener('change', function () { S.shown = 300; renderRows(); }); });
   $('f-text').addEventListener('input', function () { S.shown = 300; renderRows(); });
   $('more-rows').addEventListener('click', function () { S.shown += 300; renderRows(); });
-  $('target').addEventListener('change', function (e) { S.target = e.target.value; S.sel = null; load(); });
+  $('target').addEventListener('change', function (e) { S.target = e.target.value; S.sel = null; S.edit = null; load().then(restoreDraft); });
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || S.tab !== 'list' || $('dlg').open) return;
@@ -440,7 +551,8 @@
     else if (e.key === 'c') { var t = document.querySelector('textarea.cm'); if (t) { e.preventDefault(); t.focus(); } }
     else if (e.key === 'a') { var m = S.byId[S.sel]; if (m && m.tr && ($('no-ask').checked || confirm('Ask Claude for this message? This uses your Claude usage.'))) suggest([m.id], false); }
     else if (e.key === 'w') weird();
+    else if (e.key === 'e') { if (S.sel) { e.preventDefault(); openEdit(S.sel); } }
     else return;
   });
-  load().then(function () { pollQueue(); });
+  load().then(function () { pollQueue(); restoreDraft(); });
 })();

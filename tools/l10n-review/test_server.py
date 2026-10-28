@@ -141,6 +141,46 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.raw("POST", "/api/comment", {"id": "demo.ftl::demo-title", "comment": "x"},
                                   {"Content-Length": "-5"})[0], 400)
 
+    def test_owner_edit(self):
+        mid = "demo.ftl::demo-title"
+        it = self.req("/api/item?id=" + mid)
+        h0 = it["tr"]["hash"]
+        self.assertIn("{ $n }", it["chips"])
+        self.assertIn("{ $total }", it["chips"])
+        # validation: the same rules as Apply
+        r = self.req("/api/validate", {"id": mid, "text": "Aruanne { $n }"})
+        self.assertIn("variables", r["error"])
+        r = self.req("/api/validate", {"id": mid, "text": "Aruanne { $n } / { $total }"})
+        self.assertIsNone(r["error"])
+        self.assertTrue(self.req("/api/validate", {"id": mid, "text": it["tr"]["raw"]})["unchanged"])
+        # invalid text is refused with the reason and stores nothing
+        before = len(it["suggestions"])
+        status, text = self.raw("POST", "/api/owner-edit", {"id": mid, "text": "Aruanne { $n }", "base_hash": h0})
+        self.assertEqual(status, 400)
+        self.assertIn("variables", json.loads(text)["error"])
+        self.assertEqual(len(self.req("/api/item?id=" + mid)["suggestions"]), before)
+        # unchanged text does nothing
+        r = self.req("/api/owner-edit", {"id": mid, "text": it["tr"]["raw"], "base_hash": h0})
+        self.assertTrue(r["unchanged"])
+        self.assertEqual(len(r["suggestions"]), before)
+        # a stale base hash is refused
+        status, text = self.raw("POST", "/api/owner-edit", {"id": mid, "text": "Aruanne { $n } / { $total }", "base_hash": "0" * 12})
+        self.assertEqual(status, 400)
+        self.assertIn("changed in the file", json.loads(text)["error"])
+        # save as a suggestion, then save and accept
+        r = self.req("/api/owner-edit", {"id": mid, "text": "Raport { $n } / { $total }", "base_hash": h0})
+        s = r["suggestions"][-1]
+        self.assertEqual((s["source"], s["state"], s["text"]), ("owner edit", "pending", "Raport { $n } / { $total }"))
+        self.assertEqual(s["base_hash"], h0)
+        self.assertNotEqual(r["status"], "accepted")
+        r = self.req("/api/owner-edit", {"id": mid, "text": "Aruanne nr { $n } / { $total }", "base_hash": h0, "accept": True})
+        self.assertEqual(r["status"], "accepted")
+        self.assertEqual([x["text"] for x in r["suggestions"] if x["state"] == "accepted"], ["Aruanne nr { $n } / { $total }"])
+        pv = self.req("/api/apply/preview", {})
+        self.assertIn(mid, [c["id"] for c in pv["changes"] if not c["error"]])
+        # a field of the wrong type is a 400
+        self.assertEqual(self.raw("POST", "/api/owner-edit", {"id": mid, "text": 5})[0], 400)
+
     def test_apply_over_http_needs_the_preview_digest(self):
         mid = "demo.ftl::demo-recover"
         it = self.req("/api/suggestion", {"id": mid, "op": "add", "text": "Alles on need varukoopiad."})
