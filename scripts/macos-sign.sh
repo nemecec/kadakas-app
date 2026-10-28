@@ -35,8 +35,18 @@ sign_programs() {
     echo "item: ${f##*/}: $kind"
     # Every executable file is a program. `file` is only the second check.
     if [ -x "$f" ] || [[ "$kind" == *Mach-O* ]]; then
-      sign "$f"
-      codesign --verify --strict "$f" || { echo "not signed: $f" >&2; return 1; }
+      sign -vvv "$f"
+      if ! codesign --verify --strict --verbose=2 "$f"; then
+        # Seen on the Intel runner: the sign call succeeded and the check said "not signed at all".
+        # Print what is on the file, then take the signature off and sign once more.
+        echo "retry: $f" >&2
+        ls -l "$f" >&2
+        codesign -dvvv "$f" >&2 || true
+        codesign --remove-signature "$f" || true
+        sleep 2
+        sign -vvv "$f"
+        codesign --verify --strict --verbose=2 "$f" || { echo "not signed: $f" >&2; return 1; }
+      fi
     fi
   done
 }
