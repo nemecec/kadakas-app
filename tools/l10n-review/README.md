@@ -58,7 +58,7 @@ Most messages are fine. A typical session goes like this.
 
 The header shows `Reviewed N of M (xx%)`. Reviewed means every status except unreviewed. The file list shows unreviewed and total counts for each file. The status filter has a "needs attention" choice. It shows flagged, suggested and accepted messages.
 
-OK keeps your data. Comments, highlights and suggestions stay when you mark a message OK. An OK message with open suggestions shows an "open" badge. A highlight or a new suggestion on an OK message sets it back to flagged or suggested. The key `f` flags an OK message too. An accepted or fixed message cannot be marked OK.
+OK keeps your data. Comments, highlights and suggestions stay when you mark a message OK. An OK message with open suggestions shows an "open" badge. A highlight or a new suggestion on an OK message sets it back to flagged or suggested. The key `f` flags an OK message too. Key `o` refuses an accepted or fixed message.
 
 Apply and the Terms tab ignore OK. The export lists only the number of OK messages for each file.
 
