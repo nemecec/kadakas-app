@@ -40,7 +40,7 @@ Each row shows the file and key, the English text, the target text and the statu
 - Select words in the target text and press Weird (or key `w`). The words get a yellow highlight. Click a highlight to remove it.
 - Write a comment in the box. Press `f` to flag or unflag the message.
 - Statuses are unreviewed, ok, flagged, suggested, accepted and fixed.
-- Keys: `o` marks OK, `u` and `U` jump to unreviewed rows, `?` shows all keys, `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` edits in place, `w` marks the selected words.
+- Keys: `o` marks OK, `u` and `U` jump to unreviewed rows, `?` shows all keys, `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` and `E` edit the target and the English text in place, `w` marks the selected words.
 - Filters: file, status, text search in both languages, and only messages that have a different suggestion.
 
 If a highlighted text changes in the file, the highlights of that message are hidden. Their offsets no longer fit.
