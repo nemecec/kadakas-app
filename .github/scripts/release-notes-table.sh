@@ -56,14 +56,22 @@ while IFS= read -r f; do
   esac
 done < <(find "$dir" -type f | sort)
 
-if [[ "$version" == *-* ]]; then
+# The section about unsigned builds stays until the installers are signed (PLAT-19). The signing
+# state is the signing-identity in packager-macos.toml (UNSIGNED_NOTE=1 or 0 overrides it).
+config="${PACKAGER_MACOS_CONFIG:-$(cd "$(dirname "$0")/../.." && pwd)/packager-macos.toml}"
+unsigned=1
+if grep -Eq '^[[:space:]]*signing-identity[[:space:]]*=' "$config" 2>/dev/null; then unsigned=0; fi
+unsigned="${UNSIGNED_NOTE:-$unsigned}"
+if [ "$unsigned" = 1 ]; then
   cat <<'EOT'
 
 ## Open an unsigned build
 
-The installers of a pre-release are not signed or notarized yet. The first start shows a warning.
+The installers are not signed or notarized yet. The first start shows a warning. The app is safe to open when you got it from this page.
 
-- **macOS.** The message says "Apple could not verify Kadakas is free of malware". Press Done. Open System Settings, Privacy & Security, and press Open Anyway. Or right-click the app and choose Open. Or run `xattr -cr /Applications/Kadakas.app` in the Terminal.
+- **macOS 15 and newer.** The message says "Apple could not verify Kadakas is free of malware". Press Done. Open System Settings, Privacy & Security, scroll down and press Open Anyway. macOS asks for your password and shows a second dialog. Press Open Anyway there.
+- **macOS 14 and older.** The message says "Kadakas cannot be opened because the developer cannot be verified". Right-click the app, choose Open, and press Open. Right-click does not work on macOS 15.
+- **Any macOS.** Run `xattr -cr /Applications/Kadakas.app` in the Terminal. This removes the download flag, and the app opens at once.
 - **Windows.** SmartScreen says "Windows protected your PC". Press More info, then Run anyway.
 EOT
 fi
