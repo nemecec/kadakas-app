@@ -70,3 +70,6 @@ ext:maaruum-etak-wfs	Maa- ja Ruumiamet Estonian Topographic Database ETAK: build
 ext:keskkonnaagentuur-eelis-wfs	EELIS protected areas, Natura 2000 and flood risk areas (WFS, queried at run time by the demo script, not stored)	Keskkonnaagentuur and Kliimaministeerium (Estonian Environmental Agency and Ministry of Climate)	CC-BY-4.0	https://gsavalik.envir.ee/geoserver/ows	test
 ext:muinsuskaitseamet-register-wfs	Register of Cultural Monuments: monuments and protection zones (WFS, queried at run time by the demo script, not stored)	Muinsuskaitseamet (National Heritage Board)	CC-BY-4.0	https://register.muinas.ee	test
 ext:openstreetmap-overpass	OpenStreetMap data through the Overpass API (fallback for nearby objects, queried at run time by the demo script, not stored)	OpenStreetMap contributors	ODbL-1.0	https://www.openstreetmap.org/copyright	test
+tools/l10n-review/**/*.js	Translation review tool scripts	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tools/l10n-review/static/*.html	Translation review tool page	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test
+tools/l10n-review/static/*.css	Translation review tool style	Kadakas project	Apache-2.0 OR MIT	https://github.com/nemecec/kadakas-app	test

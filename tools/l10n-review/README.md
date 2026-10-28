@@ -1,0 +1,179 @@
+# Translation review tool
+
+A small local web app. It shows the English text and the target text side by side. You mark weird words, write comments and ask Claude for better texts. It runs only on your machine.
+
+It needs Python 3 for the page. No packages, no network, no CDN. The Suggest button also needs the Claude Code CLI (`claude`) on your PATH and a logged-in account.
+
+## Start
+
+```
+python3 tools/l10n-review/server.py
+```
+
+Then open http://127.0.0.1:8765/ in a browser.
+
+Options:
+
+- `--port 8765` sets the port.
+- `--target et` sets the language to review. The page has a language selector too.
+- `--repo <path>` sets the repository. The default is the repository of the script.
+- `--state <file>` sets the state file.
+- `--timeout 120` sets the seconds for one Claude call.
+- `--claude-bin claude` sets the name or path of the Claude Code CLI.
+
+The server binds to 127.0.0.1 only. It answers only the Host names `127.0.0.1:<port>` and `localhost:<port>`. A request with another Origin gets 403. Every API call needs a random token that the page carries. The page builds all elements through one helper (`static/dom.js`). Texts become text nodes. Attribute names come from a fixed list. There is no `innerHTML`, no style string, no `href` or `src` from data and no string event handler. A node test proves it. Every POST needs `Content-Type: application/json`. The server never answers CORS preflights.
+
+## State file
+
+Your flags, comments, highlights, suggestions and glossary go to one JSON file. The file is outside the repository.
+
+The default is `~/.kadakas-l10n-review/<target>.json`. The file is written atomically. If the file is not valid JSON, has the wrong shape or belongs to another language, the tool moves it to `<name>.broken-<time>` and raises an error at start-up. A second locale with a broken file gives HTTP 400. The tool never drops your data silently.
+
+The repository files change only when you press Apply.
+
+## Review
+
+Each row shows the file and key, the English text, the target text and the status.
+
+- Click a row to see the context. The file name, the group comment and the comment above the message are always visible. The neighbouring keys ("Neighbours (6)") and the places in the Rust sources that use the key ("Used in 3 places", up to five with three lines of code) are collapsed. The browser remembers what you opened.
+- The status column holds the status and three buttons: OK, Flag and Accept. Accept takes the chosen suggestion of the row for Apply. It is off until the row has a valid suggestion.
+- Select words in the target text and press Weird (or key `w`). The words get a yellow highlight. Click a highlight to remove it.
+- Write a comment in the box. Press `f` to flag or unflag the message.
+- Statuses are unreviewed, ok, flagged, suggested, accepted and fixed.
+- Keys: `o` marks OK, `u` and `U` jump to unreviewed rows, `?` shows all keys, `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` and `E` edit the target and the English text in place, `w` marks the selected words.
+- Filters: file, status, text search in both languages, and only messages that have a different suggestion.
+
+If a highlighted text changes in the file, the highlights of that message are hidden. Their offsets no longer fit.
+
+## Workflow
+
+Most messages are fine. A typical session goes like this.
+
+1. Filter by one file and the status unreviewed.
+2. Read a row. If it is fine, press `o`. The row becomes OK and the selection moves to the next unreviewed row. Press `o` again on an OK row to undo it.
+3. If a word is wrong, select it and press `w` (Weird). Press `f` to flag a message without a word.
+4. Press `e` to fix the text yourself. Press `a` to ask Claude for three alternatives.
+5. Press `u` or `U` to jump to the next or previous unreviewed row. Press `?` for the list of keys.
+6. Finish a file with Mark all shown as OK. It marks only the unreviewed rows in the shown list. It asks first and shows the count. One Undo restores them.
+7. At the end, open Apply to write the accepted texts.
+
+The header shows `Reviewed N of M (xx%)`. Reviewed means every status except unreviewed. The file list shows unreviewed and total counts for each file. The status filter has a "needs attention" choice. It shows flagged, suggested and accepted messages.
+
+OK keeps your data. Comments, highlights and suggestions stay when you mark a message OK. An OK message with open suggestions shows an "open" badge. A highlight or a new suggestion on an OK message sets it back to flagged or suggested. The key `f` flags an OK message too. Key `o` refuses an accepted or fixed message.
+
+Apply and the Terms tab ignore OK. The export lists only the number of OK messages for each file.
+
+## Saving
+
+Every action goes to the state file at once. The header shows `Saving...`, then `Saved HH:MM:SS`. If a save fails (network error or server error), it shows a red `NOT SAVED` with the error and a Retry button. A comment is sent 600 ms after you stop typing. It is also sent when you leave the box, change the row or tab, and when the page closes.
+
+## Edit the English text
+
+The English text has its own pencil, next to the English text. The key `E` does the same. The editor works like the target editor: pre-filled raw value, live checks, chips, Save as suggestion, Save and accept, drafts and the check of the base hash. The target text is shown above the box for context.
+
+- Suggestions have a language. A card shows English or the target language. A row holds one accepted suggestion for each language.
+- An edit of the English text is allowed to remove a variable. The editor warns: update the target text too.
+- An edit of the English text is refused when it adds a variable. The Rust code does not pass it. The message names the places in the Rust sources that use the key.
+- Terms, string literals, functions and the selector structure stay as they are, like for the target.
+- Apply writes the English file in `crates/kadakas-l10n/locales/en-US/`. The preview shows the diff for each language and file. The check for uncommitted changes covers both folders.
+- After Apply wrote an English change, the target message of the same key becomes flagged. The tool adds the comment "English text changed on <date>: <old> -> <new>" and keeps the old comment. The target row shows the change with the changed words marked. Mark the row OK to remove the note. If you apply a new target text in the same run, the row becomes fixed.
+- A target suggestion made for the old English text shows the badge "made for older English". Apply refuses it.
+- Suggest English asks Claude for a better English text. The prompt tells Claude to improve clarity and consistency, to keep the meaning and the variables, and to add no variable. The target text is only context.
+
+## Preview with sample values
+
+Below the English text and the target text, a Preview shows how the user sees the message. A small Fluent evaluator in `evaluator.py` renders it. It handles variables, selectors with plural categories (one and other for English and Estonian), number keys and string keys, the default variant, nested selectors, message references, terms with arguments, string literals and `NUMBER`. A cycle or a missing reference shows as `{? name}` in the text. Preview lines appear only for messages with a placeable.
+
+- A message with a selector gets one line for each combination of selector values, at most 12. The line starts with the values, for example `n = 1`.
+- Sample values come from the variable name. The variables `n`, `count` and `total` use 1, 2 and 5 in selectors, so every plural category and every number key shows. Names such as `file` and `path` give `plan.kad`. The variable `name` gives `Näidis`. The variable `version` gives `0.1.0`. The variables `error` and `reason` give `Permission denied`. Sizes give 12.5. The variable `percent` gives 80. An unknown name gives the name in brackets, for example `[kiht]`.
+- Numbers use the decimal separator of the language: a point in English, a comma in Estonian.
+- Open a row to see the line "Samples" with one box for each variable. A value you type counts for all messages with that variable. It fixes the value, so a selector shows only that case. An empty box returns to the default. Reset samples clears all of them. The values are in the state file.
+- The editors show a live preview of the text you type.
+
+## Edit in place
+
+Press the pencil button at the top right of the target text, or press `e`. The pencil shows on hover and on keyboard focus. It is always visible on touch and narrow screens. A double-click on the target text still selects a word, for the Weird button. The target text turns into a text box. It holds the current value as it is written in the file, with line breaks, selectors and placeables, and without the indentation of the file. The English source is above it. The flagged words are in a read-only line above the box.
+
+- While you type, the tool checks the text after a short pause. It uses the same checks as Apply: variables, terms, string literals, functions, selector structure, line count, spaces at the ends and empty braces. The reason shows under the box.
+- The chips under the box hold the variables and the placeables of the message, for example `{ $name }`, `{ -term }` and `{ " " }`. A click inserts the exact text at the cursor.
+- Save as suggestion stores the text as a suggestion with the source "owner edit". Save and accept does the same and accepts it, so it goes into the next Apply preview. Ctrl/Cmd+Enter is Save and accept.
+- Esc cancels. If you changed the text, the tool asks first.
+- An invalid text is refused with the reason. An unchanged text does nothing. If the file text changed since you opened the editor, the save is refused.
+- The suggestion cards show your text against the current text.
+- An edit in progress survives the one-second refresh and a filter change. It is also saved as a draft in the local storage of the browser, one draft for each message. The draft returns after a reload. It is deleted on save and on cancel. If the file text changed in the meantime, the draft is dropped.
+
+## Suggest
+
+Suggest runs `claude -p` on this machine. It uses your Claude usage. Pick the model (sonnet, opus or haiku) next to the button.
+
+1. The server builds a prompt. It has the English source, the current text, the weird words, your comment, up to six neighbours, the variables and the glossary.
+2. The server starts the CLI with an argument list. It sends the prompt on stdin. The working folder is a temporary folder, not the repository. The CLI runs without tools, MCP servers, settings, slash commands and session files, and with a system prompt that says the texts are data. The prompt wraps the texts in `<data>` tags for the same reason.
+3. The prompt asks for strict JSON with three alternatives. The server finds the first JSON object, even inside code fences.
+4. The server checks every alternative. The variables are the same as the English ones. The selector is intact. Terms, string literals and functions in braces are the same as in the current text. The text has no leading or trailing space. The line count matches. A bad alternative stays in the list with the reason. You accept it only after you edit it.
+
+Each alternative is a card. Changed words are marked against the current text. Buttons:
+
+- Choose makes the alternative the candidate of the row. The newest valid suggestion is the candidate by default. The card of the candidate has a green border. The Accept button in the status column then accepts it.
+- Edit changes the text in place and then chooses it.
+- Reject marks it rejected.
+- Withdraw (on an accepted card) takes the acceptance back.
+- More options asks again. The rejected texts go into the prompt as texts to avoid.
+
+Type your own suggestion under the cards.
+
+Suggest for all flagged runs the flagged messages one after another. It starts one process at a time. A progress bar shows the state. Cancel stops the running process and all its child processes.
+
+If the CLI is missing, not logged in or fails, the card area shows the exit code and the last lines of stderr. Copy prompt stays available. It copies the same prompt. Paste it into any chat.
+
+The timeout is 120 seconds for each call. On a timeout, a cancel or a server stop, the tool ends the whole process group of the CLI. It sends SIGTERM first and SIGKILL after two seconds.
+
+## Glossary and terms
+
+The Glossary tab holds fixed pairs of an English term and a target term, with a note. The pairs go into every prompt. The first start seeds a few pairs. Edit them as needed.
+
+The Terms tab shows two heuristic checks.
+
+- The glossary check counts messages that have the English term but not the fixed target term.
+- The second list shows English words with several target renderings. It compares word stems of five letters. It finds many false hits. Use it as a hint only.
+
+## Apply
+
+The button Apply accepted to files shows a diff of the exact lines that change. After you confirm, it rewrites the value text of the accepted messages in `crates/kadakas-l10n/locales/<target>/*.ftl`.
+
+Safety rules:
+
+- Keys, comments, attributes and indentation stay as they are.
+- The new text has exactly the variables of the English message. A dropped or new `$variable` is refused. Variables in attributes count apart from the value.
+- The selector (the expression, the variant keys, the default mark, the braces, the lines and their indentation) equals the current text. Otherwise it is refused.
+- Term references, message references, string literals and function calls in braces equal those of the current text. An empty `{}` is refused. A line that starts with `[`, `*` or `.` outside a variant is refused.
+- The line count of a plain message stays the same.
+- After the rewrite the tool parses the file again. The keys are the same. Every other message is unchanged. If a check fails, the file is not written. If the package `fluent.syntax` is installed, the official parser checks the result too. It is optional and the tool does not need it.
+- Every suggestion stores a hash of the target and English text from the time you asked. If the text changed since then, the suggestion is refused.
+- The preview lists the exact changes with hashes. Apply sends them back. If anything differs from the preview, nothing is written.
+- The file keeps its mode.
+- If Git is missing or fails, the tool treats the files as possibly changed and asks for the tick box.
+- Files are written atomically. There are no backup files. Git is your backup.
+- If the target files have uncommitted changes, Apply refuses until you tick the box in the dialog.
+- A message becomes fixed after it is written.
+
+## Export
+
+Export review as Markdown lists every message that is not unreviewed. It has the English text, the current text, the weird words, the comment and the suggestions. It also lists the glossary.
+
+## Tests
+
+```
+python3 -m unittest discover -s tools/l10n-review
+```
+
+The tests cover the Fluent evaluator (also on every real message in both languages), English edits, the parser (also on every real file), key parity, the usage index, the state file, the prompt, the answer parsing with a fake `claude` script, Apply on temporary copies and a server smoke test. The JavaScript offset logic has its own test. It runs with `node` and is skipped when node is missing. The tests never call the real Claude.
+
+## Limits
+
+- The preview knows the plural rules of English and Estonian (one when the number is 1 without fraction digits). It does not do date formats.
+- Preview lines show only for the rows on screen and only for messages with a placeable.
+- The row-level Accept takes one suggestion at a time. Accept the English and the target suggestion in two clicks.
+- The parser reads the shapes this repository uses. It is not a full Fluent parser.
+- The usage search looks for exact key strings in `crates/**/*.rs`. Names built at run time are matched by prefix and are marked as a guess.
+- The tool does not add missing keys.
+- It reads files with LF line ends. A file with CRLF is not rewritten.

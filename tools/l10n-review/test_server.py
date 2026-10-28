@@ -1,0 +1,451 @@
+import http.client
+import json
+import os
+import re
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+import server
+from review import Review
+from helpers import CANNED, et_path, make_fake_claude, make_repo
+
+
+class ServerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.root = make_repo(git=True)
+        cls.fake = make_fake_claude(cls.dir)
+        with open(os.path.join(cls.dir, "canned.json"), "w") as f:
+            f.write(CANNED)
+        os.environ["FAKE_DIR"] = cls.dir
+        os.environ["FAKE_MODE"] = "json"
+        app = server.App(cls.root, "et", os.path.join(cls.dir, "state.json"), cls.fake, timeout=20)
+        cls.app = app
+        cls.srv = server.make_server(app, 0)
+        cls.port = cls.srv.server_address[1]
+        cls.thread = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        cls.thread.join(5)
+
+    def setUp(self):
+        st = self.app.review("et").state
+        st.data["messages"] = {}
+        st.data["samples"] = {}
+        st.save()
+        self.app.job = None
+
+    def raw(self, method, path, body=None, headers=None, token=True, ctype="application/json"):
+        """Low-level request. Returns (status, text)."""
+        h = {}
+        if token:
+            h["X-L10n-Token"] = self.app.token
+        if body is not None:
+            h["Content-Type"] = ctype
+        h.update(headers or {})
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        data = None if body is None else (body if isinstance(body, str) else json.dumps(body))
+        conn.request(method, path, body=data, headers=h)
+        r = conn.getresponse()
+        text = r.read().decode()
+        conn.close()
+        return r.status, text
+
+    def req(self, path, body=None, headers=None):
+        status, text = self.raw("GET" if body is None else "POST", path, body, headers)
+        if status >= 400:
+            raise urllib.error.HTTPError(path, status, text, {}, None)
+        try:
+            return json.loads(text)
+        except ValueError:
+            return text
+
+    def test_smoke(self):
+        self.assertEqual(self.srv.server_address[0], "127.0.0.1")
+        page = self.req("/")
+        self.assertIn("Translation review", page)
+        self.assertIn("Offsets", self.req("/offsets.js"))
+        d = self.req("/api/list")
+        self.assertEqual(d["total"], 4)
+        self.assertEqual(d["counts"]["flagged"], 0)
+        self.assertEqual(len(d["files"]), 1)
+
+    def test_bad_host_rejected(self):
+        self.assertEqual(self.raw("GET", "/api/list", headers={"Host": "evil.example"})[0], 403)
+
+    def test_highlight_comment_and_queue(self):
+        mid = "demo.ftl::demo-title"
+        it = self.req("/api/highlight", {"id": mid, "start": 0, "end": 10})
+        self.assertEqual(it["highlights"][0]["text"], "Jooksutuse")
+        self.assertEqual(it["status"], "flagged")
+        self.req("/api/comment", {"id": mid, "comment": "bad"})
+        self.assertEqual(self.req("/api/list")["counts"]["flagged"], 1)
+        self.req("/api/queue", {"ids": [mid], "model": "haiku"})
+        for _ in range(100):
+            j = self.req("/api/queue")
+            if j["status"] != "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(j["status"], "done")
+        it = self.req("/api/item?id=" + mid)
+        self.assertEqual(len(it["suggestions"]), 3)
+        self.assertEqual(self.req("/api/usage?id=" + mid)["uses"][0]["line"], 3)
+        self.assertIn("Weird words", self.req("/api/export"))
+        self.assertEqual(self.raw("POST", "/api/queue", {"ids": [mid], "model": "gpt"})[0], 400)
+
+    def test_csrf_rules(self):
+        port = self.port
+        good = {"id": "demo.ftl::demo-title", "comment": "x"}
+        self.assertEqual(self.raw("POST", "/api/comment", good)[0], 200)
+        # foreign port origin, foreign host origin, null origin
+        for origin in ("http://127.0.0.1:%d" % (port + 1), "http://localhost:1", "http://evil.example", "null"):
+            self.assertEqual(self.raw("POST", "/api/comment", good, {"Origin": origin})[0], 403, origin)
+            self.assertEqual(self.raw("GET", "/api/list", headers={"Origin": origin})[0], 403, origin)
+        self.assertEqual(self.raw("POST", "/api/comment", good, {"Origin": "http://localhost:%d" % port})[0], 200)
+        # text/plain and form posts
+        self.assertEqual(self.raw("POST", "/api/comment", json.dumps(good), ctype="text/plain")[0], 403)
+        self.assertEqual(self.raw("POST", "/api/comment", "id=1", ctype="application/x-www-form-urlencoded")[0], 403)
+        # no token and a wrong token, on GET and POST
+        self.assertEqual(self.raw("GET", "/api/list", token=False)[0], 403)
+        self.assertEqual(self.raw("POST", "/api/comment", good, token=False)[0], 403)
+        self.assertEqual(self.raw("GET", "/api/list", headers={"X-L10n-Token": "nope"})[0], 403)
+        # preflight is never answered with permission
+        status, _ = self.raw("OPTIONS", "/api/comment", headers={"Origin": "http://evil.example",
+                                                                 "Access-Control-Request-Method": "POST"})
+        self.assertEqual(status, 405)
+
+    def test_page_embeds_the_token(self):
+        page = self.req("/")
+        self.assertIn('name="l10n-token" content="%s"' % self.app.token, page)
+        self.assertNotIn("__TOKEN__", page)
+
+    def test_field_validation(self):
+        mid = "demo.ftl::demo-title"
+        cases = [("/api/comment", {"id": 5, "comment": "x"}), ("/api/comment", {"id": mid}),
+                 ("/api/comment", {"id": mid, "comment": 3}), ("/api/highlight", {"id": mid, "remove": True}),
+                 ("/api/highlight", {"id": mid, "start": "a", "end": 2}),
+                 ("/api/highlight", {"id": mid, "start": True, "end": 2}),
+                 ("/api/suggestion", {"id": mid, "op": "bogus"}), ("/api/suggestion", {"id": mid, "op": "accept"}),
+                 ("/api/glossary", {"items": "x"}), ("/api/glossary", {"items": [1]}),
+                 ("/api/queue", {"ids": "x"}), ("/api/apply", {}), ("/api/status", {"id": mid, "status": "weird"})]
+        for path, body in cases:
+            status, text = self.raw("POST", path, body)
+            self.assertEqual(status, 400, (path, body, text))
+            self.assertIn("error", json.loads(text))
+        self.assertEqual(self.raw("POST", "/api/comment", "[1]")[0], 400)
+        self.assertEqual(self.raw("POST", "/api/comment", "{oops")[0], 400)
+        self.assertEqual(self.raw("GET", "/api/item")[0], 400)
+        self.assertEqual(self.raw("GET", "/api/item?id=nope")[0], 404)
+        self.assertEqual(self.raw("GET", "/api/list?target=zz")[0], 400)
+        self.assertEqual(self.raw("POST", "/api/comment", {"id": "demo.ftl::demo-title", "comment": "x"},
+                                  {"Content-Length": "-5"})[0], 400)
+
+    def test_every_state_change_is_on_disk(self):
+        """After each state-changing call a fresh load of the state file equals the server memory."""
+        from state import ReviewState
+        mem = self.app.review("et").state
+        mid, mid2 = "demo.ftl::demo-title", "demo.ftl::demo-recover"
+
+        def check(label):
+            fresh = ReviewState(mem.path, "et")
+            self.assertEqual(json.loads(json.dumps(fresh.data)), json.loads(json.dumps(mem.data)), label)
+
+        def sid(m, text):
+            return [x for x in self.req("/api/item?id=" + m)["suggestions"] if x["text"] == text][-1]["id"]
+
+        steps = [
+            ("status", lambda: self.req("/api/status", {"id": mid2, "status": "flagged"})),
+            ("comment", lambda: self.req("/api/comment", {"id": mid2, "comment": "kommentaar"})),
+            ("highlight add", lambda: self.req("/api/highlight", {"id": mid2, "start": 0, "end": 5})),
+            ("highlight remove", lambda: self.req("/api/highlight", {"id": mid2, "start": 0, "end": 5, "remove": True})),
+            ("suggestion add", lambda: self.req("/api/suggestion", {"id": mid2, "op": "add", "text": "Alles on need koopiad."})),
+            ("suggestion edit", lambda: self.req("/api/suggestion", {"id": mid2, "op": "edit", "sid": sid(mid2, "Alles on need koopiad."), "text": "Alles on need koopiad!"})),
+            ("suggestion reject", lambda: self.req("/api/suggestion", {"id": mid2, "op": "reject", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion pending", lambda: self.req("/api/suggestion", {"id": mid2, "op": "pending", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion accept", lambda: self.req("/api/suggestion", {"id": mid2, "op": "accept", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("suggestion delete", lambda: self.req("/api/suggestion", {"id": mid2, "op": "delete", "sid": sid(mid2, "Alles on need koopiad!")})),
+            ("owner edit", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Alles on need varukoopiad."})),
+            ("owner edit accept", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Siin on need varukoopiad.", "accept": True})),
+            ("glossary", lambda: self.req("/api/glossary", {"items": [{"en": "layer", "tr": "kiht", "note": "n"}]})),
+            ("sample", lambda: self.req("/api/samples", {"name": "n", "value": "1"})),
+            ("choose", lambda: self.req("/api/suggestion", {"id": mid, "op": "choose", "sid": self.req("/api/suggestion", {"id": mid, "op": "add", "text": "Aruanne { $n } / { $total }!"})["suggestions"][-1]["id"]})),
+            ("english owner edit", lambda: self.req("/api/owner-edit", {"id": mid, "text": "Crash report { $n } out of { $total }", "locale": "en-US", "accept": True})),
+            ("sample reset", lambda: self.req("/api/samples/reset", {})),
+        ]
+        for label, step in steps:
+            step()
+            check(label)
+        pv = self.req("/api/apply/preview", {})
+        self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
+        check("apply")
+        self.assertEqual(self.req("/api/item?id=" + mid2)["status"], "fixed")
+
+    def test_locale_samples_and_preview_over_http(self):
+        mid = "demo.ftl::demo-count"
+        # a locale other than the source or the target is a 400
+        self.assertEqual(self.raw("POST", "/api/validate", {"id": mid, "text": "x", "locale": "de"})[0], 400)
+        self.assertEqual(self.raw("POST", "/api/owner-edit", {"id": mid, "text": "x", "locale": 5})[0], 400)
+        # English validation: a new variable is refused with the reason, removing one gives a warning
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Crash { $n } { $new }", "locale": "en-US"})
+        self.assertIn("adds $new", r["error"])
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Crash { $n }", "locale": "en-US"})
+        self.assertIsNone(r["error"])
+        self.assertIn("$total", r["warnings"][0])
+        # the same text for the target is invalid (variables must equal the English ones)
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Aruanne { $n }"})
+        self.assertIn("variables", r["error"])
+        # previews: one line for each plural category, in both locales
+        p = self.req("/api/preview", {"ids": [mid, "demo.ftl::demo-recover", "nope"]})["previews"]
+        self.assertEqual([l["text"] for l in p[mid]["en"]["lines"]], ["1 layer", "2 layers"])
+        self.assertEqual([l["text"] for l in p[mid]["tr"]["lines"]], ["1 kiht", "2 kihti"])
+        self.assertIsNone(p["demo.ftl::demo-recover"]["en"])
+        self.assertNotIn("nope", p)
+        # samples: stored by name, empty removes, reset clears
+        self.assertEqual(self.req("/api/samples", {"name": "n", "value": "1"})["samples"], {"n": "1"})
+        p = self.req("/api/preview", {"ids": [mid]})["previews"]
+        self.assertEqual([l["text"] for l in p[mid]["tr"]["lines"]], ["1 kiht"])
+        self.assertEqual(self.req("/api/samples", {"name": "n", "value": ""})["samples"], {})
+        self.assertEqual(self.raw("POST", "/api/samples", {"name": "bad name!", "value": "1"})[0], 400)
+        self.req("/api/samples", {"name": "total", "value": "9"})
+        self.assertIn("samples", self.req("/api/list"))
+        t = self.req("/api/preview-text", {"id": "demo.ftl::demo-title", "locale": "et", "text": "A { $n } / { $total }"})
+        self.assertEqual(t["lines"][0]["text"], "A 2 / 9")
+        self.req("/api/samples/reset", {})
+        item = self.req("/api/item?id=demo.ftl::demo-title")
+        self.assertEqual([r["name"] for r in item["sample_rows"]], ["n", "total"])
+        self.assertIn("chips_en", item)
+
+    def test_owner_edit(self):
+        mid = "demo.ftl::demo-title"
+        it = self.req("/api/item?id=" + mid)
+        h0 = it["tr"]["hash"]
+        self.assertIn("{ $n }", it["chips"])
+        self.assertIn("{ $total }", it["chips"])
+        # validation: the same rules as Apply
+        r = self.req("/api/validate", {"id": mid, "text": "Aruanne { $n }"})
+        self.assertIn("variables", r["error"])
+        r = self.req("/api/validate", {"id": mid, "text": "Aruanne { $n } / { $total }"})
+        self.assertIsNone(r["error"])
+        self.assertTrue(self.req("/api/validate", {"id": mid, "text": it["tr"]["raw"]})["unchanged"])
+        # invalid text is refused with the reason and stores nothing
+        before = len(it["suggestions"])
+        status, text = self.raw("POST", "/api/owner-edit", {"id": mid, "text": "Aruanne { $n }", "base_hash": h0})
+        self.assertEqual(status, 400)
+        self.assertIn("variables", json.loads(text)["error"])
+        self.assertEqual(len(self.req("/api/item?id=" + mid)["suggestions"]), before)
+        # unchanged text does nothing
+        r = self.req("/api/owner-edit", {"id": mid, "text": it["tr"]["raw"], "base_hash": h0})
+        self.assertTrue(r["unchanged"])
+        self.assertEqual(len(r["suggestions"]), before)
+        # a stale base hash is refused
+        status, text = self.raw("POST", "/api/owner-edit", {"id": mid, "text": "Aruanne { $n } / { $total }", "base_hash": "0" * 12})
+        self.assertEqual(status, 400)
+        self.assertIn("changed in the file", json.loads(text)["error"])
+        # save as a suggestion, then save and accept
+        r = self.req("/api/owner-edit", {"id": mid, "text": "Raport { $n } / { $total }", "base_hash": h0})
+        s = r["suggestions"][-1]
+        self.assertEqual((s["source"], s["state"], s["text"]), ("owner edit", "pending", "Raport { $n } / { $total }"))
+        self.assertEqual(s["base_hash"], h0)
+        self.assertNotEqual(r["status"], "accepted")
+        r = self.req("/api/owner-edit", {"id": mid, "text": "Aruanne nr { $n } / { $total }", "base_hash": h0, "accept": True})
+        self.assertEqual(r["status"], "accepted")
+        self.assertEqual([x["text"] for x in r["suggestions"] if x["state"] == "accepted"], ["Aruanne nr { $n } / { $total }"])
+        pv = self.req("/api/apply/preview", {})
+        self.assertIn(mid, [c["mid"] for c in pv["changes"] if not c["error"]])
+        # a field of the wrong type is a 400
+        self.assertEqual(self.raw("POST", "/api/owner-edit", {"id": mid, "text": 5})[0], 400)
+
+    def test_apply_over_http_needs_the_preview_digest(self):
+        mid = "demo.ftl::demo-recover"
+        it = self.req("/api/suggestion", {"id": mid, "op": "add", "text": "Alles on need varukoopiad."})
+        sid = it["suggestions"][-1]["id"]
+        self.req("/api/suggestion", {"id": mid, "sid": sid, "op": "accept"})
+        pv = self.req("/api/apply/preview", {})
+        self.assertEqual(len(pv["digest"]), 1)
+        r = self.req("/api/apply", {"expect": [], "confirm_dirty": True})
+        self.assertEqual(r["refused"], "changed")
+        self.assertIn("taastekoopiad", open(et_path(self.root), encoding="utf-8").read())
+        r = self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
+        self.assertEqual(r["applied"], [mid + "|et"])
+        self.assertIn("varukoopiad", open(et_path(self.root), encoding="utf-8").read())
+
+
+class OkStatusTest(unittest.TestCase):
+    """The OK status, bulk marking, counts, export and the state file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.root = make_repo(git=True)
+        cls.app = server.App(cls.root, "et", os.path.join(cls.dir, "state.json"), "claude", timeout=5)
+        cls.srv = server.make_server(cls.app, 0)
+        cls.port = cls.srv.server_address[1]
+        cls.thread = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.ids = ["demo.ftl::" + k for k in ("demo-title", "demo-recover", "demo-count", "demo-multi")]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        cls.thread.join(5)
+
+    def setUp(self):
+        st = self.app.review("et").state
+        st.data["messages"] = {}
+        st.save()
+
+    def post(self, path, body):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("POST", "/api/" + path, json.dumps(body),
+                     {"X-L10n-Token": self.app.token, "Content-Type": "application/json"})
+        r = conn.getresponse()
+        data = json.loads(r.read().decode())
+        conn.close()
+        return r.status, data
+
+    def get(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("GET", "/api/" + path, headers={"X-L10n-Token": self.app.token})
+        r = conn.getresponse()
+        text = r.read().decode()
+        conn.close()
+        return text
+
+    def disk(self):
+        from state import ReviewState
+        return ReviewState(self.app.review("et").state.path, "et")
+
+    def counts(self):
+        return json.loads(self.get("list"))["counts"]
+
+    def test_ok_flow(self):
+        a, b, c, d = self.ids
+        self.assertEqual(self.counts()["ok"], 0)
+        # one click OK keeps the data, toggling back works
+        self.post("comment", {"id": a, "comment": "keep me"})
+        self.post("status", {"id": a, "status": "flagged"})
+        s, it = self.post("status", {"id": a, "status": "ok"})
+        self.assertEqual((it["status"], it["comment"]), ("ok", "keep me"))
+        self.assertEqual(self.disk().view(a)["status"], "ok")
+        # a highlight or a suggestion on an OK row flags it again
+        s, it = self.post("highlight", {"id": a, "start": 0, "end": 5})
+        self.assertEqual(it["status"], "flagged")
+        self.post("status", {"id": a, "status": "ok"})
+        s, it = self.post("suggestion", {"id": a, "op": "add", "text": "Raport { $n } / { $total }"})
+        self.assertEqual(it["status"], "suggested")
+        self.post("status", {"id": a, "status": "ok"})   # OK with an open suggestion stays OK
+        self.assertEqual(self.post("status", {"id": a, "status": "ok"})[1]["suggestions"][0]["state"], "pending")
+        self.assertEqual(self.post("status", {"id": a, "status": "unreviewed"})[1]["status"], "unreviewed")
+        # unreviewed with data stays in the file, an empty unreviewed entry is dropped
+        self.assertIn(a, self.disk().data["messages"])
+        self.post("comment", {"id": a, "comment": ""})
+        self.post("suggestion", {"id": a, "op": "delete", "sid": self.disk().view(a)["suggestions"][0]["id"]})
+        self.post("highlight", {"id": a, "start": 0, "end": 5, "remove": True})
+        self.assertNotIn(a, self.disk().data["messages"])
+
+    def test_bulk_only_touches_unreviewed_and_undo(self):
+        a, b, c, d = self.ids
+        self.post("status", {"id": b, "status": "flagged"})
+        self.post("status", {"id": c, "status": "ok"})
+        before = self.counts()
+        s, r = self.post("bulk-ok", {"ids": [a, b, c, d, "nope::x", 5]})
+        self.assertEqual(sorted(r["changed"]), sorted([a, d]))   # b is flagged, c is already ok
+        after = self.counts()
+        self.assertEqual(after["flagged"], before["flagged"])
+        self.assertEqual(after["ok"], before["ok"] + 2)
+        self.assertEqual(self.disk().view(a)["status"], "ok")
+        self.assertEqual(self.disk().view(b)["status"], "flagged")
+        # the undo restores exactly the changed rows
+        s, u = self.post("bulk-undo", {"ids": r["changed"]})
+        self.assertEqual(sorted(u["changed"]), sorted([a, d]))
+        self.assertEqual(self.counts()["ok"], before["ok"])
+        self.assertEqual(self.disk().view(c)["status"], "ok")   # not in the undo list
+        self.assertEqual(self.post("bulk-ok", {"ids": "x"})[0], 400)
+        # an empty bulk writes nothing and is fine
+        self.assertEqual(self.post("bulk-ok", {"ids": []})[1]["count"], 0)
+
+    def test_bulk_is_one_atomic_write(self):
+        from state import ReviewState
+        calls = []
+        st = self.app.review("et").state
+        orig = st.save
+        st.save = lambda: (calls.append(1), orig())[1]
+        try:
+            self.post("bulk-ok", {"ids": self.ids})
+        finally:
+            st.save = orig
+        self.assertEqual(len(calls), 1)
+        self.post("bulk-undo", {"ids": self.ids})
+
+    def test_export_has_ok_counts_only(self):
+        self.post("status", {"id": self.ids[0], "status": "ok"})
+        md = self.get("export")
+        self.assertIn("## Marked OK", md)
+        self.assertIn("- demo.ftl: 1", md)
+        self.assertNotIn("demo-title", md.split("## Marked OK")[0])
+        pv = json.loads(self.get("list"))
+        self.assertIn("ok", pv["statuses"])
+        self.post("status", {"id": self.ids[0], "status": "unreviewed"})
+
+    def test_old_state_file_still_loads(self):
+        from state import ReviewState
+        p = os.path.join(tempfile.mkdtemp(), "old.json")
+        with open(p, "w") as f:
+            json.dump({"version": 1, "target": "et", "glossary": None, "messages": {
+                "demo.ftl::demo-title": {"status": "flagged", "comment": "x", "highlights": [], "suggestions": [
+                    {"id": "a1", "text": "t", "source": "owner", "state": "pending", "time": 1}]}}}, f)
+        rv = Review(self.root, "et", state_path=p)
+        self.assertEqual(rv.item(self.ids[0])["status"], "flagged")
+        self.assertEqual(rv.list()["counts"]["ok"], 0)
+
+
+class QueueKillTest(unittest.TestCase):
+    def test_cancel_leaves_running_and_kills_the_grandchild(self):
+        d = tempfile.mkdtemp()
+        root = make_repo(git=True)
+        fake = make_fake_claude(d)
+        os.environ["FAKE_DIR"] = d
+        os.environ["FAKE_MODE"] = "grand"
+        app = server.App(root, "et", os.path.join(d, "s.json"), fake, timeout=60)
+        rv = app.review("et")
+        job = app.start_job(rv, ["demo.ftl::demo-title", "demo.ftl::demo-recover"], "haiku", False)
+        self.assertIsNotNone(job)
+        self.assertIsNone(app.start_job(rv, ["demo.ftl::demo-title"], "haiku", False))   # one at a time
+        pidfile = os.path.join(d, "grandchild.pid")
+        for _ in range(50):
+            if os.path.exists(pidfile) and open(pidfile).read().strip():
+                break
+            time.sleep(0.1)
+        pid = int(open(pidfile).read())
+        t0 = time.time()
+        job.cancel()
+        while job.status == "running" and time.time() - t0 < 5:
+            time.sleep(0.05)
+        self.assertEqual(job.status, "cancelled")
+        self.assertLess(time.time() - t0, 5)
+        end = time.time() + 5
+        alive = True
+        while alive and time.time() < end:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.1)
+            except OSError:
+                alive = False
+        self.assertFalse(alive, "the grandchild is still running")
+        # the second message was never started
+        self.assertEqual(job.done, 1)
+        os.environ.pop("FAKE_MODE")
+
+
+if __name__ == "__main__":
+    unittest.main()
