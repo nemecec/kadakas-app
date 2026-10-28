@@ -1,7 +1,8 @@
 'use strict';
 (function () {
   var O = window.Offsets, Ed = window.Editing;
-  var S = { target: new URLSearchParams(location.search).get('target') || '', data: null, byId: {}, sel: null,
+  var S = { target: '',   // set from the server answer, never from the address bar
+     data: null, byId: {}, sel: null,
     shown: 300, filtered: [], tab: 'list', prev: {}, sampleVer: 0, queue: null, jobErrors: {}, open: {} };
   var $ = function (id) { return document.getElementById(id); };
 
