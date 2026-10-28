@@ -25,11 +25,15 @@ real_identity() { grep -Eq '^[[:space:]]*signing-identity[[:space:]]*=' "$config
 
 sign() { codesign --force --sign - --timestamp=none "$@"; }
 
-# Signs every Mach-O file directly in a folder.
+# Signs every Mach-O file directly in Contents/MacOS of a bundle, except the main executable.
+# codesign on a main executable signs the whole bundle, and it needs the other programs signed
+# first. The signature of the main executable comes with the signature of the bundle.
 sign_programs() {
-  local f kind
-  for f in "$1"/*; do
+  local f kind main
+  main="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$1/Contents/Info.plist")"
+  for f in "$1"/Contents/MacOS/*; do
     [ -f "$f" ] || continue
+    [ "${f##*/}" != "$main" ] || continue
     # Not `file | grep -q`: with pipefail, grep ending early makes the pipe fail now and then.
     kind="$(file -b "$f")"
     echo "item: ${f##*/}: $kind"
@@ -64,7 +68,7 @@ case "$mode" in
   inner)
     [ -d "$bundle" ] || { echo "no bundle: $bundle" >&2; exit 1; }
     if real_identity; then echo "signing-identity is set: cargo-packager signs, skipped"; exit 0; fi
-    sign_programs "$bundle/Contents/MacOS"
+    sign_programs "$bundle"
     sign "$bundle"
     ;;
   outer)
@@ -74,7 +78,7 @@ case "$mode" in
     [ -d "$inner" ] || { echo "no inner app: $inner" >&2; exit 1; }
     # The inner app is signed already (macos-app.sh). Check, then sign the loose programs, then the outer bundle.
     codesign --verify --strict "$inner"
-    sign_programs "$bundle/Contents/MacOS"
+    sign_programs "$bundle"
     sign "$bundle"
     codesign --verify --deep --strict --verbose=2 "$bundle"
     codesign -dv "$bundle" 2>&1 | grep -E 'Identifier|Signature|Sealed|Info.plist|flags|CodeDirectory' || true
