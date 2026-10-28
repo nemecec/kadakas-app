@@ -213,9 +213,9 @@ The scripts in `scripts/smoke/` are what the job `smoke` of `release.yml` runs (
 
 ```sh
 scripts/smoke/macos.sh dist/Kadakas_0.1.0_aarch64.dmg 0.1.0 smoke-artifacts          # macOS
-xvfb-run -a scripts/smoke/linux.sh deb dist/kadakas_0.1.0_amd64.deb 0.1.0            # Linux, installs with sudo
-xvfb-run -a scripts/smoke/linux.sh appimage dist/kadakas_0.1.0_amd64.AppImage 0.1.0  # Linux, installs nothing
-pwsh scripts/smoke/windows.ps1 -Kind msi -Package dist\Kadakas_0.1.0_x64_en-US.msi -Version 0.1.0   # Windows, installs
+xvfb-run -a scripts/smoke/linux.sh deb dist/kadakas-launcher_0.1.0_amd64.deb 0.1.0            # Linux, installs with sudo
+xvfb-run -a scripts/smoke/linux.sh appimage dist/kadakas-launcher_0.1.0_x86_64.AppImage 0.1.0  # Linux, installs nothing
+pwsh scripts/smoke/windows.ps1 -Kind msi -Package dist\kadakas-launcher_0.1.0_x64_en-US.msi -Version 0.1.0   # Windows, installs
 ```
 
 - On a Mac, `KADAKAS_SMOKE_APPLICATIONS=/tmp/apps` installs into that folder and not into `/Applications`. The test windows open on your screen for about a minute.

@@ -29,8 +29,10 @@ out-dir = "dist"
 binaries-dir = "target/release"
 
 # The outer bundle gets its ad-hoc seal after the format `app` and before the format `dmg` copies
-# it (scripts/macos-sign.sh hook). With a signing-identity below, the packager signs and the script
-# does nothing.
+# it (scripts/macos-sign.sh hook), so the formats are `app,dmg` in this order. With a
+# signing-identity below, the packager signs the outer bundle, and the script only verifies it. The
+# inner app is signed with that identity by scripts/macos-app.sh, because the packager leaves
+# embedded apps out of its signing.
 before-each-package-command = "scripts/macos-sign.sh hook"
 
 # macOS (PLAT-16): two bundles, one inside the other.
@@ -43,7 +45,7 @@ before-each-package-command = "scripts/macos-sign.sh hook"
 #   `kadakas-app`, and its own `Info.plist` gives the name, the icon and the Dock tile. It is the
 #   base version: the launcher starts it when no update is installed, and it is never deleted.
 #   `scripts/macos-app.sh` makes it, and the update archive is the same bundle, so an update is a
-#   whole `.app` too. The packager signs it as a bundle of its own when a signing identity is set.
+#   whole `.app` too. `scripts/macos-sign.sh` signs it (ad-hoc, or with the signing identity).
 #
 # Run `scripts/macos-app.sh target/release dist-app` before `cargo packager`. The `kadakas`
 # command line tool is next to the launcher, so agents find it at a fixed place.

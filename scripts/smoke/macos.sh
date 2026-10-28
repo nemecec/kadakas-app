@@ -56,12 +56,13 @@ mounted=""
 step "codesign --verify --deep --strict"
 codesign --verify --deep --strict --verbose=2 "$installed" || fail "the installed bundle has an invalid code signature"
 
-# Gatekeeper on a download. The installed copy has no quarantine flag, so a copy gets one here, as
-# a browser sets it. This documents today's expected rejection of an ad-hoc signed beta build:
-# "rejected", the source is unnotarized or the developer is unidentified. The message must not say
-# that the bundle is broken ("invalid", "damaged", "a sealed resource is missing", "code has no
-# resources"): that is the "Kadakas.app is damaged" dialog. With notarization (PLAT-19) this
-# check changes to "accepted".
+# What Gatekeeper says about the bundle. This documents today's expected answer for an ad-hoc
+# signed beta build: "rejected" (the source is unnotarized or the developer is unidentified). The
+# message must not say that the bundle is broken ("invalid", "damaged", "a sealed resource is
+# missing", "code has no resources"): that is the "Kadakas.app is damaged" dialog. spctl does not
+# read the quarantine flag, so the answer is the same with or without it. The test still assesses a
+# copy that carries the flag, as a browser download does, and never touches the installed bundle.
+# With notarization (PLAT-19) the expected answer changes to "accepted".
 step "spctl on a quarantined copy"
 qcopy="$work/quarantine/$name"
 mkdir -p "$work/quarantine"
@@ -69,6 +70,7 @@ ditto "$installed" "$qcopy"
 xattr -w com.apple.quarantine "0181;$(printf %x "$(date +%s)");Safari;" "$qcopy"
 spctl_out="$(spctl --assess --type execute -vv "$qcopy" 2>&1 || true)"
 echo "$spctl_out"
+printf '%s\n' "$spctl_out" | grep -Eq ': (rejected|accepted)$' || fail "spctl gave no clear answer (rejected or accepted): $spctl_out"
 if printf '%s' "$spctl_out" | grep -Eiq 'invalid|damaged|a sealed resource is missing|code has no resources'; then
   fail "Gatekeeper calls the bundle broken: $spctl_out"
 fi
@@ -99,6 +101,10 @@ done
 [ -n "$("$installed/Contents/MacOS/kadakas" --version)" ] || fail "kadakas --version prints nothing"
 
 run_smoke "$launcher" "$version" "$artifacts" "screencapture -x {out}" "$work/run"
+
+# The program ran three times. The seal must still be valid: a write into the bundle breaks it.
+step "codesign --verify --deep --strict after the runs"
+codesign --verify --deep --strict --verbose=2 "$installed" || fail "the seal of the bundle broke while the program ran"
 
 step "remove $installed"
 rm -rf "$installed"

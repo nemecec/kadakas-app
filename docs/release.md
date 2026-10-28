@@ -154,28 +154,42 @@ Two kinds of files keep their names, because the launcher and **Update manifest*
 
 ### Notes of the release
 
-The draft release starts with the table "Which file do I download?". It has one row for each installer, with a link. The job `publish` makes the table from the real files (`.github/scripts/release-notes-table.sh`). A missing file or an installer without a row stops the job. A sentence under the table says that the `kadakas-update-*` files and `kadakas-web.tar.gz` are for the launcher and for hosting. A pre-release adds the section "Open an unsigned build" with the warnings of macOS and Windows and the steps to open the app. The section of the version in `CHANGELOG.md` follows.
+The draft release starts with the table "Which file do I download?". It has one row for each installer, with a link. The job `publish` makes the table from the real files (`.github/scripts/release-notes-table.sh`). A missing file or an installer without a row stops the job. A sentence under the table says that the `kadakas-update-*` files and `kadakas-web.tar.gz` are for the launcher and for hosting. Every release gets the section "Open an unsigned build" with the warnings of macOS and Windows and the steps to open the app, as long as `packager-macos.toml` has no signing identity. The section of the version in `CHANGELOG.md` follows.
 
 `.github/scripts/test-release-assets.sh` tests both scripts. CI runs it in the job `version`.
 
 ### Open an unsigned Mac build
 
-The beta builds have an ad-hoc seal (`scripts/macos-sign.sh`) and no Developer ID signature. They are not notarized. Without a seal macOS says "Kadakas.app is damaged and can't be opened". With the seal the message is the milder one.
+The installers are not signed with a Developer ID and not notarized (PLAT-19). The macOS bundles have an ad-hoc seal (`scripts/macos-sign.sh`). Without a seal macOS says "Kadakas.app is damaged and can't be opened". With the seal the message is the milder one. The release notes of every release carry the section "Open an unsigned build" until a signing identity is set in `packager-macos.toml`.
 
-- On macOS 15 the dialog says "Apple could not verify Kadakas is free of malware". Press Done.
-- Open System Settings, Privacy & Security. Press Open Anyway next to the message about Kadakas.
-- Or right-click the app and choose Open.
-- Or run `xattr -cr /Applications/Kadakas.app`. This removes the quarantine flag.
+- On macOS 15 and newer the dialog says "Apple could not verify Kadakas is free of malware". Press Done.
+- Open System Settings, Privacy & Security. Scroll down and press Open Anyway. macOS asks for the password and shows a second dialog. Press Open Anyway there.
+- On macOS 14 and older the dialog says "Kadakas cannot be opened because the developer cannot be verified". Right-click the app, choose Open, then press Open. This does not work on macOS 15.
+- On every version, `xattr -cr /Applications/Kadakas.app` removes the quarantine flag. The app then opens at once.
 
 This goes away with notarization (PLAT-19).
 
-The seal is made inside-out, with no `--deep` and no hardened runtime. `scripts/macos-app.sh` seals `Kadakas Engine.app` before the update archive is packed. A hook of cargo-packager (`before-each-package-command` in `packager-macos.toml`) seals the outer bundle after the format `app` and before the format `dmg` copies it. Nothing changes the bundle after that. If `packager-macos.toml` sets a `signing-identity`, the packager signs and the script does nothing.
+How the seal is made:
 
-The smoke test on macOS runs `codesign --verify --deep --strict` on the installed bundle. Then it sets the quarantine flag on a copy and runs `spctl --assess`. Today Gatekeeper rejects the copy as unnotarized. The test fails when the message says "invalid", "damaged", "a sealed resource is missing" or "code has no resources". The update archive holds the same sealed inner bundle.
+- The seal is made inside-out, with no `--deep`. The hardened runtime is off.
+- `scripts/macos-app.sh` seals `Kadakas Engine.app` before the update archive is packed.
+- A hook of cargo-packager (`before-each-package-command` in `packager-macos.toml`) seals the outer bundle. It runs after the format `app` and before the format `dmg` copies the bundle. So the formats are `app,dmg` in this order. The hook refuses `dmg` alone, `dmg` before `app`, and `app` alone.
+- Nothing changes the bundle after that.
+- With a `signing-identity` in `packager-macos.toml`, `scripts/macos-sign.sh` signs the inner app and the tool with that identity. It uses the hardened runtime and a secure timestamp. cargo-packager 0.11.8 leaves embedded apps out of its signing, so the script has to do it. The packager then signs the outer bundle, and the script verifies it. Nobody tested a real identity yet.
+
+The smoke test on macOS runs `codesign --verify --deep --strict` on the installed bundle, before and after the three starts. Then it runs `spctl --assess` on a copy with the quarantine flag. Today Gatekeeper answers "rejected". The test fails when the message says "invalid", "damaged", "a sealed resource is missing" or "code has no resources". The job `package` also unpacks the update archive and verifies the seal of the inner bundle.
+
+What a real Developer ID release still needs (PLAT-19):
+
+- A Developer ID Application certificate, and the name of the identity in `signing-identity`.
+- An entitlements file for the hardened runtime (`[macos] entitlements`). The app loads plugins and WebAssembly, so test which entitlements it needs.
+- Notarization of the `.dmg` and of the update bundle with `notarytool`, and stapling of the ticket. Keep the credentials in GitHub secrets.
+- The update archive must hold the bundle signed with the same identity, notarized and stapled before `tar`.
+- A new smoke expectation: `spctl` must answer "accepted".
 
 ### Retention of the build files
 
-The artifacts `kadakas-<platform>` and `kadakas-web` of a run are kept for 7 days. The job `publish` runs in the same run and reads them, so it does not need more. The release has the real copies. The smoke artifacts (screenshots, logs) are kept for 14 days.
+The artifacts `kadakas-<platform>` and `kadakas-web` of a run are kept for 7 days. The job `publish` runs in the same run and reads them, so it does not need more. The release has the real copies. The smoke artifacts (screenshots, logs) are kept for 14 days. After 7 days a failed `publish` cannot run again from the same run. Start the whole workflow again, which builds everything.
 
 ### Version forms
 
@@ -405,7 +419,7 @@ Launchers that are older than step 1 cannot follow a rotation. They need a new i
 
 Nothing is signed. Users will see warnings on first start. Do this before a public release.
 
-- macOS: join the Apple Developer Program. Sign the `.app` with a Developer ID Application certificate (`[macos] signing-identity` in `packager-macos.toml`; the packager signs the embedded inner app as a bundle of its own). The update archive then holds the signed inner bundle, so sign it before `tar`, and notarize it too, then notarize it (`notarytool`) and staple the ticket. Keep the certificate and the API key in GitHub secrets.
+- macOS: join the Apple Developer Program. Sign with a Developer ID Application certificate (`[macos] signing-identity` in `packager-macos.toml`). See "Open an unsigned Mac build" for the list of what is still needed: entitlements, notarization with `notarytool`, the staple, and the same signature on the bundle of the update archive. Keep the certificate and the API key in GitHub secrets.
 - Windows: buy a code signing certificate (or use Azure Trusted Signing). Set the signing command for NSIS and WiX in `packager.toml`. Without it, SmartScreen warns.
 - Linux: sign the `.deb` repository or publish a checksum file. AppImage signing is optional.
 - Updates: the launcher has its own signed manifests (see "Launcher and updates"). The `cargo-packager` updater is not used.
