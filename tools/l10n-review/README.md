@@ -35,7 +35,8 @@ The repository files change only when you press Apply.
 
 Each row shows the file and key, the English text, the target text and the status.
 
-- Click a row to see the context. It has the group comment of the file, the comment above the message, the variables with example values, the neighbouring keys and up to five places in the Rust sources that use the key.
+- Click a row to see the context. The file name, the group comment and the comment above the message are always visible. The neighbouring keys ("Neighbours (6)") and the places in the Rust sources that use the key ("Used in 3 places", up to five with three lines of code) are collapsed. The browser remembers what you opened.
+- The status column holds the status and three buttons: OK, Flag and Accept. Accept takes the chosen suggestion of the row for Apply. It is off until the row has a valid suggestion.
 - Select words in the target text and press Weird (or key `w`). The words get a yellow highlight. Click a highlight to remove it.
 - Write a comment in the box. Press `f` to flag or unflag the message.
 - Statuses are unreviewed, ok, flagged, suggested, accepted and fixed.
@@ -66,6 +67,29 @@ Apply and the Terms tab ignore OK. The export lists only the number of OK messag
 
 Every action goes to the state file at once. The header shows `Saving...`, then `Saved HH:MM:SS`. If a save fails (network error or server error), it shows a red `NOT SAVED` with the error and a Retry button. A comment is sent 600 ms after you stop typing. It is also sent when you leave the box, change the row or tab, and when the page closes.
 
+## Edit the English text
+
+The English text has its own pencil, next to the English text. The key `E` does the same. The editor works like the target editor: pre-filled raw value, live checks, chips, Save as suggestion, Save and accept, drafts and the check of the base hash. The target text is shown above the box for context.
+
+- Suggestions have a language. A card shows English or the target language. A row holds one accepted suggestion for each language.
+- An edit of the English text is allowed to remove a variable. The editor warns: update the target text too.
+- An edit of the English text is refused when it adds a variable. The Rust code does not pass it. The message names the places in the Rust sources that use the key.
+- Terms, string literals, functions and the selector structure stay as they are, like for the target.
+- Apply writes the English file in `crates/kadakas-l10n/locales/en-US/`. The preview shows the diff for each language and file. The check for uncommitted changes covers both folders.
+- After Apply wrote an English change, the target message of the same key becomes flagged. The tool adds the comment "English text changed on <date>: <old> -> <new>" and keeps the old comment. The target row shows the change with the changed words marked. Mark the row OK to remove the note. If you apply a new target text in the same run, the row becomes fixed.
+- A target suggestion made for the old English text shows the badge "made for older English". Apply refuses it.
+- Suggest English asks Claude for a better English text. The prompt tells Claude to improve clarity and consistency, to keep the meaning and the variables, and to add no variable. The target text is only context.
+
+## Preview with sample values
+
+Below the English text and the target text, a Preview shows how the user sees the message. A small Fluent evaluator in `evaluator.py` renders it. It handles variables, selectors with plural categories (one and other for English and Estonian), number keys and string keys, the default variant, nested selectors, message references, terms with arguments, string literals and `NUMBER`. A cycle or a missing reference shows as `{? name}` in the text. Preview lines appear only for messages with a placeable.
+
+- A message with a selector gets one line for each combination of selector values, at most 12. The line starts with the values, for example `n = 1`.
+- Sample values come from the variable name. The variables `n`, `count` and `total` use 1, 2 and 5 in selectors, so every plural category and every number key shows. Names such as `file` and `path` give `plan.kad`. The variable `name` gives `Näidis`. The variable `version` gives `0.1.0`. The variables `error` and `reason` give `Permission denied`. Sizes give 12.5. The variable `percent` gives 80. An unknown name gives the name in brackets, for example `[kiht]`.
+- Numbers use the decimal separator of the language: a point in English, a comma in Estonian.
+- Open a row to see the line "Samples" with one box for each variable. A value you type counts for all messages with that variable. It fixes the value, so a selector shows only that case. An empty box returns to the default. Reset samples clears all of them. The values are in the state file.
+- The editors show a live preview of the text you type.
+
 ## Edit in place
 
 Press the pencil button at the top right of the target text, or press `e`. The pencil shows on hover and on keyboard focus. It is always visible on touch and narrow screens. A double-click on the target text still selects a word, for the Weird button. The target text turns into a text box. It holds the current value as it is written in the file, with line breaks, selectors and placeables, and without the indentation of the file. The English source is above it. The flagged words are in a read-only line above the box.
@@ -89,9 +113,10 @@ Suggest runs `claude -p` on this machine. It uses your Claude usage. Pick the mo
 
 Each alternative is a card. Changed words are marked against the current text. Buttons:
 
-- Use this accepts the alternative and sets the status to accepted.
-- Edit changes the text in place and then accepts it.
+- Choose makes the alternative the candidate of the row. The newest valid suggestion is the candidate by default. The card of the candidate has a green border. The Accept button in the status column then accepts it.
+- Edit changes the text in place and then chooses it.
 - Reject marks it rejected.
+- Withdraw (on an accepted card) takes the acceptance back.
 - More options asks again. The rejected texts go into the prompt as texts to avoid.
 
 Type your own suggestion under the cards.
@@ -141,10 +166,13 @@ Export review as Markdown lists every message that is not unreviewed. It has the
 python3 -m unittest discover -s tools/l10n-review
 ```
 
-The tests cover the parser (also on every real file), key parity, the usage index, the state file, the prompt, the answer parsing with a fake `claude` script, Apply on temporary copies and a server smoke test. The JavaScript offset logic has its own test. It runs with `node` and is skipped when node is missing. The tests never call the real Claude.
+The tests cover the Fluent evaluator (also on every real message in both languages), English edits, the parser (also on every real file), key parity, the usage index, the state file, the prompt, the answer parsing with a fake `claude` script, Apply on temporary copies and a server smoke test. The JavaScript offset logic has its own test. It runs with `node` and is skipped when node is missing. The tests never call the real Claude.
 
 ## Limits
 
+- The preview knows the plural rules of English and Estonian (one when the number is 1 without fraction digits). It does not do date formats.
+- Preview lines show only for the rows on screen and only for messages with a placeable.
+- The row-level Accept takes one suggestion at a time. Accept the English and the target suggestion in two clicks.
 - The parser reads the shapes this repository uses. It is not a full Fluent parser.
 - The usage search looks for exact key strings in `crates/**/*.rs`. Names built at run time are matched by prefix and are marked as a guess.
 - The tool does not add missing keys.

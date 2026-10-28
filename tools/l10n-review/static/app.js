@@ -2,7 +2,7 @@
 (function () {
   var O = window.Offsets, Ed = window.Editing;
   var S = { target: new URLSearchParams(location.search).get('target') || '', data: null, byId: {}, sel: null,
-    shown: 300, filtered: [], tab: 'list', queue: null, jobErrors: {}, open: {} };
+    shown: 300, filtered: [], tab: 'list', prev: {}, sampleVer: 0, queue: null, jobErrors: {}, open: {} };
   var $ = function (id) { return document.getElementById(id); };
 
   function h(tag, attrs, kids) {
@@ -33,7 +33,7 @@
     return fetch(url, opt);
   }
   // Every request that changes the state file is tracked by the Saved indicator.
-  var STATE_PATHS = ['status', 'comment', 'highlight', 'suggestion', 'owner-edit', 'glossary', 'apply', 'bulk-ok', 'bulk-undo'];
+  var STATE_PATHS = ['status', 'comment', 'highlight', 'suggestion', 'owner-edit', 'glossary', 'apply', 'bulk-ok', 'bulk-undo', 'samples', 'samples/reset'];
   var SAVE = { pending: 0, failed: [], last: '', typing: false };
   function clock() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
   function showSave() {
@@ -160,6 +160,7 @@
     S.filtered.slice(0, S.shown).forEach(function (m) { tb.appendChild(rowFor(m)); if (S.sel === m.id) tb.appendChild(detailFor(m)); });
     $('more-rows').hidden = S.filtered.length <= S.shown;
     if (had && S.edit.ta.isConnected) { S.edit.ta.focus(); S.edit.ta.setSelectionRange(ss, se); }
+    fetchPreviews();
   }
   function trNode(m) {
     var text = m.tr ? m.tr.raw : '';
@@ -178,48 +179,114 @@
     });
     return box;
   }
-  function statusBadges(m) {
-    var open = m.suggestions.filter(function (x) { return x.state === 'pending'; }).length;
-    var kids = [h('span', { class: 'badge ' + m.status }, m.status)];
-    if (m.status === 'ok' && open) kids.push(' ', h('span', { class: 'badge suggested', title: 'Open suggestions on an OK message' }, open + ' open'));
-    return kids;
-  }
-  var PENCIL = 'M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z';
-  function pencilButton(m) {
+  function svgIcon(paths, width) {
     var ns = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '15'); svg.setAttribute('height', '15');
-    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '14'); svg.setAttribute('height', '14');
+    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', width || '2');
     svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
-    PENCIL.split(' M').forEach(function (d, i) { var p = document.createElementNS(ns, 'path'); p.setAttribute('d', (i ? 'M' : '') + d); svg.appendChild(p); });
-    var b = h('button', { class: 'pencil', type: 'button', 'aria-label': 'Edit', title: 'Edit this text (e)', onclick: function (ev) { ev.stopPropagation(); openEdit(m.id); } });
-    b.appendChild(svg);
+    paths.forEach(function (d) { var p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); svg.appendChild(p); });
+    return svg;
+  }
+  function pencilButton(m, loc) {
+    var b = h('button', { class: 'pencil', type: 'button', 'aria-label': loc === 'en' ? 'Edit English' : 'Edit',
+      title: loc === 'en' ? 'Edit the English source text (E)' : 'Edit this text (e)',
+      onclick: function (ev) { ev.stopPropagation(); openEdit(m.id, loc); } });
+    b.appendChild(svgIcon(['M12 20h9', 'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z']));
     return b;
   }
   function okButton(m) {
-    var ns = 'http://www.w3.org/2000/svg';
-    var svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '15'); svg.setAttribute('height', '15');
-    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2.4');
-    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
-    var p = document.createElementNS(ns, 'path'); p.setAttribute('d', 'M4 12.5l5 5L20 6.5'); svg.appendChild(p);
     var on = m.status === 'ok';
     var b = h('button', { class: 'okbtn' + (on ? ' on' : ''), type: 'button', 'aria-label': 'Mark OK', 'aria-pressed': on ? 'true' : 'false',
       title: on ? 'Marked OK. Click to undo (o)' : 'Looks good (o)', onclick: function (ev) { ev.stopPropagation(); S.sel = m.id; toggleOk(); } });
-    b.appendChild(svg);
+    b.appendChild(svgIcon(['M4 12.5l5 5L20 6.5'], '2.4'));
+    b.appendChild(document.createTextNode(' OK'));
     return b;
+  }
+  function flagButton(m) {
+    var can = m.status === 'unreviewed' || m.status === 'ok' || m.status === 'flagged';
+    return h('button', { class: 'rowbtn', type: 'button', disabled: !can, title: can ? 'Flag or unflag (f)' : 'The status is ' + m.status,
+      onclick: function (ev) { ev.stopPropagation(); S.sel = m.id; toggleFlag(); } }, m.status === 'flagged' ? 'Unflag' : 'Flag');
+  }
+  function chosenSuggestion(m) { return m.suggestions.filter(function (x) { return x.id === m.chosen; })[0] || null; }
+  function acceptButton(m) {
+    var c = chosenSuggestion(m);
+    return h('button', { class: 'rowbtn acc', type: 'button', disabled: !c,
+      title: c ? 'Accept the chosen suggestion for Apply: ' + c.text.slice(0, 60) : 'Add or choose a valid suggestion first',
+      onclick: function (ev) { ev.stopPropagation(); S.sel = m.id; post('suggestion', { id: m.id, sid: c.id, op: 'accept' }); } }, 'Accept');
+  }
+  function statusCell(m) {
+    var open = m.suggestions.filter(function (x) { return x.state === 'pending'; }).length;
+    var kids = [h('span', { class: 'badge ' + m.status }, m.status)];
+    if (m.status === 'ok' && open) kids.push(' ', h('span', { class: 'badge suggested', title: 'Open suggestions on an OK message' }, open + ' open'));
+    return [h('div', {}, kids), h('div', { class: 'rowacts' }, [okButton(m), flagButton(m), acceptButton(m)])];
+  }
+  // Preview lines below a text, filled from the cache. The server renders them with sample values.
+  function previewNode(m, which) {
+    var box = h('div', { class: 'preview pv-' + which, 'data-id': m.id });
+    paintInto(box, m, which);
+    return box;
+  }
+  function paintInto(box, m, which) {
+    box.textContent = '';
+    var c = S.prev[m.id]; var data = c && c.sig === prevSig(m) ? c.data[which] : null;
+    if (!data) return;
+    box.appendChild(h('div', { class: 'muted pv-title' }, 'Preview'));
+    data.lines.forEach(function (l) {
+      var line = h('div', { class: 'pv-line' + (l.errors.length ? ' bad' : '') }, [l.label ? h('span', { class: 'pv-label' }, l.label + ' → ') : '', l.text]);
+      if (l.errors.length) line.title = l.errors.join('; ');
+      box.appendChild(line);
+    });
+    if (data.truncated) box.appendChild(h('div', { class: 'muted' }, 'More combinations are not shown.'));
+  }
+  function prevSig(m) { return (m.en ? m.en.hash : '') + ':' + (m.tr ? m.tr.hash : '') + ':' + S.sampleVer; }
+  function paintPreviews(ids) {
+    ids.forEach(function (id) {
+      var m = S.byId[id]; if (!m) return;
+      [].forEach.call(document.querySelectorAll('.preview[data-id="' + CSS.escape(id) + '"]'), function (box) { paintInto(box, m, box.classList.contains('pv-en') ? 'en' : 'tr'); });
+    });
+  }
+  function fetchPreviews() {
+    var want = S.filtered.slice(0, S.shown).filter(function (m) {
+      var c = S.prev[m.id];
+      return !(c && c.sig === prevSig(m)) && ((m.en && m.en.raw.indexOf('{') >= 0) || (m.tr && m.tr.raw.indexOf('{') >= 0));
+    }).map(function (m) { return m.id; });
+    for (var i = 0; i < want.length; i += 150) {
+      (function (ids) {
+        api('preview', { ids: ids }).then(function (r) {
+          ids.forEach(function (id) { var m = S.byId[id]; if (m) S.prev[id] = { sig: prevSig(m), data: r.previews[id] || {} }; });
+          S.data.samples = r.samples; paintPreviews(ids);
+        }).catch(function () {});
+      })(want.slice(i, i + 150));
+    }
+  }
+  function enCell(m) {
+    var wrap = h('div', { class: 'trwrap' }, [h('div', { class: 'entext' }, m.en ? m.en.raw : '(no English)')]);
+    if (m.en) wrap.appendChild(h('div', { class: 'rowbtns' }, [pencilButton(m, 'en')]));
+    if (m.en) wrap.appendChild(previewNode(m, 'en'));
+    return wrap;
+  }
+  function changeNode(m) {
+    var c = m.en_change; if (!c) return '';
+    var diff = h('span');
+    O.diffWords(c.old, c.new).forEach(function (p) { diff.appendChild(p.changed ? h('span', { class: 'chg' }, p.text) : document.createTextNode(p.text)); });
+    return h('div', { class: 'enchange' }, [h('div', { class: 'muted' }, 'English changed on ' + c.date + '. Check this text.'), h('div', { class: 'entext' }, ['Before: ' + c.old]), h('div', { class: 'entext' }, ['Now: ', diff])]);
   }
   function trCell(m) {
     var wrap = h('div', { class: 'trwrap' }, [trNode(m)]);
-    if (m.tr) wrap.appendChild(h('div', { class: 'rowbtns' }, [okButton(m), pencilButton(m)]));
-    return wrap;
+    if (m.tr) wrap.appendChild(h('div', { class: 'rowbtns' }, [pencilButton(m, 'tr')]));
+    var kids = [wrap];
+    if (m.en_change) kids.push(changeNode(m));
+    if (m.tr) kids.push(previewNode(m, 'tr'));
+    return h('div', {}, kids);
   }
   function rowFor(m) {
+    var editEn = S.edit && S.edit.id === m.id && S.edit.loc === 'en', editTr = S.edit && S.edit.id === m.id && S.edit.loc === 'tr';
     var tr = h('tr', { class: 'msg' + (S.sel === m.id ? ' sel' : ''), 'data-id': m.id, onclick: function () { if (S.sel === m.id || !window.getSelection().isCollapsed) return; select(m.id, false); } }, [
       h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '']),
-      h('td', { class: 'en' }, m.en ? m.en.raw : '(no English)'),
-      h('td', { class: 'tr' }, S.edit && S.edit.id === m.id ? S.edit.el : trCell(m)),
-      h('td', { class: 'st' }, statusBadges(m))]);
+      h('td', { class: 'en' }, editEn ? S.edit.el : enCell(m)),
+      h('td', { class: 'tr' }, editTr ? S.edit.el : trCell(m)),
+      h('td', { class: 'st' }, statusCell(m))]);
     return tr;
   }
   function select(id, scroll) {
@@ -241,43 +308,52 @@
   }
   var NOSTORE = { length: 0, key: function () { return null; }, getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} };
   function st() { return store() || NOSTORE; }
-  function openEdit(id) {
+  function editKey(id, loc) { return id + '|' + loc; }
+  function openEdit(id, loc) {
+    loc = loc || 'tr';
     var m = S.byId[id];
-    if (!m || !m.tr) return toast('Nothing to edit');
-    if (S.edit && S.edit.id === id) { if (S.edit.ta) S.edit.ta.focus(); return; }
+    if (!m || !(loc === 'en' ? m.en : m.tr)) return toast('Nothing to edit');
+    if (S.edit && S.edit.id === id && S.edit.loc === loc) { if (S.edit.ta) S.edit.ta.focus(); return; }
     S.edit = null;   // the draft of another edit stays in localStorage
     api('item?id=' + encodeURIComponent(id)).then(function (it) {
       apply(it);
-      var d = Ed.loadDraft(st(), S.target, id, it.tr.raw);
-      startEdit(S.byId[id], d ? d.text : it.tr.raw, !!d);
+      var cur = loc === 'en' ? it.en : it.tr;
+      var d = Ed.loadDraft(st(), S.target, editKey(id, loc), cur.raw);
+      startEdit(S.byId[id], loc, d ? d.text : cur.raw, !!d);
     }).catch(fail);
   }
-  function startEdit(m, text, restored) {
+  function startEdit(m, loc, text, restored) {
     S.sel = m.id;
-    S.edit = { id: m.id, orig: m.tr.raw, hash: m.tr.hash, text: text, seq: 0 };
-    S.edit.el = buildEditor(m, text);
+    var cur = loc === 'en' ? m.en : m.tr;
+    S.edit = { id: m.id, loc: loc, locale: loc === 'en' ? S.data.source : S.target, key: editKey(m.id, loc), orig: cur.raw, hash: cur.hash, text: text, seq: 0 };
+    S.edit.el = buildEditor(m, loc, text);
     renderRows(); fillDetail();
     S.edit.ta.focus();
     var row = document.querySelector('tr.msg[data-id="' + CSS.escape(m.id) + '"]'); if (row) row.scrollIntoView({ block: 'center' });
     validateNow();
     if (restored) toast('Restored your unsaved edit');
   }
-  function buildEditor(m, text) {
-    var ta = h('textarea', { class: 'ed-ta', lang: S.target, spellcheck: 'true', rows: String(Math.max(2, text.split('\n').length + 1)) });
+  function buildEditor(m, loc, text) {
+    var ta = h('textarea', { class: 'ed-ta', lang: loc === 'en' ? 'en' : S.target, spellcheck: 'true', rows: String(Math.max(2, text.split('\n').length + 1)) });
     ta.value = text;
     var msg = h('div', { class: 'ed-msg muted' }, '');
+    var warn = h('div', { class: 'ed-warn' }, '');
+    var pv = h('div', { class: 'preview ed-preview' }, '');
     var bSug = h('button', { onclick: function () { saveEdit(false); } }, 'Save as suggestion');
     var bAcc = h('button', { class: 'primary', onclick: function () { saveEdit(true); } }, 'Save and accept');
-    var chips = h('div', { class: 'chips' }, [h('span', { class: 'muted' }, 'Insert: ')].concat((m.chips || []).map(function (c) {
+    var chipList = (loc === 'en' ? m.chips_en : m.chips) || [];
+    var chips = h('div', { class: 'chips' }, [h('span', { class: 'muted' }, 'Insert: ')].concat(chipList.map(function (c) {
       return h('button', { class: 'chip', type: 'button', title: 'Insert at the cursor', onmousedown: function (e) { e.preventDefault(); }, onclick: function () { insertChip(c); } }, c);
     })));
-    var words = (m.highlights || []).map(function (x) { return x.text; });
+    var words = loc === 'tr' ? (m.highlights || []).map(function (x) { return x.text; }) : [];
+    var ctx = loc === 'en'
+      ? h('div', { class: 'ed-en' }, [h('div', { class: 'muted' }, 'Editing the English source. The ' + S.target + ' text for context:'), h('div', { class: 'ed-en-text' }, m.tr ? m.tr.raw : '(missing)'),
+          h('div', { class: 'muted' }, 'A new variable is refused, because the code does not pass it. Removing one is allowed. Then the ' + S.target + ' text is flagged for you.')])
+      : h('div', { class: 'ed-en' }, [h('div', { class: 'muted' }, 'English'), h('div', { class: 'ed-en-text' }, m.en ? m.en.raw : '')]);
     var box = h('div', { class: 'editor', onclick: function (e) { e.stopPropagation(); } }, [
-      h('div', { class: 'ed-en' }, [h('div', { class: 'muted' }, 'English'), h('div', { class: 'ed-en-text' }, m.en ? m.en.raw : '')]),
-      words.length ? wordsLine(words) : '',
-      ta, chips, msg,
+      ctx, words.length ? wordsLine(words) : '', ta, chips, msg, warn, pv,
       h('div', { class: 'actions' }, [bSug, bAcc, h('button', { onclick: cancelEdit }, 'Cancel'), h('span', { class: 'muted' }, 'Ctrl/Cmd+Enter saves and accepts, Esc cancels')])]);
-    S.edit.ta = ta; S.edit.msg = msg; S.edit.bSug = bSug; S.edit.bAcc = bAcc;
+    S.edit.ta = ta; S.edit.msg = msg; S.edit.warn = warn; S.edit.pv = pv; S.edit.bSug = bSug; S.edit.bAcc = bAcc;
     ta.addEventListener('input', onEditInput);
     ta.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(true); }
@@ -294,7 +370,7 @@
   function onEditInput() {
     var e = S.edit; if (!e) return;
     e.text = e.ta.value;
-    Ed.saveDraft(st(), S.target, e.id, e.text, e.orig);
+    Ed.saveDraft(st(), S.target, e.key, e.text, e.orig);
     e.ta.rows = Math.max(2, e.text.split('\n').length + 1);
     clearTimeout(onEditInput.t); onEditInput.t = setTimeout(validateNow, 300);
   }
@@ -302,12 +378,23 @@
   function validateNow() {
     var e = S.edit; if (!e) return;
     var seq = ++e.seq, text = e.ta.value;
-    if (!Ed.isChanged(text, e.orig)) { showEditMsg('No change yet.', 'muted'); e.bSug.disabled = e.bAcc.disabled = true; return; }
-    e.bSug.disabled = e.bAcc.disabled = false;
-    api('validate', { id: e.id, text: text }).then(function (r) {
-      if (!S.edit || S.edit.seq !== seq) return;
-      if (r.error) showEditMsg('Invalid: ' + r.error, 'err'); else showEditMsg('Valid. Variables, placeables and structure fit.', 'ok');
-    }).catch(function (er) { showEditMsg(er.message, 'err'); });
+    if (!Ed.isChanged(text, e.orig)) { showEditMsg('No change yet.', 'muted'); e.warn.textContent = ''; e.bSug.disabled = e.bAcc.disabled = true; }
+    else {
+      e.bSug.disabled = e.bAcc.disabled = false;
+      api('validate', { id: e.id, text: text, locale: e.locale }).then(function (r) {
+        if (!S.edit || S.edit.seq !== seq) return;
+        if (r.error) showEditMsg('Invalid: ' + r.error, 'err'); else showEditMsg('Valid. Variables, placeables and structure fit.', 'ok');
+        e.warn.textContent = (r.warnings || []).join(' ');
+      }).catch(function (er) { showEditMsg(er.message, 'err'); });
+    }
+    if (text.indexOf('{') >= 0) {
+      api('preview-text', { id: e.id, text: text, locale: e.locale }).then(function (r) {
+        if (!S.edit || S.edit.seq !== seq) return;
+        e.pv.textContent = '';
+        e.pv.appendChild(h('div', { class: 'muted pv-title' }, 'Preview'));
+        r.lines.forEach(function (l) { e.pv.appendChild(h('div', { class: 'pv-line' + (l.errors.length ? ' bad' : '') }, [l.label ? h('span', { class: 'pv-label' }, l.label + ' → ') : '', l.text])); });
+      }).catch(function () {});
+    } else if (e.pv) e.pv.textContent = '';
   }
   function insertChip(chip) {
     var e = S.edit; if (!e) return;
@@ -319,14 +406,14 @@
     var e = S.edit; if (!e) return;
     var text = e.ta.value;
     if (!Ed.isChanged(text, e.orig)) { toast('No change, nothing saved'); closeEdit(true); return; }
-    api('owner-edit', { id: e.id, text: text, base_hash: e.hash, accept: accept }).then(function (it) {
-      Ed.clearDraft(st(), S.target, e.id);
+    api('owner-edit', { id: e.id, text: text, locale: e.locale, base_hash: e.hash, accept: accept }).then(function (it) {
+      Ed.clearDraft(st(), S.target, e.key);
       S.edit = null; apply(it); counts(); renderRows(); fillDetail();
       toast(accept ? 'Saved and accepted' : 'Saved as a suggestion');
     }).catch(function (er) { showEditMsg(er.message, 'err'); });
   }
   function closeEdit(clear) {
-    if (S.edit && clear) Ed.clearDraft(st(), S.target, S.edit.id);
+    if (S.edit && clear) Ed.clearDraft(st(), S.target, S.edit.key);
     S.edit = null; counts(); renderRows(); fillDetail();
   }
   function cancelEdit() {
@@ -336,10 +423,11 @@
   }
   function restoreDraft() {
     var cur = {};
-    S.data.messages.forEach(function (m) { if (m.tr) cur[m.id] = m.tr.raw; });
+    S.data.messages.forEach(function (m) { if (m.tr) cur[editKey(m.id, 'tr')] = m.tr.raw; if (m.en) cur[editKey(m.id, 'en')] = m.en.raw; });
     var d = Ed.newestDraft(st(), S.target, cur);
     if (d && !S.edit) {
-      api('item?id=' + encodeURIComponent(d.id)).then(function (it) { apply(it); startEdit(S.byId[d.id], d.text, true); }).catch(fail);
+      var i = d.id.lastIndexOf('|'), id = d.id.slice(0, i), loc = d.id.slice(i + 1);
+      api('item?id=' + encodeURIComponent(id)).then(function (it) { apply(it); startEdit(S.byId[id], loc, d.text, true); }).catch(fail);
     }
   }
 
@@ -358,36 +446,53 @@
     if (keepFocus) { var n = cell.querySelector('textarea.cm'); n.focus(); n.setSelectionRange(pos, pos); }
   }
   function fileGroup(m) { return m.group_en || ''; }
+  // Remembered open or closed state of the collapsible sections, per browser.
+  function uiGet(name) { try { return window.localStorage.getItem('l10n-ui:' + name) === '1'; } catch (e) { return false; } }
+  function uiSet(name, on) { try { window.localStorage.setItem('l10n-ui:' + name, on ? '1' : '0'); } catch (e) {} }
+  function section(name, summary, kids) {
+    var d = h('details', uiGet(name) ? { open: true, 'data-sec': name } : { 'data-sec': name }, [h('summary', {}, summary)].concat(kids || []));
+    d.addEventListener('toggle', function () { uiSet(name, d.open); });
+    return d;
+  }
   function contextBlock(m) {
     var c = h('div', { class: 'ctx' });
     var l = h('div'), r = h('div');
     l.appendChild(h('h4', {}, 'File'));
     l.appendChild(h('div', {}, m.file + (fileGroup(m) ? ': ' + fileGroup(m) : '')));
     if (m.en && m.en.comment) { l.appendChild(h('h4', {}, 'Comment above the message')); l.appendChild(h('div', {}, m.en.comment)); }
-    if (m.en && m.en.variables.length) {
-      l.appendChild(h('h4', {}, 'Variables (example value)'));
-      l.appendChild(h('div', {}, m.en.variables.map(function (v) { return '$' + v + ' = ' + m.en.examples[v]; }).join(',  ')));
-    }
     if (m.en && m.en.selector) {
       l.appendChild(h('h4', {}, 'Variants of ' + m.en.selector));
-      l.appendChild(h('div', {}, m.en.variants.map(function (v) { return (v.default ? '*' : '') + '[' + v.key + '] ' + v.text; }).join('\n')));
-      l.lastChild.style.whiteSpace = 'pre-wrap';
+      l.appendChild(h('div', { style: 'white-space:pre-wrap' }, m.en.variants.map(function (v) { return (v.default ? '*' : '') + '[' + v.key + '] ' + v.text; }).join('\n')));
     }
-    l.appendChild(h('h4', {}, 'Neighbouring keys'));
-    var det = h('details', S.open.neigh ? { open: true } : {}, [h('summary', {}, (m.neighbours || []).length + ' keys')]);
-    det.addEventListener('toggle', function () { S.open.neigh = det.open; });
-    (m.neighbours || []).forEach(function (n) {
-      det.appendChild(h('div', { class: 'muted', style: n.here ? 'font-weight:bold' : '' }, [n.key + ': ' + n.en.replace(/\n/g, ' ') + '  |  ' + n.tr.replace(/\n/g, ' ')]));
+    var rows = m.sample_rows || [];
+    if (rows.length) {
+      l.appendChild(h('h4', {}, 'Samples for the preview'));
+      var line = h('div', { class: 'samples' });
+      rows.forEach(function (row) {
+        line.appendChild(h('label', {}, [row.name + ' ', h('input', { size: String(Math.max(4, (row.value || row.default).length)), value: row.value, placeholder: row.default,
+          title: 'Sample value for $' + row.name + '. It counts for all messages. Empty means the default.',
+          onchange: function (e) { setSample(row.name, e.target.value); } })]));
+      });
+      line.appendChild(h('button', { class: 'link', onclick: function () { api('samples/reset', {}).then(function (r2) { S.data.samples = r2.samples; sampleChanged(); select(S.sel, true); }).catch(fail); } }, 'Reset samples'));
+      l.appendChild(line);
+    }
+    var nb = (m.neighbours || []).map(function (n) {
+      return h('div', { class: 'muted', style: n.here ? 'font-weight:bold' : '' }, [n.key + ': ' + n.en.replace(/\n/g, ' ') + '  |  ' + n.tr.replace(/\n/g, ' ')]);
     });
-    l.appendChild(det);
-    r.appendChild(h('h4', {}, 'Where it is used'));
-    r.appendChild(h('div', { id: 'usage-box', class: 'muted' }, 'Searching...'));
+    r.appendChild(section('neigh', 'Neighbours (' + Math.max(0, (m.neighbours || []).length - 1) + ')', nb));
+    r.appendChild(section('usage', 'Used in ... places', [h('div', { id: 'usage-box', class: 'muted' }, 'Searching...')]));
     c.appendChild(l); c.appendChild(r);
     return c;
   }
+  function setSample(name, value) {
+    api('samples', { name: name, value: value }).then(function (r) { S.data.samples = r.samples; sampleChanged(); }).catch(fail);
+  }
+  function sampleChanged() { S.sampleVer++; S.prev = {}; renderSafe(); }
   function loadUsage(id) {
     api('usage?id=' + encodeURIComponent(id)).then(function (u) {
       var box = $('usage-box'); if (!box || S.sel !== id) return;
+      var sum = box.parentNode.querySelector('summary');
+      sum.textContent = u.total ? 'Used in ' + u.total + (u.total === 1 ? ' place' : ' places') : 'Not used in the Rust sources';
       box.textContent = '';
       if (!u.uses.length) { box.textContent = 'No use found in crates/**/*.rs.'; return; }
       u.uses.forEach(function (x) {
@@ -403,9 +508,9 @@
     var busy = S.queue && S.queue.status === 'running';
     var a = h('div', { class: 'actions' }, [
       h('button', { onclick: weird, title: 'Select words in the target text first (key w)' }, 'Weird'),
-      h('button', { disabled: m.status !== 'unreviewed' && m.status !== 'flagged', onclick: toggleFlag }, m.status === 'unreviewed' ? 'Flag' : 'Unflag'),
       h('button', { class: 'primary', disabled: busy || !m.tr, onclick: function () { suggest([m.id], false); } }, 'Suggest'),
       h('button', { disabled: busy || !m.suggestions.length, onclick: function () { suggest([m.id], true); } }, 'More options'),
+      h('button', { disabled: busy || !m.en, title: 'Ask Claude for a better English source text', onclick: function () { suggest([m.id], false, S.data.source); } }, 'Suggest English'),
       h('button', { class: 'link', onclick: copyPrompt }, 'Copy prompt'),
       h('span', { class: 'muted' }, 'Runs claude -p on this machine and uses your Claude usage.')]);
     wrap.appendChild(a);
@@ -524,19 +629,28 @@
     return wrap;
   }
   function card(m, s) {
-    var cur = m.tr ? m.tr.raw : '';
+    var isEn = s.locale === S.data.source;
+    var cur = (isEn ? m.en : m.tr) ? (isEn ? m.en.raw : m.tr.raw) : '';
     var txt = h('div', { class: 'txt' });
     O.diffWords(cur, s.text).forEach(function (p) { txt.appendChild(p.changed ? h('span', { class: 'chg' }, p.text) : document.createTextNode(p.text)); });
-    var c = h('div', { class: 'card ' + s.state + (s.error ? ' invalid' : '') });
+    var chosen = m.chosen === s.id && s.state === 'pending';
+    var c = h('div', { class: 'card ' + s.state + (s.error ? ' invalid' : '') + (chosen ? ' chosen' : '') });
+    var head = h('div', { class: 'cardhead' }, [h('span', { class: 'badge' }, isEn ? 'English' : S.target)]);
+    if (chosen) head.appendChild(h('span', { class: 'badge accepted', title: 'The Accept button of the row takes this one' }, 'chosen'));
+    if (s.stale_en) head.appendChild(h('span', { class: 'badge bad', title: 'The English text changed after this suggestion was made. Apply refuses it.' }, 'made for older English'));
+    if (s.stale_base) head.appendChild(h('span', { class: 'badge bad', title: 'The text in the file changed after this suggestion was made. Apply refuses it.' }, 'text changed since'));
+    c.appendChild(head);
     c.appendChild(txt);
-    if (s.why) c.appendChild(h('div', { class: 'why' }, s.why + '  (' + s.source + ')'));
-    else c.appendChild(h('div', { class: 'why' }, s.source));
+    c.appendChild(h('div', { class: 'why' }, (s.why ? s.why + '  (' : '(') + s.source + ')'));
     if (s.error) c.appendChild(h('div', { class: 'err' }, 'Invalid: ' + s.error));
     var btns = h('div', { class: 'actions' });
-    if (s.state === 'accepted') btns.appendChild(h('span', { class: 'badge accepted' }, 'accepted'));
+    if (s.state === 'accepted') {
+      btns.appendChild(h('span', { class: 'badge accepted' }, 'accepted'));
+      btns.appendChild(h('button', { class: 'link', onclick: function () { post('suggestion', { id: m.id, sid: s.id, op: 'pending' }); } }, 'Withdraw'));
+    }
     if (s.state === 'applied') btns.appendChild(h('span', { class: 'badge fixed' }, 'applied'));
-    if (s.state === 'pending' || s.state === 'rejected') {
-      btns.appendChild(h('button', { class: 'primary', disabled: !!s.error, onclick: function () { post('suggestion', { id: m.id, sid: s.id, op: 'accept' }); } }, 'Use this'));
+    if (s.state === 'pending' && !chosen) {
+      btns.appendChild(h('button', { disabled: !!s.error, title: s.error ? 'Invalid' : 'Make this the candidate for the Accept button', onclick: function () { post('suggestion', { id: m.id, sid: s.id, op: 'choose' }); } }, 'Choose'));
     }
     if (s.state !== 'applied') {
       btns.appendChild(h('button', { onclick: function () { editCard(m, s, c, txt, btns); } }, 'Edit'));
@@ -554,18 +668,18 @@
       api('suggestion', { id: m.id, sid: s.id, op: 'edit', text: ta.value }).then(function (it) {
         apply(it);
         var ns = it.suggestions.filter(function (x) { return x.id === s.id; })[0];
-        if (ns && !ns.error) return post('suggestion', { id: m.id, sid: s.id, op: 'accept' });
+        if (ns && !ns.error) return post('suggestion', { id: m.id, sid: s.id, op: 'choose' });
         fillDetail(); toast('Saved, but the text is invalid: ' + (ns && ns.error));
       }).catch(fail);
-    } }, 'Save and use'));
+    } }, 'Save'));
     btns.appendChild(h('button', { onclick: fillDetail }, 'Cancel'));
     ta.focus();
   }
 
   // ---- queue
-  function suggest(ids, more) {
+  function suggest(ids, more, locale) {
     delete S.jobErrors[ids[0]];
-    api('queue', { ids: ids, model: $('model').value, more: more }).then(function (j) { S.queue = j; pollQueue(); fillDetail(); }).catch(fail);
+    api('queue', { ids: ids, model: $('model').value, more: more, locale: locale || S.target }).then(function (j) { S.queue = j; pollQueue(); fillDetail(); }).catch(fail);
   }
   function pollQueue() {
     clearTimeout(pollQueue.t);
@@ -656,7 +770,8 @@
       d.appendChild(h('h3', {}, 'Apply accepted suggestions'));
       if (!pv.changes.length) d.appendChild(h('p', {}, 'Nothing accepted yet.'));
       pv.changes.forEach(function (c) {
-        d.appendChild(h('div', {}, c.file + ':' + c.line + '  ' + c.key));
+        d.appendChild(h('div', {}, c.locale + '/' + c.file + ':' + c.line + '  ' + c.key));
+        (c.warnings || []).forEach(function (w) { d.appendChild(h('div', { class: 'ed-warn' }, 'Warning: ' + w)); });
         if (c.error) d.appendChild(h('div', { class: 'errbox' }, 'Refused: ' + c.error));
         else d.appendChild(h('div', { class: 'diff' }, c.old_lines.map(function (l) { return h('span', { class: 'del' }, '- ' + l); }).concat(c.new_lines.map(function (l) { return h('span', { class: 'add' }, '+ ' + l); }))));
       });
@@ -708,7 +823,8 @@
     else if (e.key === 'c') { var t = document.querySelector('textarea.cm'); if (t) { e.preventDefault(); t.focus(); } }
     else if (e.key === 'a') { var m = S.byId[S.sel]; if (m && m.tr && ($('no-ask').checked || confirm('Ask Claude for this message? This uses your Claude usage.'))) suggest([m.id], false); }
     else if (e.key === 'w') weird();
-    else if (e.key === 'e') { if (S.sel) { e.preventDefault(); openEdit(S.sel); } }
+    else if (e.key === 'e') { if (S.sel) { e.preventDefault(); openEdit(S.sel, 'tr'); } }
+    else if (e.key === 'E') { if (S.sel) { e.preventDefault(); openEdit(S.sel, 'en'); } }
     else return;
   });
   showSave();

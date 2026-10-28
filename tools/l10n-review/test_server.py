@@ -37,6 +37,13 @@ class ServerTest(unittest.TestCase):
         cls.srv.server_close()
         cls.thread.join(5)
 
+    def setUp(self):
+        st = self.app.review("et").state
+        st.data["messages"] = {}
+        st.data["samples"] = {}
+        st.save()
+        self.app.job = None
+
     def raw(self, method, path, body=None, headers=None, token=True, ctype="application/json"):
         """Low-level request. Returns (status, text)."""
         h = {}
@@ -169,6 +176,10 @@ class ServerTest(unittest.TestCase):
             ("owner edit", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Alles on need varukoopiad."})),
             ("owner edit accept", lambda: self.req("/api/owner-edit", {"id": mid2, "text": "Siin on need varukoopiad.", "accept": True})),
             ("glossary", lambda: self.req("/api/glossary", {"items": [{"en": "layer", "tr": "kiht", "note": "n"}]})),
+            ("sample", lambda: self.req("/api/samples", {"name": "n", "value": "1"})),
+            ("choose", lambda: self.req("/api/suggestion", {"id": mid, "op": "choose", "sid": self.req("/api/suggestion", {"id": mid, "op": "add", "text": "Aruanne { $n } / { $total }!"})["suggestions"][-1]["id"]})),
+            ("english owner edit", lambda: self.req("/api/owner-edit", {"id": mid, "text": "Crash report { $n } out of { $total }", "locale": "en-US", "accept": True})),
+            ("sample reset", lambda: self.req("/api/samples/reset", {})),
         ]
         for label, step in steps:
             step()
@@ -177,6 +188,41 @@ class ServerTest(unittest.TestCase):
         self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
         check("apply")
         self.assertEqual(self.req("/api/item?id=" + mid2)["status"], "fixed")
+
+    def test_locale_samples_and_preview_over_http(self):
+        mid = "demo.ftl::demo-count"
+        # a locale other than the source or the target is a 400
+        self.assertEqual(self.raw("POST", "/api/validate", {"id": mid, "text": "x", "locale": "de"})[0], 400)
+        self.assertEqual(self.raw("POST", "/api/owner-edit", {"id": mid, "text": "x", "locale": 5})[0], 400)
+        # English validation: a new variable is refused with the reason, removing one gives a warning
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Crash { $n } { $new }", "locale": "en-US"})
+        self.assertIn("adds $new", r["error"])
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Crash { $n }", "locale": "en-US"})
+        self.assertIsNone(r["error"])
+        self.assertIn("$total", r["warnings"][0])
+        # the same text for the target is invalid (variables must equal the English ones)
+        r = self.req("/api/validate", {"id": "demo.ftl::demo-title", "text": "Aruanne { $n }"})
+        self.assertIn("variables", r["error"])
+        # previews: one line for each plural category, in both locales
+        p = self.req("/api/preview", {"ids": [mid, "demo.ftl::demo-recover", "nope"]})["previews"]
+        self.assertEqual([l["text"] for l in p[mid]["en"]["lines"]], ["1 layer", "2 layers"])
+        self.assertEqual([l["text"] for l in p[mid]["tr"]["lines"]], ["1 kiht", "2 kihti"])
+        self.assertIsNone(p["demo.ftl::demo-recover"]["en"])
+        self.assertNotIn("nope", p)
+        # samples: stored by name, empty removes, reset clears
+        self.assertEqual(self.req("/api/samples", {"name": "n", "value": "1"})["samples"], {"n": "1"})
+        p = self.req("/api/preview", {"ids": [mid]})["previews"]
+        self.assertEqual([l["text"] for l in p[mid]["tr"]["lines"]], ["1 kiht"])
+        self.assertEqual(self.req("/api/samples", {"name": "n", "value": ""})["samples"], {})
+        self.assertEqual(self.raw("POST", "/api/samples", {"name": "bad name!", "value": "1"})[0], 400)
+        self.req("/api/samples", {"name": "total", "value": "9"})
+        self.assertIn("samples", self.req("/api/list"))
+        t = self.req("/api/preview-text", {"id": "demo.ftl::demo-title", "locale": "et", "text": "A { $n } / { $total }"})
+        self.assertEqual(t["lines"][0]["text"], "A 2 / 9")
+        self.req("/api/samples/reset", {})
+        item = self.req("/api/item?id=demo.ftl::demo-title")
+        self.assertEqual([r["name"] for r in item["sample_rows"]], ["n", "total"])
+        self.assertIn("chips_en", item)
 
     def test_owner_edit(self):
         mid = "demo.ftl::demo-title"
