@@ -32,7 +32,10 @@ sign_programs() {
     [ -f "$f" ] || continue
     # Not `file | grep -q`: with pipefail, grep ending early makes the pipe fail now and then.
     kind="$(file -b "$f")"
-    case "$kind" in *Mach-O*) sign "$f" ;; esac
+    echo "item: ${f##*/}: $kind"
+    # Every executable file is a program. `file` is only the second check.
+    if [ -x "$f" ]; then sign "$f"; else case "$kind" in *Mach-O*) sign "$f" ;; esac; fi
+    codesign --verify --strict "$f" || { echo "not signed: $f" >&2; return 1; }
   done
 }
 
