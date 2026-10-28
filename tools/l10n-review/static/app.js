@@ -33,7 +33,7 @@
     return fetch(url, opt);
   }
   // Every request that changes the state file is tracked by the Saved indicator.
-  var STATE_PATHS = ['status', 'comment', 'highlight', 'suggestion', 'owner-edit', 'glossary', 'apply'];
+  var STATE_PATHS = ['status', 'comment', 'highlight', 'suggestion', 'owner-edit', 'glossary', 'apply', 'bulk-ok', 'bulk-undo'];
   var SAVE = { pending: 0, failed: [], last: '', typing: false };
   function clock() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
   function showSave() {
@@ -103,13 +103,27 @@
     var s = $('f-status'), cs = s.value;
     s.textContent = ''; s.appendChild(h('option', { value: '' }, 'all'));
     S.data.statuses.forEach(function (x) { s.appendChild(h('option', { value: x }, x)); });
+    s.appendChild(h('option', { value: 'attention' }, 'needs attention'));
     s.value = cs;
   }
+  var ATTENTION = ['flagged', 'suggested', 'accepted'];
   function counts() {
-    var c = {}; S.data.messages.forEach(function (m) { c[m.status] = (c[m.status] || 0) + 1; });
+    var c = {}, per = {};
+    S.data.messages.forEach(function (m) {
+      c[m.status] = (c[m.status] || 0) + 1;
+      var p = per[m.file] || (per[m.file] = { un: 0, total: 0 });
+      p.total++; if (m.status === 'unreviewed') p.un++;
+    });
     S.data.counts = c;
-    $('counts').textContent = S.data.total + ' messages, ' + (c.flagged || 0) + ' flagged, ' + (c.suggested || 0) +
+    var total = S.data.total, done = total - (c.unreviewed || 0);
+    $('progress').textContent = 'Reviewed ' + done + ' of ' + total + ' (' + (total ? Math.round(100 * done / total) : 0) + '%)';
+    $('counts').textContent = (c.ok || 0) + ' ok, ' + (c.flagged || 0) + ' flagged, ' + (c.suggested || 0) +
       ' suggested, ' + (c.accepted || 0) + ' accepted, ' + (c.fixed || 0) + ' fixed';
+    [].forEach.call($('f-file').options, function (o) {
+      if (!o.value) { o.textContent = 'all files (' + (c.unreviewed || 0) + ' / ' + total + ')'; return; }
+      var p = per[o.value] || { un: 0, total: 0 };
+      o.textContent = o.value + ' (' + p.un + ' / ' + p.total + ')';
+    });
   }
   function apply(it) {  // merge a fresh item from the server
     var old = S.byId[it.id];
@@ -122,7 +136,8 @@
     var file = $('f-file').value, st = $('f-status').value, q = $('f-text').value.trim().toLowerCase(), df = $('f-diff').checked;
     S.filtered = S.data.messages.filter(function (m) {
       if (file && m.file !== file) return false;
-      if (st && m.status !== st) return false;
+      if (st === 'attention') { if (ATTENTION.indexOf(m.status) < 0) return false; }
+      else if (st && m.status !== st) return false;
       if (df && !m.suggestions.some(function (s) { return s.state !== 'rejected' && m.tr && s.text !== m.tr.raw; })) return false;
       if (q) {
         var t = ((m.en ? m.en.raw : '') + '\n' + (m.tr ? m.tr.raw : '') + '\n' + m.key).toLowerCase();
@@ -163,6 +178,12 @@
     });
     return box;
   }
+  function statusBadges(m) {
+    var open = m.suggestions.filter(function (x) { return x.state === 'pending'; }).length;
+    var kids = [h('span', { class: 'badge ' + m.status }, m.status)];
+    if (m.status === 'ok' && open) kids.push(' ', h('span', { class: 'badge suggested', title: 'Open suggestions on an OK message' }, open + ' open'));
+    return kids;
+  }
   var PENCIL = 'M12 20h9 M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z';
   function pencilButton(m) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -175,9 +196,22 @@
     b.appendChild(svg);
     return b;
   }
+  function okButton(m) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '15'); svg.setAttribute('height', '15');
+    svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '2.4');
+    svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+    var p = document.createElementNS(ns, 'path'); p.setAttribute('d', 'M4 12.5l5 5L20 6.5'); svg.appendChild(p);
+    var on = m.status === 'ok';
+    var b = h('button', { class: 'okbtn' + (on ? ' on' : ''), type: 'button', 'aria-label': 'Mark OK', 'aria-pressed': on ? 'true' : 'false',
+      title: on ? 'Marked OK. Click to undo (o)' : 'Looks good (o)', onclick: function (ev) { ev.stopPropagation(); S.sel = m.id; toggleOk(); } });
+    b.appendChild(svg);
+    return b;
+  }
   function trCell(m) {
     var wrap = h('div', { class: 'trwrap' }, [trNode(m)]);
-    if (m.tr) wrap.appendChild(pencilButton(m));
+    if (m.tr) wrap.appendChild(h('div', { class: 'rowbtns' }, [okButton(m), pencilButton(m)]));
     return wrap;
   }
   function rowFor(m) {
@@ -185,7 +219,7 @@
       h('td', { class: 'k' }, [h('div', { class: 'f' }, m.file), h('div', {}, m.key), m.parity !== 'ok' ? h('span', { class: 'badge bad' }, m.parity) : '', m.problems.length ? h('span', { class: 'badge bad' }, m.problems.join(', ')) : '']),
       h('td', { class: 'en' }, m.en ? m.en.raw : '(no English)'),
       h('td', { class: 'tr' }, S.edit && S.edit.id === m.id ? S.edit.el : trCell(m)),
-      h('td', { class: 'st' }, h('span', { class: 'badge ' + m.status }, m.status))]);
+      h('td', { class: 'st' }, statusBadges(m))]);
     return tr;
   }
   function select(id, scroll) {
@@ -400,9 +434,55 @@
 
   function toggleFlag() {
     var m = S.byId[S.sel]; if (!m) return;
-    if (m.status === 'unreviewed') post('status', { id: m.id, status: 'flagged' });
+    if (m.status === 'unreviewed' || m.status === 'ok') post('status', { id: m.id, status: 'flagged' });
     else if (m.status === 'flagged') post('status', { id: m.id, status: 'unreviewed' });
-    else toast('The status is ' + m.status + '. Flag and unflag only switch between unreviewed and flagged.');
+    else toast('The status is ' + m.status + '. Flag and unflag switch between unreviewed, ok and flagged only.');
+  }
+  // The next (dir 1) or previous (dir -1) unreviewed row of the shown list, after row `fromId`.
+  function nextUnreviewed(dir, fromId) {
+    var i = S.filtered.findIndex(function (m) { return m.id === fromId; });
+    for (var k = i < 0 ? (dir > 0 ? 0 : S.filtered.length - 1) : i + dir; k >= 0 && k < S.filtered.length; k += dir) {
+      if (S.filtered[k].status === 'unreviewed') return S.filtered[k].id;
+    }
+    return null;
+  }
+  function goTo(id) {
+    var n = S.filtered.findIndex(function (m) { return m.id === id; });
+    if (n < 0) return;
+    if (n >= S.shown) S.shown = n + 20;
+    S.sel = null; select(id, true);
+  }
+  function toggleOk() {
+    var m = S.byId[S.sel]; if (!m) return;
+    if (m.status === 'ok') {
+      post('status', { id: m.id, status: 'unreviewed' }).then(function (it) {
+        if (it) toast('Back to unreviewed', function () { post('status', { id: m.id, status: 'ok' }); });
+      });
+      return;
+    }
+    if (m.status === 'accepted' || m.status === 'fixed') return toast('The status is ' + m.status + '. It cannot be marked OK.');
+    var prev = m.status, next = nextUnreviewed(1, m.id);
+    post('status', { id: m.id, status: 'ok' }).then(function (it) {
+      if (!it) return;
+      toast('Marked OK', function () { post('status', { id: m.id, status: prev }); });
+      if (next) goTo(next);
+    });
+  }
+  function markAllShownOk() {
+    filter();
+    var ids = S.filtered.filter(function (m) { return m.status === 'unreviewed'; }).map(function (m) { return m.id; });
+    if (!ids.length) return toast('No unreviewed messages are shown');
+    if (!confirm('Mark ' + ids.length + ' shown messages as OK?')) return;
+    api('bulk-ok', { ids: ids }).then(function (r) {
+      r.changed.forEach(function (id) { if (S.byId[id]) S.byId[id].status = 'ok'; });
+      renderSafe();
+      toast('Marked ' + r.count + ' as OK', function () {
+        api('bulk-undo', { ids: r.changed }).then(function (u) {
+          u.changed.forEach(function (id) { if (S.byId[id]) S.byId[id].status = 'unreviewed'; });
+          renderSafe();
+        }).catch(fail);
+      });
+    }).catch(fail);
   }
   function weird() {
     var m = S.byId[S.sel]; if (!m || !m.tr) return toast('Select a row first');
@@ -517,6 +597,9 @@
     S.queue = null; S.jobErrors = {}; S.seenFinished = {};
     api('queue', { ids: ids, model: $('model').value }).then(function (j) { S.queue = j; pollQueue(); }).catch(fail);
   });
+  $('btn-bulk-ok').addEventListener('click', markAllShownOk);
+  $('btn-help').addEventListener('click', function () { $('help').showModal(); });
+  $('help-close').addEventListener('click', function () { $('help').close(); });
   $('btn-cancel').addEventListener('click', function () { api('queue/cancel', {}).then(function () { pollQueue(); }); });
 
   // ---- terms, glossary, parity
@@ -612,12 +695,16 @@
   $('target').addEventListener('change', function (e) { flushComment(); S.target = e.target.value; S.sel = null; S.edit = null; load().then(restoreDraft); });
   document.addEventListener('keydown', function (e) {
     var tag = (e.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || S.tab !== 'list' || $('dlg').open) return;
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.metaKey || e.ctrlKey || e.altKey || $('dlg').open || $('help').open) return;
+    if (e.key === '?') { e.preventDefault(); $('help').showModal(); return; }
+    if (S.tab !== 'list') return;
     var i = S.filtered.findIndex(function (m) { return m.id === S.sel; });
     if (e.key === 'j' || e.key === 'k') {
       var n = Math.min(S.filtered.length - 1, Math.max(0, i + (e.key === 'j' ? 1 : -1)));
       if (S.filtered[n]) { if (n >= S.shown) S.shown = n + 20; S.sel = null; select(S.filtered[n].id, true); }
     } else if (e.key === 'f') toggleFlag();
+    else if (e.key === 'o') toggleOk();
+    else if (e.key === 'u' || e.key === 'U') { var id = nextUnreviewed(e.key === 'u' ? 1 : -1, S.sel); if (id) goTo(id); else toast('No ' + (e.key === 'u' ? 'next' : 'previous') + ' unreviewed row in the shown list'); }
     else if (e.key === 'c') { var t = document.querySelector('textarea.cm'); if (t) { e.preventDefault(); t.focus(); } }
     else if (e.key === 'a') { var m = S.byId[S.sel]; if (m && m.tr && ($('no-ask').checked || confirm('Ask Claude for this message? This uses your Claude usage.'))) suggest([m.id], false); }
     else if (e.key === 'w') weird();

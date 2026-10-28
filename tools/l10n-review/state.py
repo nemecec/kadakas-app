@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-STATUSES = ["unreviewed", "flagged", "suggested", "accepted", "fixed"]
+STATUSES = ["unreviewed", "ok", "flagged", "suggested", "accepted", "fixed"]
 
 
 def default_state_path(target):
@@ -103,6 +103,27 @@ class ReviewState:
             self._prune(mid)
             self.save()
 
+    def bulk_set(self, mids, from_status, to_status):
+        """Change the status of every message in `mids` that has `from_status`. One write.
+
+        Returns the ids that changed. Nothing else is touched: comments, highlights and
+        suggestions stay.
+        """
+        if from_status not in STATUSES or to_status not in STATUSES:
+            raise StateError("Unknown status")
+        with self.lock:
+            changed = []
+            for mid in mids:
+                cur = (self.entry(mid) or {}).get("status", "unreviewed")
+                if cur == from_status:
+                    self._ensure(mid)["status"] = to_status
+                    changed.append(mid)
+            for mid in changed:
+                self._prune(mid)
+            if changed:
+                self.save()
+            return changed
+
     def set_comment(self, mid, comment):
         with self.lock:
             e = self._ensure(mid)
@@ -126,7 +147,7 @@ class ReviewState:
             hs.sort(key=lambda h: h["start"])
             e["highlights"] = hs
             e["text_hash"] = hash_text(text)
-            if e["status"] == "unreviewed":
+            if e["status"] in ("unreviewed", "ok"):
                 e["status"] = "flagged"
             self.save()
             return word
@@ -151,7 +172,7 @@ class ReviewState:
                  "why": why, "error": error, "time": int(time.time()),
                  "base_hash": base_hash, "en_hash": en_hash}
             e["suggestions"].append(s)
-            if e["status"] in ("unreviewed", "flagged"):
+            if e["status"] in ("unreviewed", "ok", "flagged"):
                 e["status"] = "suggested"
             self.save()
             return s

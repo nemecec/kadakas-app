@@ -38,11 +38,29 @@ Each row shows the file and key, the English text, the target text and the statu
 - Click a row to see the context. It has the group comment of the file, the comment above the message, the variables with example values, the neighbouring keys and up to five places in the Rust sources that use the key.
 - Select words in the target text and press Weird (or key `w`). The words get a yellow highlight. Click a highlight to remove it.
 - Write a comment in the box. Press `f` to flag or unflag the message.
-- Statuses are unreviewed, flagged, suggested, accepted and fixed.
-- Keys: `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` edits in place, `w` marks the selected words.
+- Statuses are unreviewed, ok, flagged, suggested, accepted and fixed.
+- Keys: `o` marks OK, `u` and `U` jump to unreviewed rows, `?` shows all keys, `j` and `k` move, `f` flags, `c` goes to the comment, `a` asks for suggestions, `e` edits in place, `w` marks the selected words.
 - Filters: file, status, text search in both languages, and only messages that have a different suggestion.
 
 If a highlighted text changes in the file, the highlights of that message are hidden. Their offsets no longer fit.
+
+## Workflow
+
+Most messages are fine. A typical session goes like this.
+
+1. Filter by one file and the status unreviewed.
+2. Read a row. If it is fine, press `o`. The row becomes OK and the selection moves to the next unreviewed row. Press `o` again on an OK row to undo it.
+3. If a word is wrong, select it and press `w` (Weird). Press `f` to flag a message without a word.
+4. Press `e` to fix the text yourself. Press `a` to ask Claude for three alternatives.
+5. Press `u` or `U` to jump to the next or previous unreviewed row. Press `?` for the list of keys.
+6. Finish a file with Mark all shown as OK. It marks only the unreviewed rows in the shown list. It asks first and shows the count. One Undo restores them.
+7. At the end, open Apply to write the accepted texts.
+
+The header shows `Reviewed N of M (xx%)`. Reviewed means every status except unreviewed. The file list shows unreviewed and total counts for each file. The status filter has a "needs attention" choice. It shows flagged, suggested and accepted messages.
+
+OK keeps your data. Comments, highlights and suggestions stay when you mark a message OK. An OK message with open suggestions shows an "open" badge. A highlight or a new suggestion on an OK message sets it back to flagged or suggested. The key `f` flags an OK message too. An accepted or fixed message cannot be marked OK.
+
+Apply and the Terms tab ignore OK. The export lists only the number of OK messages for each file.
 
 ## Saving
 

@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 
 import server
+from review import Review
 from helpers import CANNED, et_path, make_fake_claude, make_repo
 
 
@@ -230,6 +231,136 @@ class ServerTest(unittest.TestCase):
         r = self.req("/api/apply", {"expect": pv["digest"], "confirm_dirty": True})
         self.assertEqual(r["applied"], [mid])
         self.assertIn("varukoopiad", open(et_path(self.root), encoding="utf-8").read())
+
+
+class OkStatusTest(unittest.TestCase):
+    """The OK status, bulk marking, counts, export and the state file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.root = make_repo(git=True)
+        cls.app = server.App(cls.root, "et", os.path.join(cls.dir, "state.json"), "claude", timeout=5)
+        cls.srv = server.make_server(cls.app, 0)
+        cls.port = cls.srv.server_address[1]
+        cls.thread = threading.Thread(target=cls.srv.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.ids = ["demo.ftl::" + k for k in ("demo-title", "demo-recover", "demo-count", "demo-multi")]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        cls.thread.join(5)
+
+    def setUp(self):
+        st = self.app.review("et").state
+        st.data["messages"] = {}
+        st.save()
+
+    def post(self, path, body):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("POST", "/api/" + path, json.dumps(body),
+                     {"X-L10n-Token": self.app.token, "Content-Type": "application/json"})
+        r = conn.getresponse()
+        data = json.loads(r.read().decode())
+        conn.close()
+        return r.status, data
+
+    def get(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn.request("GET", "/api/" + path, headers={"X-L10n-Token": self.app.token})
+        r = conn.getresponse()
+        text = r.read().decode()
+        conn.close()
+        return text
+
+    def disk(self):
+        from state import ReviewState
+        return ReviewState(self.app.review("et").state.path, "et")
+
+    def counts(self):
+        return json.loads(self.get("list"))["counts"]
+
+    def test_ok_flow(self):
+        a, b, c, d = self.ids
+        self.assertEqual(self.counts()["ok"], 0)
+        # one click OK keeps the data, toggling back works
+        self.post("comment", {"id": a, "comment": "keep me"})
+        self.post("status", {"id": a, "status": "flagged"})
+        s, it = self.post("status", {"id": a, "status": "ok"})
+        self.assertEqual((it["status"], it["comment"]), ("ok", "keep me"))
+        self.assertEqual(self.disk().view(a)["status"], "ok")
+        # a highlight or a suggestion on an OK row flags it again
+        s, it = self.post("highlight", {"id": a, "start": 0, "end": 5})
+        self.assertEqual(it["status"], "flagged")
+        self.post("status", {"id": a, "status": "ok"})
+        s, it = self.post("suggestion", {"id": a, "op": "add", "text": "Raport { $n } / { $total }"})
+        self.assertEqual(it["status"], "suggested")
+        self.post("status", {"id": a, "status": "ok"})   # OK with an open suggestion stays OK
+        self.assertEqual(self.post("status", {"id": a, "status": "ok"})[1]["suggestions"][0]["state"], "pending")
+        self.assertEqual(self.post("status", {"id": a, "status": "unreviewed"})[1]["status"], "unreviewed")
+        # unreviewed with data stays in the file, an empty unreviewed entry is dropped
+        self.assertIn(a, self.disk().data["messages"])
+        self.post("comment", {"id": a, "comment": ""})
+        self.post("suggestion", {"id": a, "op": "delete", "sid": self.disk().view(a)["suggestions"][0]["id"]})
+        self.post("highlight", {"id": a, "start": 0, "end": 5, "remove": True})
+        self.assertNotIn(a, self.disk().data["messages"])
+
+    def test_bulk_only_touches_unreviewed_and_undo(self):
+        a, b, c, d = self.ids
+        self.post("status", {"id": b, "status": "flagged"})
+        self.post("status", {"id": c, "status": "ok"})
+        before = self.counts()
+        s, r = self.post("bulk-ok", {"ids": [a, b, c, d, "nope::x", 5]})
+        self.assertEqual(sorted(r["changed"]), sorted([a, d]))   # b is flagged, c is already ok
+        after = self.counts()
+        self.assertEqual(after["flagged"], before["flagged"])
+        self.assertEqual(after["ok"], before["ok"] + 2)
+        self.assertEqual(self.disk().view(a)["status"], "ok")
+        self.assertEqual(self.disk().view(b)["status"], "flagged")
+        # the undo restores exactly the changed rows
+        s, u = self.post("bulk-undo", {"ids": r["changed"]})
+        self.assertEqual(sorted(u["changed"]), sorted([a, d]))
+        self.assertEqual(self.counts()["ok"], before["ok"])
+        self.assertEqual(self.disk().view(c)["status"], "ok")   # not in the undo list
+        self.assertEqual(self.post("bulk-ok", {"ids": "x"})[0], 400)
+        # an empty bulk writes nothing and is fine
+        self.assertEqual(self.post("bulk-ok", {"ids": []})[1]["count"], 0)
+
+    def test_bulk_is_one_atomic_write(self):
+        from state import ReviewState
+        calls = []
+        st = self.app.review("et").state
+        orig = st.save
+        st.save = lambda: (calls.append(1), orig())[1]
+        try:
+            self.post("bulk-ok", {"ids": self.ids})
+        finally:
+            st.save = orig
+        self.assertEqual(len(calls), 1)
+        self.post("bulk-undo", {"ids": self.ids})
+
+    def test_export_has_ok_counts_only(self):
+        self.post("status", {"id": self.ids[0], "status": "ok"})
+        md = self.get("export")
+        self.assertIn("## Marked OK", md)
+        self.assertIn("- demo.ftl: 1", md)
+        self.assertNotIn("demo-title", md.split("## Marked OK")[0])
+        pv = json.loads(self.get("list"))
+        self.assertIn("ok", pv["statuses"])
+        self.post("status", {"id": self.ids[0], "status": "unreviewed"})
+
+    def test_old_state_file_still_loads(self):
+        from state import ReviewState
+        p = os.path.join(tempfile.mkdtemp(), "old.json")
+        with open(p, "w") as f:
+            json.dump({"version": 1, "target": "et", "glossary": None, "messages": {
+                "demo.ftl::demo-title": {"status": "flagged", "comment": "x", "highlights": [], "suggestions": [
+                    {"id": "a1", "text": "t", "source": "owner", "state": "pending", "time": 1}]}}}, f)
+        rv = Review(self.root, "et", state_path=p)
+        self.assertEqual(rv.item(self.ids[0])["status"], "flagged")
+        self.assertEqual(rv.list()["counts"]["ok"], 0)
 
 
 class QueueKillTest(unittest.TestCase):

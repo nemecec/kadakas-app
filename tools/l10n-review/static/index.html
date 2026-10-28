@@ -18,16 +18,19 @@
       <button data-tab="glossary">Glossary</button>
       <button data-tab="parity">Key parity</button>
     </nav>
+    <span id="progress" class="progress"></span>
     <span id="save-ind" class="save-ind" role="status" aria-live="polite"></span>
     <span class="grow"></span>
     <button id="btn-apply">Apply accepted to files</button>
     <button id="btn-export">Export review as Markdown</button>
+    <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
   </div>
   <div class="bar" id="filters">
     <label>File <select id="f-file"></select></label>
     <label>Status <select id="f-status"></select></label>
     <input id="f-text" type="search" placeholder="Search English and target text" size="32">
     <label class="chk"><input type="checkbox" id="f-diff"> only differences between old and new</label>
+    <button id="btn-bulk-ok" title="Only unreviewed messages in the shown list">Mark all shown as OK</button>
     <span id="counts" class="muted"></span>
   </div>
   <div class="bar" id="queue-bar">
@@ -44,13 +47,30 @@
   <section id="tab-list">
     <table id="rows"><thead><tr><th>File / Key</th><th>English</th><th id="th-target">Target</th><th>Status</th></tr></thead><tbody></tbody></table>
     <p><button id="more-rows" hidden>Show more rows</button></p>
-    <p class="muted">Keys: j / k next and previous, f flag, c comment, a suggest, e edit, w mark selected words as weird.</p>
+    <p class="muted">Keys: press ? for the list. o = OK, f = flag, e = edit, a = ask Claude, u = next unreviewed.</p>
   </section>
   <section id="tab-terms" hidden></section>
   <section id="tab-glossary" hidden></section>
   <section id="tab-parity" hidden></section>
 </main>
 <dialog id="dlg"></dialog>
+<dialog id="help">
+  <h3>Keyboard shortcuts</h3>
+  <table class="keys">
+    <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous row</td></tr>
+    <tr><td><kbd>u</kbd> / <kbd>U</kbd></td><td>next / previous unreviewed row</td></tr>
+    <tr><td><kbd>o</kbd></td><td>mark OK and go to the next unreviewed row (again: back to unreviewed)</td></tr>
+    <tr><td><kbd>f</kbd></td><td>flag (from unreviewed or ok) or unflag (from flagged)</td></tr>
+    <tr><td><kbd>e</kbd></td><td>edit the text in place</td></tr>
+    <tr><td><kbd>a</kbd></td><td>ask Claude for suggestions</td></tr>
+    <tr><td><kbd>w</kbd></td><td>mark the selected words as weird</td></tr>
+    <tr><td><kbd>c</kbd></td><td>go to the comment box</td></tr>
+    <tr><td><kbd>Ctrl/Cmd+Enter</kbd></td><td>in the editor: save and accept</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>in the editor: cancel</td></tr>
+    <tr><td><kbd>?</kbd></td><td>this help</td></tr>
+  </table>
+  <p><button id="help-close">Close</button></p>
+</dialog>
 <div id="toast" hidden></div>
 <script src="/offsets.js"></script>
 <script src="/editing.js"></script>

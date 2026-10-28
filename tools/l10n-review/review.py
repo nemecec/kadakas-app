@@ -304,9 +304,13 @@ class Review:
     def export_markdown(self):
         L = ["# Translation review: %s" % self.target, ""]
         n = 0
+        ok_by_file = {}
         for mid in self.order:
             st = self.state.view(mid)
-            if st["status"] == "unreviewed":
+            if st["status"] == "ok":
+                f = self.index[mid]["file"]
+                ok_by_file[f] = ok_by_file.get(f, 0) + 1
+            if st["status"] in ("unreviewed", "ok"):
                 continue
             n += 1
             it = self.item(mid, brief=True)
@@ -324,6 +328,13 @@ class Review:
             L.append("")
         if n == 0:
             L.append("No flagged messages.")
+            L.append("")
+        if ok_by_file:
+            L.append("## Marked OK")
+            L.append("")
+            L.append("%d messages in total." % sum(ok_by_file.values()))
+            for f in sorted(ok_by_file):
+                L.append("- %s: %d" % (f, ok_by_file[f]))
             L.append("")
         gl = self.state.glossary() or []
         if gl:

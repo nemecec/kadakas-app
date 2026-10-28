@@ -275,6 +275,13 @@ class Handler(BaseHTTPRequestHandler):
                 rv.edit_suggestion(mid, need(body, "sid", str), need(body, "text", str))
             else:
                 rv.state.decide_suggestion(mid, need(body, "sid", str), op)
+        elif path in ("bulk-ok", "bulk-undo"):
+            ids = [i for i in need(body, "ids", list) if isinstance(i, str) and i in rv.index]
+            if path == "bulk-ok":
+                changed = rv.state.bulk_set(ids, "unreviewed", "ok")
+            else:
+                changed = rv.state.bulk_set(ids, "ok", "unreviewed")
+            return self.send(200, {"changed": changed, "count": len(changed)})
         elif path == "validate":
             text = need(body, "text", str)
             return self.send(200, {"error": rv.validate(mid, text.strip("\n")),
