@@ -166,7 +166,18 @@ jobs:
           case "$RUNNER_OS" in Windows) special=wix ;; Linux) special=deb ;; esac
           plain="$FORMATS"
           if [ -n "$special" ]; then plain="${FORMATS//,$special/}"; fi
-          cargo packager --release --config "$CONFIG" --formats "$plain"
+          # create-dmg sometimes fails to eject the disk image on a runner ("Resource busy"). Then the
+          # volume is detached by force and the packager runs again (macOS only, 3 tries).
+          tries=1
+          if [ "$RUNNER_OS" = "macOS" ]; then tries=3; fi
+          for attempt in $(seq 1 "$tries"); do
+            if cargo packager --release --config "$CONFIG" --formats "$plain"; then break; fi
+            [ "$attempt" -lt "$tries" ] || { echo "::error::cargo packager failed $tries times"; exit 1; }
+            echo "::warning::cargo packager failed (try $attempt of $tries), detaching the volumes and trying again"
+            for v in /Volumes/Kadakas*; do hdiutil detach "$v" -force || true; done
+            rm -f dist/rw.*.dmg
+            sleep 10
+          done
           if [ -n "$special" ]; then
             mapped=$(scripts/packager-version.sh "$special" "$ver")
             echo "$special package version: $mapped (workspace version $ver)"
