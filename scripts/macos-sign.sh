@@ -34,8 +34,10 @@ sign_programs() {
     kind="$(file -b "$f")"
     echo "item: ${f##*/}: $kind"
     # Every executable file is a program. `file` is only the second check.
-    if [ -x "$f" ]; then sign "$f"; else case "$kind" in *Mach-O*) sign "$f" ;; esac; fi
-    codesign --verify --strict "$f" || { echo "not signed: $f" >&2; return 1; }
+    if [ -x "$f" ] || [[ "$kind" == *Mach-O* ]]; then
+      sign "$f"
+      codesign --verify --strict "$f" || { echo "not signed: $f" >&2; return 1; }
+    fi
   done
 }
 
