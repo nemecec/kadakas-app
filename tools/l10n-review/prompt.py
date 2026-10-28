@@ -15,7 +15,7 @@ LANG_NAMES = {"et": "Estonian", "de": "German", "fi": "Finnish", "sv": "Swedish"
 
 SEED_GLOSSARY = [
     {"en": "crash report", "tr": "kokkujooksmise aruanne",
-     "note": "Owner choice. Older texts say \"jooksutuse aruanne\", which sounds wrong."},
+     "note": "Owner choice. The repo uses this wording now."},
     {"en": "recovery copy", "tr": "taastekoopia", "note": "Used in the autosave texts."},
     {"en": "layer", "tr": "kiht", "note": "Drawing layer. Not a sheet."},
     {"en": "sheet", "tr": "leht", "note": "Layout sheet."},
