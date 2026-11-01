@@ -247,6 +247,7 @@ const TABLE: &[(&str, Class)] = &[
     ("notes_db.get", Read),
     ("notes_db.list", Read),
     ("notes_db.update", Edit),
+    ("objects.delete", Edit),
     ("objects.get", Read),
     ("objects.list", Read),
     ("objects.query", Read),

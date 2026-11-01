@@ -561,6 +561,127 @@ fn back_returns_from_the_3d_camera_to_the_plan() {
     );
 }
 
+/// AGR-09: the camera of `view.get` is the camera of `view.camera`, `render.png` and
+/// `mesh.render`, as it is. A picture with it repeats the view of the person.
+#[test]
+fn the_camera_of_view_get_round_trips_through_view_camera_and_render_png() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.ok(
+        "view.camera",
+        json!({"eye": [8000, -9000, 6000], "target": [2000, 1500, 0], "projection": "perspective"}),
+    );
+    r.app.gpu_ready = true;
+    r.frame(vec![]);
+    let g = r.ok("view.get", json!({}));
+    let cam = g["camera"].clone();
+    // The keys of the camera of render.png are all there, and the old keys stay.
+    for key in ["target", "yaw", "pitch", "distance", "fov", "projection"] {
+        assert!(!cam[key].is_null(), "camera.{key} is missing in {cam}");
+    }
+    for key in [
+        "view",
+        "projection",
+        "render_mode",
+        "eye",
+        "up",
+        "fov_deg",
+        "visible_box",
+    ] {
+        assert!(cam.get(key).is_some(), "the old key camera.{key} is gone");
+    }
+    assert_eq!(num(&cam["fov"]), 45.0);
+    assert_eq!(num(&cam["fov"]), num(&cam["fov_deg"]));
+    let canvas = (num(&g["canvas"]["width"]), num(&g["canvas"]["height"]));
+    assert!((num(&cam["aspect"]) - canvas.0 / canvas.1).abs() < 1e-9);
+    // yaw and pitch (radians) and the distance say where the eye is.
+    let (yaw, pitch, dist) = (num(&cam["yaw"]), num(&cam["pitch"]), num(&cam["distance"]));
+    let t: Vec<f64> = (0..3).map(|k| num(&cam["target"][k])).collect();
+    let eye = [
+        t[0] + dist * pitch.cos() * yaw.cos(),
+        t[1] + dist * pitch.cos() * yaw.sin(),
+        t[2] + dist * pitch.sin(),
+    ];
+    for k in 0..3 {
+        assert!((eye[k] - num(&cam["eye"][k])).abs() < 1.0, "{eye:?} {cam}");
+    }
+
+    // view.camera takes it back as it is, and the view does not move.
+    r.ok("view.camera", cam.clone());
+    r.advance(0.5);
+    let again = r.ok("view.get", json!({}))["camera"].clone();
+    for key in ["yaw", "pitch", "distance", "fov"] {
+        assert!(
+            (num(&cam[key]) - num(&again[key])).abs() < 1e-3,
+            "{key}: {cam} {again}"
+        );
+    }
+    for k in 0..3 {
+        assert!((num(&cam["target"][k]) - num(&again["target"][k])).abs() < 1e-3);
+        assert!((num(&cam["eye"][k]) - num(&again["eye"][k])).abs() < 1e-2);
+    }
+    // The orbit form (target, yaw, pitch, distance) gives the same view as the eye form.
+    r.ok(
+        "view.camera",
+        json!({"target": cam["target"], "yaw": cam["yaw"], "pitch": cam["pitch"], "distance": cam["distance"]}),
+    );
+    r.advance(0.5);
+    let orbit = r.ok("view.get", json!({}))["camera"].clone();
+    for k in 0..3 {
+        assert!(
+            (num(&cam["eye"][k]) - num(&orbit["eye"][k])).abs() < 1e-2,
+            "{cam} {orbit}"
+        );
+    }
+    assert_eq!(
+        r.err("view.camera", json!({"target": [0, 0, 0]})).code,
+        -32602
+    );
+
+    // A picture with that camera is the picture with the same camera, whichever way it is
+    // given, and its answer reports the camera that was used.
+    let size = json!({"width": 96, "height": 64});
+    let render = |r: &mut Rig, camera: Value| -> Value {
+        let mut p = size.clone();
+        p["camera"] = camera;
+        r.app.session.handle("render.png", p).unwrap_or_else(|e| {
+            panic!("render.png: {}", e.message);
+        })
+    };
+    let from_view_get = render(&mut r, cam.clone());
+    let spelled = render(
+        &mut r,
+        json!({
+            "target": cam["target"], "yaw": cam["yaw"], "pitch": cam["pitch"],
+            "distance": cam["distance"], "fov": cam["fov"], "projection": cam["projection"],
+        }),
+    );
+    assert_eq!(from_view_get["png_base64"], spelled["png_base64"]);
+    assert_eq!(from_view_get["camera"], spelled["camera"]);
+    assert_eq!(from_view_get["projection"], cam["projection"]);
+    let used = &from_view_get["camera"];
+    for key in ["yaw", "pitch", "distance", "fov"] {
+        assert!(
+            (num(&used[key]) - num(&cam[key])).abs() < 1e-3,
+            "{key}: {used} {cam}"
+        );
+    }
+    // The picture differs from a picture of the model with another camera.
+    let other = render(
+        &mut r,
+        json!({
+            "target": cam["target"], "yaw": num(&cam["yaw"]) + 1.0, "pitch": cam["pitch"],
+            "distance": cam["distance"], "fov": cam["fov"], "projection": cam["projection"],
+        }),
+    );
+    assert_ne!(from_view_get["png_base64"], other["png_base64"]);
+    // view.get is the camera that the picture used, so the next round gives the same picture.
+    let latest = r.ok("view.get", json!({}))["camera"].clone();
+    let again = render(&mut r, latest);
+    assert_eq!(again["png_base64"], from_view_get["png_base64"]);
+}
+
 #[test]
 fn a_view_set_through_the_session_is_kept_for_back() {
     let mut r = Rig::new();

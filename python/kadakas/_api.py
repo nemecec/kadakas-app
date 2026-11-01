@@ -66,10 +66,16 @@ if TYPE_CHECKING:
         'sources': bool | None,
     }, total=False)
 
+    ObjectsDeleteParams = TypedDict("ObjectsDeleteParams", {
+        'ids': Required[list[str]],
+    }, total=False)
+
     SelectionGetParams = TypedDict("SelectionGetParams", {}, total=False)
 
     SelectionSetParams = TypedDict("SelectionSetParams", {
-        'ids': Required[list[str]],
+        'edges': dict[str, list[int]] | None,
+        'faces': dict[str, list[int]] | None,
+        'ids': list[str] | None,
     }, total=False)
 
     RenderSvgParams = TypedDict("RenderSvgParams", {
@@ -2496,11 +2502,19 @@ if TYPE_CHECKING:
     }, total=False)
 
     ViewCameraParams = TypedDict("ViewCameraParams", {
-        'eye': Required[list[float]],
+        'aspect': float | None,
+        'distance': float | None,
+        'eye': list[float] | None,
         'fov': float | None,
+        'fov_deg': float | None,
+        'pitch': float | None,
         'projection': Literal['ortho', 'perspective'] | None,
+        'render_mode': str | None,
         'target': Required[list[float]],
         'up': list[float] | None,
+        'view': str | None,
+        'visible_box': dict[str, Any] | None,
+        'yaw': float | None,
     }, total=False)
 
     ViewHighlightParams = TypedDict("ViewHighlightParams", {
@@ -3468,14 +3482,20 @@ class Api:
         JSON-RPC method ``objects.get``."""
         return self._call("objects.get", params or None)
 
+    def objects_delete(self, **params: "Unpack[ObjectsDeleteParams]") -> Any:
+        """Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: "delete_objects", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).
+
+        JSON-RPC method ``objects.delete``."""
+        return self._call("objects.delete", params or None)
+
     def selection_get(self, **params: "Unpack[SelectionGetParams]") -> Any:
-        """Selected object IDs.
+        """The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The app without that editor has no parts of its own, so the maps stay empty unless selection.set filled them.
 
         JSON-RPC method ``selection.get``."""
         return self._call("selection.get", params or None)
 
     def selection_set(self, **params: "Unpack[SelectionSetParams]") -> Any:
-        """Select objects. params: {ids: [id]}. Objects of grey layers and classes cannot be selected.
+        """Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids cannot be combined with faces or edges. Returns the selection as selection.get does.
 
         JSON-RPC method ``selection.set``."""
         return self._call("selection.set", params or None)
@@ -5389,7 +5409,7 @@ class Api:
         return self._call("agent.activity", params or None)
 
     def view_get(self, **params: "Unpack[ViewGetParams]") -> Any:
-        """What the person looks at now (only the app answers; the headless server gives an error). No params. Returns {mode (plan | 3d), window {width, height, pixels_per_point} (points), canvas {width, height} (points; the drawing area), plan {center [x, y], zoom (px per mm), mm_per_px, layer_scale (the drawing scale denominator of the active layer), visible_box {min, max} (drawing mm; only when mode is plan)}, camera {view, projection, render_mode, eye, target, up, fov_deg, distance, visible_box {min, max} (the ground the camera sees, drawing mm; only when mode is 3d; null if the camera does not look at the ground)}, selection [id], active_layer {id, name}, active_class {id, name}, visible_layers [{id, name}], visible_classes [{id, name}], animating, highlights [{id, kind, text, color, until}], back (how many views Back can return to), view_locked (the person turned off "Agent may move my view")}. In 3D, camera.visible_box is the ground (at the height of the target) that the four corners of the view reach, or null if a corner looks past the horizon. Read it before you move the view and when you want to know what the person means by "this".
+        """What the person looks at now (only the app answers; the headless server gives an error). No params. Returns {mode (plan | 3d), window {width, height, pixels_per_point} (points), canvas {width, height} (points; the drawing area), plan {center [x, y], zoom (px per mm), mm_per_px, layer_scale (the drawing scale denominator of the active layer), visible_box {min, max} (drawing mm; only when mode is plan)}, camera {view, projection, render_mode, eye, target, up, fov_deg, distance, yaw and pitch (radians), fov (degrees, the same as fov_deg), aspect (canvas width over height), visible_box {min, max} (the ground the camera sees, drawing mm; only when mode is 3d; null if the camera does not look at the ground)}, selection [id], selection_parts {faces: {model id: [face id]}, edges: {model id: [edge id]}} (as selection.get), active_layer {id, name}, active_class {id, name}, visible_layers [{id, name}], visible_classes [{id, name}], animating, highlights [{id, kind, text, color, until}], back (how many views Back can return to), view_locked (the person turned off "Agent may move my view")}. In 3D, camera.visible_box is the ground (at the height of the target) that the four corners of the view reach, or null if a corner looks past the horizon. The 3D camera has the keys of the camera of render.png and mesh.render (target, yaw, pitch, distance, fov, projection): give it back as it is to render.png {camera, width, height} to draw what the person sees, or to view.camera to return to it. Read it before you move the view and when you want to know what the person means by "this".
 
         JSON-RPC method ``view.get``."""
         return self._call("view.get", params or None)
@@ -5407,7 +5427,7 @@ class Api:
         return self._call("view.pan", params or None)
 
     def view_camera(self, **params: "Unpack[ViewCameraParams]") -> Any:
-        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z], target: [x, y, z], up?, fov?, projection?}. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
+        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z] (or yaw, pitch in radians and distance in mm instead of eye), target: [x, y, z], up?, fov?, projection?}. The camera of view.get is accepted as it is. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
 
         JSON-RPC method ``view.camera``."""
         return self._call("view.camera", params or None)
@@ -6109,6 +6129,7 @@ METHOD_NAMES: tuple[str, ...] = (
     "file.open",
     "objects.list",
     "objects.get",
+    "objects.delete",
     "selection.get",
     "selection.set",
     "render.svg",

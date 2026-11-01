@@ -70,10 +70,35 @@ pub struct ViewPanParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewCameraParams {
-    /// [x, y, z] in drawing mm
-    pub eye: Vec<Num>,
+    /// [x, y, z] in drawing mm; left out when yaw, pitch and distance give the orbit
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye: Option<Vec<Num>>,
     /// [x, y, z] in drawing mm
     pub target: Vec<Num>,
+    /// radians; with pitch and distance instead of eye (the camera of render.png)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<Num>,
+    /// radians; see yaw
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<Num>,
+    /// mm; see yaw
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<Num>,
+    /// read-only keys of the camera of view.get; they are ignored, so that camera can be passed back as it is
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<String>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fov_deg: Option<Num>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect: Option<Num>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_box: Option<Obj>,
     /// must point upward (z above 0): the camera has no roll
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up: Option<Vec<Num>>,

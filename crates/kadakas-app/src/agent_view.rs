@@ -545,6 +545,16 @@ impl Env<'_> {
             "fov_deg": FOV_DEG,
             "distance": num(cam.distance),
         });
+        // The keys of the camera of `render.png` (`camera`), `mesh.render` and `view.camera`
+        // (AGR-09): this object can be given back to any of them as it is. `target`, `distance`
+        // and `projection` above are the same keys. `fov` is in degrees, `yaw` and `pitch` in
+        // radians. The picture needs the shape of the canvas too: `aspect` is its width over its
+        // height.
+        let saved = cam.to_saved(origin);
+        camera["yaw"] = json!(saved.yaw);
+        camera["pitch"] = json!(saved.pitch);
+        camera["fov"] = json!(FOV_DEG);
+        camera["aspect"] = json!(size.x / size.y);
         if plan_mode {
             plan["visible_box"] = json!({"min": [lo.x, lo.y], "max": [hi.x, hi.y]});
         } else {
@@ -582,6 +592,8 @@ impl Env<'_> {
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>()
         );
+        // The faces and edges of surface models that the person picked (see `selection.get`).
+        out["selection_parts"] = self.session.parts.to_json();
         out["active_layer"] = doc
             .layer(doc.active_layer)
             .map_or(Value::Null, |l| named(l.id.0, &l.name));

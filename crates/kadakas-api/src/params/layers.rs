@@ -231,6 +231,28 @@ pub struct SavedViewCamera {
     pub fov: Num,
     /// perspective or ortho
     pub projection: String,
+    /// read-only keys of the camera of view.get (view, render_mode, eye, up, fov_deg, aspect,
+    /// visible_box): they are ignored, so that camera can be passed back as it is
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<String>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye: Option<[Num; 3]>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up: Option<[Num; 3]>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fov_deg: Option<Num>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect: Option<Num>,
+    /// see view
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_box: Option<Obj>,
 }
 
 // Parameters of `saved_view.restore`.

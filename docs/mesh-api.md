@@ -217,6 +217,49 @@ Every edit method is one undo step. This includes `mesh.erase` with edges and fa
 
 Edits of an agent are marked as agent changes. They show in `agent.activity` and in the Activity panel. The person undoes or reverts a step there. There is no review window of its own.
 
+## Delete, selection and the camera (AGR-09)
+
+An agent that builds a model needs three more things. They are not `mesh.*` methods, but a model builder uses them all the time.
+
+### Delete objects
+
+`objects.delete {ids}` deletes whole objects, for example a surface model or a group. It runs the command `delete_objects`, so it has the same checks. A locked layer, a grey layer or a grey class refuses the call. A group goes with its members. The call is one undo step.
+
+An unknown id is the error `no_such_object`. Nothing is deleted then. An empty `ids` is the error `ids_empty`. The answer is `{count, deleted: [id]}`, and `deleted` also lists the members of a deleted group.
+
+To delete objects together with other edits in one step, use the command in a batch: `execute {command: {op: "batch", commands: [..., {op: "delete_objects", ids}]}}`. `mesh.batch` takes edits of one model and has no delete. To delete a face or an edge, use `mesh.erase`.
+
+In MCP the method is in the tool `document`, which has the destructive hint. The tool `objects` only reads. In Python it is `doc.api.objects_delete(ids=[...])`.
+
+### An unknown method
+
+The answer to a method that does not exist names the closest listed methods, up to three. `data.closest` has the same list. A name like `object.delete`, `objects.remove` or `delete_objects` also gets a hint: call `objects.delete {ids}` or the command form `execute {command: {op: "delete_objects", ids}}`.
+
+### The selection with faces and edges
+
+`selection.get` returns `{ids, faces, edges}`. `ids` are whole objects. `faces` is `{model id: [face id]}` and `edges` is `{model id: [edge id]}`. The face and edge ids are the ones of `mesh.faces` and `mesh.edges`. Both maps are empty when no part is selected.
+
+The 3D editor of the modeler holds the picked parts. It selects whole objects or parts, never both at once. A host without that editor keeps the parts that `selection.set` gave and nothing more. The main app has no face picking yet, so its maps stay empty unless a call fills them. `view.get` in the app also has `selection_parts` with the same two maps.
+
+`selection.set` takes the same shape: `{ids?, faces?, edges?}`. What is left out is empty. A model that is not a surface model is the error `not_a_surface_model`. A face or edge that does not exist is `no_such_face` or `no_such_edge`. The call refuses `ids` together with `faces` or `edges`. A refused call leaves the selection as it was. An undo or a delete removes the parts that are gone.
+
+```json
+{"method": "selection.get"}
+{"ids": [], "faces": {"0190f1c2-...": [14, 15]}, "edges": {}}
+```
+
+### The camera of the person
+
+`view.get` (app only) answers in 3D with `camera`. It has the keys of the camera of `render.png` and `mesh.render`. These are `target` (drawing mm), `yaw` and `pitch` (radians), `distance` (mm), `fov` (degrees) and `projection`. The older keys stay: `view`, `render_mode`, `eye`, `up`, `fov_deg` and `visible_box`. `aspect` is the width of the canvas over its height. `canvas` in the answer has the size in points.
+
+Give that object back as it is. The three calls ignore the keys that they do not need.
+
+- `render.png {camera: <view.get camera>, width, height}` draws the view of the person. Choose a width and height with the ratio `aspect`, and the picture has the same frame.
+- `view.camera <view.get camera>` moves the view of the person to that camera. It also takes `{target, yaw, pitch, distance}` without `eye`. The eye wins when both are there.
+- `mesh.render {camera: <view.get camera>}` draws the same view with a model to look at.
+
+The camera that `render.png` or `mesh.render` returns has the same six keys. It goes back into any of these calls. A key that no call knows is still an error that names the nearest key. The app tests check the round trip `view.get`, `view.camera`, `render.png`.
+
 ## Errors
 
 A refusal is a validation error (code 3). A missing object, layer, class, vertex, edge or face is `not_found` (code 2). A locked layer is a `conflict` (code 5). A size limit is `limit` (code 6). A wrong parameter is `invalid_params` (code -32602) and has no `error_id`.
@@ -369,5 +412,8 @@ The usual methods work on these objects: `selection.set`, and the commands `move
 | Edits, batch and refusals | `crates/kadakas-api/src/mesh_api/edit.rs` |
 | Parameter structs | `crates/kadakas-api/src/params/mesh.rs` |
 | Tests | `crates/kadakas-api/tests/mesh.rs`, `python/tests/test_mesh.py` |
+| Delete, selection parts, unknown methods (AGR-09) | `crates/kadakas-api/src/objects_api.rs`, `selection_api.rs`, `method_hints.rs`, `tests/agent_gaps.rs`, `tests/behavior/test_agent_gaps.py` |
+| Selected parts of the 3D editor | `crates/kadakas-modeler/src/parts_sync.rs` |
+| Camera round trip | `crates/kadakas-app/src/agent_view.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs` |
 
 After a change to a method, renew the Python client with `python python/tools/codegen.py`.

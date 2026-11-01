@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Agent API gaps from a furniture model (AGR-09). `objects.delete {ids}` is a listed method (MCP, Python, scripts) with the checks of `delete_objects` and one undo step. The answer to an unknown method names the closest listed methods. `selection.get` and `selection.set` carry the selected faces and edges of surface models. `view.get` gives the 3D camera in the shape that `render.png`, `mesh.render` and `view.camera` take.
+
 ### Changed
 
 - Release files have one name pattern, `Kadakas-<version>-<os>-<arch>.<ext>`, with the exact version in every name. The notes of a release start with a table that tells which file to download.

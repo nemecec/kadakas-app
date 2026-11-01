@@ -40,6 +40,7 @@ mod issue_api;
 mod libfiles;
 mod massing_api;
 mod mesh_api;
+mod method_hints;
 pub use mesh_api::ERROR_IDS as MESH_ERROR_IDS;
 mod pattern_api;
 mod picture_api;
@@ -56,8 +57,11 @@ mod review_api;
 mod script_js_api;
 pub use compare_api::{CompareCache, CompareMode, CompareSpec, ShownDoc};
 pub use review_api::{Side as CompareSide, VERSION_BYTES_MAX, VERSIONS_MAX, VERSIONS_WARN};
+pub use selection_api::PartSelection;
+mod objects_api;
 pub mod params;
 mod rules_api;
+mod selection_api;
 mod sheets_api;
 mod solid_api;
 mod survey_api;
@@ -143,6 +147,11 @@ pub use limits::{DEFAULT_DOCUMENT_FILE_BYTES, STRICT_DOCUMENT_FILE_BYTES, Sessio
 pub struct Session {
     pub editor: Editor,
     pub selection: Vec<ObjectId>,
+    /// The selected faces and edges of surface models (see `selection_api`). The editor of the
+    /// modeler keeps it up to date; `selection.set` can set it.
+    pub parts: PartSelection,
+    /// `selection.set` changed `parts` and the editor did not take the change yet.
+    parts_changed: bool,
     /// The groups you have entered, outermost first. A click selects members of the last one.
     pub context: Vec<ObjectId>,
     /// The chosen 3D view. `view.set` changes it, and the app follows it.
@@ -526,10 +535,17 @@ pub const METHODS: &[(&str, &str)] = &[
         "objects.get",
         "One object. params: {id, sources? (true shows the import tags of the sources of a site model: data.import_sources, one entry for each point and line; by default the answer only counts them)}. A surface model, a group of them and a component instance also have the field surface of objects.list; the surface model has its geometry too.",
     ),
-    ("selection.get", "Selected object IDs."),
+    (
+        "objects.delete",
+        "Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: \"delete_objects\", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).",
+    ),
+    (
+        "selection.get",
+        "The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The app without that editor has no parts of its own, so the maps stay empty unless selection.set filled them.",
+    ),
     (
         "selection.set",
-        "Select objects. params: {ids: [id]}. Objects of grey layers and classes cannot be selected.",
+        "Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids cannot be combined with faces or edges. Returns the selection as selection.get does.",
     ),
     (
         "render.svg",
@@ -1154,6 +1170,8 @@ impl Session {
         Session {
             editor: Editor::default(),
             selection: Vec::new(),
+            parts: PartSelection::default(),
+            parts_changed: false,
             context: Vec::new(),
             view: ViewSettings::default(),
             snap: Default::default(),
@@ -1819,27 +1837,9 @@ impl Session {
                 );
                 v
             }
-            "selection.get" => json!({ "ids": self.selection }),
-            "selection.set" => {
-                #[derive(Deserialize)]
-                struct P {
-                    ids: Vec<ObjectId>,
-                }
-                let P { ids } = params(p)?;
-                if let Some(bad) = ids.iter().find(|id| doc.object(**id).is_none()) {
-                    return Err(RpcError::not_found(format!("object {bad} does not exist")));
-                }
-                if let Some(g) = ids
-                    .iter()
-                    .find(|id| doc.object(**id).is_some_and(|o| doc.is_grey(o)))
-                {
-                    return Err(RpcError::validation(format!(
-                        "object {g} is on a grey layer or in a grey class and cannot be selected"
-                    )));
-                }
-                self.selection = ids;
-                json!({ "ids": self.selection })
-            }
+            "objects.delete" => objects_api::delete(self, p)?,
+            "selection.get" => selection_api::get(self),
+            "selection.set" => selection_api::set(self, p)?,
             "render.svg" => {
                 #[derive(Deserialize)]
                 struct P {
@@ -2205,10 +2205,17 @@ impl Session {
     pub fn prune_selection(&mut self) {
         let doc = self.editor.doc();
         self.selection.retain(|id| doc.object(*id).is_some());
+        self.parts.retain_existing(doc);
         // Leave groups that are gone.
         if let Some(i) = self.context.iter().position(|g| !doc.is_group(*g)) {
             self.context.truncate(i);
         }
+    }
+
+    /// The selected faces and edges that `selection.set` gave, once, for an editor that has its
+    /// own set of them. `None` when `selection.set` did not change them since the last call.
+    pub fn take_parts_change(&mut self) -> Option<PartSelection> {
+        std::mem::take(&mut self.parts_changed).then(|| self.parts.clone())
     }
 
     /// The group you are in, if any.
@@ -2679,7 +2686,10 @@ mod tests {
         let sum = ok(&mut s, "document.summary", json!({}));
         assert_eq!(sum["object_count"], 0);
         assert_eq!(sum["can_undo"], false);
-        assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": []}));
+        assert_eq!(
+            ok(&mut s, "selection.get", json!({})),
+            json!({"ids": [], "faces": {}, "edges": {}})
+        );
     }
 
     #[test]
@@ -2790,12 +2800,15 @@ mod tests {
     #[test]
     fn selection_is_validated_and_pruned_when_objects_go_away() {
         let mut s = Session::with_sequential_ids();
-        assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": []}));
+        assert_eq!(
+            ok(&mut s, "selection.get", json!({})),
+            json!({"ids": [], "faces": {}, "edges": {}})
+        );
         let a = exec(&mut s, circle_cmd(0.0))[0];
         let b = exec(&mut s, circle_cmd(5.0))[0];
         assert_eq!(
             ok(&mut s, "selection.set", json!({"ids": [a, b]})),
-            json!({"ids": [a, b]})
+            json!({"ids": [a, b], "faces": {}, "edges": {}})
         );
 
         // An unknown ID is rejected and the selection stays as it was.
@@ -2813,18 +2826,15 @@ mod tests {
                 )
             )
         );
-        assert_eq!(
-            ok(&mut s, "selection.get", json!({})),
-            json!({"ids": [a, b]})
-        );
+        assert_eq!(ok(&mut s, "selection.get", json!({}))["ids"], json!([a, b]));
 
         // Deleting a selected object drops it from the selection.
         exec(&mut s, json!({"op": "delete_objects", "ids": [a]}));
-        assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": [b]}));
+        assert_eq!(ok(&mut s, "selection.get", json!({}))["ids"], json!([b]));
 
         // Undo that brings the object back, but the old selection is not restored.
         ok(&mut s, "undo", json!(null));
-        assert_eq!(ok(&mut s, "selection.get", json!({})), json!({"ids": [b]}));
+        assert_eq!(ok(&mut s, "selection.get", json!({}))["ids"], json!([b]));
     }
 
     #[test]

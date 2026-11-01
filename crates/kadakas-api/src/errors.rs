@@ -143,12 +143,10 @@ impl RpcError {
     pub fn invalid_params(e: impl std::fmt::Display) -> Self {
         Self::new(-32602, "invalid_params", e)
     }
+    /// An unknown method. The message names the closest listed methods (see `method_hints`).
     pub fn method_not_found(method: &str) -> Self {
-        Self::new(
-            -32601,
-            "method_not_found",
-            format!("unknown method: {method}"),
-        )
+        let (message, facts) = crate::method_hints::unknown_method(method);
+        Self::new(-32601, "method_not_found", message).with_details(facts)
     }
     pub fn internal(e: impl std::fmt::Display) -> Self {
         Self::new(-32603, "internal", e)

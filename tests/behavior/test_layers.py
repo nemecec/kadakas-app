@@ -37,7 +37,7 @@ def test_unlocking_a_layer_allows_edits_again(cad, locked_rect):
 
 def test_locked_objects_can_still_be_selected(cad, locked_rect):
     cad.result("selection.set", {"ids": [locked_rect]})
-    assert cad.result("selection.get") == {"ids": [locked_rect]}
+    assert cad.result("selection.get")["ids"] == [locked_rect]
 
 
 def test_hidden_class_removes_its_objects_from_render_but_keeps_them(cad):

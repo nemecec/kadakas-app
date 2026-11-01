@@ -3,6 +3,8 @@
 //! The fields are read by serde and schemars only, so the compiler sees them as unused.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -58,6 +60,14 @@ pub struct ObjectsGetParams {
     pub sources: Option<bool>,
 }
 
+// Parameters of `objects.delete`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectsDeleteParams {
+    /// the objects to delete; a group goes with its members
+    pub ids: Vec<ObjectRef>,
+}
+
 // Parameters of `selection.get`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -67,7 +77,15 @@ pub struct SelectionGetParams {}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SelectionSetParams {
-    pub ids: Vec<ObjectRef>,
+    /// whole objects
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<ObjectRef>>,
+    /// {surface model id: [face id]}; the ids of mesh.faces; not together with ids
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<BTreeMap<String, Vec<u32>>>,
+    /// {surface model id: [edge id]}; the ids of mesh.edges; not together with ids
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<BTreeMap<String, Vec<u32>>>,
 }
 
 // Parameters of `record_format.list`.
@@ -932,6 +950,7 @@ pub struct ObjectsQueryParams {
 entries! {
     "objects.list" => ObjectsListParams,
     "objects.get" => ObjectsGetParams,
+    "objects.delete" => ObjectsDeleteParams,
     "selection.get" => SelectionGetParams,
     "selection.set" => SelectionSetParams,
     "record_format.list" => RecordFormatListParams,
