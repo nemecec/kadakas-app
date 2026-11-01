@@ -177,7 +177,7 @@ How the seal is made:
 - Nothing changes the bundle after that.
 - With a `signing-identity` in `packager-macos.toml`, `scripts/macos-sign.sh` signs the inner app and the tool with that identity. It uses the hardened runtime and a secure timestamp. cargo-packager 0.11.8 leaves embedded apps out of its signing, so the script has to do it. The packager then signs the outer bundle, and the script verifies it. Nobody tested a real identity yet.
 
-The smoke test on macOS runs `codesign --verify --deep --strict` on the installed bundle, before and after the four starts. Then it runs `spctl --assess` on a copy with the quarantine flag. Today Gatekeeper answers "rejected". The test fails when the message says "invalid", "damaged", "a sealed resource is missing" or "code has no resources". The job `package` also unpacks the update archive and verifies the seal of the inner bundle.
+The smoke test on macOS runs `codesign --verify --deep --strict` on the installed bundle, before and after the starts. Then it runs `spctl --assess` on a copy with the quarantine flag. Today Gatekeeper answers "rejected". The test fails when the message says "invalid", "damaged", "a sealed resource is missing" or "code has no resources". The job `package` also unpacks the update archive and verifies the seal of the inner bundle.
 
 What a real Developer ID release still needs (PLAT-19):
 
@@ -230,15 +230,16 @@ The logic is in `scripts/smoke/`, not in the YAML. A platform script (`linux.sh`
 2. **First start.** The launcher opens the welcome dialog. The test mode (`KADAKAS_SMOKE_STATE`, see `docs/welcome.md`) writes a state file. It holds the version, the kind of the dialog and the shown values. After a short hold the dialog answers "Use defaults" and ends. The test checks the state file, `welcome.json` and the settings files (`launcher.json`, `prefs.json`, the feedback `settings.json`). A screenshot is taken while the dialog waits.
 3. **Second start.** No dialog opens. The launcher starts the default program (the 3D modeler) and writes its run record. The program stays up for 12 seconds.
 4. **Third start.** The test sets the flavor to `kadakas-app` in `launcher.json` and starts the launcher with `--agent-port 0 --allow-dir DIR`. The app writes `agent.json`. The test sends `auth` and `describe` over TCP and checks that `describe` names the version of the package. Then it saves a file with `file.save` in `DIR` (this works) and in another folder (the app refuses it). So the options reach the app through the launcher (PLAT-32).
-4a. **Fourth start.** The same checks, with the variables `KADAKAS_AGENT_PORT=0` and `KADAKAS_ALLOW_DIR=DIR` instead of the options.
-5. **Uninstall.** The uninstaller removes the programs and the menu entry. For the dmg the app is deleted. For the AppImage the extracted files are deleted.
+5. **Fourth start.** The same checks, with the variables `KADAKAS_AGENT_PORT=0` and `KADAKAS_ALLOW_DIR=DIR` instead of the options.
+6. **Fifth start (macOS only).** The test starts `Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir DIR FILE` by hand. The program hands over to the launcher with `open -b net.kadakas.Kadakas --args ...`. The test checks `agent.json`, the saves inside and outside `DIR`, and that the app is a child of the launcher. If the system does not know the installed app, `open` finds no launcher and the program runs alone with its options. The test then warns and the handover is not covered on that runner. The pure plan of the handover (`handover::plan`) has unit tests in every case.
+7. **Uninstall.** The uninstaller removes the programs and the menu entry. For the dmg the app is deleted. For the AppImage the extracted files are deleted.
 
 Details.
 
 - The test uses its own folders (`KADAKAS_LAUNCHER_ROOT`, `KADAKAS_PREFS_DIR`, `KADAKAS_FEEDBACK_DIR`, a private `HOME` and runtime folder). It never touches the settings of the person who runs it.
 - Linux runs under `xvfb-run` with Mesa software rendering (lavapipe and llvmpipe). Windows uses the WARP renderer of Windows. macOS uses the virtual GPU of the runner. No variable forces the fallback adapter of `wgpu`. If a runner image needs one, add it to the app first and document it.
 - Screenshots and logs are artifacts named `smoke-<system>-<kind>`. A failed screenshot is a warning. It never fails the job. macOS needs the screen recording right for `screencapture`. Without it the screenshot fails and the job goes on.
-- A failure message names the step. The logs of the four starts (`first.log`, `second.log`, `third.log`, `fourth.log`) are in the artifact.
+- A failure message names the step. The logs of the starts (`first.log` to `fifth.log`) are in the artifact.
 - Both Debian and MSI versions differ from the app version (`0.1.0~beta.1`, `0.1.0-10001`). The scripts get the app version from the workspace `Cargo.toml`.
 - The `describe` method of the JSON-RPC API returns `version`. This is what the ping reads.
 

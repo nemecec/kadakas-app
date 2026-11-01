@@ -565,20 +565,25 @@ fn serve_client(
 
 /// Folders that agents may read and write: `--allow-dir DIR` (or `--allow-dir=DIR`, repeat for more),
 /// then the list in the variable `KADAKAS_ALLOW_DIR` (`env`, separated like `PATH`). The two add up;
-/// a folder is listed once. Both are the choice of the person who starts the app. Default: the
-/// current folder. A folder that does not exist is dropped later (`PathPolicy::restricted`).
-pub fn parse_allow_dirs(args: &[String], env: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--allow-dir" {
-            if let Some(v) = it.next() {
-                dirs.push(PathBuf::from(v));
-            }
-        } else if let Some(v) = a.strip_prefix("--allow-dir=") {
-            dirs.push(PathBuf::from(v));
-        }
-    }
+/// a folder is listed once. Both are the choice of the person who starts the app.
+///
+/// `start_folder_default` is true for a direct start of the app (from a terminal): when the person
+/// names no folder, the current folder is the one. A start through the launcher passes false: the
+/// current folder is then the folder of the version, or the home folder, and no folder is the
+/// answer (agents use the folder of the open document only). The caller checks the folders with
+/// `kadakas_update::options::check_dirs` (a folder that does not exist or the root of a disk is
+/// dropped).
+///
+/// Reads only the options before `--` (see `kadakas_update::options::pairs`).
+pub fn parse_allow_dirs(
+    args: &[String],
+    env: Option<&std::ffi::OsStr>,
+    start_folder_default: bool,
+) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = kadakas_update::options::values_of(args, "--allow-dir")
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
     dirs.extend(
         env.map(kadakas_update::options::split_env_dirs)
             .unwrap_or_default(),
@@ -589,7 +594,7 @@ pub fn parse_allow_dirs(args: &[String], env: Option<&std::ffi::OsStr>) -> Vec<P
         seen.push(d.clone());
         new
     });
-    if dirs.is_empty() {
+    if dirs.is_empty() && start_folder_default {
         dirs.push(PathBuf::from("."));
     }
     dirs
@@ -598,51 +603,30 @@ pub fn parse_allow_dirs(args: &[String], env: Option<&std::ffi::OsStr>) -> Vec<P
 /// Addresses from `--allow-url URL` (or `--allow-url=URL`), which agents may fetch for map services.
 /// Default: none.
 pub fn parse_allow_urls(args: &[String]) -> Vec<String> {
-    let mut urls = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--allow-url" {
-            if let Some(v) = it.next() {
-                urls.push(v.clone());
-            }
-        } else if let Some(v) = a.strip_prefix("--allow-url=") {
-            urls.push(v.to_string());
-        }
-    }
-    urls
+    kadakas_update::options::values_of(args, "--allow-url")
 }
 
-/// Port from `--agent-port N` (or `--agent-port=N`), else from the env value.
+/// Port from `--agent-port N` (or `--agent-port=N`), else from the env value. The first
+/// `--agent-port` decides, also when its value is no port (then there is no agent server).
 pub fn parse_agent_port(args: &[String], env: Option<&str>) -> Option<u16> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--agent-port" {
-            return it.next().and_then(|v| v.parse().ok());
-        }
-        if let Some(v) = a.strip_prefix("--agent-port=") {
-            return v.parse().ok();
-        }
+    match kadakas_update::options::pairs(args)
+        .into_iter()
+        .find(|(n, _)| n == "--agent-port")
+    {
+        Some((_, value)) => value.and_then(|v| v.parse().ok()),
+        None => env.and_then(|v| v.trim().parse().ok()),
     }
-    env.and_then(|v| v.trim().parse().ok())
 }
 
 /// The workspace profile from `--profile NAME` (or `--profile=NAME`), else from the env value.
 /// A name has 1 to 40 characters: letters, digits, `-` and `_`. Anything else gives an empty name.
 /// The launcher (PLAT-06) passes the profile this way. The app picks the profile with this name (PLAT-04).
 pub fn parse_profile(args: &[String], env: Option<&str>) -> String {
-    let mut found = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--profile" {
-            found = it.next().map(String::as_str);
-            break;
-        }
-        if let Some(v) = a.strip_prefix("--profile=") {
-            found = Some(v);
-            break;
-        }
-    }
-    let name = found.or(env).unwrap_or("").trim();
+    let found = kadakas_update::options::pairs(args)
+        .into_iter()
+        .find(|(n, _)| n == "--profile")
+        .and_then(|(_, v)| v);
+    let name = found.as_deref().or(env).unwrap_or("").trim();
     let ok = !name.is_empty()
         && name.len() <= 40
         && name
@@ -837,17 +821,24 @@ mod tests {
         );
     }
 
+    fn words(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn allow_dirs_from_arguments() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let a = words;
+        // A direct start names no folder: the current folder. A start through the launcher: none.
         assert_eq!(
-            parse_allow_dirs(&a(&["app"]), None),
+            parse_allow_dirs(&a(&["app"]), None, true),
             vec![PathBuf::from(".")]
         );
+        assert!(parse_allow_dirs(&a(&["app"]), None, false).is_empty());
         assert_eq!(
             parse_allow_dirs(
                 &a(&["app", "--allow-dir", "/a", "--allow-dir=/b", "--allow-dir"]),
-                None
+                None,
+                false
             ),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
         );
@@ -855,18 +846,19 @@ mod tests {
 
     #[test]
     fn allow_dirs_from_the_variable_add_to_the_flags() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let a = words;
         let list = std::env::join_paths(["/b", "", "/c"]).unwrap();
         // The variable alone replaces the default folder.
         assert_eq!(
-            parse_allow_dirs(&a(&["app"]), Some(&list)),
+            parse_allow_dirs(&a(&["app"]), Some(&list), true),
             vec![PathBuf::from("/b"), PathBuf::from("/c")]
         );
         // With flags: the flags first, no folder twice.
         assert_eq!(
             parse_allow_dirs(
                 &a(&["app", "--allow-dir", "/c", "--allow-dir=/a"]),
-                Some(&list)
+                Some(&list),
+                true
             ),
             vec![
                 PathBuf::from("/c"),
@@ -876,9 +868,100 @@ mod tests {
         );
         // An empty variable is no variable.
         assert_eq!(
-            parse_allow_dirs(&a(&["app"]), Some(std::ffi::OsStr::new(""))),
+            parse_allow_dirs(&a(&["app"]), Some(std::ffi::OsStr::new("")), true),
             vec![PathBuf::from(".")]
         );
+    }
+
+    #[test]
+    fn the_parsers_stop_at_the_double_dash_and_skip_option_values() {
+        let a = words;
+        // The launcher puts the documents after `--`. A document can have the name of an option.
+        let files = a(&[
+            "app",
+            "--agent-port=5",
+            "--",
+            "--allow-dir=/",
+            "--allow-url=evil.example",
+            "--allow-agent-scripts",
+            "--allow-converters",
+            "--profile=x",
+            "--agent-port=9",
+            "--collab-url=wss://evil.example",
+        ]);
+        assert!(parse_allow_dirs(&files, None, false).is_empty());
+        assert!(parse_allow_urls(&files).is_empty());
+        assert!(!kadakas_update::options::has_switch(
+            &files,
+            "--allow-agent-scripts"
+        ));
+        assert!(!kadakas_update::options::has_switch(
+            &files,
+            "--allow-converters"
+        ));
+        assert_eq!(parse_profile(&files, None), "");
+        assert_eq!(parse_agent_port(&files, None), Some(5));
+        let collab = kadakas_ui_core::collab::CollabArgs::parse(
+            &kadakas_update::options::pick(
+                &files,
+                &["--collab-url", "--collab-token", "--allow-collab-url"],
+            ),
+            &|_| None,
+        );
+        assert_eq!(collab, kadakas_ui_core::collab::CollabArgs::default());
+        // The value of an option is a value: `--allow-dir --agent-port 0` has no agent port.
+        let odd = a(&["app", "--allow-dir", "--agent-port", "0"]);
+        assert_eq!(parse_agent_port(&odd, Some("7")), Some(7));
+        assert_eq!(
+            parse_allow_dirs(&odd, None, false),
+            vec![PathBuf::from("--agent-port")]
+        );
+        assert!(!kadakas_update::options::has_switch(
+            &a(&["app", "--profile", "--allow-converters"]),
+            "--allow-converters"
+        ));
+    }
+
+    /// Every flag that the app reads must be in the list of `kadakas_update::options`: the
+    /// launcher and the handover pass on only the options of that list, and the parsers read only
+    /// them. The test reads the sources of the readers for a `"--name"` word.
+    #[test]
+    fn every_flag_in_the_sources_of_the_app_is_in_the_shared_list() {
+        use kadakas_update::options::{SWITCHES, WITH_VALUE};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        for file in ["src/agent.rs", "src/app.rs", "src/main.rs"] {
+            let text = std::fs::read_to_string(root.join(file)).unwrap();
+            // The code before the tests.
+            let code = text.split("\n#[cfg(test)]\nmod tests").next().unwrap();
+            for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                let mut rest = line;
+                while let Some(i) = rest.find("\"--") {
+                    rest = &rest[i + 1..];
+                    let end = rest.find('"').unwrap_or(rest.len());
+                    let word = &rest[..end];
+                    rest = &rest[end..];
+                    if word.len() > 2
+                        && word[2..]
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c == '-')
+                    {
+                        found.push(word.to_string());
+                    }
+                }
+            }
+        }
+        assert!(found.len() >= 6, "the scan found {found:?}");
+        for word in found {
+            assert!(
+                WITH_VALUE.contains(&word.as_str()) || SWITCHES.contains(&word.as_str()),
+                "{word} is read by the app but is not in kadakas_update::options"
+            );
+        }
+        // The collaboration flags are read in kadakas-ui-core: they are in the list too.
+        for flag in ["--collab-url", "--collab-token", "--allow-collab-url"] {
+            assert!(WITH_VALUE.contains(&flag));
+        }
     }
 
     #[test]

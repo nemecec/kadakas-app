@@ -122,21 +122,24 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 
 The app serves agents only when you give it an agent port. Port 0 picks a free port. The app writes the port and a token to `agent.json` (see the README, section "The live app").
 
-Agents read and write only in the folder of the open document and in the folders you allow. The default is the folder where you started the app. These forms work in the same way:
+Agents read and write only in the folder of the open document and in the folders you allow. These forms work in the same way:
 
 ```sh
 # Flags (repeat --allow-dir for more folders).
-kadakas-app --agent-port 0 --allow-dir ~/plans --allow-dir ~/models plan.kad
+kadakas-app --agent-port 0 --allow-dir "$HOME/plans" --allow-dir "$HOME/models" plan.kad
 # Variables. KADAKAS_ALLOW_DIR is a list with the separator of PATH (a colon on macOS and Linux, a semicolon on Windows).
-KADAKAS_AGENT_PORT=0 KADAKAS_ALLOW_DIR=~/plans:~/models kadakas-app plan.kad
+KADAKAS_AGENT_PORT=0 KADAKAS_ALLOW_DIR="$HOME/plans:$HOME/models" kadakas-app plan.kad
 ```
 
 - The flag `--agent-port` wins over `KADAKAS_AGENT_PORT`.
-- The folders of `--allow-dir` and of `KADAKAS_ALLOW_DIR` add up. A folder that does not exist is dropped. The app creates nothing.
+- The folders of `--allow-dir` and of `KADAKAS_ALLOW_DIR` add up. `kadakas serve` and `kadakas mcp` read both in the same way.
+- The folders are exactly the ones you name. The one exception is a direct start of the app from a terminal. Without a folder it uses the current folder. A start through the launcher (the Finder, the Dock, a menu entry, a shortcut, `kadakas-launcher`) never adds a folder. Its current folder can be your home folder or a system folder. Then agents use only the folder of the open document.
+- The root of a disk (`/`, `C:\`) is never allowed, from any source. A folder that does not exist is dropped. The app creates nothing. Each refused or dropped folder gets one line on stderr.
+- A relative folder needs the folder where you started. If the launcher has the root as current folder (the Dock, `open`), a relative folder is refused with a line on stderr. Give an absolute folder.
 - Only the person who starts the process sets these. The app reads no other place for them.
-- The same forms work for the bundle program (`Kadakas Engine.app/Contents/MacOS/kadakas-app`) and for the launcher (`kadakas-launcher`). The launcher and the macOS handover pass all options of the app on: `--agent-port`, `--allow-dir`, `--allow-url`, `--allow-converters`, `--allow-agent-scripts`, `--collab-url`, `--collab-token`, `--allow-collab-url` and `--profile`. The list is `kadakas_update::options`. A restart for an update keeps them.
-- The app that the launcher starts runs in the folder of its version. So the launcher turns each relative folder into an absolute one, with the folder where you started. Without `--allow-dir` and with an agent port, the start folder is the allowed folder.
-- On macOS, when a launcher already runs, a new start only opens the file in the running app. The options have no effect then. Close the app first.
+- The same forms work for the bundle program (`Kadakas Engine.app/Contents/MacOS/kadakas-app`) and for the launcher (`kadakas-launcher`). The launcher and the macOS handover pass all options of the app on: `--agent-port`, `--allow-dir`, `--allow-url`, `--allow-converters`, `--allow-agent-scripts`, `--collab-url`, `--allow-collab-url` and `--profile`. The list is `kadakas_update::options`, and the app reads only the options before `--`. A restart for an update keeps them. The app that the launcher starts runs in the folder of its version, so the launcher turns each relative folder into an absolute one first.
+- `--collab-token` is never passed on in a command line. Another user can read a command line (`ps`, `/proc`). The handover and the launcher put the token in the environment of the app. Prefer `KADAKAS_COLLAB_TOKEN` over the flag, because the flag shows in the process list of your own start.
+- On macOS, when a launcher already runs, a new start only opens the file in the running app. The options have no effect then. The app says so on stderr. Close the app first.
 
 ## Test-only features
 

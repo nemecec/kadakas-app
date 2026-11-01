@@ -91,7 +91,7 @@ the changes you accept as one undo step with a version before and one after. Fil
 PDF) with optional revision clouds. See `docs/feature-spec.md` (IOP-23, IOP-24) and `describe`.
 
 A server for agents (`kadakas serve`, `kadakas mcp`, the app with `--agent-port`) only reads and writes in the folder of
-the open document and in the folders given with `--allow-dir DIR` (repeat the flag) or in the list `KADAKAS_ALLOW_DIR` (separated like `PATH`, and added to the flags). The default is the folder where it started.
+the open document and in the folders given with `--allow-dir DIR` (repeat the flag) or in the list `KADAKAS_ALLOW_DIR` (separated like `PATH`, and added to the flags). A direct start of the app from a terminal without a folder uses the current folder. `kadakas serve` and `kadakas mcp` do the same. A start through the launcher never adds a folder.
 This covers `import.file`, `export.file`, `file.open` and `file.save`. Paths are resolved first, so `..` and links do not
 leave those folders. The extension must match the format, and `export.file` needs `"overwrite": true` to replace a file
 (the old file stays as `<name>.bak`). The File > Import and Export dialogs of the app are not limited.

@@ -71,7 +71,7 @@ def serve():
             ok = req["params"]["token"] == "t0k"
             out = {{"result": {{"ok": True}}}} if ok else {{"error": {{"message": "no"}}}}
         elif req["method"] == "file.save":
-            if mode != "no_folders" and any(req["params"]["path"].startswith(d) for d in allowed_dirs()):
+            if mode == "open_folders" or (mode != "no_folders" and any(req["params"]["path"].startswith(d) for d in allowed_dirs())):
                 out = {{"result": {{"ok": True}}}}
             else:
                 out = {{"error": {{"message": "x is outside the folders that agents may use (none)"}}}}
@@ -166,6 +166,21 @@ class SmokeRun(unittest.TestCase):
         self.failure("wrong_ping", "the app answers version '0.0.1'")
         self.failure("no_agent", "timeout (15.0 s) while we waited for agent.json")
         self.failure("no_folders", "the app refuses a save in the allowed folder")
+        # An app that allows every folder is caught by the check of the refused folder.
+        self.failure("open_folders", "the app does not refuse a save outside the allowed folder")
+
+    def test_the_handover_check_reads_the_parent_of_the_app(self):
+        rows = [
+            (10, 1, "/Applications/Kadakas.app/Contents/MacOS/kadakas-launcher"),
+            (11, 10, "/x/Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir /w/allowed -- /w/a.kad"),
+            (12, 1, "/x/Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir /other"),
+        ]
+        found = smoke_run.find_apps(rows, "/w/allowed")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], 11)
+        self.assertIn("kadakas-launcher", found[0][1])
+        self.assertEqual(smoke_run.find_apps(rows, "/nowhere"), [])
+        self.assertTrue(smoke_run.processes())
 
     def test_a_launcher_that_never_opens_the_dialog_times_out_with_its_log(self):
         os.environ["FAKE_MODE"] = "no_state"

@@ -15,6 +15,10 @@ The run does these steps. Each one fails with a clear message.
    `--agent-port 0 --allow-dir DIR`: the app answers a JSON-RPC `auth` and `describe` over TCP with
    the right version, saves a file in DIR and refuses to save outside DIR (PLAT-32).
 4. Fourth start: the same with the variables KADAKAS_AGENT_PORT=0 and KADAKAS_ALLOW_DIR=DIR.
+5. Only with --engine (macOS): the program inside `Kadakas Engine.app` is started by hand with
+   `--agent-port 0 --allow-dir DIR FILE`. It hands over to the launcher (`open -b`). The run checks
+   agent.json, the folders and, when the system knows the installed app, that the launcher started
+   the app. Without that registration the program runs alone and the run warns.
 
 The screenshots are best effort. `--screenshot-cmd` is a command with `{out}` in it. A failed
 screenshot is a warning, never an error.
@@ -353,9 +357,42 @@ def set_flavor(work, flavor):
     os.replace(tmp, path)
 
 
-def ping_when_up(work, info, args, proc):
-    """Waits for agent.json of a start, then pings the app and checks the folders of the agent."""
-    wait_for("agent.json of the app", lambda: os.path.isfile(info), args.timeout, proc)
+def processes():
+    """The output of `ps` as (pid, parent pid, command) for each process. Unix only."""
+    out = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], stdout=subprocess.PIPE,
+                         universal_newlines=True).stdout
+    rows = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    return rows
+
+
+def find_apps(rows, marker):
+    """The processes of `kadakas-app` whose command line has `marker`, as (pid, command of the parent).
+
+    After the handover the parent of the app is `kadakas-launcher`; an app that runs alone has
+    another parent."""
+    commands = {pid: cmd for pid, _, cmd in rows}
+    return [(pid, commands.get(ppid, "")) for pid, ppid, cmd in rows if "kadakas-app" in cmd and marker in cmd]
+
+
+def stop_apps(marker):
+    """Ends the apps that the system started for the handover (they are not in our process group)."""
+    for pid, _ in find_apps(processes(), marker):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def ping_when_up(work, info, args, proc, watch=True):
+    """Waits for agent.json of a start, then pings the app and checks the folders of the agent.
+
+    `watch` is false for the start that hands over: that program ends at once, and the app is
+    another process."""
+    wait_for("agent.json of the app", lambda: os.path.isfile(info), args.timeout, proc if watch else None)
     if os.path.exists(work.state):
         raise SmokeError(f"the start of {os.path.basename(proc.log_path)} shows the welcome dialog")
     time.sleep(1)
@@ -367,6 +404,36 @@ def ping_when_up(work, info, args, proc):
             if time.monotonic() > deadline:
                 raise SmokeError(f"the app does not answer the ping: {e}\n{proc.tail()}")
             time.sleep(1)
+
+
+def handover_start(work, info, args, started):
+    """Step 5: `Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir DIR FILE`."""
+    if os.path.exists(info):
+        os.remove(info)
+    document = os.path.join(work.root, "handover.kad")
+    open(document, "w").close()
+    marker = work.allowed
+    fifth = Started(
+        [args.engine, "--agent-port", "0", "--allow-dir", work.allowed, document],
+        work.env(os.environ, args.hold),
+        os.path.join(work.root, "fifth.log"),
+    )
+    started.append(fifth)
+    try:
+        answered = ping_when_up(work, info, args, fifth, watch=False)
+        log(f"the app answered the ping after the handover start, version {answered}")
+        parents = [cmd for _, cmd in find_apps(processes(), marker)]
+        if any("kadakas-launcher" in cmd for cmd in parents):
+            log("the handover to the launcher ran: the app is a child of the launcher and has the options")
+        else:
+            # Without the registration of the installed app, `open -b` finds no launcher and the
+            # program runs alone with its own options. The options still work, but the handover
+            # was not tested here.
+            warn("the handover to the launcher was not seen (the system does not know the installed "
+                 "app?): the program ran alone with its options")
+    finally:
+        fifth.stop()
+        stop_apps(marker)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -472,6 +539,12 @@ def run(args):
         answered = ping_when_up(work, info, args, fourth)
         log(f"the app answered the ping with the variables, version {answered}")
         fourth.stop()
+
+        # 5. The inner program of the macOS bundle, started by hand with the options (PLAT-32). It
+        # hands over to the launcher with `open`, and the launcher starts the app with the
+        # options. This is the start that lost its options before.
+        if args.engine:
+            handover_start(work, info, args, started)
         log("OK")
         return 0
     finally:
@@ -480,7 +553,7 @@ def run(args):
         if artifacts:
             try:
                 os.makedirs(artifacts, exist_ok=True)
-                for name in ("first.log", "second.log", "third.log", "fourth.log"):
+                for name in ("first.log", "second.log", "third.log", "fourth.log", "fifth.log"):
                     src = os.path.join(work.root, name)
                     if os.path.isfile(src):
                         with open(src, "rb") as a, open(os.path.join(artifacts, name), "wb") as b:
@@ -492,9 +565,12 @@ def run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="the four starts and their checks")
+    r = sub.add_parser("run", help="the starts and their checks")
     r.add_argument("--launcher", required=True, help="the installed kadakas-launcher program")
     r.add_argument("--launcher-args", default="", help="extra arguments of the launcher (one string)")
+    r.add_argument("--engine", default=os.environ.get("KADAKAS_SMOKE_ENGINE", ""),
+                   help="macOS: the program inside the Engine bundle; a fifth start checks the handover "
+                        "(or the variable KADAKAS_SMOKE_ENGINE)")
     r.add_argument("--version", required=True, help="the version of the app, for example 0.1.0-beta.1")
     r.add_argument("--work", help="folder for the state of the test (default: a new temporary folder)")
     r.add_argument("--artifacts", help="folder for screenshots and logs")

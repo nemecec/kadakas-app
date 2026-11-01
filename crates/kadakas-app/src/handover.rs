@@ -6,7 +6,7 @@
 //! (`open -b net.kadakas.Kadakas`, with the files) and ends. The launcher then starts the right
 //! version. The decision is a pure function; the caller starts `open`.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// The bundle identifier of the outer bundle, which has the launcher.
@@ -45,12 +45,89 @@ pub fn launcher_open_args(
         return None;
     }
     let mut args = vec![OsString::from("-b"), OsString::from(LAUNCHER_BUNDLE_ID)];
-    args.extend(files.iter().map(|f| f.clone().into_os_string()));
+    args.extend(files.iter().map(|f| safe_file(f)));
     if !options.is_empty() {
         args.push(OsString::from("--args"));
         args.extend(options.iter().cloned());
     }
     Some(args)
+}
+
+/// A file argument for `open`: a name that starts with `-` would be read as an option of `open`
+/// (`-name` or `--env=...`), so it gets `./` in front.
+fn safe_file(f: &Path) -> OsString {
+    let s = f.as_os_str();
+    if s.to_string_lossy().starts_with('-') {
+        let mut out = OsString::from("./");
+        out.push(s);
+        out
+    } else {
+        s.to_os_string()
+    }
+}
+
+/// What the app tells the launcher when it hands over (PLAT-32).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// The documents, with absolute paths when the start folder is known.
+    pub files: Vec<PathBuf>,
+    /// The options for the launcher, behind `--args`. Never `--collab-token`.
+    pub options: Vec<OsString>,
+    /// The collaboration token. It goes in the environment of `open` and nowhere else: a word on a
+    /// command line is visible to other users.
+    pub token: Option<String>,
+    /// Lines for the person (stderr): folders that are refused.
+    pub notes: Vec<String>,
+}
+
+/// The variables that the handover reads.
+#[derive(Clone, Copy, Default)]
+pub struct HandoverEnv<'a> {
+    /// `KADAKAS_AGENT_PORT`.
+    pub agent_port: Option<&'a str>,
+    /// `KADAKAS_ALLOW_DIR`.
+    pub allow_dir: Option<&'a OsStr>,
+}
+
+/// Decides what the handover passes on. `args` is the whole command line (with the program name),
+/// `files` the documents of it, `collab_token` the token that the app parsed from the flag or the
+/// variable (the variable leaves the environment early, so this is the only place to read it),
+/// `cwd` the folder where the person started the app.
+///
+/// - The options are the options of the app in `args`, with absolute folders; the two variables
+///   become options (`kadakas_update::options::prepare`). A relative folder with the root as
+///   `cwd` (or without `cwd`) and the root of a disk are refused with a note.
+/// - No start folder is added as an allowed folder.
+/// - The token never is an option.
+/// - A relative document gets `cwd` in front.
+pub fn plan(
+    args: &[String],
+    files: &[PathBuf],
+    env: HandoverEnv<'_>,
+    collab_token: Option<&str>,
+    cwd: Option<&Path>,
+) -> Plan {
+    use kadakas_update::options;
+    let os_args: Vec<OsString> = args.iter().skip(1).map(OsString::from).collect();
+    let (rest, flag_token) = options::split_token(options::options_in(&os_args));
+    let prepared = options::prepare(rest, env.agent_port, env.allow_dir, cwd);
+    let token = collab_token
+        .map(str::to_string)
+        .or_else(|| flag_token.and_then(|t| t.into_string().ok()))
+        .filter(|t| !t.is_empty());
+    let files = files
+        .iter()
+        .map(|f| match cwd {
+            Some(cwd) if f.is_relative() => cwd.join(f),
+            _ => f.clone(),
+        })
+        .collect();
+    Plan {
+        files,
+        options: prepared.options,
+        token,
+        notes: prepared.notes,
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +170,133 @@ mod tests {
         // Without a file: the options still go.
         let args = launcher_open_args(Some(Path::new(INNER)), false, &[], &options).unwrap();
         assert_eq!(args[..3], ["-b", "net.kadakas.Kadakas", "--args"]);
+    }
+
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_plan_for_the_handover_is_a_table() {
+        let home = Some(Path::new("/home/me/plans"));
+        let root = Some(Path::new("/"));
+        let none = HandoverEnv::default();
+        let a = |extra: &[&str]| {
+            let mut v = vec!["kadakas-app"];
+            v.extend_from_slice(extra);
+            words(&v)
+        };
+        let os = |l: &[&str]| l.iter().map(OsString::from).collect::<Vec<_>>();
+
+        // The case of PLAT-32: flags and a file. They all go on.
+        let p = plan(
+            &a(&["--agent-port", "0", "--allow-dir", "/d", "plan.kad"]),
+            &[PathBuf::from("plan.kad")],
+            none,
+            None,
+            home,
+        );
+        assert_eq!(p.options, os(&["--agent-port", "0", "--allow-dir", "/d"]));
+        assert_eq!(p.files, [PathBuf::from("/home/me/plans/plan.kad")]);
+        assert!(p.notes.is_empty() && p.token.is_none());
+
+        // Relative folders get the start folder. The variables become options.
+        let env = std::env::join_paths(["sub", "/abs"]).unwrap();
+        let p = plan(
+            &a(&["--allow-dir=rel"]),
+            &[],
+            HandoverEnv {
+                agent_port: Some("0"),
+                allow_dir: Some(&env),
+            },
+            None,
+            home,
+        );
+        assert_eq!(
+            p.options,
+            os(&[
+                "--allow-dir",
+                "/home/me/plans/rel",
+                "--agent-port",
+                "0",
+                "--allow-dir",
+                "/home/me/plans/sub",
+                "--allow-dir",
+                "/abs"
+            ])
+        );
+
+        // The start folder is the root (the Dock, `open`): relative folders are refused,
+        // absolute ones stay, and the root itself is refused. No folder is added.
+        let env = std::env::join_paths([".", "/ok"]).unwrap();
+        let p = plan(
+            &a(&["--agent-port=0", "--allow-dir", ".", "--allow-dir", "/"]),
+            &[],
+            HandoverEnv {
+                agent_port: None,
+                allow_dir: Some(&env),
+            },
+            None,
+            root,
+        );
+        assert_eq!(p.options, os(&["--agent-port=0", "--allow-dir", "/ok"]));
+        assert_eq!(p.notes.len(), 3, "{:?}", p.notes);
+
+        // No start folder known: the same.
+        let p = plan(&a(&["--allow-dir", "x"]), &[], none, None, None);
+        assert!(p.options.is_empty());
+        assert_eq!(p.notes.len(), 1);
+
+        // Documents after `--` are documents, not options, and a name with a dash is safe.
+        let p = plan(
+            &a(&["--agent-port=0", "--", "--allow-dir=/", "-odd.kad"]),
+            &[PathBuf::from("--allow-dir=/"), PathBuf::from("-odd.kad")],
+            none,
+            None,
+            home,
+        );
+        assert_eq!(p.options, os(&["--agent-port=0"]));
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &p.files, &p.options).unwrap();
+        assert!(
+            args.iter().all(|w| !w.to_string_lossy().starts_with('-')
+                || ["-b", "--args", "--agent-port=0"].contains(&w.to_string_lossy().as_ref())),
+            "{args:?}"
+        );
+
+        // The token: from the flag or from the parsed value. Never in the options.
+        let p = plan(
+            &a(&["--collab-token", "flag-secret", "--agent-port=0"]),
+            &[],
+            none,
+            None,
+            home,
+        );
+        assert_eq!(p.token.as_deref(), Some("flag-secret"));
+        assert_eq!(p.options, os(&["--agent-port=0"]));
+        let p = plan(
+            &a(&["--collab-token=flag-secret"]),
+            &[],
+            none,
+            Some("env-secret"),
+            home,
+        );
+        assert_eq!(p.token.as_deref(), Some("env-secret"));
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &p.files, &p.options).unwrap();
+        assert!(
+            args.iter().all(|w| !w.to_string_lossy().contains("secret")),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn a_document_that_starts_with_a_dash_is_not_an_option_of_open() {
+        let files = [PathBuf::from("-odd.kad"), PathBuf::from("--env=X=1")];
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &files, &[]).unwrap();
+        assert_eq!(
+            args,
+            ["-b", "net.kadakas.Kadakas", "./-odd.kad", "./--env=X=1"]
+        );
     }
 
     #[test]

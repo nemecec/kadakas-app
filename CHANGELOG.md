@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The macOS app no longer drops `--agent-port`, `--allow-dir` and the other options of the app when it hands over to the launcher or restarts for an update. The launcher takes these options too. Before, `Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir DIR FILE` started an app with no agent port and no `agent.json` (PLAT-32). The new variable `KADAKAS_ALLOW_DIR` is the list form of `--allow-dir`.
+- The macOS app no longer drops `--agent-port`, `--allow-dir` and the other options of the app when it hands over to the launcher or restarts for an update. The launcher takes these options too. Before, `Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir DIR FILE` started an app with no agent port and no `agent.json` (PLAT-32). The new variable `KADAKAS_ALLOW_DIR` is the list form of `--allow-dir` (app, `kadakas serve`, `kadakas mcp`). The root of a disk is never an allowed folder. A start through the launcher does not add the start folder. `--collab-token` is passed in the environment, never in a command line. The app reads only the options before `--`.
 
 ### Changed
 

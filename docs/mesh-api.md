@@ -364,11 +364,11 @@ The usual methods work on these objects: `selection.set`, and the commands `move
 The `mesh.*` methods of the live app need an agent port. The folders for `file.open` and `file.save` need `--allow-dir`, or the variable. Both forms work, also for the macOS bundle program and for the launcher:
 
 ```sh
-kadakas-app --agent-port 0 --allow-dir /path/to/models --allow-dir /path/to/out model.kad
-KADAKAS_AGENT_PORT=0 KADAKAS_ALLOW_DIR=/path/to/models:/path/to/out kadakas-app model.kad
+kadakas-app --agent-port 0 --allow-dir "$HOME/models" --allow-dir "$HOME/out" model.kad
+KADAKAS_AGENT_PORT=0 KADAKAS_ALLOW_DIR="$HOME/models:$HOME/out" kadakas-app model.kad
 ```
 
-`KADAKAS_ALLOW_DIR` is a list with the separator of `PATH` (a colon on macOS and Linux, a semicolon on Windows). The flags and the variable add up. Without a folder, agents use only the folder where the app started. A path outside the folders gives the error "outside the folders that agents may use". See `docs/dev-guide.md` for all details.
+`KADAKAS_ALLOW_DIR` is a list with the separator of `PATH` (a colon on macOS and Linux, a semicolon on Windows). The flags and the variable add up. Agents use only these folders and the folder of the open document. A start of the app from a terminal without a folder uses the current folder. A start through the launcher (the Finder, the Dock, a shortcut) never adds one. A path outside the folders gives the error "outside the folders that agents may use". See `docs/dev-guide.md` for all details.
 
 ## Where the code is
 

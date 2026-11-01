@@ -98,39 +98,41 @@ use kadakas_view3d::{gpu3d, view3d};
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
-    let env = std::env::var("KADAKAS_AGENT_PORT").ok();
+    let env = std::env::var(kadakas_update::options::ENV_AGENT_PORT).ok();
     let port = agent::parse_agent_port(&args, env.as_deref());
-    let allow_dirs = agent::parse_allow_dirs(
-        &args,
-        std::env::var_os(kadakas_update::options::ENV_ALLOW_DIR).as_deref(),
-    );
     // Collaboration settings (`--collab-url`, `--collab-token`, `--allow-collab-url` and the
     // variables). Then the token variables leave the environment, so no child process (a Python
-    // script, a converter) can read them.
-    let collab = kadakas_ui_core::collab::CollabArgs::parse(&args, &|k| std::env::var(k).ok());
+    // script, a converter) can read them. Only the options before `--` count.
+    let collab_words = kadakas_update::options::pick(
+        &args,
+        &["--collab-url", "--collab-token", "--allow-collab-url"],
+    );
+    let collab =
+        kadakas_ui_core::collab::CollabArgs::parse(&collab_words, &|k| std::env::var(k).ok());
     // The run id of the launcher goes the same way: read once, then out of the environment.
     app_updates::capture_env();
     // The panic hook and the native crash handler (PLAT-20), as early as the run id is known.
     crash_ui::install(&app_updates::launch_env);
     kadakas_sys::process::remove_secrets_from_env();
+    let via_launcher = app_updates::launch_env(kadakas_update::handshake::ENV_VIA).is_some();
+    // The folders for agents. A direct start (a terminal) uses the current folder when none is
+    // named. A start through the launcher does not: its current folder is not the person's.
+    // A folder that does not exist or is the root of a disk is dropped, with a line on stderr.
+    let (allow_dirs, notes) = kadakas_update::options::check_dirs(agent::parse_allow_dirs(
+        &args,
+        std::env::var_os(kadakas_update::options::ENV_ALLOW_DIR).as_deref(),
+        !via_launcher,
+    ));
+    if port.is_some() {
+        for note in &notes {
+            eprintln!("kadakas-app: {note}");
+        }
+    }
     // macOS: the inner bundle was started by something other than the launcher (Keep in Dock on
     // its icon, `open` on the bundle). Hand over to the launcher, which owns updates and `.kad`
     // files. If that fails, run alone as before.
     #[cfg(target_os = "macos")]
-    if let Some(open_args) = handover::launcher_open_args(
-        std::env::current_exe().ok().as_deref(),
-        app_updates::launch_env(kadakas_update::handshake::ENV_VIA).is_some(),
-        &agent::parse_open_files(&args),
-        &handover_options(&args),
-    ) && std::process::Command::new("/usr/bin/open")
-        .args(open_args)
-        // The two variables went into the options with absolute folders. The launcher must not
-        // read them again: it does not start in the folder of the person (PLAT-32).
-        .env_remove(kadakas_update::options::ENV_AGENT_PORT)
-        .env_remove(kadakas_update::options::ENV_ALLOW_DIR)
-        .status()
-        .is_ok_and(|s| s.success())
-    {
+    if handover_to_launcher(&args, env.as_deref(), collab.token.as_deref(), via_launcher) {
         return Ok(());
     }
     let options = eframe::NativeOptions {
@@ -154,18 +156,55 @@ fn main() -> eframe::Result {
     )
 }
 
-/// The options of the app for the launcher (PLAT-32): the flags of this start and the variables
-/// `KADAKAS_AGENT_PORT` and `KADAKAS_ALLOW_DIR`, as flags with absolute folders.
+/// macOS: asks the launcher to start the app with the same options (PLAT-32). Returns true when
+/// the launcher took over. The plan is `handover::plan`; this function only starts `open`.
 #[cfg(all(not(target_arch = "wasm32"), target_os = "macos"))]
-fn handover_options(args: &[String]) -> Vec<std::ffi::OsString> {
+fn handover_to_launcher(
+    args: &[String],
+    env_port: Option<&str>,
+    token: Option<&str>,
+    via_launcher: bool,
+) -> bool {
     use kadakas_update::options;
-    let os_args: Vec<std::ffi::OsString> = args.iter().skip(1).map(Into::into).collect();
-    options::prepare(
-        options::options_in(&os_args),
-        std::env::var(options::ENV_AGENT_PORT).ok().as_deref(),
-        std::env::var_os(options::ENV_ALLOW_DIR).as_deref(),
+    let env_allow = std::env::var_os(options::ENV_ALLOW_DIR);
+    let plan = handover::plan(
+        args,
+        &agent::parse_open_files(args),
+        handover::HandoverEnv {
+            agent_port: env_port,
+            allow_dir: env_allow.as_deref(),
+        },
+        token,
         std::env::current_dir().ok().as_deref(),
-    )
+    );
+    let Some(open_args) = handover::launcher_open_args(
+        std::env::current_exe().ok().as_deref(),
+        via_launcher,
+        &plan.files,
+        &plan.options,
+    ) else {
+        return false;
+    };
+    for note in &plan.notes {
+        eprintln!("kadakas-app: {note}");
+    }
+    if !plan.options.is_empty() {
+        eprintln!(
+            "kadakas-app: handing over to the launcher with your options. A Kadakas app that runs already keeps its own options."
+        );
+    }
+    let mut open = std::process::Command::new("/usr/bin/open");
+    open.args(open_args)
+        // The two variables went into the options with absolute folders. The launcher must not
+        // read them again: it does not start in the folder of the person.
+        .env_remove(options::ENV_AGENT_PORT)
+        .env_remove(options::ENV_ALLOW_DIR);
+    // The token goes in the environment of `open` only, never on a command line. This process
+    // removed it from its own environment already.
+    if let Some(token) = &plan.token {
+        open.env(options::ENV_COLLAB_TOKEN, token);
+    }
+    open.status().is_ok_and(|s| s.success())
 }
 
 /// The window icon: our own 256 px icon (`packaging/icons`, made by `make_icons.py`), so the
