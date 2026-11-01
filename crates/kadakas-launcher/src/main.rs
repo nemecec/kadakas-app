@@ -179,6 +179,38 @@ fn window(root: PathBuf, factory: &UpdaterFactory, status: Option<String>) -> ef
     )
 }
 
+/// The options and the variables for the app (PLAT-32). The app starts in the folder of its
+/// version, so the folders are made absolute against the folder where the person started the
+/// launcher, and the variables `KADAKAS_AGENT_PORT` and `KADAKAS_ALLOW_DIR` become options too.
+fn app_launch(
+    app_options: Vec<std::ffi::OsString>,
+) -> (Vec<std::ffi::OsString>, Vec<(String, String)>) {
+    use kadakas_update::options;
+    let cwd = std::env::current_dir().ok();
+    let allow = std::env::var_os(options::ENV_ALLOW_DIR);
+    let port = std::env::var(options::ENV_AGENT_PORT).ok();
+    let opts = options::prepare(
+        app_options,
+        port.as_deref(),
+        allow.as_deref(),
+        cwd.as_deref(),
+    );
+    // The variable stays for the app (it reads it too), with absolute folders.
+    let env = match (allow.as_deref(), cwd.as_deref()) {
+        (Some(v), Some(cwd)) => options::absolute_env_dirs(v, cwd)
+            .map(|v| {
+                (
+                    options::ENV_ALLOW_DIR.to_string(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    };
+    (opts, env)
+}
+
 /// macOS, from inside the app bundle: the launcher is the program of the outer `Kadakas.app`. It
 /// runs the system event loop on the main thread, so that the open-documents Apple event of a
 /// double click arrives (also while the app runs), and the supervisor on a worker thread. The app
@@ -189,6 +221,7 @@ fn start_in_bundle(
     exe: PathBuf,
     files: Vec<std::ffi::OsString>,
     site: Option<String>,
+    app_options: Vec<std::ffi::OsString>,
 ) -> ExitCode {
     use kadakas_update::inbox::Inbox;
     use kadakas_update::supervisor::{Spawner, Supervisor};
@@ -198,7 +231,9 @@ fn start_in_bundle(
     let system = Arc::new(appkit::AppKitEvents);
     let forwarder = events::Forwarder::new(inbox.clone(), system.clone(), spawner.clone());
     let welcome_root = root.clone();
+    let (options, env) = app_launch(app_options);
     let supervisor = Supervisor::new(root, factory, spawner)
+        .with_app_options(options, env)
         .with_inbox(inbox)
         .with_welcome(Arc::new(welcome::show_again));
     let ok = events::run_with_events(
@@ -301,22 +336,28 @@ fn main() -> ExitCode {
                 }
             }
         }
-        cli::Command::Start { files, site } => {
+        cli::Command::Start {
+            files,
+            site,
+            app_options,
+        } => {
             #[cfg(target_os = "macos")]
             if let Some(exe) = std::env::current_exe()
                 .ok()
                 .filter(|e| events::in_app_bundle(e))
             {
-                return start_in_bundle(root, exe, files, site);
+                return start_in_bundle(root, exe, files, site, app_options);
             }
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(site));
             // The first start waits for the welcome dialog (PLAT-26) before anything starts.
             welcome::before_start(&root);
+            let (options, env) = app_launch(app_options);
             let supervisor = kadakas_update::supervisor::Supervisor::new(
                 root.clone(),
                 factory.clone(),
                 Arc::new(SystemSpawner),
             )
+            .with_app_options(options, env)
             .with_welcome(Arc::new(welcome::show_again));
             match supervisor.run(files) {
                 Ok(_) => ExitCode::SUCCESS,

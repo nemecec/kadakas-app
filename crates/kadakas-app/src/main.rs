@@ -100,7 +100,10 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     let env = std::env::var("KADAKAS_AGENT_PORT").ok();
     let port = agent::parse_agent_port(&args, env.as_deref());
-    let allow_dirs = agent::parse_allow_dirs(&args);
+    let allow_dirs = agent::parse_allow_dirs(
+        &args,
+        std::env::var_os(kadakas_update::options::ENV_ALLOW_DIR).as_deref(),
+    );
     // Collaboration settings (`--collab-url`, `--collab-token`, `--allow-collab-url` and the
     // variables). Then the token variables leave the environment, so no child process (a Python
     // script, a converter) can read them.
@@ -118,8 +121,13 @@ fn main() -> eframe::Result {
         std::env::current_exe().ok().as_deref(),
         app_updates::launch_env(kadakas_update::handshake::ENV_VIA).is_some(),
         &agent::parse_open_files(&args),
+        &handover_options(&args),
     ) && std::process::Command::new("/usr/bin/open")
         .args(open_args)
+        // The two variables went into the options with absolute folders. The launcher must not
+        // read them again: it does not start in the folder of the person (PLAT-32).
+        .env_remove(kadakas_update::options::ENV_AGENT_PORT)
+        .env_remove(kadakas_update::options::ENV_ALLOW_DIR)
         .status()
         .is_ok_and(|s| s.success())
     {
@@ -143,6 +151,20 @@ fn main() -> eframe::Result {
                 collab.clone(),
             )))
         }),
+    )
+}
+
+/// The options of the app for the launcher (PLAT-32): the flags of this start and the variables
+/// `KADAKAS_AGENT_PORT` and `KADAKAS_ALLOW_DIR`, as flags with absolute folders.
+#[cfg(all(not(target_arch = "wasm32"), target_os = "macos"))]
+fn handover_options(args: &[String]) -> Vec<std::ffi::OsString> {
+    use kadakas_update::options;
+    let os_args: Vec<std::ffi::OsString> = args.iter().skip(1).map(Into::into).collect();
+    options::prepare(
+        options::options_in(&os_args),
+        std::env::var(options::ENV_AGENT_PORT).ok().as_deref(),
+        std::env::var_os(options::ENV_ALLOW_DIR).as_deref(),
+        std::env::current_dir().ok().as_deref(),
     )
 }
 

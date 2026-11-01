@@ -23,11 +23,27 @@ pub fn command_with(
     args: &[OsString],
     env: &[(String, String)],
 ) -> Result<Command> {
+    command_with_options(dir, flavor, profile, &[], args, env)
+}
+
+/// Like [`command_with`], with the options that the person gave to the launcher (`--agent-port 0`,
+/// `--allow-dir DIR`, see `options`). They come first, so an option of the person wins over the
+/// profile of the settings. The app starts in `dir`: the options must have absolute folders
+/// (`options::prepare`).
+pub fn command_with_options(
+    dir: &Path,
+    flavor: &Flavor,
+    profile: &str,
+    options: &[OsString],
+    args: &[OsString],
+    env: &[(String, String)],
+) -> Result<Command> {
     let mut cmd = Command::new(dir.join(&flavor.exe));
     cmd.current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    cmd.args(options);
     if profile.is_empty() {
         cmd.env_remove("KADAKAS_PROFILE");
     } else if valid_name(profile) {
@@ -189,6 +205,58 @@ mod tests {
         assert_eq!(args, ["--profile", "p", "--", "/a/b.kad", "-odd.kad"]);
         let envs: Vec<_> = c.get_envs().collect();
         assert!(envs.contains(&(OsStr::new("KADAKAS_RUN_ID"), Some(OsStr::new("1a")))));
+    }
+
+    #[test]
+    fn the_options_of_the_person_come_first_and_before_the_files() {
+        let options = [
+            OsString::from("--agent-port"),
+            OsString::from("0"),
+            OsString::from("--allow-dir"),
+            OsString::from("/d"),
+        ];
+        let files = [OsString::from("/a/b.kad")];
+        let c =
+            command_with_options(Path::new("/v"), &flavor(), "p", &options, &files, &[]).unwrap();
+        let args: Vec<&OsStr> = c.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--agent-port",
+                "0",
+                "--allow-dir",
+                "/d",
+                "--profile",
+                "p",
+                "--",
+                "/a/b.kad"
+            ]
+        );
+        // No options: the command is the one of `command_with`.
+        let plain = command_with_options(Path::new("/v"), &flavor(), "", &[], &[], &[]).unwrap();
+        assert_eq!(plain.get_args().count(), 0);
+    }
+
+    #[test]
+    fn a_real_app_gets_the_options_of_the_person() {
+        let d = tmp("options-real");
+        let exe = d.join(exe_name("kadakas-app"));
+        write_stub_app(&exe);
+        let options = [
+            OsString::from("--agent-port"),
+            OsString::from("0"),
+            OsString::from("--allow-dir"),
+            OsString::from("/d"),
+        ];
+        let files = [OsString::from("/a/b.kad")];
+        let mut c = command_with_options(&d, &flavor(), "p", &options, &files, &[]).unwrap();
+        assert!(c.spawn().unwrap().wait().unwrap().success());
+        let out = std::fs::read_to_string(d.join("out.txt")).unwrap();
+        assert_eq!(
+            out, "--agent-port 0 --allow-dir /d --profile p -- /a/b.kad|||p",
+            "the options, the profile, the files"
+        );
+        crate::store::tests::rm_dir(&d);
     }
 
     #[test]

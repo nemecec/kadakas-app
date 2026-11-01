@@ -563,9 +563,12 @@ fn serve_client(
     }
 }
 
-/// Folders from `--allow-dir DIR` (or `--allow-dir=DIR`), which agents may read and write. Default: the current folder.
-pub fn parse_allow_dirs(args: &[String]) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+/// Folders that agents may read and write: `--allow-dir DIR` (or `--allow-dir=DIR`, repeat for more),
+/// then the list in the variable `KADAKAS_ALLOW_DIR` (`env`, separated like `PATH`). The two add up;
+/// a folder is listed once. Both are the choice of the person who starts the app. Default: the
+/// current folder. A folder that does not exist is dropped later (`PathPolicy::restricted`).
+pub fn parse_allow_dirs(args: &[String], env: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--allow-dir" {
@@ -576,6 +579,16 @@ pub fn parse_allow_dirs(args: &[String]) -> Vec<PathBuf> {
             dirs.push(PathBuf::from(v));
         }
     }
+    dirs.extend(
+        env.map(kadakas_update::options::split_env_dirs)
+            .unwrap_or_default(),
+    );
+    let mut seen = Vec::new();
+    dirs.retain(|d| {
+        let new = !seen.contains(d);
+        seen.push(d.clone());
+        new
+    });
     if dirs.is_empty() {
         dirs.push(PathBuf::from("."));
     }
@@ -642,22 +655,13 @@ pub fn parse_profile(args: &[String], env: Option<&str>) -> String {
 /// values, and everything after `--`. The launcher passes the files of a double click and the
 /// documents of a restart to update this way.
 pub fn parse_open_files(args: &[String]) -> Vec<PathBuf> {
-    // Options that take the next argument as their value.
-    const WITH_VALUE: [&str; 7] = [
-        "--agent-port",
-        "--allow-dir",
-        "--allow-url",
-        "--allow-collab-url",
-        "--collab-url",
-        "--collab-token",
-        "--profile",
-    ];
+    // Options that take the next argument as their value (one list for the app and the launcher).
     let mut files = Vec::new();
     let mut it = args.iter().skip(1);
     while let Some(a) = it.next() {
         if a == "--" {
             files.extend(it.by_ref().map(PathBuf::from));
-        } else if WITH_VALUE.contains(&a.as_str()) {
+        } else if kadakas_update::options::WITH_VALUE.contains(&a.as_str()) {
             it.next();
         } else if !a.starts_with('-') && !a.is_empty() {
             files.push(PathBuf::from(a));
@@ -836,16 +840,44 @@ mod tests {
     #[test]
     fn allow_dirs_from_arguments() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(parse_allow_dirs(&a(&["app"])), vec![PathBuf::from(".")]);
         assert_eq!(
-            parse_allow_dirs(&a(&[
-                "app",
-                "--allow-dir",
-                "/a",
-                "--allow-dir=/b",
-                "--allow-dir"
-            ])),
+            parse_allow_dirs(&a(&["app"]), None),
+            vec![PathBuf::from(".")]
+        );
+        assert_eq!(
+            parse_allow_dirs(
+                &a(&["app", "--allow-dir", "/a", "--allow-dir=/b", "--allow-dir"]),
+                None
+            ),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+    }
+
+    #[test]
+    fn allow_dirs_from_the_variable_add_to_the_flags() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let list = std::env::join_paths(["/b", "", "/c"]).unwrap();
+        // The variable alone replaces the default folder.
+        assert_eq!(
+            parse_allow_dirs(&a(&["app"]), Some(&list)),
+            vec![PathBuf::from("/b"), PathBuf::from("/c")]
+        );
+        // With flags: the flags first, no folder twice.
+        assert_eq!(
+            parse_allow_dirs(
+                &a(&["app", "--allow-dir", "/c", "--allow-dir=/a"]),
+                Some(&list)
+            ),
+            vec![
+                PathBuf::from("/c"),
+                PathBuf::from("/a"),
+                PathBuf::from("/b")
+            ]
+        );
+        // An empty variable is no variable.
+        assert_eq!(
+            parse_allow_dirs(&a(&["app"]), Some(std::ffi::OsStr::new(""))),
+            vec![PathBuf::from(".")]
         );
     }
 

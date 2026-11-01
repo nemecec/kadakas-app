@@ -118,6 +118,26 @@ A host can run many `Session` values in one process (PLAT-12). The rules:
 - Two process-wide values are explicit exceptions for the UI: the active language (`kadakas-l10n`) and the current units (`kadakas-units`). They are preferences of the person. They are not document data, and an API session never reads them.
 - New ids are UUIDv7 (`Document::alloc_id`). A web build must call `kadakas_core::uid::set_host_seed(ms, salt)` once before it makes a document (the app does this in `new_web` with `Date.now()` and `crypto.getRandomValues`), because `std` has no clock or process there. Tests and fixtures use `Document::with_sequential_ids()` or `kadakas serve --sequential-ids`.
 
+## Start the app for agents
+
+The app serves agents only when you give it an agent port. Port 0 picks a free port. The app writes the port and a token to `agent.json` (see the README, section "The live app").
+
+Agents read and write only in the folder of the open document and in the folders you allow. The default is the folder where you started the app. These forms work in the same way:
+
+```sh
+# Flags (repeat --allow-dir for more folders).
+kadakas-app --agent-port 0 --allow-dir ~/plans --allow-dir ~/models plan.kad
+# Variables. KADAKAS_ALLOW_DIR is a list with the separator of PATH (a colon on macOS and Linux, a semicolon on Windows).
+KADAKAS_AGENT_PORT=0 KADAKAS_ALLOW_DIR=~/plans:~/models kadakas-app plan.kad
+```
+
+- The flag `--agent-port` wins over `KADAKAS_AGENT_PORT`.
+- The folders of `--allow-dir` and of `KADAKAS_ALLOW_DIR` add up. A folder that does not exist is dropped. The app creates nothing.
+- Only the person who starts the process sets these. The app reads no other place for them.
+- The same forms work for the bundle program (`Kadakas Engine.app/Contents/MacOS/kadakas-app`) and for the launcher (`kadakas-launcher`). The launcher and the macOS handover pass all options of the app on: `--agent-port`, `--allow-dir`, `--allow-url`, `--allow-converters`, `--allow-agent-scripts`, `--collab-url`, `--collab-token`, `--allow-collab-url` and `--profile`. The list is `kadakas_update::options`. A restart for an update keeps them.
+- The app that the launcher starts runs in the folder of its version. So the launcher turns each relative folder into an absolute one, with the folder where you started. Without `--allow-dir` and with an agent port, the start folder is the allowed folder.
+- On macOS, when a launcher already runs, a new start only opens the file in the running app. The options have no effect then. Close the app first.
+
 ## Test-only features
 
 A feature that only tests need must never be in a program that we ship. `kadakas-core` has `fault-injection` (a command can be made to panic, see `kadakas_core::fault`); only the dev-dependencies of `kadakas-api` turn it on. `scripts/check-test-hook.sh` reads the feature tree of `kadakas-app`, `kadakas-cli` and `kadakas-launcher` and fails if a hook is in it (and fails if it cannot see the hook in the tree of the tests). CI runs it (job `test-hooks`). Add the name of each new test-only feature to `HOOKS` in the script. The measurement of the limits (`docs/modeler-limits.md`) needs the surface limits to be raised. That is the cfg `kadakas_measure`, set only by `RUSTFLAGS="--cfg kadakas_measure"` in the measurement runs. It is not a cargo feature, so no dependency can turn it on, and the check above has nothing to look for.

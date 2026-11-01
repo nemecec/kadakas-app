@@ -253,6 +253,7 @@ mod tests {
                     exe: "Kadakas Engine.app/Contents/MacOS/kadakas-app".into(),
                 },
                 profile: "p".into(),
+                options: Vec::new(),
                 files: files(&["/old.kad"]),
                 env: vec![("KADAKAS_RUN_ID".into(), id.into())],
             },

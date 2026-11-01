@@ -35,6 +35,7 @@ pub mod keys;
 pub mod launch;
 pub mod local;
 pub mod manifest;
+pub mod options;
 pub mod runs;
 pub mod settings;
 #[cfg(any(test, feature = "sign"))]

@@ -187,6 +187,7 @@ mod tests {
                     exe: "kadakas-app".into(),
                 },
                 profile: String::new(),
+                options: Vec::new(),
                 files: Vec::new(),
                 env: Vec::new(),
             },

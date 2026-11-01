@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The macOS app no longer drops `--agent-port`, `--allow-dir` and the other options of the app when it hands over to the launcher or restarts for an update. The launcher takes these options too. Before, `Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir DIR FILE` started an app with no agent port and no `agent.json` (PLAT-32). The new variable `KADAKAS_ALLOW_DIR` is the list form of `--allow-dir`.
+
 ### Changed
 
 - Release files have one name pattern, `Kadakas-<version>-<os>-<arch>.<ext>`, with the exact version in every name. The notes of a release start with a table that tells which file to download.

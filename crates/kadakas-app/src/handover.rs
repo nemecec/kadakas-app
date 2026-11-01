@@ -27,10 +27,16 @@ fn in_engine_bundle(exe: &Path) -> bool {
 
 /// The arguments for `open`, or `None` when the app should run on its own: it was started by the
 /// launcher (`via_launcher`), or it is not in an engine bundle (a development build).
+///
+/// `options` are the options of the app (`--agent-port 0`, `--allow-dir DIR`, see
+/// `kadakas_update::options::prepare`). They go after `--args`, so the launcher gets them in its
+/// command line and passes them to the app (PLAT-32). When a launcher runs already, `open` only
+/// sends the files to it, and the options do not apply: an app runs, and it keeps its options.
 pub fn launcher_open_args(
     exe: Option<&Path>,
     via_launcher: bool,
     files: &[PathBuf],
+    options: &[OsString],
 ) -> Option<Vec<OsString>> {
     if via_launcher || std::env::var_os("KADAKAS_NO_HANDOVER").is_some() {
         return None;
@@ -40,6 +46,10 @@ pub fn launcher_open_args(
     }
     let mut args = vec![OsString::from("-b"), OsString::from(LAUNCHER_BUNDLE_ID)];
     args.extend(files.iter().map(|f| f.clone().into_os_string()));
+    if !options.is_empty() {
+        args.push(OsString::from("--args"));
+        args.extend(options.iter().cloned());
+    }
     Some(args)
 }
 
@@ -53,17 +63,43 @@ mod tests {
     #[test]
     fn an_engine_started_alone_hands_over_with_its_files() {
         let files = [PathBuf::from("/a/b.kad")];
-        let args = launcher_open_args(Some(Path::new(INNER)), false, &files).unwrap();
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &files, &[]).unwrap();
         assert_eq!(args, ["-b", "net.kadakas.Kadakas", "/a/b.kad"]);
-        let none = launcher_open_args(Some(Path::new(INNER)), false, &[]).unwrap();
+        let none = launcher_open_args(Some(Path::new(INNER)), false, &[], &[]).unwrap();
         assert_eq!(none, ["-b", "net.kadakas.Kadakas"]);
+    }
+
+    #[test]
+    fn the_options_of_the_app_go_after_the_files_behind_args() {
+        let files = [PathBuf::from("/a/b.kad")];
+        let options: Vec<OsString> = ["--agent-port", "0", "--allow-dir", "/d"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &files, &options).unwrap();
+        assert_eq!(
+            args,
+            [
+                "-b",
+                "net.kadakas.Kadakas",
+                "/a/b.kad",
+                "--args",
+                "--agent-port",
+                "0",
+                "--allow-dir",
+                "/d"
+            ]
+        );
+        // Without a file: the options still go.
+        let args = launcher_open_args(Some(Path::new(INNER)), false, &[], &options).unwrap();
+        assert_eq!(args[..3], ["-b", "net.kadakas.Kadakas", "--args"]);
     }
 
     #[test]
     fn the_launcher_started_app_and_other_builds_run_on_their_own() {
         let exe = Some(Path::new(INNER));
         // Started by the launcher: never hands over (no loop).
-        assert!(launcher_open_args(exe, true, &[]).is_none());
+        assert!(launcher_open_args(exe, true, &[], &[]).is_none());
         // A build outside an engine bundle: `cargo run`, an old plain install, the outer bundle.
         for other in [
             "/repo/target/debug/kadakas-app",
@@ -72,10 +108,10 @@ mod tests {
             "/Kadakas Engine.app/kadakas-app",
         ] {
             assert!(
-                launcher_open_args(Some(Path::new(other)), false, &[]).is_none(),
+                launcher_open_args(Some(Path::new(other)), false, &[], &[]).is_none(),
                 "{other}"
             );
         }
-        assert!(launcher_open_args(None, false, &[]).is_none());
+        assert!(launcher_open_args(None, false, &[], &[]).is_none());
     }
 }

@@ -102,7 +102,7 @@ done
 
 run_smoke "$launcher" "$version" "$artifacts" "screencapture -x {out}" "$work/run"
 
-# The program ran three times. The seal must still be valid: a write into the bundle breaks it.
+# The program ran four times. The seal must still be valid: a write into the bundle breaks it.
 step "codesign --verify --deep --strict after the runs"
 codesign --verify --deep --strict --verbose=2 "$installed" || fail "the seal of the bundle broke while the program ran"
 

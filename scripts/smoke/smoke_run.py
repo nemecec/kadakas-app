@@ -11,8 +11,10 @@ The run does these steps. Each one fails with a clear message.
    (KADAKAS_SMOKE_STATE) writes a JSON file, waits, answers "Use defaults" and ends the dialog.
    The run checks the file (version, kind, shown values) and then `welcome.json` and the settings.
 2. Second start: no dialog. The launcher starts the default program and keeps it running.
-3. Third start with the app (`kadakas-app`, flavor set in launcher.json) and an agent port:
-   the app answers a JSON-RPC `auth` and `describe` over TCP with the right version.
+3. Third start with the app (`kadakas-app`, flavor set in launcher.json), started with the options
+   `--agent-port 0 --allow-dir DIR`: the app answers a JSON-RPC `auth` and `describe` over TCP with
+   the right version, saves a file in DIR and refuses to save outside DIR (PLAT-32).
+4. Fourth start: the same with the variables KADAKAS_AGENT_PORT=0 and KADAKAS_ALLOW_DIR=DIR.
 
 The screenshots are best effort. `--screenshot-cmd` is a command with `{out}` in it. A failed
 screenshot is a warning, never an error.
@@ -74,16 +76,19 @@ class Work:
         self.runtime = os.path.join(self.root, "runtime")
         self.localappdata = os.path.join(self.root, "localappdata")
         self.state = os.path.join(self.root, "welcome-state.json")
+        # A folder that agents may use, and one that they may not (PLAT-32).
+        self.allowed = os.path.join(self.root, "agent-allowed")
+        self.refused = os.path.join(self.root, "agent-refused")
         # A local folder that does not exist (the launcher takes only file:// sites, no spaces).
         self.no_updates = "file:///kadakas-smoke-no-updates"
-        for d in (self.root, self.home, self.runtime, self.localappdata):
+        for d in (self.root, self.home, self.runtime, self.localappdata, self.allowed, self.refused):
             os.makedirs(d, exist_ok=True)
         if not IS_WINDOWS:
             os.chmod(self.runtime, 0o700)
 
-    def env(self, base, hold, agent_port=None, state=True):
+    def env(self, base, hold, agent_port=None, state=True, allow_dir=None):
         env = dict(base)
-        for name in ("KADAKAS_SKIP_WELCOME", "KADAKAS_AGENT_PORT", "KADAKAS_SMOKE_STATE"):
+        for name in ("KADAKAS_SKIP_WELCOME", "KADAKAS_AGENT_PORT", "KADAKAS_ALLOW_DIR", "KADAKAS_SMOKE_STATE"):
             env.pop(name, None)
         env["KADAKAS_LAUNCHER_ROOT"] = self.launcher
         env["KADAKAS_PREFS_DIR"] = self.prefs
@@ -98,6 +103,8 @@ class Work:
             env["KADAKAS_SMOKE_STATE"] = self.state
         if agent_port is not None:
             env["KADAKAS_AGENT_PORT"] = str(agent_port)
+        if allow_dir is not None:
+            env["KADAKAS_ALLOW_DIR"] = allow_dir
         if IS_WINDOWS:
             env["LOCALAPPDATA"] = self.localappdata
         else:
@@ -287,8 +294,12 @@ def check_files(work):
     return launcher
 
 
-def ping(info_path, version, timeout=30):
-    """JSON-RPC over TCP as the app serves it: `auth` first, then `describe` (it names the version)."""
+def ping(info_path, version, timeout=30, folders=None):
+    """JSON-RPC over TCP as the app serves it: `auth` first, then `describe` (it names the version).
+
+    `folders` is `(allowed, refused)`: then `file.save` must work in the first folder and be refused
+    in the second ("outside the folders that agents may use"). That shows that the app got
+    `--allow-dir` (or `KADAKAS_ALLOW_DIR`) from the launcher (PLAT-32)."""
     info = read_json(info_path)
     port, token = info.get("port"), info.get("token")
     if not isinstance(port, int) or not isinstance(token, str):
@@ -319,6 +330,15 @@ def ping(info_path, version, timeout=30):
             raise SmokeError(f"the app answers version {got!r}, expected {version!r}")
         if not r["result"].get("methods"):
             raise SmokeError("describe lists no methods")
+        if folders:
+            allowed, refused = folders
+            r = call(3, "file.save", {"path": os.path.join(allowed, "smoke.kad")})
+            if "result" not in r:
+                raise SmokeError(f"the app refuses a save in the allowed folder {allowed}: {r}")
+            r = call(4, "file.save", {"path": os.path.join(refused, "smoke.kad")})
+            message = str(r.get("error", {}).get("message", ""))
+            if "outside the folders that agents may use" not in message:
+                raise SmokeError(f"the app does not refuse a save outside the allowed folder: {r}")
     return got
 
 
@@ -331,6 +351,22 @@ def set_flavor(work, flavor):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp, path)
+
+
+def ping_when_up(work, info, args, proc):
+    """Waits for agent.json of a start, then pings the app and checks the folders of the agent."""
+    wait_for("agent.json of the app", lambda: os.path.isfile(info), args.timeout, proc)
+    if os.path.exists(work.state):
+        raise SmokeError(f"the start of {os.path.basename(proc.log_path)} shows the welcome dialog")
+    time.sleep(1)
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            return ping(info, args.version, folders=(work.allowed, work.refused))
+        except (OSError, ValueError) as e:
+            if time.monotonic() > deadline:
+                raise SmokeError(f"the app does not answer the ping: {e}\n{proc.tail()}")
+            time.sleep(1)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -404,29 +440,17 @@ def run(args):
         screenshot(args.screenshot_cmd, os.path.join(work.root, "second-start.png"), artifacts)
         second.stop()
 
-        # 3. The app answers a JSON-RPC ping.
+        # 3. The app answers a JSON-RPC ping. The options of the person (`--agent-port 0
+        # --allow-dir DIR`) go through the launcher to the app (PLAT-32).
         set_flavor(work, "kadakas-app")
         third = Started(
-            [launcher] + shlex.split(args.launcher_args),
-            work.env(os.environ, args.hold, agent_port=0),
+            [launcher] + shlex.split(args.launcher_args) + ["--agent-port", "0", "--allow-dir", work.allowed],
+            work.env(os.environ, args.hold),
             os.path.join(work.root, "third.log"),
         )
         started.append(third)
         info = work.agent_info()
-        wait_for("agent.json of the app", lambda: os.path.isfile(info), args.timeout, third)
-        if os.path.exists(work.state):
-            raise SmokeError("the third start shows the welcome dialog")
-        time.sleep(1)
-        answered = None
-        deadline = time.monotonic() + 60
-        while True:
-            try:
-                answered = ping(info, args.version)
-                break
-            except (OSError, ValueError) as e:
-                if time.monotonic() > deadline:
-                    raise SmokeError(f"the app does not answer the ping: {e}\n{third.tail()}")
-                time.sleep(1)
+        answered = ping_when_up(work, info, args, third)
         log(f"the app answered the ping with version {answered}")
         # Every start ends with a kill, so the launcher sees runs without the clean-exit mark.
         # The app has no quit call yet, so this path is not tested. Say what the launcher kept.
@@ -434,6 +458,20 @@ def run(args):
         log(f"health.json: {open(health).read().strip() if os.path.isfile(health) else 'none'}")
         screenshot(args.screenshot_cmd, os.path.join(work.root, "app.png"), artifacts)
         third.stop()
+
+        # 4. The same with the variables: `KADAKAS_AGENT_PORT` and `KADAKAS_ALLOW_DIR`. The killed app
+        # left its agent.json, so it goes first.
+        if os.path.exists(info):
+            os.remove(info)
+        fourth = Started(
+            [launcher] + shlex.split(args.launcher_args),
+            work.env(os.environ, args.hold, agent_port=0, allow_dir=work.allowed),
+            os.path.join(work.root, "fourth.log"),
+        )
+        started.append(fourth)
+        answered = ping_when_up(work, info, args, fourth)
+        log(f"the app answered the ping with the variables, version {answered}")
+        fourth.stop()
         log("OK")
         return 0
     finally:
@@ -442,7 +480,7 @@ def run(args):
         if artifacts:
             try:
                 os.makedirs(artifacts, exist_ok=True)
-                for name in ("first.log", "second.log", "third.log"):
+                for name in ("first.log", "second.log", "third.log", "fourth.log"):
                     src = os.path.join(work.root, name)
                     if os.path.isfile(src):
                         with open(src, "rb") as a, open(os.path.join(artifacts, name), "wb") as b:
@@ -454,7 +492,7 @@ def run(args):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="the three starts and their checks")
+    r = sub.add_parser("run", help="the four starts and their checks")
     r.add_argument("--launcher", required=True, help="the installed kadakas-launcher program")
     r.add_argument("--launcher-args", default="", help="extra arguments of the launcher (one string)")
     r.add_argument("--version", required=True, help="the version of the app, for example 0.1.0-beta.1")
