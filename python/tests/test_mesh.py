@@ -245,3 +245,34 @@ def test_a_near_touch_is_refused_until_the_agent_allows_the_snap(doc):
     assert "snap_near" in api.mesh_solid.__doc__
     doc.undo()
     assert geometry(doc, model) == before
+
+
+def test_objects_delete_is_a_typed_method_with_one_undo_step(doc):
+    """AGR-09: the furniture agent deletes a part by id, and undo brings it back."""
+    model, _ = make_box(doc)
+    other = doc.api.mesh_create(name="Leg")["id"]
+    out = doc.api.objects_delete(ids=[other])
+    assert out == {"count": 1, "deleted": [other]}
+    assert [o["id"] for o in doc.api.objects_list()] == [model]
+    assert doc.api.undo() == {"done": True}
+    assert {o["id"] for o in doc.api.objects_list()} == {model, other}
+    with pytest.raises(KadakasError) as e:
+        doc.api.objects_delete(ids=[model, "00000000-0000-0000-0000-0000000003e7"])
+    assert e.value.code == 2 and e.value.data["error_id"] == "no_such_object"
+    assert len(doc.api.objects_list()) == 2
+    with pytest.raises(KadakasError) as e:
+        doc.call("object.delete", ids=[model])
+    assert e.value.code == -32601 and "objects.delete" in str(e.value)
+
+
+def test_the_selection_has_the_faces_and_edges_of_a_model(doc):
+    model, face = make_box(doc)
+    edge = doc.api.mesh_edges(id=model, limit=1)["items"][0]["id"]
+    assert doc.selection.faces() == {} and doc.selection.edges() == {}
+    doc.selection.set([], faces={model: [face]}, edges={model: [edge]})
+    assert doc.api.selection_get() == {
+        "ids": [], "faces": {model: [face]}, "edges": {model: [edge]},
+    }
+    assert doc.selection.faces() == {model: [face]} and doc.selection.edges() == {model: [edge]}
+    doc.selection.clear()
+    assert doc.api.selection_get() == {"ids": [], "faces": {}, "edges": {}}

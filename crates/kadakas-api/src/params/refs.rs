@@ -112,7 +112,7 @@ impl Kind {
 
 /// The distance between two names, counting inserted, removed and changed letters and swapped
 /// neighbours.
-fn distance(a: &str, b: &str) -> usize {
+pub(crate) fn distance(a: &str, b: &str) -> usize {
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
     let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
     for (i, row) in d.iter_mut().enumerate() {

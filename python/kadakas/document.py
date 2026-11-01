@@ -259,8 +259,23 @@ class Selection:
     def objects(self) -> list[Obj]:
         return [self._doc.get(i) for i in self.ids()]
 
-    def set(self, items: Iterable[ObjRef]) -> None:
-        self._doc.api.selection_set(ids=[_id_of(i) for i in items])
+    def faces(self) -> dict[Id, list[int]]:
+        """The selected faces of surface models: ``{model id: [face id]}``, the ids of ``mesh.faces``."""
+        return self._doc.api.selection_get()["faces"]
+
+    def edges(self) -> dict[Id, list[int]]:
+        """The selected edges of surface models: ``{model id: [edge id]}``, the ids of ``mesh.edges``."""
+        return self._doc.api.selection_get()["edges"]
+
+    def set(self, items: Iterable[ObjRef], *, faces: dict[Id, list[int]] | None = None,
+            edges: dict[Id, list[int]] | None = None) -> None:
+        """Select objects, or (with ``faces`` and ``edges``) parts of surface models instead."""
+        params: dict[str, Any] = {"ids": [_id_of(i) for i in items]}
+        if faces:
+            params["faces"] = faces
+        if edges:
+            params["edges"] = edges
+        self._doc.api.selection_set(**params)
 
     def clear(self) -> None:
         self.set([])

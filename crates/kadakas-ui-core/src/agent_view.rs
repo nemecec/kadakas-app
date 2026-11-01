@@ -239,8 +239,33 @@ impl CameraReq {
                 }
             }
         };
-        let eye = triple("eye")?.ok_or("eye is required")?;
         let target = triple("target")?.ok_or("target is required")?;
+        // The eye, or the orbit of `render.png` and `view.get` (yaw and pitch in radians, distance
+        // in mm): the same camera in both forms. The eye wins when both are given.
+        let eye = match triple("eye")? {
+            Some(eye) => eye,
+            None => {
+                let orbit = |k: &str| p.get(k).and_then(Value::as_f64);
+                let (Some(yaw), Some(pitch), Some(dist)) =
+                    (orbit("yaw"), orbit("pitch"), orbit("distance"))
+                else {
+                    return Err(
+                        "eye is required (or yaw, pitch and distance, as in view.get)".into(),
+                    );
+                };
+                if !(yaw.is_finite() && pitch.is_finite() && dist.is_finite() && dist >= 1.0) {
+                    return Err(
+                        "yaw and pitch (radians) must be finite and distance at least 1 mm".into(),
+                    );
+                }
+                target
+                    + DVec3::new(
+                        pitch.cos() * yaw.cos(),
+                        pitch.cos() * yaw.sin(),
+                        pitch.sin(),
+                    ) * dist
+            }
+        };
         if (eye - target).length() < 1.0 {
             return Err("eye and target are less than 1 mm apart".into());
         }

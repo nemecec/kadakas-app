@@ -29,7 +29,7 @@ pub const DOMAINS: &[Domain] = &[
     },
     Domain {
         name: "document",
-        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). Also the project data, saved views of layer visibility, the document files and the change events (`events.poll`; MCP has no pushed messages). Also collaboration (`collab.*`: connect to a shared document, sync, presence, per-user undo).",
+        summary: "The document and its history of changes. `execute` runs one command (add, modify, move or delete objects, and change layers, classes and settings: layers and classes have no methods of their own, use their commands). `objects.delete` deletes objects by id (the command `delete_objects`). Also the project data, saved views of layer visibility, the document files and the change events (`events.poll`; MCP has no pushed messages). Also collaboration (`collab.*`: connect to a shared document, sync, presence, per-user undo).",
         prefixes: &[
             "execute",
             "document",
@@ -229,6 +229,9 @@ fn prefix_of(method: &str) -> &str {
 /// reads and drives what the person sees (AGR-02, AGR-03) are part of the review: a person
 /// reviews what the agent does, and the agent points at it.
 const METHOD_DOMAIN: &[(&str, &str)] = &[
+    // The domain `objects` only reads. A method that deletes is in `document` with `execute`, the
+    // tool that carries the destructive hint (AGR-09).
+    ("objects.delete", "document"),
     ("view.get", "review"),
     ("view.zoom", "review"),
     ("view.pan", "review"),

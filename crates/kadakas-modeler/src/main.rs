@@ -19,6 +19,7 @@ mod icons;
 mod interop;
 mod launch;
 mod menu;
+mod parts_sync;
 mod prefs;
 mod scenes_panel;
 mod soften;

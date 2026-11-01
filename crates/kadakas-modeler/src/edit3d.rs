@@ -9,6 +9,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
+use crate::parts_sync::PartsSync;
 use egui::{Color32, Pos2, Rect, Stroke};
 use glam::{DVec2, DVec3, Vec2};
 use kadakas_api::Session;
@@ -39,6 +40,8 @@ pub struct Edit3d {
     pub cache: SceneCache,
     /// The selected faces and edges.
     pub sub: SubSelection,
+    /// Keeps `sub` and `Session::parts` in step (AGR-09).
+    parts_sync: PartsSync,
     inferencer: Inferencer,
     picker: Inferencer,
     /// Finds faces only (no snapping to points and edges): the Paint Bucket.
@@ -123,6 +126,7 @@ impl Default for Edit3d {
             modeling: Modeling::default(),
             cache: SceneCache::default(),
             sub: SubSelection::default(),
+            parts_sync: PartsSync::default(),
             inferencer: Inferencer::default(),
             picker: Inferencer::default(),
             painter: modeling::paint::face_engine(),
@@ -366,6 +370,7 @@ impl Edit3d {
         nav_cam: &kadakas_render::Camera,
         inp: &Input,
     ) {
+        self.parts_sync.apply(session, &mut self.sub);
         let rev = session.editor.revision();
         let t0 = Instant::now();
         let before = self.cache.builds;
@@ -712,6 +717,7 @@ impl Edit3d {
         }
 
         self.run(session, out);
+        self.parts_sync.mirror(session, &self.sub);
     }
 
     /// Before the pointer events of Move, Rotate and Scale: the copy key, the pick of what is under
