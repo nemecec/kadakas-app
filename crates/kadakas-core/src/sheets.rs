@@ -257,6 +257,150 @@ pub struct ViewCamera {
     pub projection: String,
 }
 
+/// The largest pitch of an orbit camera in radians: straight up or down, and the rounding of a
+/// pitch that was `FRAC_PI_2` as an `f32`. Every call that takes a camera uses this limit.
+pub const PITCH_LIMIT: f64 = std::f64::consts::FRAC_PI_2 + 1e-6;
+
+/// The field of view of the cameras that the agent API makes, in degrees.
+pub const DEFAULT_FOV_DEG: f64 = 45.0;
+
+/// How far the eye of `yaw`, `pitch` and `distance` may be from a given `eye`, as a part of the
+/// distance. A larger gap is a conflict.
+pub const EYE_TOLERANCE: f64 = 1e-3;
+
+/// An orbit camera read from a request (AGR-09).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Orbit {
+    pub target: [f64; 3],
+    /// Radians. `None` when the eye is straight above or below the target: the turn is not known
+    /// then, and the caller keeps the turn it has.
+    pub yaw: Option<f64>,
+    pub pitch: f64,
+    pub distance: f64,
+}
+
+/// Why a camera request is refused.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OrbitError {
+    /// `eye` and `yaw`, `pitch`, `distance` were both given and they disagree.
+    Conflict(String),
+    /// Anything else that is wrong with the numbers.
+    Invalid(String),
+}
+
+impl std::fmt::Display for OrbitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrbitError::Conflict(s) | OrbitError::Invalid(s) => f.write_str(s),
+        }
+    }
+}
+
+/// The eye of an orbit camera, in the frame of the target.
+pub fn orbit_eye(target: [f64; 3], yaw: f64, pitch: f64, distance: f64) -> [f64; 3] {
+    [
+        target[0] + distance * pitch.cos() * yaw.cos(),
+        target[1] + distance * pitch.cos() * yaw.sin(),
+        target[2] + distance * pitch.sin(),
+    ]
+}
+
+/// The one rule for a camera that is given as an `eye` and a `target`, as `yaw`, `pitch` and
+/// `distance` around the target, or as both. One form is used as it is. With both, they must give
+/// the same eye (within `EYE_TOLERANCE` of the distance), else the request is a conflict. The
+/// orbit is used when they agree, so a pitch of exactly straight up keeps its turn. The work is
+/// done in f64 around the target.
+pub fn orbit_from(
+    target: [f64; 3],
+    eye: Option<[f64; 3]>,
+    yaw: Option<f64>,
+    pitch: Option<f64>,
+    distance: Option<f64>,
+) -> Result<Orbit, OrbitError> {
+    let invalid = |s: &str| OrbitError::Invalid(s.to_string());
+    let finite = target.iter().all(|v| v.is_finite())
+        && eye.is_none_or(|e| e.iter().all(|v| v.is_finite()))
+        && [yaw, pitch, distance]
+            .iter()
+            .all(|v| v.is_none_or(f64::is_finite));
+    if !finite {
+        return Err(invalid("the camera numbers must be finite"));
+    }
+    let given = match (yaw, pitch, distance) {
+        (Some(y), Some(p), Some(d)) => Some((y, p, d)),
+        (None, None, None) => None,
+        _ => {
+            return Err(invalid(
+                "yaw, pitch and distance go together: give all three or none",
+            ));
+        }
+    };
+    if let Some((_, p, d)) = given {
+        if p.abs() > PITCH_LIMIT {
+            return Err(OrbitError::Invalid(format!(
+                "pitch is {p} radians: it must be from -pi/2 to pi/2 (-1.5708 to 1.5708)"
+            )));
+        }
+        if d < 1e-3 {
+            return Err(invalid("distance must be at least 0.001 mm"));
+        }
+    }
+    let derived = eye.map(|e| {
+        let d = [e[0] - target[0], e[1] - target[1], e[2] - target[2]];
+        let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let flat = d[0].hypot(d[1]);
+        let pitch = if dist > 0.0 {
+            (d[2] / dist).clamp(-1.0, 1.0).asin()
+        } else {
+            0.0
+        };
+        // Straight above or below: the turn is not in the eye.
+        let yaw = (flat > 1e-6 * dist.max(1.0)).then(|| d[1].atan2(d[0]));
+        (yaw, pitch, dist)
+    });
+    match (derived, given) {
+        (None, None) => Err(invalid(
+            "give eye, or yaw, pitch and distance, with the target",
+        )),
+        (Some((_, _, dist)), None) if dist < 1e-3 => {
+            Err(invalid("eye and target are the same point"))
+        }
+        (Some((yaw, pitch, distance)), None) => Ok(Orbit {
+            target,
+            yaw,
+            pitch,
+            distance,
+        }),
+        (None, Some((yaw, pitch, distance))) => Ok(Orbit {
+            target,
+            yaw: Some(yaw),
+            pitch,
+            distance,
+        }),
+        (Some(_), Some((yaw, pitch, distance))) => {
+            let (from, eye) = (
+                orbit_eye(target, yaw, pitch, distance),
+                eye.unwrap_or(target),
+            );
+            let gap = (0..3)
+                .map(|k| (from[k] - eye[k]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            if gap > EYE_TOLERANCE * distance.max(1.0) {
+                return Err(OrbitError::Conflict(format!(
+                    "eye {eye:?} and yaw, pitch, distance disagree: they give the eye {from:?}, {gap:.1} mm away. Give one form, or make them agree"
+                )));
+            }
+            Ok(Orbit {
+                target,
+                yaw: Some(yaw),
+                pitch,
+                distance,
+            })
+        }
+    }
+}
+
 impl ViewCamera {
     pub fn is_valid(&self) -> bool {
         self.target
@@ -265,7 +409,7 @@ impl ViewCamera {
             && self.yaw.is_finite()
             && self.yaw.abs() <= 1.0e3
             && self.pitch.is_finite()
-            && self.pitch.abs() <= std::f64::consts::FRAC_PI_2 + 1e-6
+            && self.pitch.abs() <= PITCH_LIMIT
             && self.distance.is_finite()
             && self.distance >= 1.0e-3
             && self.distance <= 1.0e9

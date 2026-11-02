@@ -49,6 +49,20 @@ impl PartSelection {
         self.faces.is_empty() && self.edges.is_empty()
     }
 
+    /// How many faces and edges are selected.
+    pub fn len(&self) -> usize {
+        self.faces
+            .values()
+            .chain(self.edges.values())
+            .map(BTreeSet::len)
+            .sum()
+    }
+
+    pub fn clear(&mut self) {
+        self.faces.clear();
+        self.edges.clear();
+    }
+
     /// The selected faces as (model, face id) pairs, in order.
     pub fn faces(&self) -> impl Iterator<Item = (ObjectId, u32)> + '_ {
         self.faces
@@ -97,12 +111,9 @@ impl PartSelection {
 
 /// The answer of `selection.get`: `{ids, faces, edges}`.
 pub(crate) fn get(s: &Session) -> Value {
-    let doc = s.editor.doc();
     // The parts are checked against the document now, so a face that an edit removed is not listed
     // even when the host did not prune yet.
-    let mut parts = s.parts.clone();
-    parts.retain_existing(doc);
-    let mut out = parts.to_json();
+    let mut out = s.parts_now().to_json();
     out["ids"] = json!(s.selection);
     out
 }
@@ -125,6 +136,11 @@ fn parse_parts(
     for (text, list) in given.unwrap_or_default() {
         let id = object_id(&text)?;
         let model = model_of(doc, id)?;
+        if doc.object(id).is_some_and(|o| doc.is_grey(o)) {
+            return Err(RpcError::validation(format!(
+                "object {id} is on a grey layer or in a grey class and cannot be selected"
+            )));
+        }
         let missing: Vec<u32> = list
             .iter()
             .copied()
@@ -180,6 +196,20 @@ pub(crate) fn set(s: &mut Session, p: Value) -> Result<Value, RpcError> {
         return Err(RpcError::limit(format!(
             "selection.set takes at most {PARTS_MAX} faces and edges, got {total}"
         )));
+    }
+    if !s.parts_supported
+        && [&faces, &edges].iter().any(|m| {
+            m.as_ref()
+                .is_some_and(|m| m.values().any(|l| !l.is_empty()))
+        })
+    {
+        return Err(typed(
+            RpcError::validation(
+                "this program has no way to show selected faces and edges, so it refuses them. The 3D modeler and kadakas serve take them",
+            ),
+            "parts_not_supported",
+            json!({}),
+        ));
     }
     let doc = s.editor.doc();
     let ids = ids.unwrap_or_default();

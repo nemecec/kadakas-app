@@ -110,10 +110,17 @@ impl Kind {
 // ---------------------------------------------------------------------------------------------
 // Names that are near.
 
+/// The longest name that is looked at for a near name. A longer name is not a typing mistake.
+pub(crate) const NEAR_NAME_MAX: usize = 64;
+
 /// The distance between two names, counting inserted, removed and changed letters and swapped
-/// neighbours.
-pub(crate) fn distance(a: &str, b: &str) -> usize {
+/// neighbours, or `max + 1` when it is larger than `max`. It stops as soon as no row of the
+/// table can come back under `max`, and it refuses names longer than `NEAR_NAME_MAX` at once.
+pub(crate) fn distance_within(a: &str, b: &str, max: usize) -> usize {
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len() > NEAR_NAME_MAX || b.len() > NEAR_NAME_MAX || a.len().abs_diff(b.len()) > max {
+        return max + 1;
+    }
     let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
     for (i, row) in d.iter_mut().enumerate() {
         row[0] = i;
@@ -131,23 +138,30 @@ pub(crate) fn distance(a: &str, b: &str) -> usize {
                 d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
             }
         }
+        // A swap looks two rows back, so the early exit needs two rows above the limit.
+        if i > 1 && d[i].iter().chain(&d[i - 1]).all(|v| *v > max) {
+            return max + 1;
+        }
     }
-    d[a.len()][b.len()]
+    d[a.len()][b.len()].min(max + 1)
 }
 
 /// The known name that is nearest to `name`, if one is near enough to be a typing mistake.
 pub fn nearest<'a>(name: &str, known: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    if name.chars().count() > NEAR_NAME_MAX {
+        return None;
+    }
     let lower = name.to_ascii_lowercase();
     let mut best: Option<(usize, &str)> = None;
     for k in known {
         let kl = k.to_ascii_lowercase();
-        let mut d = distance(&lower, &kl);
+        let limit = (kl.chars().count().max(lower.chars().count()) / 3).clamp(1, 3);
+        let mut d = distance_within(&lower, &kl, limit);
         // `layers` for `layer`, `ids` for `id`, `site_model` for `site`: a name that contains the
         // other counts as a near miss.
         if kl.len() >= 3 && lower.len() >= 3 && (lower.contains(&kl) || kl.contains(&lower)) {
             d = d.min(1);
         }
-        let limit = (kl.chars().count().max(lower.chars().count()) / 3).clamp(1, 3);
         if d <= limit && best.is_none_or(|(b, _)| d < b) {
             best = Some((d, k));
         }

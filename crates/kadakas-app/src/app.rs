@@ -519,6 +519,8 @@ impl KadakasApp {
         let mut session = Session::default();
         // A person is at the screen: an agent must not replace a drawing with unsaved changes.
         session.set_guard_unsaved(true);
+        // The app has no editor for selected faces and edges (only the 3D modeler has one).
+        session.set_parts_supported(false);
         // The API checks the consent to delete the work of somebody else against this name.
         session.set_identity(&crate::issues_ui::author_name());
         // The WebSocket for `collab.connect`; the same code runs in the browser and on the

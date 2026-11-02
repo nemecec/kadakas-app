@@ -20,6 +20,7 @@ use egui::Rect;
 use glam::{DVec2, DVec3, Vec3};
 use kadakas_api::{REASON_PERSON_NAVIGATING, REASON_VIEW_LOCKED, RpcError, Session};
 use kadakas_core::model::ObjectId;
+use kadakas_core::sheets::OrbitError;
 use kadakas_core::uid::Uid;
 use kadakas_render::{Camera, StandardView, ViewSettings};
 use kadakas_ui_core::agent_view::{
@@ -593,7 +594,7 @@ impl Env<'_> {
                 .collect::<Vec<_>>()
         );
         // The faces and edges of surface models that the person picked (see `selection.get`).
-        out["selection_parts"] = self.session.parts.to_json();
+        out["selection_parts"] = self.session.parts_now().to_json();
         out["active_layer"] = doc
             .layer(doc.active_layer)
             .map_or(Value::Null, |l| named(l.id.0, &l.name));
@@ -725,11 +726,19 @@ impl Env<'_> {
     }
 
     fn set_camera(&mut self, params: &Value) -> Result<Value, RpcError> {
-        let req = CameraReq::parse(params).map_err(invalid)?;
+        let req = CameraReq::parse(params).map_err(|e| match e {
+            OrbitError::Conflict(m) => RpcError::invalid_params(m)
+                .with_reason("camera_conflict")
+                .with_details(json!({
+                    "error_id": "camera_conflict",
+                    "keys": ["eye", "yaw", "pitch", "distance"],
+                })),
+            OrbitError::Invalid(m) => invalid(m),
+        })?;
         self.frame()?;
         self.check_not_busy()?;
         let projection = req.projection.unwrap_or(self.session.view.projection);
-        let target = req.camera(self.origin(), projection);
+        let target = req.camera(self.origin(), projection, self.camera().yaw);
         self.keep_for_back();
         let mut settings = self.session.view;
         if settings.view.is_plan() {

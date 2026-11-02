@@ -225,7 +225,7 @@ An agent that builds a model needs three more things. They are not `mesh.*` meth
 
 `objects.delete {ids}` deletes whole objects, for example a surface model or a group. It runs the command `delete_objects`, so it has the same checks. A locked layer, a grey layer or a grey class refuses the call. A group goes with its members. The call is one undo step.
 
-An unknown id is the error `no_such_object`. Nothing is deleted then. An empty `ids` is the error `ids_empty`. The answer is `{count, deleted: [id]}`, and `deleted` also lists the members of a deleted group.
+An unknown id is the error `no_such_object`. Nothing is deleted then. An empty `ids` is the error `ids_empty`. The answer is `{count, deleted: [id]}`. `deleted` is in id order and also lists the members of a deleted group. The deleted objects leave the selection, and an undo does not bring the selection back.
 
 To delete objects together with other edits in one step, use the command in a batch: `execute {command: {op: "batch", commands: [..., {op: "delete_objects", ids}]}}`. `mesh.batch` takes edits of one model and has no delete. To delete a face or an edge, use `mesh.erase`.
 
@@ -233,15 +233,24 @@ In MCP the method is in the tool `document`, which has the destructive hint. The
 
 ### An unknown method
 
-The answer to a method that does not exist names the closest listed methods, up to three. `data.closest` has the same list. A name like `object.delete`, `objects.remove` or `delete_objects` also gets a hint: call `objects.delete {ids}` or the command form `execute {command: {op: "delete_objects", ids}}`.
+The answer to a method that does not exist names listed methods, up to three. `data.closest` has the same list. A name with a near spelling, such as `mesh.facez`, gets "Closest listed methods". A name that only shares a word gets "Listed methods with a word in common".
+
+A name like `object.delete`, `objects.remove` or `delete_objects` also gets a hint: call `objects.delete {ids}` or the command form `execute {command: {op: "delete_objects", ids}}`. A name with a near spelling or a delete hint gets no feedback draft. The answer already points to a method.
+
+A name longer than 64 characters is not searched. The message shows its first 64 characters and an ellipsis, and the answer has no `closest`.
 
 ### The selection with faces and edges
 
-`selection.get` returns `{ids, faces, edges}`. `ids` are whole objects. `faces` is `{model id: [face id]}` and `edges` is `{model id: [edge id]}`. The face and edge ids are the ones of `mesh.faces` and `mesh.edges`. Both maps are empty when no part is selected.
+`selection.get` returns `{ids, faces, edges}`. `ids` are whole objects. `faces` is `{model id: [face id]}` and `edges` is `{model id: [edge id]}`. The face and edge ids are the ones of `mesh.faces` and `mesh.edges`. Both maps are empty when no part is selected. Whole objects and parts are never selected together. A selection of objects ends the selection of parts. The parts do not come back when the objects are deselected.
 
-The 3D editor of the modeler holds the picked parts. It selects whole objects or parts, never both at once. A host without that editor keeps the parts that `selection.set` gave and nothing more. The main app has no face picking yet, so its maps stay empty unless a call fills them. `view.get` in the app also has `selection_parts` with the same two maps.
+`selection.set` takes the same shape: `{ids?, faces?, edges?}`. What is left out is empty. A model that is not a surface model is the error `not_a_surface_model`. A face or edge that does not exist is `no_such_face` or `no_such_edge`. A model on a grey layer or in a grey class is refused, as it is for `ids`. The call refuses `ids` together with `faces` or `edges`. A refused call leaves the selection as it was. An undo or a delete removes the parts that are gone. An undo does not bring a selection back.
 
-`selection.set` takes the same shape: `{ids?, faces?, edges?}`. What is left out is empty. A model that is not a surface model is the error `not_a_surface_model`. A face or edge that does not exist is `no_such_face` or `no_such_edge`. The call refuses `ids` together with `faces` or `edges`. A refused call leaves the selection as it was. An undo or a delete removes the parts that are gone.
+What is done and what is not:
+
+- Done: the answer shape and the store in the session (`Session::parts`). Also done: the mirror of the picks of the 3D modeler into the session, and `selection.set` of parts.
+- Not done: no host connects a face pick of the person to an agent yet. The modeler has an editor with face picking, but no agent connection. The app has an agent connection, but no face picking, so it refuses faces and edges in `selection.set` as `parts_not_supported`. Until the modeler has an agent transport, only `selection.set` fills the maps, for example in `kadakas serve`. The backlog rows AGR-10 and the modeler agent transport close this gap.
+
+`view.get` in the app also has `selection_parts` with the same two maps.
 
 ```json
 {"method": "selection.get"}
@@ -252,13 +261,21 @@ The 3D editor of the modeler holds the picked parts. It selects whole objects or
 
 `view.get` (app only) answers in 3D with `camera`. It has the keys of the camera of `render.png` and `mesh.render`. These are `target` (drawing mm), `yaw` and `pitch` (radians), `distance` (mm), `fov` (degrees) and `projection`. The older keys stay: `view`, `render_mode`, `eye`, `up`, `fov_deg` and `visible_box`. `aspect` is the width of the canvas over its height. `canvas` in the answer has the size in points.
 
-Give that object back as it is. The three calls ignore the keys that they do not need.
+Give that object back as it is. `view.camera`, `render.png` and `mesh.render` use one rule for the position:
+
+- Give `eye` and `target`, or `target`, `yaw`, `pitch` and `distance`. One form is used as it is.
+- With both forms, they must give the same eye. A gap up to 1e-3 of the distance is fine. A larger gap is refused as `camera_conflict`, and the message names the keys.
+- `yaw`, `pitch` and `distance` go together. `pitch` is from -pi/2 to pi/2. The same range holds in all three calls.
+- The orbit form is used as it is, never through an eye. Top and Bottom keep their turn. An eye straight above or below the target has no turn. `view.camera` then keeps the turn of the view. `render.png` uses the turn of the Top view.
+- `render.png` and `mesh.render` default `fov` to 45 and `projection` to perspective.
+
+The render calls and `view.camera` ignore some keys by design: `view`, `render_mode`, `up`, `fov_deg`, `aspect` and `visible_box`. So the camera of `view.get` goes in whole. A key that no call knows is an error that names the nearest key. `saved_view.save` and the other write calls take the strict camera `{target, yaw, pitch, distance, fov, projection}` and refuse every other key.
 
 - `render.png {camera: <view.get camera>, width, height}` draws the view of the person. Choose a width and height with the ratio `aspect`, and the picture has the same frame.
-- `view.camera <view.get camera>` moves the view of the person to that camera. It also takes `{target, yaw, pitch, distance}` without `eye`. The eye wins when both are there.
+- `view.camera <view.get camera>` moves the view of the person to that camera.
 - `mesh.render {camera: <view.get camera>}` draws the same view with a model to look at.
 
-The camera that `render.png` or `mesh.render` returns has the same six keys. It goes back into any of these calls. A key that no call knows is still an error that names the nearest key. The app tests check the round trip `view.get`, `view.camera`, `render.png`.
+The camera that `render.png` or `mesh.render` returns has the same six keys. It goes back into any of these calls. The app tests check the round trip `view.get`, `view.camera`, `render.png` for Top, Bottom, far targets, isometric and random views.
 
 ## Errors
 

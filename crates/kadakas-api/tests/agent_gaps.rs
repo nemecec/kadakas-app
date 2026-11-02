@@ -363,3 +363,255 @@ fn an_editor_takes_the_change_of_selection_set_once() {
     assert_eq!(parts.faces().count(), 1);
     assert!(s.take_parts_change().is_none(), "taken once");
 }
+
+// ---------------------------------------------------------------- the review of AGR-09
+
+#[test]
+fn a_very_long_method_name_is_not_searched_and_gets_a_short_answer() {
+    let mut s = Session::with_sequential_ids();
+    let long = "x".repeat(1_000_000);
+    let e = err(&mut s, &long, json!({}));
+    assert_eq!(e.kind, "method_not_found");
+    assert!(e.message.len() < 200, "{}", e.message.len());
+    assert!(e.message.contains(&format!("{}...", "x".repeat(64))));
+    assert!(!e.message.contains("Closest"));
+    assert!(e.details.as_ref().unwrap().get("closest").is_none());
+    // The same through the line protocol: the reply is short too.
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": long, "params": {}}).to_string();
+    let reply = s.handle_line(&line).unwrap();
+    assert!(reply.len() < 2000, "{}", reply.len());
+}
+
+#[test]
+fn a_method_with_a_near_name_gets_no_feedback_draft() {
+    let mut s = Session::with_sequential_ids();
+    let reply = |s: &mut Session, m: &str| -> Value {
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": m, "params": {}}).to_string();
+        serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap()
+    };
+    for near in ["object.delete", "objects.remove", "mesh.facez"] {
+        let r = reply(&mut s, near);
+        assert!(r["error"]["data"].get("feedback").is_none(), "{near}: {r}");
+    }
+    // Methods that only share a word with the name are no answer: the draft stays.
+    for far in ["qqqqqqqqqqqq", "plants.teleport"] {
+        let r = reply(&mut s, far);
+        assert!(r["error"]["data"].get("feedback").is_some(), "{far}: {r}");
+    }
+}
+
+#[test]
+fn whole_objects_end_the_selection_of_parts_for_good() {
+    let mut s = Session::with_sequential_ids();
+    let (model, faces, _) = box_model(&mut s);
+    ok(
+        &mut s,
+        "selection.set",
+        json!({"faces": {model.clone(): [faces[0]]}}),
+    );
+    // A host selects an object (the person clicks a rectangle).
+    let a = rect(&mut s, 0.0);
+    s.selection = vec![serde_json::from_value(json!(a)).unwrap()];
+    let got = ok(&mut s, "selection.get", json!({}));
+    assert_eq!(
+        (got["ids"].clone(), got["faces"].clone()),
+        (json!([a]), json!({}))
+    );
+    // The person clears the selection: the faces do not come back.
+    s.selection.clear();
+    assert_eq!(
+        ok(&mut s, "selection.get", json!({})),
+        json!({"ids": [], "faces": {}, "edges": {}})
+    );
+}
+
+#[test]
+fn a_program_without_an_editor_for_parts_refuses_them() {
+    let mut s = Session::with_sequential_ids();
+    let (model, faces, _) = box_model(&mut s);
+    s.set_parts_supported(false);
+    let e = err(
+        &mut s,
+        "selection.set",
+        json!({"faces": {model.clone(): [faces[0]]}}),
+    );
+    assert_eq!((e.code, error_id(&e).as_str()), (3, "parts_not_supported"));
+    // Whole objects are fine.
+    ok(&mut s, "selection.set", json!({"ids": [model.clone()]}));
+    // A new document keeps the host as it is.
+    s.replace_document(Default::default());
+    let (model, faces, _) = box_model(&mut s);
+    let e = err(
+        &mut s,
+        "selection.set",
+        json!({"faces": {model: [faces[0]]}}),
+    );
+    assert_eq!(error_id(&e), "parts_not_supported");
+}
+
+#[test]
+fn parts_of_a_model_on_a_grey_layer_cannot_be_selected() {
+    let mut s = Session::with_sequential_ids();
+    let layer = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Survey"}}),
+    )["created"][0]
+        .clone();
+    let model = ok(
+        &mut s,
+        "mesh.create",
+        json!({"name": "Grey", "layer": layer}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let corner = |x: f64, y: f64| json!([x, y, 0.0]);
+    let sq = json!([
+        [corner(0.0, 0.0), corner(10.0, 0.0)],
+        [corner(10.0, 0.0), corner(10.0, 10.0)],
+        [corner(10.0, 10.0), corner(0.0, 10.0)],
+        [corner(0.0, 10.0), corner(0.0, 0.0)]
+    ]);
+    ok(&mut s, "mesh.add_edges", json!({"id": model, "edges": sq}));
+    let face = ok(&mut s, "mesh.faces", json!({"id": model}))["items"][0]["id"].clone();
+    let edge = ok(&mut s, "mesh.edges", json!({"id": model}))["items"][0]["id"].clone();
+    ok(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "grey", "layers": [layer]}),
+    );
+    for params in [
+        json!({"faces": {model.clone(): [face]}}),
+        json!({"edges": {model.clone(): [edge]}}),
+    ] {
+        let e = err(&mut s, "selection.set", params);
+        assert_eq!(e.code, 3);
+        assert!(e.message.contains("grey"), "{}", e.message);
+    }
+    assert_eq!(
+        ok(&mut s, "selection.get", json!({})),
+        json!({"ids": [], "faces": {}, "edges": {}})
+    );
+}
+
+fn camera_png(s: &mut Session, camera: Value) -> Result<Value, RpcError> {
+    call(
+        s,
+        "render.png",
+        json!({"width": 64, "height": 48, "camera": camera}),
+    )
+}
+
+#[test]
+fn eye_and_orbit_give_one_camera_or_a_conflict() {
+    let mut s = Session::with_sequential_ids();
+    box_model(&mut s);
+    let target = json!([50.0, 50.0, 0.0]);
+    // The orbit form, the eye form and both that agree give the same picture.
+    let orbit = ok(
+        &mut s,
+        "render.png",
+        json!({"width": 64, "height": 48, "camera": {"target": target, "yaw": 0.0, "pitch": 0.0, "distance": 1000.0}}),
+    );
+    let eye = camera_png(
+        &mut s,
+        json!({"target": target, "eye": [1050.0, 50.0, 0.0]}),
+    )
+    .unwrap();
+    let both = camera_png(
+        &mut s,
+        json!({"target": target, "eye": [1050.0, 50.0, 0.0], "yaw": 0.0, "pitch": 0.0, "distance": 1000.0}),
+    )
+    .unwrap();
+    assert_eq!(orbit["png_base64"], eye["png_base64"]);
+    assert_eq!(orbit["png_base64"], both["png_base64"]);
+    assert_eq!(orbit["camera"], eye["camera"]);
+    // They disagree: refused with an id, and the keys.
+    let e = camera_png(
+        &mut s,
+        json!({"target": target, "eye": [50.0, 1050.0, 0.0], "yaw": 0.0, "pitch": 0.0, "distance": 1000.0}),
+    )
+    .unwrap_err();
+    assert_eq!((e.code, error_id(&e).as_str()), (-32602, "camera_conflict"));
+    assert!(e.message.contains("eye") && e.message.contains("yaw"));
+    // The same through mesh.render.
+    let e = err(
+        &mut s,
+        "mesh.render",
+        json!({"width": 64, "height": 48, "camera": {"target": target, "eye": [50.0, 1050.0, 0.0], "yaw": 0.0, "pitch": 0.0, "distance": 1000.0}}),
+    );
+    assert_eq!(error_id(&e), "camera_conflict");
+    // A part of the orbit, a pitch past straight up, no position at all.
+    assert!(camera_png(&mut s, json!({"target": target, "yaw": 0.0})).is_err());
+    assert!(
+        camera_png(
+            &mut s,
+            json!({"target": target, "yaw": 0.0, "pitch": 1.6, "distance": 100.0})
+        )
+        .is_err()
+    );
+    assert!(camera_png(&mut s, json!({"target": target})).is_err());
+}
+
+#[test]
+fn top_and_bottom_cameras_keep_their_turn_in_a_picture_and_far_targets_work() {
+    let mut s = Session::with_sequential_ids();
+    box_model(&mut s);
+    let up = f64::from(std::f32::consts::FRAC_PI_2);
+    for (yaw, pitch, target) in [
+        (-std::f64::consts::FRAC_PI_2, up, [150000.0, 90000.0, 0.0]),
+        (-std::f64::consts::FRAC_PI_2, -up, [150000.0, 90000.0, 0.0]),
+        (0.6, 0.5, [-150000.0, 40000.0, 0.0]),
+    ] {
+        let out = camera_png(
+            &mut s,
+            json!({"target": target, "yaw": yaw, "pitch": pitch, "distance": 20000.0}),
+        )
+        .unwrap();
+        let used = &out["camera"];
+        assert!((used["yaw"].as_f64().unwrap() - yaw).abs() < 1e-6, "{used}");
+        assert!(
+            (used["pitch"].as_f64().unwrap() - pitch).abs() < 1e-6,
+            "{used}"
+        );
+        assert_eq!(used["target"], json!(target));
+        // The camera of the answer goes back in as it is.
+        let again = camera_png(&mut s, used.clone()).unwrap();
+        assert_eq!(again["png_base64"], out["png_base64"]);
+    }
+}
+
+#[test]
+fn the_camera_of_view_get_is_ignored_by_render_calls_and_refused_when_it_is_saved() {
+    let mut s = Session::with_sequential_ids();
+    box_model(&mut s);
+    let full = json!({
+        "view": "right_isometric", "projection": "perspective", "render_mode": "shaded",
+        "eye": [1050.0, 50.0, 0.0], "target": [50.0, 50.0, 0.0], "up": [0.0, 0.0, 1.0],
+        "fov_deg": 45.0, "fov": 45.0, "distance": 1000.0, "yaw": 0.0, "pitch": 0.0, "aspect": 1.3,
+        "visible_box": null
+    });
+    // Render calls read the camera of view.get as it is.
+    camera_png(&mut s, full.clone()).unwrap();
+    // A write call keeps the strict camera and names the key that it does not take.
+    let strict = json!({"target": [0.0, 0.0, 0.0], "yaw": 0.0, "pitch": 0.0, "distance": 1000.0, "fov": 45.0, "projection": "perspective"});
+    ok(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "ok", "camera": strict}),
+    );
+    let mut with_eye = strict.clone();
+    with_eye["eye"] = json!([1.0, 2.0, 3.0]);
+    let e = err(
+        &mut s,
+        "saved_view.save",
+        json!({"name": "bad", "camera": with_eye}),
+    );
+    assert_eq!(e.code, -32602);
+    assert!(e.message.contains("eye"), "{}", e.message);
+    // A typo is an error in a render call too.
+    let mut typo = full;
+    typo["yawn"] = json!(1.0);
+    assert_eq!(camera_png(&mut s, typo).unwrap_err().code, -32602);
+}

@@ -761,6 +761,10 @@ pub fn hint(method: &str, kind: &str, message: &str) -> Option<Value> {
     }
     let lower = message.to_ascii_lowercase();
     const MISSING: &str = "If the name is right according to `describe` and the feature is missing, file a feature request with `feedback`.";
+    // A method that is not there but has a near one, or a delete hint, needs no feature request.
+    if kind == "method_not_found" && crate::method_hints::points_elsewhere(message) {
+        return None;
+    }
     let (draft_kind, title, text) = match kind {
         "method_not_found" => (
             "feature_request",

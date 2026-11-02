@@ -231,26 +231,50 @@ pub struct SavedViewCamera {
     pub fov: Num,
     /// perspective or ortho
     pub projection: String,
-    /// read-only keys of the camera of view.get (view, render_mode, eye, up, fov_deg, aspect,
-    /// visible_box): they are ignored, so that camera can be passed back as it is
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view: Option<String>,
-    /// see view
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub render_mode: Option<String>,
-    /// see view
+}
+
+// The camera of the render calls. It is the camera that view.get gives. The keys that the render
+// calls do not need are read and ignored by design: view, render_mode, up, fov_deg, aspect and
+// visible_box. The writing calls (saved_view.save) take SavedViewCamera, which refuses them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenderCamera {
+    /// [x, y, z] in mm
+    pub target: [Num; 3],
+    /// [x, y, z] in mm, the eye. Give it or yaw, pitch and distance. With both they must agree, else the call is refused as camera_conflict
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eye: Option<[Num; 3]>,
-    /// see view
+    /// radians
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw: Option<Num>,
+    /// radians, from -pi/2 to pi/2
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch: Option<Num>,
+    /// mm
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<Num>,
+    /// degrees, default 45
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fov: Option<Num>,
+    /// perspective or ortho, default perspective
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<String>,
+    /// read only key of view.get, ignored
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// read only key of view.get, ignored
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<String>,
+    /// read only key of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub up: Option<[Num; 3]>,
-    /// see view
+    /// read only key of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fov_deg: Option<Num>,
-    /// see view
+    /// read only key of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aspect: Option<Num>,
-    /// see view
+    /// read only key of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_box: Option<Obj>,
 }

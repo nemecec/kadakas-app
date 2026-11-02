@@ -40,7 +40,9 @@ impl PartsSync {
     /// Shows the parts of the editor to the session, when they changed.
     pub fn mirror(&mut self, session: &mut Session, sub: &SubSelection) {
         let now = key(sub);
-        if self.mirrored == Some(now) {
+        // The session prunes its parts when an undo takes a face away, and the editor prunes its
+        // own set at its next pointer step. A different count means that they drifted apart.
+        if self.mirrored == Some(now) && session.parts.len() == sub.len() {
             return;
         }
         self.mirrored = Some(now);

@@ -6,6 +6,7 @@ the person to make a picture of the same view. The camera of the app itself (`vi
 in the app crate, because only the app has a window."""
 
 import base64
+import math
 
 from helpers import rect_cmd, uid
 
@@ -153,11 +154,20 @@ def test_selected_parts_follow_undo_and_delete(cad):
 
 # ---------------------------------------------------------------- the camera
 
+def eye_of(target, yaw, pitch, distance):
+    return [
+        target[0] + distance * math.cos(pitch) * math.cos(yaw),
+        target[1] + distance * math.cos(pitch) * math.sin(yaw),
+        target[2] + distance * math.sin(pitch),
+    ]
+
+
+_TARGET, _YAW, _PITCH, _DISTANCE = [2000.0, 1500.0, 0.0], -0.85, 0.5, 13000.0
 VIEW_GET_CAMERA = {
     # What `view.get` gives in 3D: the keys of the camera of render.png, and the old read-only keys.
     "view": "right_isometric", "projection": "perspective", "render_mode": "shaded",
-    "eye": [8000.0, -9000.0, 6000.0], "target": [2000.0, 1500.0, 0.0], "up": [0.0, 0.0, 1.0],
-    "fov_deg": 45.0, "fov": 45.0, "distance": 13000.0, "yaw": -0.85, "pitch": 0.5, "aspect": 1.5,
+    "eye": eye_of(_TARGET, _YAW, _PITCH, _DISTANCE), "target": _TARGET, "up": [0.0, 0.0, 1.0],
+    "fov_deg": 45.0, "fov": 45.0, "distance": _DISTANCE, "yaw": _YAW, "pitch": _PITCH, "aspect": 1.5,
     "visible_box": {"min": [-5000.0, -5000.0], "max": [9000.0, 8000.0]},
 }
 
@@ -182,7 +192,8 @@ def test_render_png_takes_the_camera_of_view_get_as_it_is(cad):
     mesh = cad.result("mesh.render", {"id": model, **size, "camera": VIEW_GET_CAMERA})
     assert mesh["camera"]["target"] == VIEW_GET_CAMERA["target"]
     # A different camera makes a different picture.
-    other = cad.result("render.png", {**size, "camera": {**VIEW_GET_CAMERA, "yaw": 1.0}})
+    no_eye = {k: v for k, v in VIEW_GET_CAMERA.items() if k != "eye"}
+    other = cad.result("render.png", {**size, "camera": {**no_eye, "yaw": 1.0}})
     assert png(other) != png(as_given)
     # A typo is still an error that names the key.
     typo = cad.error("render.png", {**size, "camera": {**VIEW_GET_CAMERA, "yawn": 1.0}})
@@ -195,3 +206,46 @@ def test_view_camera_takes_the_camera_of_view_get_in_both_forms(cad):
         error = cad.error("view.camera", camera)
         assert error["code"] == 1 and "live window of the app" in error["message"], error
     assert cad.error("view.camera", {"target": [0, 0, 0], "yawn": 1})["code"] == -32602
+
+
+def test_a_camera_whose_eye_and_orbit_disagree_is_refused_everywhere(cad):
+    model, _, _ = box(cad)
+    wrong = {**VIEW_GET_CAMERA, "eye": [0.0, 0.0, 9000.0]}
+    for method, params in (("render.png", {"camera": wrong}), ("mesh.render", {"id": model, "camera": wrong})):
+        error = cad.error(method, {**params, "width": 32, "height": 32})
+        assert error["code"] == -32602 and error["data"]["error_id"] == "camera_conflict", error
+        assert "eye" in error["message"] and "yaw" in error["message"]
+    # One form alone is fine in the render calls: the eye, or the orbit.
+    only_eye = {"target": _TARGET, "eye": VIEW_GET_CAMERA["eye"]}
+    a = cad.result("render.png", {"camera": only_eye, "width": 32, "height": 32})
+    b = cad.result("render.png", {"camera": VIEW_GET_CAMERA, "width": 32, "height": 32})
+    assert png(a) == png(b)
+    # The pitch has one range: past straight up is refused.
+    bad = {"target": _TARGET, "yaw": 0.0, "pitch": 1.6, "distance": 1000.0}
+    assert cad.error("render.png", {"camera": bad})["code"] == -32602
+
+
+def test_a_camera_that_is_saved_takes_no_read_only_keys(cad):
+    strict = {"target": _TARGET, "yaw": _YAW, "pitch": _PITCH, "distance": _DISTANCE, "fov": 45.0,
+              "projection": "perspective"}
+    cad.result("saved_view.save", {"name": "Overview", "camera": strict})
+    error = cad.error("saved_view.save", {"name": "Bad", "camera": VIEW_GET_CAMERA})
+    assert error["code"] == -32602
+
+
+def test_a_very_long_method_name_gets_a_short_answer_and_no_search(cad):
+    error = cad.error("x" * 1_000_000)
+    assert error["code"] == -32601 and len(error["message"]) < 200
+    assert "closest" not in error["data"]
+    near = cad.error("object.delete")
+    assert "feedback" not in near["data"]
+    assert "feedback" in cad.error("qqqqqqqqqqqq")["data"]
+
+
+def test_selected_faces_do_not_come_back_after_an_object_is_selected(cad):
+    model, faces, _ = box(cad)
+    a = cad.execute(rect_cmd(0, 0, 1, 1))[0]
+    cad.result("selection.set", {"faces": {model: [faces[0]]}})
+    cad.result("selection.set", {"ids": [a]})
+    cad.result("selection.set", {"ids": []})
+    assert cad.result("selection.get") == {"ids": [], "faces": {}, "edges": {}}

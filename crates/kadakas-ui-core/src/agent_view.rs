@@ -15,6 +15,7 @@
 //! need no clock.
 
 use glam::{DVec2, DVec3, Vec3};
+use kadakas_core::sheets::{OrbitError, orbit_from};
 use kadakas_core::uid::Uid;
 use kadakas_render::{Camera, Projection};
 use serde_json::Value;
@@ -221,102 +222,108 @@ impl PanReq {
 /// `view.camera`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraReq {
-    pub eye: DVec3,
     pub target: DVec3,
+    /// Radians. `None`: the eye is straight above or below the target, so the camera keeps the
+    /// turn it has.
+    pub yaw: Option<f64>,
+    /// Radians.
+    pub pitch: f64,
+    /// mm.
+    pub distance: f64,
     pub projection: Option<Projection>,
 }
 
 impl CameraReq {
     /// The 3D camera orbits a target and has no roll, so `up` must point upward (it is checked,
-    /// not used) and `fov` must be the field of view that the camera has.
-    pub fn parse(p: &Value) -> Result<CameraReq, String> {
-        let triple = |k: &str| -> Result<Option<DVec3>, String> {
+    /// not used) and `fov` must be the field of view that the camera has. The position is `eye`,
+    /// or `yaw`, `pitch` and `distance` as `view.get` and `render.png` give them: one rule for
+    /// all three calls (`kadakas_core::sheets::orbit_from`). The turn and the pitch of the
+    /// orbit form are used as they are, never through an eye.
+    pub fn parse(p: &Value) -> Result<CameraReq, OrbitError> {
+        let invalid = |s: String| OrbitError::Invalid(s);
+        let triple = |k: &str| -> Result<Option<DVec3>, OrbitError> {
             match p.get(k).filter(|v| !v.is_null()) {
                 None => Ok(None),
                 Some(v) => {
-                    let n = numbers(v, k, &[3])?;
+                    let n = numbers(v, k, &[3]).map_err(invalid)?;
                     Ok(Some(DVec3::new(n[0], n[1], n[2])))
                 }
             }
         };
-        let target = triple("target")?.ok_or("target is required")?;
-        // The eye, or the orbit of `render.png` and `view.get` (yaw and pitch in radians, distance
-        // in mm): the same camera in both forms. The eye wins when both are given.
-        let eye = match triple("eye")? {
-            Some(eye) => eye,
-            None => {
-                let orbit = |k: &str| p.get(k).and_then(Value::as_f64);
-                let (Some(yaw), Some(pitch), Some(dist)) =
-                    (orbit("yaw"), orbit("pitch"), orbit("distance"))
-                else {
-                    return Err(
-                        "eye is required (or yaw, pitch and distance, as in view.get)".into(),
-                    );
-                };
-                if !(yaw.is_finite() && pitch.is_finite() && dist.is_finite() && dist >= 1.0) {
-                    return Err(
-                        "yaw and pitch (radians) must be finite and distance at least 1 mm".into(),
-                    );
-                }
-                target
-                    + DVec3::new(
-                        pitch.cos() * yaw.cos(),
-                        pitch.cos() * yaw.sin(),
-                        pitch.sin(),
-                    ) * dist
+        let number = |k: &str| -> Result<Option<f64>, OrbitError> {
+            match p.get(k).filter(|v| !v.is_null()) {
+                None => Ok(None),
+                Some(v) => v
+                    .as_f64()
+                    .map(Some)
+                    .ok_or_else(|| OrbitError::Invalid(format!("{k} must be a number"))),
             }
         };
-        if (eye - target).length() < 1.0 {
-            return Err("eye and target are less than 1 mm apart".into());
+        let target = triple("target")?.ok_or_else(|| invalid("target is required".into()))?;
+        let eye = triple("eye")?;
+        let orbit = orbit_from(
+            target.to_array(),
+            eye.map(|e| e.to_array()),
+            number("yaw")?,
+            number("pitch")?,
+            number("distance")?,
+        )?;
+        if orbit.distance < 1.0 {
+            return Err(invalid("eye and target are less than 1 mm apart".into()));
         }
         if let Some(up) = triple("up")? {
-            let forward = (target - eye).normalize();
+            let (yaw, pitch) = (orbit.yaw.unwrap_or(0.0), orbit.pitch);
+            let forward = -DVec3::new(
+                pitch.cos() * yaw.cos(),
+                pitch.cos() * yaw.sin(),
+                pitch.sin(),
+            );
             let side = forward.cross(DVec3::Z);
             // The camera keeps the world up: it has no roll. An `up` is fine when it leans to
             // the same side as the world up does.
-            let ok = up.length() > 0.0 && (side.length() < 1e-9 || up.dot(DVec3::Z) > 0.0);
+            let ok = up.length() > 0.0 && (side.length() < 1e-6 || up.dot(DVec3::Z) > 0.0);
             if !ok {
-                return Err(
+                return Err(invalid(
                     "up must point upward (z above 0): the 3D camera keeps the world up and has no roll"
                         .into(),
-                );
-            }
-        }
-        if let Some(v) = p.get("fov").filter(|v| !v.is_null()) {
-            let f = v.as_f64().ok_or("fov must be a number (degrees)")?;
-            if (f - FOV_DEG).abs() > 0.5 {
-                return Err(format!(
-                    "the field of view of the 3D camera is fixed at {FOV_DEG} degrees; leave fov out or give {FOV_DEG}"
                 ));
             }
+        }
+        if let Some(f) = number("fov")?
+            && (f - FOV_DEG).abs() > 0.5
+        {
+            return Err(invalid(format!(
+                "the field of view of the 3D camera is fixed at {FOV_DEG} degrees, so leave fov out or give {FOV_DEG}"
+            )));
         }
         let projection = match p.get("projection").filter(|v| !v.is_null()) {
             None => None,
             Some(v) => Some(
                 v.as_str()
                     .and_then(Projection::from_name)
-                    .ok_or("projection must be ortho or perspective")?,
+                    .ok_or_else(|| invalid("projection must be ortho or perspective".into()))?,
             ),
         };
         Ok(CameraReq {
-            eye,
             target,
+            yaw: orbit.yaw,
+            pitch: orbit.pitch,
+            distance: orbit.distance,
             projection,
         })
     }
 
-    /// The orbit camera that looks from the eye to the target. The camera works in scene
-    /// coordinates, which are the drawing coordinates less the scene `origin`.
-    pub fn camera(&self, origin: DVec3, projection: Projection) -> Camera {
-        let (eye, target) = (self.eye - origin, self.target - origin);
-        let d = eye - target;
-        let dist = d.length();
+    /// The orbit camera. The camera works in scene coordinates, which are the drawing coordinates
+    /// less the scene `origin`: only the target is moved, in f64, and the turn and pitch go in
+    /// as they are. `current_yaw` is kept when the request has none (straight above or below).
+    pub fn camera(&self, origin: DVec3, projection: Projection, current_yaw: f32) -> Camera {
+        let target = self.target - origin;
         Camera {
             target: target.as_vec3(),
-            yaw: (d.y.atan2(d.x) as f32).rem_euclid(std::f32::consts::TAU),
-            pitch: ((d.z / dist).clamp(-1.0, 1.0).asin() as f32)
+            yaw: self.yaw.map_or(current_yaw, |y| y as f32),
+            pitch: (self.pitch as f32)
                 .clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2),
-            distance: (dist as f32).clamp(1.0, 1.0e9),
+            distance: (self.distance as f32).clamp(1.0, 1.0e9),
             projection: self.projection.unwrap_or(projection),
             fov_y: kadakas_render::FOV_Y,
         }
@@ -1101,7 +1108,7 @@ mod tests {
             "eye": [10000, 0, 0], "target": [0, 0, 0], "up": [0, 0, 1], "fov": 45, "projection": "perspective"
         }))
         .unwrap();
-        let c = r.camera(DVec3::ZERO, Projection::Orthographic);
+        let c = r.camera(DVec3::ZERO, Projection::Orthographic, 0.0);
         assert_eq!(c.projection, Projection::Perspective);
         assert!((c.distance - 10000.0).abs() < 1.0);
         assert!(c.yaw.abs() < 1e-5 && c.pitch.abs() < 1e-5);
@@ -1109,20 +1116,21 @@ mod tests {
         // The scene origin goes off the points, in f64: a far drawing keeps its precision.
         let far = DVec3::new(6.5e9, 5.9e9, 0.0);
         let shifted = CameraReq {
-            eye: far + DVec3::new(10_000.0, 0.0, 0.0),
             target: far,
+            yaw: Some(0.0),
+            pitch: 0.0,
+            distance: 10_000.0,
             projection: None,
         };
-        let c = shifted.camera(far, Projection::Orthographic);
+        let c = shifted.camera(far, Projection::Orthographic, 0.0);
         assert_eq!(c.target, Vec3::ZERO);
         assert!((c.eye() - Vec3::new(10_000.0, 0.0, 0.0)).length() < 1.0);
-        // Straight above.
+        // Straight above: the camera keeps the turn it has.
         let top = CameraReq::parse(&json!({"eye": [0, 0, 500], "target": [0, 0, 0]})).unwrap();
-        assert!(
-            (top.camera(DVec3::ZERO, Projection::Orthographic).pitch - std::f32::consts::FRAC_PI_2)
-                .abs()
-                < 1e-5
-        );
+        assert_eq!(top.yaw, None);
+        let c = top.camera(DVec3::ZERO, Projection::Orthographic, -1.25);
+        assert!((c.pitch - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        assert_eq!(c.yaw, -1.25);
         assert!(CameraReq::parse(&json!({"target": [0, 0, 0]})).is_err());
         assert!(CameraReq::parse(&json!({"eye": [0, 0, 0], "target": [0, 0, 0]})).is_err());
         assert!(
@@ -1131,12 +1139,61 @@ mod tests {
         );
         let e = CameraReq::parse(&json!({"eye": [1000, 0, 0], "target": [0, 0, 0], "fov": 90}))
             .unwrap_err();
-        assert!(e.contains("45"), "{e}");
+        assert!(e.to_string().contains("45"), "{e}");
         assert!(
             CameraReq::parse(
                 &json!({"eye": [1000, 0, 0], "target": [0, 0, 0], "projection": "fisheye"})
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_orbit_form_is_used_as_it_is_and_the_two_forms_must_agree() {
+        use std::f64::consts::FRAC_PI_2;
+        // Top and Bottom as the camera of view.get has them: the pitch is FRAC_PI_2 as an f32
+        // (a little above pi/2 as an f64), and the turn must survive.
+        let pitch = f64::from(std::f32::consts::FRAC_PI_2);
+        assert!(pitch > FRAC_PI_2);
+        for (yaw, pitch) in [(-FRAC_PI_2, pitch), (-FRAC_PI_2, -pitch), (0.7, pitch)] {
+            let r = CameraReq::parse(&json!({
+                "target": [150000, 90000, 0], "yaw": yaw, "pitch": pitch, "distance": 20000
+            }))
+            .unwrap();
+            let c = r.camera(
+                DVec3::new(150000.0, 90000.0, 0.0),
+                Projection::Perspective,
+                3.0,
+            );
+            assert!((f64::from(c.yaw) - yaw).abs() < 1e-6, "{yaw}: {}", c.yaw);
+            assert!((f64::from(c.pitch) - pitch).abs() < 1e-6);
+            assert_eq!(c.target, Vec3::ZERO);
+        }
+        // Both forms that agree: the orbit wins, also when the eye is straight above.
+        let r = CameraReq::parse(&json!({
+            "target": [0, 0, 0], "eye": [0, 0, 1000], "yaw": -FRAC_PI_2, "pitch": pitch, "distance": 1000
+        }))
+        .unwrap();
+        assert_eq!(r.yaw, Some(-FRAC_PI_2));
+        // Both forms that disagree: a conflict that names the keys.
+        let e = CameraReq::parse(&json!({
+            "target": [0, 0, 0], "eye": [1000, 0, 0], "yaw": 1.0, "pitch": 0.0, "distance": 1000
+        }))
+        .unwrap_err();
+        assert!(matches!(e, OrbitError::Conflict(_)), "{e}");
+        assert!(
+            e.to_string().contains("eye") && e.to_string().contains("yaw"),
+            "{e}"
+        );
+        // The same pitch range as render.png.
+        assert!(
+            CameraReq::parse(
+                &json!({"target": [0, 0, 0], "yaw": 0, "pitch": 1.58, "distance": 100})
+            )
+            .is_err()
+        );
+        assert!(
+            CameraReq::parse(&json!({"target": [0, 0, 0], "yaw": 0, "distance": 100})).is_err()
         );
     }
 

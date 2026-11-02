@@ -7,6 +7,7 @@ use std::sync::Arc;
 mod agent_activity_api;
 mod agent_view_api;
 mod annotation_api;
+mod camera_api;
 mod collab_api;
 mod unsaved;
 pub use unsaved::Blocked;
@@ -148,8 +149,12 @@ pub struct Session {
     pub editor: Editor,
     pub selection: Vec<ObjectId>,
     /// The selected faces and edges of surface models (see `selection_api`). The editor of the
-    /// modeler keeps it up to date; `selection.set` can set it.
+    /// modeler keeps it up to date, and `selection.set` sets it. It is empty while `selection`
+    /// holds objects.
     pub parts: PartSelection,
+    /// The host has an editor that shows selected faces and edges. A host without one refuses
+    /// faces and edges in `selection.set`, because nobody would see them or take them away.
+    parts_supported: bool,
     /// `selection.set` changed `parts` and the editor did not take the change yet.
     parts_changed: bool,
     /// The groups you have entered, outermost first. A click selects members of the last one.
@@ -537,15 +542,15 @@ pub const METHODS: &[(&str, &str)] = &[
     ),
     (
         "objects.delete",
-        "Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: \"delete_objects\", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).",
+        "Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: \"delete_objects\", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members, and deleted lists the ids in id order. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).",
     ),
     (
         "selection.get",
-        "The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The app without that editor has no parts of its own, so the maps stay empty unless selection.set filled them.",
+        "The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The modeler has no agent connection yet and the app has no face picking, so today only selection.set (for example in kadakas serve) fills the maps. A selection of whole objects ends the selection of parts. Deleted objects leave the selection, and an undo does not bring the selection back.",
     ),
     (
         "selection.set",
-        "Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids cannot be combined with faces or edges. Returns the selection as selection.get does.",
+        "Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids is refused together with faces or edges. A program without an editor for parts (the app) refuses faces and edges as parts_not_supported. Returns the selection as selection.get does.",
     ),
     (
         "render.svg",
@@ -1171,6 +1176,7 @@ impl Session {
             editor: Editor::default(),
             selection: Vec::new(),
             parts: PartSelection::default(),
+            parts_supported: true,
             parts_changed: false,
             context: Vec::new(),
             view: ViewSettings::default(),
@@ -1335,9 +1341,11 @@ impl Session {
         let sequential = self.sequential_ids;
         let session_version = self.session_version;
         let guard_unsaved = self.guard_unsaved;
+        let parts_supported = self.parts_supported;
         let (fresh, exact) = Session::with_vetted_document(doc);
         *self = Session {
             guard_unsaved,
+            parts_supported,
             replaced: true,
             view: self.view,
             snap: self.snap,
@@ -1495,6 +1503,11 @@ impl Session {
         // The drawings of patterns (sheets, PDF, SVG) lay plans with the unit limit of this session,
         // as the reports do. Every call sets it, also the calls of a script run.
         kadakas_core::hardscape::draw::set_pattern_units(self.limits.pattern_units);
+        // Whole objects and parts are never selected together. A host or a method that selected
+        // objects since the last call ends the selection of parts.
+        if !self.selection.is_empty() && !self.parts.is_empty() {
+            self.parts.clear();
+        }
         self.recover_script_run();
         if self.script_js.busy() {
             return Err(RpcError::conflict(
@@ -1889,7 +1902,7 @@ impl Session {
                     samples: Option<u32>,
                     compare: Option<Value>,
                     region: Option<[f64; 4]>,
-                    camera: Option<kadakas_core::sheets::ViewCamera>,
+                    camera: Option<Value>,
                     // Set by mesh.render only: the answer says which camera was used.
                     with_camera: Option<bool>,
                 }
@@ -1907,6 +1920,10 @@ impl Session {
                     with_camera,
                 } = params(p)?;
                 let region = region_param(region)?;
+                let free_camera = free_camera
+                    .filter(|c| !c.is_null())
+                    .map(|c| camera_api::render_camera(&c))
+                    .transpose()?;
                 let settings =
                     self.resolve_view(view.as_deref(), projection.as_deref(), mode.as_deref())?;
                 let (width, height) = self
@@ -2206,10 +2223,33 @@ impl Session {
         let doc = self.editor.doc();
         self.selection.retain(|id| doc.object(*id).is_some());
         self.parts.retain_existing(doc);
+        if !self.selection.is_empty() {
+            self.parts.clear();
+        }
         // Leave groups that are gone.
         if let Some(i) = self.context.iter().position(|g| !doc.is_group(*g)) {
             self.context.truncate(i);
         }
+    }
+
+    /// Says whether the host has an editor for selected faces and edges (see `parts`). The
+    /// modeler says yes. The default is yes, and the app says no.
+    pub fn set_parts_supported(&mut self, on: bool) {
+        self.parts_supported = on;
+        if !on {
+            self.parts.clear();
+        }
+    }
+
+    /// The selected faces and edges now: only those that the document has, and none while whole
+    /// objects are selected (the editor selects the one or the other).
+    pub fn parts_now(&self) -> PartSelection {
+        if !self.selection.is_empty() {
+            return PartSelection::default();
+        }
+        let mut parts = self.parts.clone();
+        parts.retain_existing(self.editor.doc());
+        parts
     }
 
     /// The selected faces and edges that `selection.set` gave, once, for an editor that has its
