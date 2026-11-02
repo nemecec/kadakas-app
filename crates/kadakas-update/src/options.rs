@@ -20,7 +20,7 @@
 //!   visible to other users (`ps`, `/proc`). The token goes in the environment (`split_token`).
 
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// The options of the app that take a value (`--name VALUE` or `--name=VALUE`).
 pub const WITH_VALUE: [&str; 7] = [
@@ -204,30 +204,76 @@ pub fn split_env_dirs(value: &OsStr) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `path` with `.` and `..` resolved by the words alone (no file system). `..` at the root stays
-/// at the root.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in path.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
-                    out.pop();
-                }
+/// The number of names left in `rest` after `.` and `..` are resolved. `..` above the first name
+/// stays at the top, as it does at a root. `separators` are the characters that split names.
+fn depth(rest: &str, separators: &[char]) -> usize {
+    let mut names: Vec<&str> = Vec::new();
+    for part in rest.split(separators) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                names.pop();
             }
-            other => out.push(other.as_os_str()),
+            name => names.push(name),
         }
     }
-    out
+    names.len()
 }
 
-/// True when `path` is the root of a disk by its words: `/`, `/.`, `/..`, `C:\`.
+/// True when `path` is the root of a disk on Unix, by its words: `/`, `//`, `/.`, `/..`.
+/// The backslash is a letter in a name there. It does not split names.
+pub fn is_unix_root(path: &str) -> bool {
+    path.starts_with('/') && depth(path, &['/']) == 0
+}
+
+/// True when `path` is the root of a disk or of a network share on Windows, by its words, in
+/// every form that the system accepts. Both separators work, as does the case of the letters.
+///
+/// - the root of a drive, with or without a separator at the end: `C:\`, `C:/`, `C:` (the folder
+///   `C:` is the current folder of the drive, which is refused too, to be safe), `C:\..`
+/// - the root of the current drive: `\` and `/`
+/// - the root of a share: `\\server`, `\\server\share`, with or without a separator at the end
+/// - the same in the verbatim and device forms: `\\?\C:\`, `\\?\UNC\server\share`, `\\.\C:\`
+///
+/// A folder inside one (`C:\Users`, `\\server\share\dir`) and a relative name are no root.
+pub fn is_windows_root(path: &str) -> bool {
+    let p = path.replace('/', "\\");
+    let (rest, share) = if let Some(r) = p
+        .strip_prefix("\\\\?\\")
+        .or_else(|| p.strip_prefix("\\\\.\\"))
+    {
+        match r.get(..4) {
+            Some(head) if head.eq_ignore_ascii_case("UNC\\") => (&r[4..], true),
+            _ => (r, false),
+        }
+    } else if let Some(r) = p.strip_prefix("\\\\") {
+        (r, true)
+    } else {
+        (p.as_str(), false)
+    };
+    if share {
+        // The server, or the server and the share.
+        return depth(rest, &['\\']) <= 2;
+    }
+    let bytes = rest.as_bytes();
+    let after_drive = if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        &rest[2..]
+    } else if rest.starts_with('\\') {
+        rest
+    } else {
+        return false;
+    };
+    depth(after_drive, &['\\']) == 0
+}
+
+/// True when `path` is the root of a disk by its words (the rules of the system that runs).
 pub fn is_root_lexical(path: &Path) -> bool {
-    path.is_absolute()
-        && !lexical(path)
-            .components()
-            .any(|c| matches!(c, Component::Normal(_)))
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        is_windows_root(&text)
+    } else {
+        is_unix_root(&text)
+    }
 }
 
 /// A folder as `prepare` needs it: absolute and not the root. `Err` holds the note for the person.
@@ -522,11 +568,91 @@ mod tests {
     }
 
     #[test]
+    fn unix_roots_are_found_by_their_words() {
+        for root in ["/", "/.", "/..", "//", "/a/../..", "/./"] {
+            assert!(is_unix_root(root), "{root}");
+        }
+        for not in [
+            "/a", "/a/..b", "a", ".", "..", "/a/./b", "", r"\", r"/a\..", "C:/",
+        ] {
+            assert!(!is_unix_root(not), "{not}");
+        }
+    }
+
+    // Literal Windows strings: the helper parses the separators itself, so these cases run on
+    // every system.
+    #[test]
+    fn windows_roots_are_found_by_their_words() {
+        let roots = [
+            r"C:\",
+            "C:/",
+            "C:",
+            r"c:\.",
+            r"C:\..",
+            r"C:\a\..",
+            r"C:\\",
+            r"\",
+            "/",
+            "/.",
+            "/..",
+            r"\\?\C:\",
+            r"\\?\c:",
+            r"\\?\C:\..",
+            r"\\.\C:\",
+            "//?/C:/",
+            r"\\server",
+            r"\\server\share",
+            r"\\server\share\",
+            r"\\server\share\dir\..",
+            "//server/share",
+            r"\\?\UNC\server\share",
+            r"\\?\unc\server\share\",
+            r"\\?\UNC\server",
+        ];
+        for root in roots {
+            assert!(is_windows_root(root), "{root}");
+        }
+        let inside = [
+            r"C:\Users",
+            r"C:\a\..\b",
+            "C:/Users/me",
+            "C:foo",
+            r"\Windows",
+            "/Windows",
+            r"\\server\share\dir",
+            "//server/share/dir",
+            r"\\?\C:\x",
+            r"\\?\UNC\server\share\dir",
+            r"\\?\GLOBALROOT\x",
+            "Users",
+            ".",
+            "..",
+            "",
+            r"x\y",
+        ];
+        for not in inside {
+            assert!(!is_windows_root(not), "{not}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn roots_are_found_by_their_words() {
         for root in ["/", "/.", "/..", "//", "/a/../.."] {
             assert!(is_root_lexical(Path::new(root)), "{root}");
         }
         for not in ["/a", "/a/..b", "a", ".", "..", "/a/./b"] {
+            assert!(!is_root_lexical(Path::new(not)), "{not}");
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn roots_are_found_by_their_words() {
+        for root in [r"C:\", "C:/", r"\\server\share", "/", r"\\?\C:\"] {
+            assert!(is_root_lexical(Path::new(root)), "{root}");
+        }
+        for not in [r"C:\Users", "a", ".", "..", r"\\server\share\dir"] {
             assert!(!is_root_lexical(Path::new(not)), "{not}");
         }
     }
