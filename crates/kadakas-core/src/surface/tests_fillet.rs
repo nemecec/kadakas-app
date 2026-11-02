@@ -170,9 +170,12 @@ fn three_edges_at_a_corner_and_two_with_a_sharp_third() {
     }
 }
 
-/// The U block of the row: arms of 17 and 29 mm and a 23 mm slot (so the outline is 69 mm wide,
-/// not the 82 mm that the row names), 60 mm high, arcs at the corners, pulled 50 mm.
-fn u_block() -> SurfaceModel {
+/// The U block of the row: arms of 17 and 29 mm, a slot of `slot` mm and a ledge of `ledge` mm
+/// past the right arm under the top bar, 60 mm high, arcs at the corners, pulled 50 mm. The row
+/// names 50 x 82 x 60 mm with a 23 mm slot, but 17 + 23 + 29 is 69. So the tests cover the
+/// 69 mm reading (slot 23, no ledge) and two 82 mm readings (slot 36, or slot 23 and a ledge of
+/// 13 mm).
+fn u_block_of(slot: f64, ledge: f64) -> SurfaceModel {
     let mut outline: Vec<[f64; 2]> = Vec::new();
     let arc = |o: &mut Vec<[f64; 2]>, c: [f64; 2], r: f64, from: f64, to: f64| {
         for k in 0..=6 {
@@ -180,13 +183,20 @@ fn u_block() -> SurfaceModel {
             o.push([c[0] + r * a.cos(), c[1] + r * a.sin()]);
         }
     };
+    let (x1, x2) = (17.0, 17.0 + slot);
+    let x3 = x2 + 29.0;
+    let w = x3 + ledge;
     outline.push([0.0, 0.0]);
-    outline.push([17.0, 0.0]);
-    arc(&mut outline, [21.0, 32.0], 4.0, 180.0, 90.0);
-    arc(&mut outline, [36.0, 32.0], 4.0, 90.0, 0.0);
-    outline.push([40.0, 0.0]);
-    outline.push([69.0, 0.0]);
-    arc(&mut outline, [61.0, 52.0], 8.0, 0.0, 90.0);
+    outline.push([x1, 0.0]);
+    arc(&mut outline, [x1 + 4.0, 32.0], 4.0, 180.0, 90.0);
+    arc(&mut outline, [x2 - 4.0, 32.0], 4.0, 90.0, 0.0);
+    outline.push([x2, 0.0]);
+    outline.push([x3, 0.0]);
+    if ledge > 0.0 {
+        outline.push([x3, 36.0]);
+        outline.push([w, 36.0]);
+    }
+    arc(&mut outline, [w - 8.0, 52.0], 8.0, 0.0, 90.0);
     arc(&mut outline, [8.0, 52.0], 8.0, 90.0, 180.0);
     let mut m = prism(&outline, 50.0);
     // The facets of the arcs are a curved surface: soft and smooth, as a drawn arc gives.
@@ -214,7 +224,7 @@ fn top_face(m: &SurfaceModel, z: f64) -> FaceId {
 
 #[test]
 fn the_u_block_rounds_its_end_edges_and_refuses_a_radius_that_the_thin_arm_cannot_take() {
-    let mut m = u_block();
+    let mut m = u_block_of(23.0, 0.0);
     let v0 = volume(&m);
     let end = top_face(&m, 50.0);
     let edges = m
@@ -241,6 +251,30 @@ fn the_u_block_rounds_its_end_edges_and_refuses_a_radius_that_the_thin_arm_canno
     assert!(volume(&m) < v0);
     // The arcs meet their neighbours as miters: no flat corner pieces, and the end face is one.
     assert!(m.face(end).is_some());
+}
+
+#[test]
+fn the_u_block_of_82_mm_rounds_its_end_edges_in_both_readings() {
+    for (slot, ledge, lines) in [(36.0, 0.0, 8), (23.0, 13.0, 10)] {
+        let mut m = u_block_of(slot, ledge);
+        let (lo, hi) = m.local_bounds().unwrap();
+        assert!((hi.x - lo.x - 82.0).abs() < 1e-9);
+        let v0 = volume(&m);
+        let end = top_face(&m, 50.0);
+        let edges = m
+            .fillet_edges(&EdgeChoice {
+                faces: vec![end],
+                ..EdgeChoice::default()
+            })
+            .unwrap();
+        assert_eq!(edges.len(), lines + 24);
+        // The 17 mm arm still refuses a radius of 10.
+        let err = fillet(&mut m.clone(), edges.clone(), 10.0, None).unwrap_err();
+        assert!(err.to_string().contains("at most about"), "{err}");
+        fillet(&mut m, edges, 3.0, None).unwrap();
+        sound(&m);
+        assert!(volume(&m) < v0);
+    }
 }
 
 #[test]
