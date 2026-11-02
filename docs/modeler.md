@@ -711,7 +711,7 @@ The code is `kadakas_ui_core::modeling::fillet` and `kadakas-modeler/src/fillet.
 - Model tests (`surface/tests_fillet.rs`). The U block has three readings. The first is 69 mm wide (arms 17 and 29, slot 23). The two others are 82 mm wide: a slot of 36, or a slot of 23 and a ledge of 13. Other tests use the plate of 1055 x 160 x 20 mm with two pockets of 8 mm. More tests cover a tapered leg, a cylinder ring and an L shape. The rest cover refusals, the limit of new edges and determinism.
 - Two property tests. The first uses random boxes and edge sets. The removed volume lies between the true round and the true round plus the error bound. The second uses random prisms and tapered prisms with fillet or chamfer. A refusal changes nothing. A result is a smaller closed solid.
 - Document tests (`tests/fillet.rs`) check one undo step and undo and redo byte for byte. They also check the JSON commands and Subtract on a rounded box.
-- Cost, measured once in a debug build: a model of 48,000 vertices, 72,000 edges and 36,000 faces. One edge took 1.05 s and twelve edges with ball corners took 1.05 s. A refusal with the search for the largest size took 0.28 s. The final checks of the whole model take most of the time.
+- Cost, measured once in a debug build: a model of 48,000 vertices, 72,000 edges and 36,000 faces. One edge took 1.05 s and twelve edges with ball corners took 1.05 s. A refusal with the search for the largest size took 0.28 s. In a release build the same calls took 0.56 s, 0.56 s and 0.12 s (`perf_fillet_in_a_big_model`, run with `--release -- --ignored`). The final checks of the whole model take most of the time.
 
 ## Scenes and styles (MOD-10)
 
