@@ -39,7 +39,7 @@ def make_box(doc):
 
 def test_the_client_has_a_typed_method_for_every_mesh_call(doc):
     names = [n for n in dir(doc.api) if n.startswith("mesh_")]
-    assert len(names) == 32
+    assert len(names) == 34
     assert "mesh_soften_edges" in names and "mesh_batch" in names and "mesh_render" in names
     assert "Soften every edge under an angle" in doc.api.mesh_soften_edges.__doc__
 
@@ -276,3 +276,22 @@ def test_the_selection_has_the_faces_and_edges_of_a_model(doc):
     assert doc.selection.faces() == {model: [face]} and doc.selection.edges() == {model: [edge]}
     doc.selection.clear()
     assert doc.api.selection_get() == {"ids": [], "faces": {}, "edges": {}}
+
+
+def test_fillet_and_chamfer_round_and_cut_the_edges_of_a_box(doc):
+    model, _ = make_box(doc)
+    top = next(f["id"] for f in doc.api.mesh_faces(id=model)["items"] if f["normal"][2] > 0.99)
+    before = geometry(doc, model)
+    done = doc.api.mesh_fillet(id=model, faces=[top], radius=200)
+    assert done["created"]["faces"]
+    assert doc.api.mesh_solid_report(id=model)["closed"] is True
+    doc.api.undo()
+    assert geometry(doc, model) == before
+    doc.api.mesh_chamfer(id=model, all=True, distance=100)
+    assert doc.api.mesh_solid_report(id=model)["closed"] is True
+    doc.api.undo()
+    with pytest.raises(KadakasError) as e:
+        doc.api.mesh_fillet(id=model, faces=[top], radius=2000)
+    assert e.value.data["error_id"] == "fillet_does_not_fit"
+    assert 1499 < e.value.data["max_mm"] < 1500
+    assert geometry(doc, model) == before

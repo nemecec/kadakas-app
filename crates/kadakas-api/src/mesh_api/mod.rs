@@ -102,6 +102,14 @@ pub const MESH_OFFSET: (&str, &str) = (
     "mesh.offset",
     "Offset the loops of a face, or a chain of edges. params: {id, face?, edges?, distance (mm), outward? (face), toward? ([x, y, z] local, required with edges)}. Give face or edges. Returns the change.",
 );
+pub const MESH_FILLET: (&str, &str) = (
+    "mesh.fillet",
+    "Round edges of closed solids (MOD-21), in one undo step. params: {id, edges? (taken as given), faces? (their sharp edges), all? (every sharp edge of the model), concave? (faces and all: also concave edges, default false), min_angle? (faces and all: degrees, default 5, so edges of curved surfaces are left out; soft and smooth edges are left out too), radius (mm), segments? (1 to 64 flat faces per round, default from the radius and the angle: at most 15 degrees each), smooth? (default true: edges inside the round become soft and smooth, the rails soft)}. Faces stay flat and the result is a closed solid. Corners of three faces work: one rounded edge runs to the third face, two meet on a plane through the sharp third edge, three meet on a ball patch. A corner of four or more faces, or with convex and concave edges, is refused. A radius that does not fit is refused with error_id fillet_does_not_fit and max_mm, the largest that fits ('at most about X mm fits'). Other ids: fillet_no_edges, fillet_edge_not_solid, fillet_not_solid, fillet_edge_flat, fillet_corner_unsupported (data vertex, reason), fillet_too_small, fillet_segments_out_of_range, fillet_bad_size, fillet_result_invalid, model_limit. Faces next to the edges keep their ids. Returns the change: the new faces and edges are in created.",
+);
+pub const MESH_CHAMFER: (&str, &str) = (
+    "mesh.chamfer",
+    "Cut edges of closed solids flat (MOD-21), in one undo step. params: {id, edges?, faces?, all?, concave?, min_angle? (as in mesh.fillet), distance (mm from the edge on both faces)}. Corners and refusals as in mesh.fillet: three cut edges at a corner get a triangle. Returns the change.",
+);
 pub const MESH_INTERSECT_FACES: (&str, &str) = (
     "mesh.intersect_faces",
     "Make edges where faces in different planes cross, and split both faces. params: {id, scope? (model | selection, default model), faces?, edges?}. With selection, only the given faces and edges are tested against the model. Returns the change.",
@@ -160,7 +168,7 @@ pub const MESH_EXPLODE: (&str, &str) = (
 );
 pub const MESH_BATCH: (&str, &str) = (
     "mesh.batch",
-    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
+    "Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, fillet, chamfer, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.",
 );
 pub const MESH_RENDER: (&str, &str) = (
     "mesh.render",
@@ -215,6 +223,16 @@ pub const ERROR_IDS: &[&str] = &[
     "curve_loop_unclear",
     "curve_result_invalid",
     "curve_unknown_kind",
+    "fillet_no_edges",
+    "fillet_edge_not_solid",
+    "fillet_not_solid",
+    "fillet_edge_flat",
+    "fillet_corner_unsupported",
+    "fillet_does_not_fit",
+    "fillet_too_small",
+    "fillet_segments_out_of_range",
+    "fillet_bad_size",
+    "fillet_result_invalid",
 ];
 
 /// The id of the first model in a fresh session with sequential ids, for the examples.
@@ -378,6 +396,7 @@ pub fn describe() -> Value {
             {"method": "mesh.solid_report", "params": {"id": m}},
             {"method": "mesh.transform", "params": {"id": m, "faces": [9], "scale": {"factor": 0.5, "about": [2000, 1500, 2500]}}},
             {"method": "mesh.soften_edges", "params": {"id": m, "below_angle": 20}},
+            {"method": "mesh.fillet", "params": {"id": m, "faces": [9], "radius": 50}},
             {"method": "mesh.near", "params": {"point": [100, 100, 0], "radius": 500, "kinds": ["faces", "edges"]}},
             {"method": "mesh.pick", "params": {"origin": [2000, 1500, 9000], "direction": [0, 0, -1]}},
             {"method": "material.create", "params": {"name": "Brick", "base_color": [180, 80, 60]}},

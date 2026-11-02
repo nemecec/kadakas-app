@@ -14,8 +14,8 @@ use kadakas_core::command::{Command, CommandError};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::resource::ResourceId;
 use kadakas_core::surface::{
-    CurveError, CurveId, EdgeId, Edit, FaceId, FilletError, IntersectScope, PaintSide, SnapMove,
-    SnapRefusal, SolidError, SolidOp, SurfaceError, SurfaceModel, VertexId, soften_plan,
+    CurveError, CurveId, EdgeChoice, EdgeId, Edit, FaceId, FilletError, IntersectScope, PaintSide,
+    SnapMove, SnapRefusal, SolidError, SolidOp, SurfaceError, SurfaceModel, VertexId, soften_plan,
 };
 
 use super::{create_command, model_of, object_id, typed};
@@ -39,7 +39,7 @@ pub const BATCH_EDGES_MAX: usize = 10_000;
 const LIST_MAX: usize = 1000;
 
 /// The edits that `mesh.batch` takes.
-const BATCH_OPS: [&str; 19] = [
+const BATCH_OPS: [&str; 21] = [
     "add_edges",
     "add_curve",
     "set_segments",
@@ -48,6 +48,8 @@ const BATCH_OPS: [&str; 19] = [
     "push_pull",
     "follow_me",
     "offset",
+    "fillet",
+    "chamfer",
     "intersect_faces",
     "transform",
     "copy",
@@ -93,6 +95,14 @@ enum Step {
         smooth: bool,
         coplanar: bool,
     },
+    /// Fillet (`segments` some) or chamfer of the edges of a choice, found when its turn comes.
+    Fillet {
+        id: ObjectId,
+        choice: EdgeChoice,
+        size: f64,
+        round: Option<Option<u32>>,
+        smooth: bool,
+    },
     Solid {
         id: ObjectId,
         op: SolidOp,
@@ -126,6 +136,38 @@ impl Step {
                     },
                 }
             }
+            Step::Fillet {
+                id,
+                choice,
+                size,
+                round,
+                smooth,
+            } => {
+                let m = model_of(doc, *id)?;
+                let edges = m.fillet_edges(choice).map_err(|e| {
+                    let (_, error_id, more) = classify(&e);
+                    let mut facts = json!({"object": id});
+                    if let (Value::Object(f), Value::Object(x)) = (&mut facts, more) {
+                        f.extend(x);
+                    }
+                    typed(RpcError::not_found(e.to_string()), error_id, facts)
+                })?;
+                Command::EditSurface {
+                    id: *id,
+                    edit: match round {
+                        Some(segments) => Edit::Fillet {
+                            edges,
+                            radius: *size,
+                            segments: *segments,
+                            smooth: *smooth,
+                        },
+                        None => Edit::Chamfer {
+                            edges,
+                            distance: *size,
+                        },
+                    },
+                }
+            }
             Step::Solid {
                 id,
                 op,
@@ -152,6 +194,32 @@ impl Step {
             }
         })
     }
+}
+
+/// The edges of `mesh.fillet` and `mesh.chamfer`: given edges, the sharp edges of faces, or all.
+fn choice_of(
+    edges_: Option<Vec<u32>>,
+    faces_: Option<Vec<u32>>,
+    all: Option<bool>,
+    concave: Option<bool>,
+    min_angle: Option<f64>,
+) -> Result<EdgeChoice, RpcError> {
+    let all = all.unwrap_or(false);
+    if edges_.is_none() && faces_.is_none() && !all {
+        return Err(bad("give edges, faces or all"));
+    }
+    if let Some(a) = min_angle
+        && !(0.0..=180.0).contains(&a)
+    {
+        return Err(bad("min_angle: degrees from 0 to 180"));
+    }
+    Ok(EdgeChoice {
+        edges: edges(edges_),
+        faces: faces(faces_),
+        all,
+        concave: concave.unwrap_or(false),
+        min_angle,
+    })
 }
 
 fn fixed(c: Command) -> Step {
@@ -415,6 +483,32 @@ fn plan(s: &Session, op: &str, p: Value) -> Result<Planned, RpcError> {
                 _ => return Err(bad("give face or edges, not both")),
             };
             out.steps.push(surface(id, edit));
+        }
+        "fillet" => {
+            let (q, id) = with_model!(q: MeshFilletParams);
+            if !q.radius.is_finite() {
+                return Err(bad("radius: a finite number"));
+            }
+            out.steps.push(Step::Fillet {
+                id,
+                choice: choice_of(q.edges, q.faces, q.all, q.concave, q.min_angle)?,
+                size: q.radius,
+                round: Some(q.segments),
+                smooth: q.smooth.unwrap_or(true),
+            });
+        }
+        "chamfer" => {
+            let (q, id) = with_model!(q: MeshChamferParams);
+            if !q.distance.is_finite() {
+                return Err(bad("distance: a finite number"));
+            }
+            out.steps.push(Step::Fillet {
+                id,
+                choice: choice_of(q.edges, q.faces, q.all, q.concave, q.min_angle)?,
+                size: q.distance,
+                round: None,
+                smooth: false,
+            });
         }
         "intersect_faces" => {
             let (q, id) = with_model!(q: MeshIntersectFacesParams);

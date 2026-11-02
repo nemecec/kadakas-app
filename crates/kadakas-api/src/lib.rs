@@ -720,6 +720,8 @@ pub const METHODS: &[(&str, &str)] = &[
     mesh_api::MESH_PUSH_PULL,
     mesh_api::MESH_FOLLOW_ME,
     mesh_api::MESH_OFFSET,
+    mesh_api::MESH_FILLET,
+    mesh_api::MESH_CHAMFER,
     mesh_api::MESH_INTERSECT_FACES,
     mesh_api::MESH_TRANSFORM,
     mesh_api::MESH_COPY,

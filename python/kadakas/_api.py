@@ -859,6 +859,28 @@ if TYPE_CHECKING:
         'toward': list[float] | None,
     }, total=False)
 
+    MeshFilletParams = TypedDict("MeshFilletParams", {
+        'all': bool | None,
+        'concave': bool | None,
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'min_angle': float | None,
+        'radius': Required[float],
+        'segments': int | None,
+        'smooth': bool | None,
+    }, total=False)
+
+    MeshChamferParams = TypedDict("MeshChamferParams", {
+        'all': bool | None,
+        'concave': bool | None,
+        'distance': Required[float],
+        'edges': list[int] | None,
+        'faces': list[int] | None,
+        'id': Required[str],
+        'min_angle': float | None,
+    }, total=False)
+
     MeshIntersectFacesParams = TypedDict("MeshIntersectFacesParams", {
         'edges': list[int] | None,
         'faces': list[int] | None,
@@ -4214,6 +4236,18 @@ class Api:
         JSON-RPC method ``mesh.offset``."""
         return self._call("mesh.offset", params or None)
 
+    def mesh_fillet(self, **params: "Unpack[MeshFilletParams]") -> Any:
+        """Round edges of closed solids (MOD-21), in one undo step. params: {id, edges? (taken as given), faces? (their sharp edges), all? (every sharp edge of the model), concave? (faces and all: also concave edges, default false), min_angle? (faces and all: degrees, default 5, so edges of curved surfaces are left out; soft and smooth edges are left out too), radius (mm), segments? (1 to 64 flat faces per round, default from the radius and the angle: at most 15 degrees each), smooth? (default true: edges inside the round become soft and smooth, the rails soft)}. Faces stay flat and the result is a closed solid. Corners of three faces work: one rounded edge runs to the third face, two meet on a plane through the sharp third edge, three meet on a ball patch. A corner of four or more faces, or with convex and concave edges, is refused. A radius that does not fit is refused with error_id fillet_does_not_fit and max_mm, the largest that fits ('at most about X mm fits'). Other ids: fillet_no_edges, fillet_edge_not_solid, fillet_not_solid, fillet_edge_flat, fillet_corner_unsupported (data vertex, reason), fillet_too_small, fillet_segments_out_of_range, fillet_bad_size, fillet_result_invalid, model_limit. Faces next to the edges keep their ids. Returns the change: the new faces and edges are in created.
+
+        JSON-RPC method ``mesh.fillet``."""
+        return self._call("mesh.fillet", params or None)
+
+    def mesh_chamfer(self, **params: "Unpack[MeshChamferParams]") -> Any:
+        """Cut edges of closed solids flat (MOD-21), in one undo step. params: {id, edges?, faces?, all?, concave?, min_angle? (as in mesh.fillet), distance (mm from the edge on both faces)}. Corners and refusals as in mesh.fillet: three cut edges at a corner get a triangle. Returns the change.
+
+        JSON-RPC method ``mesh.chamfer``."""
+        return self._call("mesh.chamfer", params or None)
+
     def mesh_intersect_faces(self, **params: "Unpack[MeshIntersectFacesParams]") -> Any:
         """Make edges where faces in different planes cross, and split both faces. params: {id, scope? (model | selection, default model), faces?, edges?}. With selection, only the given faces and edges are tested against the model. Returns the change.
 
@@ -4299,7 +4333,7 @@ class Api:
         return self._call("mesh.explode", params or None)
 
     def mesh_batch(self, **params: "Unpack[MeshBatchParams]") -> Any:
-        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
+        """Run many edits as one undo step. All succeed or none does. params: {id? (the model of the edits that give none), edits: [{method, ...params of mesh.<method>}]} with 1 to 50 edits. The add_edges edits draw at most 10000 edges in all, and the edits of any kind make at most 10000 new edges in all (checked after each edit, the batch is undone when it is over). method is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me, offset, fillet, chamfer, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid, make_group, make_component, explode. Every edit is checked before the first one runs. An edit that fails undoes all, and the error names its index. Ids that an earlier edit makes are not known before the batch runs: read them with a first call, or use another call. Returns {count, edits: [the change of each edit], notes}.
 
         JSON-RPC method ``mesh.batch``."""
         return self._call("mesh.batch", params or None)
@@ -6251,6 +6285,8 @@ METHOD_NAMES: tuple[str, ...] = (
     "mesh.push_pull",
     "mesh.follow_me",
     "mesh.offset",
+    "mesh.fillet",
+    "mesh.chamfer",
     "mesh.intersect_faces",
     "mesh.transform",
     "mesh.copy",

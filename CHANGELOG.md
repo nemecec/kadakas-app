@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fillet and chamfer of edges of surface models (MOD-21): `mesh.fillet` and `mesh.chamfer` in the agent API and in `mesh.batch`, and a Fillet and Chamfer panel with Edit menu items in the 3D modeler. Faces stay flat, the result stays a closed solid, and a corner of three faces gets a clean corner piece. A size that does not fit is refused with the largest size that fits.
+
+### Added
+
 - Agent API gaps from a furniture model (AGR-09). `objects.delete {ids}` is a listed method (MCP, Python, scripts) with the checks of `delete_objects` and one undo step. The answer to an unknown method names listed methods. `selection.get` and `selection.set` have the shape `{ids, faces, edges}` for the selected faces and edges of surface models. The 3D modeler mirrors its picks into the session, but no host connects a face pick to an agent yet. `view.get` gives the 3D camera in the shape that `render.png`, `mesh.render` and `view.camera` take. These calls refuse an `eye` that disagrees with `yaw`, `pitch` and `distance`.
 
 ### Changed
