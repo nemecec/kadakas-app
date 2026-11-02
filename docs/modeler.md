@@ -639,7 +639,7 @@ The arc has `segments` equal parts, so the strip is `segments` flat faces. Each 
 Edges at any angle work: slanted faces, a tapered leg, the end face of an extrusion next to its sides.
 
 The default number of segments comes from the radius and the largest angle of the chosen edges. A segment turns by 15 degrees at most.
-For a large radius a segment stays within 0.5 mm of the true circle. The default is 1 to 24 segments. A small radius gets fewer, so that a segment stays four length tolerances long. A given number is 1 to 64. A ball corner whose triangles are shorter than the length tolerance is refused with `fillet_too_small`.
+For a large radius a segment stays within 0.5 mm of the true circle. The default is 1 to 24 segments. A small radius gets fewer, so that a segment stays four length tolerances long, also on the chosen edge with the smallest angle. A given number is 1 to 64. A ball corner whose triangles are shorter than the length tolerance is refused with `fillet_too_small`.
 
 ### The corners
 
@@ -648,19 +648,20 @@ Each end of a chosen edge is a vertex. Exactly three faces meet there. Picture a
 - **One chosen edge.** The strip runs on to the plane of the third face. That face gets the end of the strip in its outline. On a box with one round edge, each end face gets a quarter circle.
 - **Two chosen edges, the third edge stays sharp.** Both strips end on one plane. The plane holds the sharp edge and the corner where the two rails meet in the shared face.
   When the two edges meet their faces at the same angle, the two ends are the same points. The strips then meet as a miter, like a picture frame. Examples are the top edges of a box, the end edges of the U block and a ring of a cylinder.
-  When the angles differ, the two ends are two different polylines in that plane. They are joined in four steps:
-  1. A point of one end within five length tolerances of the point of the other end with the same index becomes that point.
+  When the angles differ, the two ends are two different polylines in that plane. Ends that lie within 0.1 mm of each other everywhere become one end (a small size, or angles that differ a little). Other ends are joined in four steps:
+  1. A point of one end within five length tolerances (at most a quarter of a segment) of the point of the other end with the same index becomes that point.
   2. A corner of one end that close to a side of the other end goes into that side.
   3. Where the two ends cross, the crossing point goes into both ends.
   4. The shared points cut the two ends into runs. A run where both ends have no point between is a shared side. Any other run is a flat piece in the plane: one end out, the other end back.
   Picture a small flat facet between two moldings of different profiles. When the ends cross, there are two facets, one on each side of the crossing.
-  A strip whose end took a point that is not on its own line gets a short row of its own near the end. The row is 0.5 mm long, or less on a short edge. It is cut into triangles. So every face stays exactly flat, and the long faces of the strip keep their sides.
+  A strip whose end took a point that is not on its own line gets a short row of its own near the end. The row is 0.5 mm long, or less on a short edge, and at least 0.04 mm. It is cut into triangles. So every face stays exactly flat, and the long faces of the strip keep their sides.
+  **Thin wedges.** The plane through the rail corner can leave a thin wedge of material along the sharp third edge. The side face of a prism of many sides is an example: its top edge and its vertical edge at a top corner. Every edge of a new face is tested: the material between the two faces there must have an angle of at least 15 degrees. A thinner wedge cannot be printed or milled and breaks later solid tools. The review measured wedges of 0.4 to 26 degrees there. When a corner fails the test, the corner is planned again with the plane that halves the angle of the material at the sharp edge. The two rails then end on that plane at two points of the shared face. When that plane also leaves a thin wedge, the edit is refused with `fillet_thin_fin`, the angle and the place.
 - **Three chosen edges.** Picture a ball that touches the three planes. A fillet ends each strip at the cross section through the center of that ball. A patch of triangles on that ball closes the corner. Its points are rows between two of the end arcs, so the third arc is the last row. For a box corner this is an eighth of a ball. A chamfer closes the corner with the triangle of the three rail corners.
 
 A corner of four or more faces is refused with the vertex. There is no fallback.
 A vertex with chosen convex and concave edges is refused too. So `all` with `concave` on an L shape is refused at the ends of the inner edge. Round the inner edge alone, or leave it out.
 Two chosen edges that continue each other in a straight line are refused when they meet the shared face at different angles.
-At a few small sizes the pieces of a corner of two edges at different angles come closer to each other than the length tolerance (0.01 mm). Such a size is refused with the place. Measured on a block with a front that leans 20 degrees: the radius of 0.2 mm is refused, and 0.05 to 20 mm otherwise work. On a leg that leans and tapers, 1.25 mm is refused, and 0.05 to 12 mm otherwise work.
+At a few small sizes the pieces of a corner of two edges at different angles come closer to each other than the tolerances allow. Such a size is refused with the place, and the message names the largest size that works, or larger sizes that work. The tests list the measured sizes (`the_review_table_of_leaning_legs_and_blocks`).
 A corner that an earlier fillet made has four to six faces. So `all` on a box that is already rounded is refused. Round all edges of a corner in one step, or round the side edges first and the top after them.
 
 ### What stays and what is new
@@ -695,15 +696,18 @@ Each refusal has a stable id and changes nothing.
 | `fillet_too_small` | A segment is shorter than the length tolerance. |
 | `fillet_segments_out_of_range` | The segments are not 1 to 64. |
 | `fillet_too_many_edges` | More than 10,000 new edges. The message gives the most segments that fit. |
+| `fillet_thin_fin` | A corner leaves a wedge of material under 15 degrees. The message gives the angle and the place. |
 | `fillet_bad_size` | The size is not a number above the length tolerance. |
 | `fillet_result_invalid` | The result is not a closed solid, has a new problem or cuts into other geometry. |
 
 A size does not fit when a strip loses its length along its edge. It also does not fit when a face turns around or crosses itself. A hole that leaves its face and a corner piece that folds also count.
 Two fillets on opposite sides of a thin arm collide. Take an arm of 17 mm and a radius of 10 mm. The message then gives "at most about 8.49 mm fits".
-The largest size comes from two searches. First the plan is halved down to a sixteenth of the length tolerance, as for Offset. Then the whole edit, with every check of the result, runs on a copy at that size. When the edit refuses it, the size is halved again with the whole edit, at most 10 times, and then stepped down. The value is rounded down to two significant digits, and that value works. With no working size the message says so.
-The new edges are counted before the plan: each strip has its lines and the sides of its ends, and a ball corner about `3 n (n + 1) / 2` edges. More than 10,000 (`MAX_EDIT_EDGES`) is refused with `fillet_too_many_edges`. The message gives the most segments that fit ("use fewer segments: at most about 9"). The model limits are refused with `model_limit`.
+The largest size comes from two searches. The works and fails of a size are not always one interval. A round that runs into a reflex corner works only above some size, for example. So the plan first tries 24 sizes on a geometric grid below the asked size. The default segments follow each size. The largest size that works is pushed up by halving toward the next grid size. Failing grid sizes below it are listed as ranges that do not fit either (`ranges` in the API).
+Then the whole edit, with every check of the result, runs on a copy at that size, rounded down to two significant digits. A size that works is pushed up to the next two-digit values that still work. A size that does not work is halved with the whole edit, at most 10 times, and then stepped down. So the reported size always works.
+When no smaller size works, the message names two larger sizes that the whole edit takes, when there are any (`larger_mm`). Otherwise it says that no size fits.
+The new edges are counted from the plan before anything changes. More than 10,000 (`MAX_EDIT_EDGES`) is refused with `fillet_too_many_edges`. The message gives the most segments that fit ("use fewer segments: at most about 9"). The model limits are refused with `model_limit`.
 
-The result is checked like the result of the solid tools (MOD-09). The checks are the limits, new model problems, contacts of the new edges with faces that were there before, and new distance problems. The new pieces of one corner touch each other by design, so the closed-solid check finds a crossing between them. The shell closes a solid with no crossing, or the edit is refused.
+The result is checked like the result of the solid tools (MOD-09). The checks are the limits, new model problems, contacts of the new edges with faces that were there before, and new distance problems. No new edge is shorter than the length tolerance. No vertex comes within 0.005 mm of a face that it is not a corner of ("the solid would touch itself"). A concave round does not swallow another solid of the model. The new pieces of one corner touch each other by design, so the closed-solid check finds a crossing between them. The shell closes a solid with no crossing, or the edit is refused.
 The change of volume stays within the wedges between the edges and their rails, or the edit is refused. A refusal of the result names the kind of problem and the place in local mm, without ids. Fillet and chamfer are not replayed for collaboration, as the solid tools are not.
 
 ### Modeler

@@ -1019,9 +1019,17 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
                     asked,
                     why,
                     most,
-                } => {
-                    json!({"what": noun, "asked_mm": asked, "reason": why, "max_mm": most})
-                }
+                    gaps,
+                    above,
+                } => json!({
+                    "what": noun, "asked_mm": asked, "reason": why, "max_mm": most,
+                    "ranges": gaps, "larger_mm": above
+                }),
+                FilletError::ThinFin {
+                    vertex,
+                    degrees,
+                    at,
+                } => json!({"vertex": vertex, "degrees": degrees, "at": at}),
                 FilletError::TooSmall {
                     noun,
                     asked,

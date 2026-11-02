@@ -143,7 +143,18 @@ fn two(
     let (ma, mc) = (a.inward[xa], c.inward[xc]);
     let (e1, e2) = fsp.basis();
     let det = ma.dot(e1) * mc.dot(e2) - ma.dot(e2) * mc.dot(e1);
-    let normal = if det.abs() > 1e-9 {
+    // The plane of the corner: through the sharp edge and the corner of the two rails, or (when
+    // that plane leaves a thin wedge on the sharp edge, see `Builder::bisect`) the plane that
+    // halves the angle of the material at the sharp edge.
+    let bisect = b.bisect.contains(&v);
+    let into = |s: &Strip| -> DVec3 {
+        let other = if s.p == v { s.at + s.d * s.len } else { s.at };
+        let x = other - vp;
+        (x - udir * x.dot(udir)).normalize_or_zero()
+    };
+    let normal = if bisect {
+        udir.cross(into(a) + into(c))
+    } else if det.abs() > 1e-9 {
         // The corner of the two rails in the shared face.
         let mu1 = (a.s * mc.dot(e2) - ma.dot(e2) * c.s) / det;
         let mu2 = (ma.dot(e1) * c.s - mc.dot(e1) * a.s) / det;
@@ -198,7 +209,7 @@ fn two(
             c.point(j, tc[j])
         })
         .collect();
-    if pa_pos[0].distance(pc_pos[0]) > b.tol {
+    if !bisect && pa_pos[0].distance(pc_pos[0]) > b.tol {
         return Err(refuse(
             v,
             format!(
@@ -207,10 +218,20 @@ fn two(
             ),
         ));
     }
-    let ends = join_ends(b, v, &pi, &pa_pos, &pc_pos)?;
+    // Points closer than this are joined: five length tolerances, at most a quarter of a segment.
+    let shortest = a.prof[0]
+        .distance(a.prof[1])
+        .min(c.prof[0].distance(c.prof[1]));
+    let join = (5.0 * b.tol).min(0.25 * shortest).max(b.tol);
+    let whole = 10.0 * b.tol;
+    let ends = join_ends(b, v, &pi, &pa_pos, &pc_pos, join, whole)?;
     let (pa, pc) = (ends.a.clone(), ends.c.clone());
-    // The faces.
-    b.sub(fs, v, vec![pa[0]]);
+    // The faces. The shared face runs in along the rail of `c` and out along the rail of `a`.
+    if pa[0] == pc[0] {
+        b.sub(fs, v, vec![pa[0]]);
+    } else {
+        b.sub(fs, v, vec![pc[0], pa[0]]);
+    }
     let (ua, uc) = (pa[n], pc[n]);
     if ua == uc {
         b.sub(fp, v, vec![ua]);
@@ -300,6 +321,8 @@ struct Joined {
 /// Joins the two ends `pa` and `pc` (points in the plane `pi`, from the shared face to the sharp
 /// edge). The construction:
 ///
+/// 0. When every point of `c` lies within `whole` of the point of `a` with the same index, the
+///    ends become one (the points of `a`).
 /// 1. A point of `c` within five length tolerances of the point of `a` with the same index becomes
 ///    that point (the first points always, as both lie on the corner of the rails).
 /// 2. A corner of one end (not the first) within five length tolerances of a side of the other is
@@ -317,18 +340,32 @@ fn join_ends(
     pi: &Plane,
     pa: &[DVec3],
     pc: &[DVec3],
+    tol: f64,
+    whole: f64,
 ) -> Result<Joined, FilletError> {
     let n = pa.len() - 1;
-    // Points this close are joined: five length tolerances, so that no point
-    // of one end stays just outside the tolerance of a side of the other.
-    let tol = 5.0 * b.tol;
     let a: Vec<Pt> = pa.iter().map(|p| b.add(*p)).collect();
+    // Ends that lie close everywhere (a small size, or angles that differ a little) become one:
+    // the points of `c` are the points of `a`, and the end row of `c` takes the difference. A
+    // flat piece between them would be thinner than the tolerances allow.
+    let gap = (0..=n).map(|k| pa[k].distance(pc[k])).fold(0.0, f64::max);
+    if gap <= whole {
+        let shared_edges = (0..n).map(|k| pair(a[k], a[k + 1])).collect();
+        return Ok(Joined {
+            c: a.clone(),
+            a,
+            a_between: vec![Vec::new(); n],
+            c_between: vec![Vec::new(); n],
+            shared_edges,
+            pieces: Vec::new(),
+        });
+    }
     // 1. The points of `c` that are points of `a`.
     let mut c: Vec<Pt> = Vec::with_capacity(n + 1);
     let mut cpos: Vec<DVec3> = Vec::with_capacity(n + 1);
     let mut used: BTreeSet<usize> = BTreeSet::new();
     for k in 0..=n {
-        let same = (k == 0 || pa[k].distance(pc[k]) <= tol).then_some(k);
+        let same = (pa[k].distance(pc[k]) <= tol).then_some(k);
         let other = |used: &BTreeSet<usize>| {
             (1..n)
                 .filter(|i| !used.contains(i) && pa[*i].distance(pc[k]) <= tol)
@@ -436,29 +473,30 @@ fn join_ends(
     }
     let mut shared_edges = Vec::new();
     let mut pieces = Vec::new();
-    for w in 0..shared_a.len() {
-        let (i0, j0) = (shared_a[w], shared_c[w]);
-        let (i1, j1) = match (shared_a.get(w + 1), shared_c.get(w + 1)) {
-            (Some(i), Some(j)) => (*i, *j),
-            _ => (ca.len() - 1, cc.len() - 1),
-        };
-        if w + 1 == shared_a.len() && i0 == ca.len() - 1 && j0 == cc.len() - 1 {
-            break;
-        }
-        let last = w + 1 == shared_a.len();
-        if !last && i1 == i0 + 1 && j1 == j0 + 1 {
+    // The runs between the anchors: the start of both ends, each shared point, the ends of both.
+    // A run is one end out and the other back; the closing sides at the start and at the end lie
+    // in the shared face and on the sharp edge.
+    let (la, lc) = (ca.len() - 1, cc.len() - 1);
+    let mut anchors: Vec<(usize, usize)> = Vec::new();
+    if shared_a.first() != Some(&0) || shared_c.first() != Some(&0) {
+        anchors.push((0, 0));
+    }
+    anchors.extend(shared_a.iter().copied().zip(shared_c.iter().copied()));
+    if anchors.last() != Some(&(la, lc)) {
+        anchors.push((la, lc));
+    }
+    for w in anchors.windows(2) {
+        let ((i0, j0), (i1, j1)) = (w[0], w[1]);
+        if i1 == i0 + 1 && j1 == j0 + 1 && ca[i0] == cc[j0] && ca[i1] == cc[j1] {
             shared_edges.push(pair(ca[i0], ca[i1]));
             continue;
         }
-        // One end out, the other back.
         let mut poly: Vec<Pt> = cc[j0..=j1].to_vec();
-        let back: Vec<Pt> = if last {
-            ca[i0 + 1..=i1].iter().rev().copied().collect()
-        } else {
-            ca[i0 + 1..i1].iter().rev().copied().collect()
-        };
-        poly.extend(back);
+        poly.extend(ca[i0..=i1].iter().rev().copied());
         poly.dedup();
+        while poly.len() > 1 && poly.first() == poly.last() {
+            poly.pop();
+        }
         if poly.len() >= 3 {
             pieces.push(poly);
         }

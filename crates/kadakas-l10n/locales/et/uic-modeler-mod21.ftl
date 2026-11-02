@@ -13,3 +13,5 @@ uic-fillet-refused-result = Tulemus ei ole korrektne keha, seega midagi ei muutu
 uic-fillet-refused-edges = Muudatus teeb rohkem uusi servi, kui üks muudatus lubab (10 000). Vali vähem servi või ümarda neid mitmes sammus.
 uic-fillet-refused-edges-segments = Muudatus teeb rohkem uusi servi, kui üks muudatus lubab (10 000). Kasuta vähem lõike: kõige rohkem umbes { $most }.
 uic-fillet-refused-scaled = Mudel on telgede suunas erinevalt skaleeritud, seega ümardus ei oleks ümar. Lähtesta enne mõõtkava.
+uic-fillet-refused-larger = See suurus ei mahu ja väiksem ka mitte. Suurem mahub, näiteks { $size } mm.
+uic-fillet-refused-thin = See nurk jätaks serva äärde õhukese materjalikiilu ({ $degrees } kraadi). Ümarda ka kolmas serv või kasuta ühel serval väiksemat suurust.

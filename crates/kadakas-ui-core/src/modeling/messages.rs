@@ -91,6 +91,17 @@ pub fn localize_error(e: &SurfaceError) -> String {
     }
 }
 
+/// A size with two significant digits in the number format of the person, rounded down (0.047
+/// stays 0.047, 8.49 shows 8.4).
+fn two_digits(x: f64) -> String {
+    if !(x.is_finite() && x > 0.0) {
+        return kadakas_units::num_trim(0.0, 0);
+    }
+    let decimals = (1.0 - x.log10().floor()).max(0.0) as usize;
+    let f = 10f64.powi(decimals as i32);
+    kadakas_units::num_trim((x * f + 1e-9).floor() / f, decimals)
+}
+
 /// The refusal of a fillet or a chamfer (MOD-21), without ids.
 fn fillet_text(e: &FilletError) -> String {
     match e {
@@ -100,15 +111,15 @@ fn fillet_text(e: &FilletError) -> String {
         }
         FilletError::FlatEdge { .. } => tr!("uic-fillet-refused-flat"),
         FilletError::Corner { .. } => tr!("uic-fillet-refused-corner"),
-        FilletError::DoesNotFit { most, .. } => match most {
-            Some(x) if *x > 0.0 => {
-                tr!(
-                    "uic-fillet-refused-fit",
-                    most = kadakas_units::num_trim(*x, 2)
-                )
-            }
+        FilletError::DoesNotFit { most, above, .. } => match (most, above) {
+            (Some(x), _) if *x > 0.0 => tr!("uic-fillet-refused-fit", most = two_digits(*x)),
+            (_, Some([a, _])) => tr!("uic-fillet-refused-larger", size = two_digits(*a)),
             _ => tr!("uic-fillet-refused-no-room"),
         },
+        FilletError::ThinFin { degrees, .. } => tr!(
+            "uic-fillet-refused-thin",
+            degrees = kadakas_units::num_trim(*degrees, 1)
+        ),
         FilletError::TooManyEdges {
             most_segments: Some(k),
             ..
@@ -251,13 +262,30 @@ mod tests {
                 noun: "radius",
                 asked: 10.0,
                 why: "face 3 would turn inside out".into(),
-                most: Some(8.49),
+                most: Some(8.4),
+                gaps: Vec::new(),
+                above: None,
             },
             FilletError::DoesNotFit {
                 noun: "radius",
                 asked: 10.0,
                 why: "x".into(),
                 most: Some(0.0),
+                gaps: Vec::new(),
+                above: None,
+            },
+            FilletError::DoesNotFit {
+                noun: "radius",
+                asked: 1.0,
+                why: "x".into(),
+                most: Some(0.0),
+                gaps: Vec::new(),
+                above: Some([6.8, 26.0]),
+            },
+            FilletError::ThinFin {
+                vertex: VertexId(9),
+                degrees: 4.4,
+                at: [1.0, 2.0, 3.0],
             },
             FilletError::TooSmall {
                 noun: "radius",
@@ -282,7 +310,8 @@ mod tests {
             let text = localize_error(&SurfaceError::Fillet(e.clone()));
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             assert!(
-                digits.is_empty() || ["849", "164", "001", "10000"].contains(&digits.as_str()),
+                digits.is_empty()
+                    || ["84", "164", "001", "10000", "68", "44"].contains(&digits.as_str()),
                 "{text}"
             );
             // Two kinds of a missing solid share a text.

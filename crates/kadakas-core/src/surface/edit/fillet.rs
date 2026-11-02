@@ -32,8 +32,10 @@
 //! closed solid, has a new problem, cuts into other geometry, or changes the volume more than the
 //! wedges of the edges allow.
 
-use super::super::clash::Contact;
+use super::super::FaceTriangles;
+use super::super::clash::{self, Contact};
 use super::super::fillet::{self, FilletError, Profile, Pt, Shape, ShapeFace};
+use super::super::index::BoxTree;
 use super::super::{CurveId, check, solid};
 use super::style::{ATTR_SMOOTH, ATTR_SOFT, flagged};
 use super::*;
@@ -129,13 +131,25 @@ pub(super) fn fillet(
             asked,
             why,
             most,
+            gaps,
+            above,
         })) => {
-            let most = largest_working(before, edges, most.unwrap_or(asked), round, smooth);
+            let most = largest_working(before, edges, asked, most.unwrap_or(0.0), round, smooth);
+            // Larger sizes that work are named only when the whole edit takes both ends.
+            let takes = |x: f64| {
+                let mut w = before.clone();
+                fillet_once(&mut w, before, edges, x, round, smooth).is_ok()
+            };
+            let above = above
+                .filter(|_| most <= 0.0)
+                .filter(|[a, b]| takes(*a) && takes(*b));
             Err(FilletError::DoesNotFit {
                 noun,
                 asked,
                 why,
                 most: Some(most),
+                gaps,
+                above,
             }
             .into())
         }
@@ -143,27 +157,39 @@ pub(super) fn fillet(
     }
 }
 
-/// The largest size, from the guess of the planner `guess` down, with which the whole edit works
-/// (the plan and every check of the result), rounded down to two significant digits. Each try
-/// runs the edit on a copy. The planner guess is tried first; when the edit refuses it, the size
-/// is halved between 0 and the guess (at most 10 tries), then stepped down until a try works.
-/// 0 when no size works.
+/// The largest size below `asked` with which the whole edit works (the plan and every check of
+/// the result), rounded down to two significant digits, from the guess of the planner. Each try
+/// runs the edit on a copy. A guess that works is pushed up to the next two-digit values that
+/// still work. A guess that does not work is halved between 0 and the guess (at most 10 tries)
+/// and stepped down until a try works. 0 when no size works.
 fn largest_working(
     before: &SurfaceModel,
     edges: &[EdgeId],
+    asked: f64,
     guess: f64,
     round: Option<Option<u32>>,
     smooth: bool,
 ) -> f64 {
     let works = |x: f64| {
         let mut w = before.clone();
-        x > 0.0 && fillet_once(&mut w, before, edges, x, round, smooth).is_ok()
+        x > 0.0 && x < asked && fillet_once(&mut w, before, edges, x, round, smooth).is_ok()
+    };
+    let up = |c: f64| {
+        let mut c = c;
+        for _ in 0..3 {
+            let next = round_down(c + step_of(c));
+            if next <= c || !works(next) {
+                break;
+            }
+            c = next;
+        }
+        c
     };
     let c = round_down(guess);
     if works(c) {
-        return c;
+        return up(c);
     }
-    let (mut lo, mut hi) = (0.0, c);
+    let (mut lo, mut hi) = (0.0, if c > 0.0 { c } else { asked });
     for _ in 0..10 {
         let mid = (lo + hi) / 2.0;
         if works(mid) {
@@ -178,11 +204,16 @@ fn largest_working(
             return 0.0;
         }
         if works(c) {
-            return c;
+            return up(c);
         }
         c = round_down(c * 0.8);
     }
     0.0
+}
+
+/// The step of the second significant digit of `x` (0.01 for 0.47, 1 for 12).
+fn step_of(x: f64) -> f64 {
+    10f64.powf(x.log10().floor() - 1.0)
 }
 
 /// `x` rounded down to two significant digits (8.49 to 8.4, 299.99 to 290).
@@ -234,12 +265,13 @@ fn fillet_once(
         }
     }
     let mut touched: BTreeSet<usize> = BTreeSet::new();
-    let mut max_phi: f64 = 0.0;
+    let (mut max_phi, mut min_phi): (f64, f64) = (0.0, std::f64::consts::PI);
     for &(e, _, _) in &list {
         let Some((phi, _)) = kind_of(m, &t, e) else {
             return Err(FilletError::NotSolidEdge { edge: e }.into());
         };
         max_phi = max_phi.max(phi);
+        min_phi = min_phi.min(phi);
         let f = t.faces_of(e).next().expect("two faces");
         if let Some(i) = shell_of.get(&f) {
             touched.insert(*i);
@@ -292,57 +324,70 @@ fn fillet_once(
             }
         }
     }
-    let profile = match round {
+    // The profile of a size: given segments, or the default for the largest angle that keeps
+    // segments of four length tolerances on the smallest angle too.
+    let profile_at = |x: f64| match round {
         Some(segments) => Profile::Round {
-            radius: size,
-            segments: segments.unwrap_or_else(|| fillet::default_segments(size, max_phi)),
+            radius: x,
+            segments: segments.unwrap_or_else(|| {
+                fillet::default_segments(x, max_phi).min(fillet::fitting_segments(x, min_phi))
+            }),
         },
-        None => Profile::Flat { distance: size },
+        None => Profile::Flat { distance: x },
     };
-    // The new edges, counted before the plan: each strip has its lines and the sides of its two
-    // ends, and a corner of three rounds a patch of about 3 n (n + 1) / 2 edges.
-    let mut chosen_at: BTreeMap<VertexId, usize> = BTreeMap::new();
-    for (_, a, b) in &list {
-        *chosen_at.entry(*a).or_default() += 1;
-        *chosen_at.entry(*b).or_default() += 1;
-    }
-    let threes = chosen_at.values().filter(|k| **k >= 3).count();
-    let estimate = |n: usize| list.len() * (3 * n + 1) + threes * 3 * n * (n + 1) / 2;
-    let n = match profile {
-        Profile::Round { segments, .. } => segments as usize,
-        Profile::Flat { .. } => 1,
-    };
-    if estimate(n) > MAX_EDIT_EDGES {
-        let most_segments = match profile {
-            Profile::Round { .. } => (1..n)
-                .rev()
-                .find(|k| estimate(*k) <= MAX_EDIT_EDGES)
-                .map(|k| k as u32),
-            Profile::Flat { .. } => None,
-        };
-        return Err(FilletError::TooManyEdges {
-            count: estimate(n),
-            max: MAX_EDIT_EDGES,
-            most_segments,
-        }
-        .into());
-    }
+    let profile = profile_at(size);
     let plan = match fillet::plan(&shape, &list, &profile) {
         Ok(p) => p,
         Err(FilletError::DoesNotFit {
             noun, asked, why, ..
         }) => {
-            let most = fillet::largest_fit(&shape, &list, &profile, asked);
+            let scan = fillet::size_scan(&shape, &list, &profile_at, asked);
             return Err(FilletError::DoesNotFit {
                 noun,
                 asked,
                 why,
-                most: Some(most),
+                most: Some(scan.most),
+                gaps: scan.gaps,
+                above: scan.above,
             }
             .into());
         }
         Err(e) => return Err(e.into()),
     };
+    // The new edges, counted from the plan before anything changes.
+    let count = fillet::new_edges(&plan);
+    if count > MAX_EDIT_EDGES {
+        let most_segments = match profile {
+            Profile::Round { segments, .. } => {
+                let fits = |k: u32| {
+                    let p = Profile::Round {
+                        radius: size,
+                        segments: k,
+                    };
+                    fillet::plan(&shape, &list, &p)
+                        .is_ok_and(|p| fillet::new_edges(&p) <= MAX_EDIT_EDGES)
+                };
+                // The count grows with the segments: halve between 1 and the asked number.
+                let (mut good, mut bad) = (0u32, segments);
+                while bad - good > 1 {
+                    let mid = (good + bad) / 2;
+                    if fits(mid) {
+                        good = mid;
+                    } else {
+                        bad = mid;
+                    }
+                }
+                (good > 0 && fits(good)).then_some(good)
+            }
+            Profile::Flat { .. } => None,
+        };
+        return Err(FilletError::TooManyEdges {
+            count,
+            max: MAX_EDIT_EDGES,
+            most_segments,
+        }
+        .into());
+    }
     if plan
         .points
         .iter()
@@ -590,12 +635,34 @@ fn check_result(
             Contact::LiesIn => "lie in",
         };
         return Err(invalid(format!(
-            "the new faces would {how} another face of the model {}",
+            "the new faces would {how} another face {}",
             near_edge(m, e)
         )));
     }
     if let Some(p) = contact::new_distance_problem(before, m, &made.edges, &made.verts) {
         return Err(invalid(plain(m, &p)));
+    }
+    // No new edge shorter than the length tolerance.
+    let tol = geom::tol(&[]);
+    for e in &made.edges {
+        if let Some(ed) = m.edges.get(e)
+            && m.vertices[&ed.v[0]].distance(m.vertices[&ed.v[1]]) <= tol
+        {
+            return Err(invalid(format!(
+                "an edge would be shorter than the length tolerance (0.01 mm) {}",
+                near_edge(m, *e)
+            )));
+        }
+    }
+    let mut own: BTreeSet<FaceId> = shell.clone();
+    own.extend(made.faces.iter().copied());
+    if let Some((x, g)) = near_touch(m, made, 0.5 * tol) {
+        let whom = if own.contains(&g) {
+            "the solid would touch itself"
+        } else {
+            "the new faces would touch another solid"
+        };
+        return Err(invalid(format!("{whom} {}", near(x))));
     }
     let mut set: Vec<FaceId> = shell
         .iter()
@@ -615,6 +682,36 @@ fn check_result(
             _ => "it would not close a volume".to_string(),
         };
         return Err(invalid(why));
+    }
+    // A concave round adds material: no other solid of the model may end up inside it.
+    if plan.concave_bound > 0.0 {
+        let now: Vec<FaceId> = own
+            .iter()
+            .copied()
+            .filter(|f| m.faces.contains_key(f))
+            .collect();
+        let was: Vec<FaceId> = shell.iter().copied().collect();
+        for other in solid::quick_shells(before) {
+            if other.faces.iter().any(|f| shell.contains(f)) {
+                continue;
+            }
+            let Some(p) = other
+                .faces
+                .iter()
+                .find_map(|f| m.faces.get(f).and_then(|g| g.outer.first()))
+                .and_then(|v| m.vertices.get(v).copied())
+            else {
+                continue;
+            };
+            if solid::inside(m, &now, p) == Some(true)
+                && solid::inside(before, &was, p) != Some(true)
+            {
+                return Err(invalid(format!(
+                    "the round would swallow another solid {}",
+                    near(p)
+                )));
+            }
+        }
     }
     let dv = state.volume - volume_before;
     let slack = 1e-9 * volume_before.abs() + geom::tol(&[]) * state.area;
@@ -661,4 +758,59 @@ fn plain(m: &SurfaceModel, p: &check::Problem) -> String {
         Some(x) => format!("{what} {}", near(x)),
         None => what.to_string(),
     }
+}
+
+/// The first place where a vertex comes closer than `close` to a face that it is not a corner of,
+/// for the new vertices and for the vertices near the new and changed faces. The place and the
+/// face.
+fn near_touch(m: &SurfaceModel, made: &Made, close: f64) -> Option<(DVec3, FaceId)> {
+    let mut fresh: BTreeSet<FaceId> = made.faces.clone();
+    fresh.extend(made.changed.iter().copied());
+    let faces = clash::face_tree(m, close, &|_| true);
+    let verts = BoxTree::new(m.vertices.iter().map(|(v, p)| (*p, *p, v.0)).collect());
+    let mut tris: BTreeMap<FaceId, Option<FaceTriangles>> = BTreeMap::new();
+    let mut gap = |v: VertexId, g: FaceId| -> Option<f64> {
+        let f = m.faces.get(&g)?;
+        if f.loops().flatten().any(|x| *x == v) {
+            return None;
+        }
+        let p = m.vertices[&v];
+        if f.plane.distance(p).abs() >= close {
+            return None;
+        }
+        let t = tris
+            .entry(g)
+            .or_insert_with(|| m.triangulate_face(g).ok())
+            .as_ref()?;
+        t.triangles
+            .iter()
+            .map(|k| {
+                let q = [
+                    t.positions[k[0] as usize],
+                    t.positions[k[1] as usize],
+                    t.positions[k[2] as usize],
+                ];
+                solid::closest_on_triangle(p, &q).distance(p)
+            })
+            .reduce(f64::min)
+    };
+    let pad = DVec3::splat(close);
+    let mut pairs: Vec<(VertexId, FaceId)> = Vec::new();
+    for v in &made.verts {
+        let Some(p) = m.vertices.get(v) else { continue };
+        faces.query(*p - pad, *p + pad, &mut |g| pairs.push((*v, FaceId(g))));
+    }
+    for g in &fresh {
+        let Some(f) = m.faces.get(g) else { continue };
+        let (lo, hi) = clash::face_box(m, f, close);
+        verts.query(lo, hi, &mut |v| pairs.push((VertexId(v), *g)));
+    }
+    pairs.sort();
+    pairs.dedup();
+    for (v, g) in pairs {
+        if gap(v, g).is_some_and(|d| d < close) {
+            return Some((m.vertices[&v], g));
+        }
+    }
+    None
 }
