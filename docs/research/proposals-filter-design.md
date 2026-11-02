@@ -577,6 +577,12 @@ The alternative to resources is a document field like `issues`, with its own `Ki
 
 Two smaller rules need the owner as well. Published revisions (PLAT-30) never take proposals. An annotation made on a proposal joins its group.
 
+## 6a. Decisions taken
+
+On 2026-11-02 the owner accepted the recommendation of every decision, D1 to D13, in the table above. The two smaller rules also hold. Published revisions (PLAT-30) never take proposals. An annotation made on a proposal joins its group.
+
+Two points stay open on purpose. The limits of D13 (proposals per document, sets, options per set) come from a measurement. The owner chooses the numbers after that. The look of a proposal and the command layer of the propose mode are designed in their own steps.
+
 ## 7. Plan
 
 Each stage merges alone and keeps every test green. No proposal exists before the Proposal mode ships. So stages 0 to 5 change no visible behavior. Property tests create proposals through a test helper to prove the filter early.
