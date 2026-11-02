@@ -2604,7 +2604,14 @@ fn fillet_refusals_have_stable_ids_and_the_largest_size_that_fits() {
     assert_eq!(e.code, 3);
     assert!(e.message.contains("at most about"), "{}", e.message);
     let max = e.details.as_ref().unwrap()["max_mm"].as_f64().unwrap();
-    assert!(max > 299.0 && max < 300.0, "{max}");
+    // The largest size that the whole edit accepts, rounded down to two digits.
+    assert_eq!(max, 290.0);
+    ok(
+        &mut s,
+        "mesh.fillet",
+        json!({"id": id, "faces": [top], "radius": max}),
+    );
+    ok(&mut s, "undo", json!({}));
     let e = err(
         &mut s,
         "mesh.fillet",

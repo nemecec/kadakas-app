@@ -47,8 +47,10 @@ def test_a_radius_too_large_for_the_top_is_refused_with_what_fits(cad):
     before = volume(cad, model)
     data = cad.error("mesh.fillet", {"id": model, "all": True, "radius": 30})["data"]
     assert data["error_id"] == "fillet_does_not_fit"
-    assert 19.9 < data["max_mm"] <= 20
+    # The largest size that the whole edit accepts, rounded down to two digits, and it works.
+    assert 19 <= data["max_mm"] <= 20
     assert volume(cad, model) == approx(before)
+    cad.result("mesh.fillet", {"id": model, "all": True, "radius": data["max_mm"]})
 
 
 def test_a_chamfered_leg_exports_as_a_closed_stl(cad, tmp_path):

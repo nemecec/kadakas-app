@@ -83,17 +83,25 @@ pub fn fillet_edges(doc: &Document, sub: &SubSelection) -> BTreeMap<ObjectId, Ve
 
 impl FilletPanel {
     /// One action for each model with edges to round or cut. Empty when nothing fits the choice.
-    pub fn actions(&self, doc: &Document, sub: &SubSelection, kind: FilletKind) -> Vec<Action> {
+    /// A model that its placement scales unequally along its axes is refused: a round in it would
+    /// be an ellipse in the drawing (the text of the refusal is in the language of the window).
+    pub fn actions(
+        &self,
+        doc: &Document,
+        sub: &SubSelection,
+        kind: FilletKind,
+    ) -> Result<Vec<Action>, String> {
         fillet_edges(doc, sub)
             .into_iter()
             .map(|(model, edges)| {
-                // The size in the units of the model: a placement that scales it divides.
-                let scale = frame_of(doc, model).matrix3.determinant().abs().cbrt();
-                let size = if scale > 0.0 {
-                    self.size / scale
-                } else {
-                    self.size
-                };
+                // The size in the units of the model: the placement scales each axis.
+                let m = frame_of(doc, model).matrix3;
+                let lengths = [m.x_axis.length(), m.y_axis.length(), m.z_axis.length()];
+                let scale = lengths[0];
+                if scale <= 0.0 || lengths.iter().any(|l| (l - scale).abs() > 1e-9 * scale) {
+                    return Err(kadakas_l10n::tr!("uic-fillet-refused-scaled"));
+                }
+                let size = self.size / scale;
                 let edit = match kind {
                     FilletKind::Fillet => Edit::Fillet {
                         edges,
@@ -106,7 +114,7 @@ impl FilletPanel {
                         distance: size,
                     },
                 };
-                Action::Edit { model, edit }
+                Ok(Action::Edit { model, edit })
             })
             .collect()
     }

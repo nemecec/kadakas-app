@@ -24,7 +24,7 @@ use super::super::arrange::canonical;
 use super::super::{
     CurveId, Edge, EdgeId, FaceId, SurfaceError, SurfaceModel, VertexId, check, geom,
 };
-use super::pushpull;
+use super::contact;
 
 /// Fewest segments.
 pub const MIN_SEGMENTS: u32 = 3;
@@ -229,7 +229,7 @@ pub(super) fn set_curve_segments(
             return Err(bad(p));
         }
     }
-    if let Some(p) = pushpull::new_distance_problem(before, m, &touched_e, &touched_v) {
+    if let Some(p) = contact::new_distance_problem(before, m, &touched_e, &touched_v) {
         return Err(bad(&p));
     }
     Ok(())

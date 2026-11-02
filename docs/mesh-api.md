@@ -206,9 +206,9 @@ A sharp edge lies between two faces at an angle above `min_angle` (5 degrees by 
 
 Faces stay flat and the result is a closed solid. The faces next to the edges keep their ids. The new faces and edges are in `created`, and the removed edges in `removed`.
 
-Corners: exactly three faces meet at each end of a chosen edge. One chosen edge runs to the third face. Two chosen edges meet on a plane through the sharp third edge. Three meet on a ball patch, or on a triangle for a chamfer. A corner of four or more faces is refused. A corner with chosen convex and concave edges is refused too. See `docs/modeler.md`, section "Fillet and chamfer", for the pictures and the limits.
+Corners: exactly three faces meet at each end of a chosen edge. One chosen edge runs to the third face. Two chosen edges meet on a plane through the sharp third edge. Three meet on a ball patch, or on a triangle for a chamfer. A corner of four or more faces is refused. A corner with chosen convex and concave edges is refused too. See `docs/modeler.md`, section "Fillet and chamfer", for a description of the corners and the limits.
 
-A size that does not fit is refused with `fillet_does_not_fit`. The message ends with "at most about X mm fits", and `max_mm` holds X. Both work in `mesh.batch` as `fillet` and `chamfer`.
+A size that does not fit is refused with `fillet_does_not_fit`. The message ends with "at most about X mm fits", and `max_mm` holds X. X is the largest size that the whole edit accepts, rounded down to two significant digits, so a second call with X works. More than 10,000 new edges is refused with `fillet_too_many_edges`. Then `max_segments` holds the most segments that fit. Both work in `mesh.batch` as `fillet` and `chamfer`.
 
 ## Batch
 
@@ -448,6 +448,7 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `fillet_does_not_fit` | The radius or distance does not fit. | `what`, `asked_mm`, `max_mm`, `reason` |
 | `fillet_too_small` | A segment is shorter than the length tolerance. | `edge`, `segments` |
 | `fillet_segments_out_of_range` | The segments are not 1 to 64. | `segments`, `min`, `max` |
+| `fillet_too_many_edges` | The edit makes more than 10,000 new edges. `max_segments` is the most segments that fit, or null. | `count`, `max`, `max_segments` |
 | `fillet_bad_size` | The size is not a number above 0.01 mm. | `asked_mm` |
 | `fillet_result_invalid` | The result is not a valid closed solid. | `reason` |
 | `exact_stale` | `mesh3d.retessellate`: the triangles were edited after the import, so the exact data no longer fits. | `object` |

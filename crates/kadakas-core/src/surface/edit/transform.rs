@@ -79,7 +79,8 @@ use super::super::check::{self, Problem};
 use super::super::clash;
 use super::super::geom::{newell, point_segment};
 use super::super::part::Absorber;
-use super::pushpull::{new_distance_problem, weld};
+use super::contact::new_distance_problem;
+use super::pushpull::weld;
 use super::*;
 
 mod fold;

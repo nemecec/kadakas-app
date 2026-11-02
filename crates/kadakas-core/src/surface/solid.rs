@@ -221,6 +221,12 @@ pub enum SolidError {
     SnapRefused(SnapRefusal),
 }
 
+/// All shells of the model without the search for crossings, in one pass (MOD-21 finds the
+/// solids of many edges with it).
+pub(super) fn quick_shells(m: &SurfaceModel) -> Vec<Shell> {
+    shell::shells(m, &super::topo::Topo::of(m), &[])
+}
+
 /// The state of a set of faces without the search for crossings, so it is cheap: the open edges,
 /// the volume and whether it closes a solid (MOD-21 uses it before a fillet).
 pub(super) fn quick_state(m: &SurfaceModel, set: &BTreeSet<FaceId>) -> Shell {

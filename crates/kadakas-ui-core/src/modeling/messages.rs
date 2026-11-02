@@ -7,11 +7,12 @@ use kadakas_core::surface::{
 };
 use kadakas_l10n::tr;
 
-/// The number in "at most about 12.5 mm" of a core message.
+/// The number in "at most about 12.5 mm" of a core message, in the number format of the person.
 fn at_most(text: &str) -> Option<String> {
     let rest = &text[text.find("at most about ")? + "at most about ".len()..];
     let end = rest.find(" mm")?;
-    Some(rest[..end].to_string())
+    let x: f64 = rest[..end].parse().ok()?;
+    Some(kadakas_units::num_trim(x, 2))
 }
 
 /// The text of a refusal or a note of an edit, for the person.
@@ -100,12 +101,19 @@ fn fillet_text(e: &FilletError) -> String {
         FilletError::FlatEdge { .. } => tr!("uic-fillet-refused-flat"),
         FilletError::Corner { .. } => tr!("uic-fillet-refused-corner"),
         FilletError::DoesNotFit { most, .. } => match most {
-            Some(x) if *x > 0.0 => tr!(
-                "uic-fillet-refused-fit",
-                most = format!("{}", (x * 100.0).floor() / 100.0)
-            ),
+            Some(x) if *x > 0.0 => {
+                tr!(
+                    "uic-fillet-refused-fit",
+                    most = kadakas_units::num_trim(*x, 2)
+                )
+            }
             _ => tr!("uic-fillet-refused-no-room"),
         },
+        FilletError::TooManyEdges {
+            most_segments: Some(k),
+            ..
+        } => tr!("uic-fillet-refused-edges-segments", most = *k),
+        FilletError::TooManyEdges { .. } => tr!("uic-fillet-refused-edges"),
         FilletError::TooSmall { .. } => tr!("uic-fillet-refused-small"),
         FilletError::Segments { .. } => tr!("uic-fillet-refused-segments"),
         FilletError::BadSize { .. } => tr!("uic-fillet-refused-size"),
@@ -258,6 +266,11 @@ mod tests {
                 edge: EdgeId(4),
             },
             FilletError::Segments { segments: 70 },
+            FilletError::TooManyEdges {
+                count: 20000,
+                max: 10000,
+                most_segments: None,
+            },
             FilletError::BadSize {
                 noun: "radius",
                 asked: 0.0,
@@ -269,7 +282,7 @@ mod tests {
             let text = localize_error(&SurfaceError::Fillet(e.clone()));
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             assert!(
-                digits.is_empty() || ["849", "164", "001"].contains(&digits.as_str()),
+                digits.is_empty() || ["849", "164", "001", "10000"].contains(&digits.as_str()),
                 "{text}"
             );
             // Two kinds of a missing solid share a text.

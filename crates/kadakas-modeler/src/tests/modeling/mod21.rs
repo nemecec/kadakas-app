@@ -83,7 +83,7 @@ fn the_panel_rounds_the_edges_of_the_selected_face_in_one_step() {
     app.edit.sub.set([Item::Face(id, top(&app))]);
     app.tray_ui.fillet.size = 450.0;
     app.run(Cmd::Fillet(FilletKind::Chamfer), size(&app));
-    assert!(app.status.contains("299.99"), "{}", app.status);
+    assert!(app.status.contains("290"), "{}", app.status);
     assert_eq!(app.session.editor.undo_depth(), depth);
     // The Edit menu item with a fitting size.
     app.tray_ui.fillet.size = 30.0;

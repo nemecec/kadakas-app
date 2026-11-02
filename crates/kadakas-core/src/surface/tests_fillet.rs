@@ -515,7 +515,18 @@ fn more_new_edges_than_one_edit_may_make_are_refused() {
     let all = all_edges(&m);
     let before = m.clone();
     let err = fillet(&mut m, all, 5.0, Some(64)).unwrap_err();
-    assert!(matches!(err, SurfaceError::Limit { .. }), "{err}");
+    let SurfaceError::Fillet(FilletError::TooManyEdges {
+        most_segments: Some(k),
+        ..
+    }) = err
+    else {
+        panic!("{err}");
+    };
+    assert!(err.to_string().contains("use fewer segments"), "{err}");
+    // The advice works.
+    let mut w = m.clone();
+    let all = all_edges(&w);
+    fillet(&mut w, all, 5.0, Some(k)).unwrap();
     assert_eq!(m, before);
 }
 
@@ -755,4 +766,412 @@ fn perf_fillet_in_a_big_model() {
         "refused (radius 30): {:.3} s: {err}",
         t.elapsed().as_secs_f64()
     );
+}
+
+/// The largest distance of a vertex from the plane of its face, over the model.
+fn max_off_plane(m: &SurfaceModel) -> f64 {
+    m.faces()
+        .flat_map(|(_, f)| {
+            f.loops()
+                .flatten()
+                .map(|v| f.plane.distance(m.vertex(*v).unwrap()).abs())
+                .collect::<Vec<_>>()
+        })
+        .fold(0.0, f64::max)
+}
+
+/// A block whose front leans by `lean` degrees: the outline (0, 0), (100, 0), (100 - 60 tan,
+/// 60), (0, 60), pulled 50 mm. The face at y = 60 plays the top of the review.
+fn leaning_block(lean: f64) -> SurfaceModel {
+    let k = 60.0 * lean.to_radians().tan();
+    prism(
+        &[[0.0, 0.0], [100.0, 0.0], [100.0 - k, 60.0], [0.0, 60.0]],
+        50.0,
+    )
+}
+
+fn face_at_y(m: &SurfaceModel, y: f64) -> FaceId {
+    m.faces()
+        .find(|(_, f)| f.plane.normal.y > 0.99 && (f.plane.offset - y).abs() < 1e-6)
+        .unwrap()
+        .0
+}
+
+/// A leg 40 x 40 at the floor and 700 high, its top scaled by 0.6 and moved 30 mm in x.
+fn leaning_leg() -> SurfaceModel {
+    let mut m = cuboid(40.0, 40.0, 700.0);
+    let top = top_face(&m, 700.0);
+    let (c, k) = (DVec3::new(20.0, 20.0, 700.0), 0.6);
+    let t = glam::DAffine3::from_translation(DVec3::new(30.0, 0.0, 0.0))
+        * glam::DAffine3::from_translation(c)
+        * glam::DAffine3::from_scale(DVec3::new(k, k, 1.0))
+        * glam::DAffine3::from_translation(-c);
+    let mut matrix = [0.0; 12];
+    matrix[..9].copy_from_slice(&t.matrix3.to_cols_array());
+    matrix[9..].copy_from_slice(&t.translation.to_array());
+    m.apply(&Edit::TransformVertices {
+        vertices: Vec::new(),
+        faces: vec![top],
+        edges: Vec::new(),
+        matrix,
+    })
+    .unwrap();
+    sound(&m);
+    m
+}
+
+/// The sizes of the sweeps: 0.05 to 20 mm.
+fn sweep_sizes() -> Vec<f64> {
+    let mut out = vec![
+        0.05, 0.1, 0.12, 0.2, 0.3, 0.5, 0.58, 0.75, 1.0, 1.25, 1.5, 1.78,
+    ];
+    out.extend([
+        2.0, 2.22, 2.5, 2.78, 3.0, 4.0, 5.0, 6.0, 6.78, 8.0, 10.0, 10.59, 12.0, 15.0, 20.0,
+    ]);
+    out
+}
+
+/// What a sweep found.
+#[derive(Debug, Default)]
+struct Sweep {
+    /// Accepted with flat faces.
+    good: usize,
+    /// Accepted with a vertex off the plane of its face by more than 1e-9 of the model size.
+    bent: usize,
+    /// Refused with a largest size that is then accepted, or with no size.
+    refused: usize,
+    /// Refused with a largest size that is refused too, or not smaller.
+    wrong_most: usize,
+    /// The texts of the refusals and the problems.
+    notes: Vec<String>,
+}
+
+/// Runs a fillet (or a chamfer) of the edges of `face` for every size of the sweep and sorts the
+/// results (see [`Sweep`]).
+fn sweep(
+    make: &dyn Fn() -> SurfaceModel,
+    face: &dyn Fn(&SurfaceModel) -> FaceId,
+    chamfer: bool,
+) -> Sweep {
+    let mut out = Sweep::default();
+    let run = |m: &mut SurfaceModel, es: &[EdgeId], x: f64| {
+        let edit = if chamfer {
+            Edit::Chamfer {
+                edges: es.to_vec(),
+                distance: x,
+            }
+        } else {
+            Edit::Fillet {
+                edges: es.to_vec(),
+                radius: x,
+                segments: None,
+                smooth: true,
+            }
+        };
+        m.apply(&edit)
+    };
+    for x in sweep_sizes() {
+        let mut m = make();
+        let f = face(&m);
+        let es = m
+            .fillet_edges(&EdgeChoice {
+                faces: vec![f],
+                ..EdgeChoice::default()
+            })
+            .unwrap();
+        match run(&mut m, &es, x) {
+            Ok(()) => {
+                sound(&m);
+                let off = max_off_plane(&m);
+                if off < 1e-9 * 1000.0 {
+                    out.good += 1;
+                } else {
+                    out.bent += 1;
+                    out.notes.push(format!(
+                        "{x}: accepted, a vertex {off:.1e} mm off its plane"
+                    ));
+                }
+            }
+            Err(e) => {
+                let mut right = true;
+                if let SurfaceError::Fillet(FilletError::DoesNotFit {
+                    most: Some(most), ..
+                }) = &e
+                {
+                    if *most >= x {
+                        right = false;
+                    } else if *most > 0.0 {
+                        let mut w = make();
+                        if let Err(e2) = run(&mut w, &es, *most) {
+                            right = false;
+                            out.notes
+                                .push(format!("{x}: the reported {most} is refused: {e2}"));
+                        }
+                    }
+                }
+                if right {
+                    out.refused += 1;
+                } else {
+                    out.wrong_most += 1;
+                }
+                out.notes.push(format!("{x}: {e}"));
+            }
+        }
+    }
+    out
+}
+
+/// A shape of a sweep: a name, how to make it and the face whose edges change.
+type Case = (
+    &'static str,
+    Box<dyn Fn() -> SurfaceModel>,
+    Box<dyn Fn(&SurfaceModel) -> FaceId>,
+);
+
+#[test]
+fn leaning_and_tapered_parts_round_their_top_at_everyday_sizes() {
+    let cases: Vec<Case> = vec![
+        (
+            "block 5",
+            Box::new(|| leaning_block(5.0)),
+            Box::new(|m| face_at_y(m, 60.0)),
+        ),
+        (
+            "block 20",
+            Box::new(|| leaning_block(20.0)),
+            Box::new(|m| face_at_y(m, 60.0)),
+        ),
+        (
+            "leaning leg",
+            Box::new(leaning_leg),
+            Box::new(|m| top_face(m, 700.0)),
+        ),
+    ];
+    let mut bad = Vec::new();
+    for (name, make, face) in &cases {
+        for chamfer in [false, true] {
+            let s = sweep(make.as_ref(), face.as_ref(), chamfer);
+            println!(
+                "SWEEP {name} chamfer {chamfer}: good {}, bent {}, refused {}, wrong most {}",
+                s.good, s.bent, s.refused, s.wrong_most
+            );
+            for w in &s.notes {
+                println!("  {w}");
+            }
+            if s.bent > 0 || s.wrong_most > 0 {
+                bad.push(format!("{name} chamfer {chamfer}"));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+/// A refusal that names a largest size is right: that size works, and it is smaller.
+fn check_most(
+    make: &dyn Fn() -> SurfaceModel,
+    es: &[EdgeId],
+    chamfer: bool,
+    x: f64,
+    e: &SurfaceError,
+) -> Result<(), TestCaseError> {
+    if let SurfaceError::Fillet(FilletError::DoesNotFit {
+        most: Some(most), ..
+    }) = e
+        && *most > 0.0
+    {
+        prop_assert!(*most < x, "{} not below {}", most, x);
+        let mut w = make();
+        let edit = if chamfer {
+            Edit::Chamfer {
+                edges: es.to_vec(),
+                distance: *most,
+            }
+        } else {
+            Edit::Fillet {
+                edges: es.to_vec(),
+                radius: *most,
+                segments: None,
+                smooth: true,
+            }
+        };
+        let r = w.apply(&edit);
+        prop_assert!(
+            r.is_ok(),
+            "size {}: the reported {} is refused: {:?}",
+            x,
+            most,
+            r
+        );
+        sound(&w);
+        prop_assert!(max_off_plane(&w) < 1e-6);
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// A block whose front leans by 1 to 40 degrees, its top edges rounded or cut at a random size:
+    /// a result is a closed solid with flat faces; a refusal that names a largest size is right.
+    #[test]
+    fn leaning_blocks_round_their_top_or_refuse_rightly(
+        lean in 1u32..41, x100 in 5u32..2000, chamfer in any::<bool>(),
+    ) {
+        let x = x100 as f64 / 100.0;
+        let make = || leaning_block(lean as f64);
+        let mut m = make();
+        let f = face_at_y(&m, 60.0);
+        let es = m.fillet_edges(&EdgeChoice { faces: vec![f], ..EdgeChoice::default() }).unwrap();
+        let edit = if chamfer {
+            Edit::Chamfer { edges: es.clone(), distance: x }
+        } else {
+            Edit::Fillet { edges: es.clone(), radius: x, segments: None, smooth: true }
+        };
+        match m.apply(&edit) {
+            Ok(()) => {
+                sound(&m);
+                prop_assert!(max_off_plane(&m) < 1e-6, "size {}: bent", x);
+            }
+            Err(e) => check_most(&make, &es, chamfer, x, &e)?,
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// Random boxes and prisms with all their sharp edges at a size that is often too large: the
+    /// largest size of a refusal is accepted when it is used.
+    #[test]
+    fn the_largest_size_of_a_refusal_is_accepted(
+        sides in 3usize..9, h in 10u32..120, top in prop::sample::select(vec![1.0f64, 0.7]),
+        x10 in 5u32..600, chamfer in any::<bool>(),
+    ) {
+        let x = x10 as f64 / 10.0;
+        let make = || {
+            let outline: Vec<[f64; 2]> = (0..sides)
+                .map(|i| {
+                    let a = 2.0 * PI * i as f64 / sides as f64 + 0.3;
+                    [60.0 * a.cos(), 60.0 * a.sin()]
+                })
+                .collect();
+            let mut m = prism(&outline, h as f64);
+            if top != 1.0 {
+                let f = top_face(&m, h as f64);
+                let c = DVec3::new(0.0, 0.0, h as f64);
+                let t = glam::DAffine3::from_translation(c)
+                    * glam::DAffine3::from_scale(DVec3::new(top, top, 1.0))
+                    * glam::DAffine3::from_translation(-c);
+                let mut matrix = [0.0; 12];
+                matrix[..9].copy_from_slice(&t.matrix3.to_cols_array());
+                matrix[9..].copy_from_slice(&t.translation.to_array());
+                m.apply(&Edit::TransformVertices { vertices: Vec::new(), faces: vec![f], edges: Vec::new(), matrix }).unwrap();
+            }
+            m
+        };
+        let mut m = make();
+        let es = all_edges(&m);
+        let edit = if chamfer {
+            Edit::Chamfer { edges: es.clone(), distance: x }
+        } else {
+            Edit::Fillet { edges: es.clone(), radius: x, segments: None, smooth: true }
+        };
+        match m.apply(&edit) {
+            Ok(()) => sound(&m),
+            Err(e) => check_most(&make, &es, chamfer, x, &e)?,
+        }
+    }
+}
+
+#[test]
+fn a_rounded_join_of_a_line_and_an_arc_keeps_the_circle_of_the_rest_of_the_arc() {
+    // A D shape: a line from (0, 0) to (100, 0), a half circle of radius 50 to (100, 100), a
+    // line back. Pulled 40 mm.
+    let mut m = SurfaceModel::new();
+    let n = 12;
+    let pts: Vec<[f64; 3]> = (0..=n)
+        .map(|i| {
+            let a = -PI / 2.0 + PI * i as f64 / n as f64;
+            [100.0 + 50.0 * a.cos(), 50.0 + 50.0 * a.sin(), 0.0]
+        })
+        .collect();
+    m.apply(&Edit::AddCurve {
+        points: pts,
+        closed: false,
+        faceted: false,
+        analytic: Some(Analytic::arc(
+            DVec3::new(100.0, 50.0, 0.0),
+            DVec3::Z,
+            DVec3::X,
+            50.0,
+            -PI / 2.0,
+            PI / 2.0,
+        )),
+    })
+    .unwrap();
+    m.apply(&Edit::AddEdges {
+        edges: vec![
+            [[100.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
+            [[0.0, 100.0, 0.0], [0.0, 0.0, 0.0]],
+            [[0.0, 0.0, 0.0], [100.0, 0.0, 0.0]],
+        ],
+    })
+    .unwrap();
+    let face = m.faces().next().unwrap().0;
+    m.apply(&Edit::PushPull {
+        face,
+        distance: 40.0,
+    })
+    .unwrap();
+    let circles = m.curve_geometries().count();
+    assert!(circles >= 2);
+    let join = edge_at(&m, [100.0, 0.0, 0.0], [100.0, 0.0, 40.0]);
+    let notes = fillet(&mut m, vec![join], 5.0, Some(4)).unwrap();
+    sound(&m);
+    // Both arcs (bottom and top) keep an exact circle, shorter by one edge.
+    assert_eq!(m.curve_geometries().count(), circles, "{notes:?}");
+    for (c, a) in m.curve_geometries() {
+        for v in m.curve_vertices(c).unwrap() {
+            assert!(a.deviation(m.vertex(v).unwrap()) < 0.01, "curve {c}");
+        }
+    }
+}
+
+/// Measured once (release build): many boxes in one model, all their edges cut at once, to show
+/// that the cost grows in line with the edges.
+/// `cargo test --release -p kadakas-core --lib surface::tests_fillet::perf_many -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn perf_many_boxes_with_all_edges_cut() {
+    for boxes in [50u32, 100, 200, 800] {
+        let mut m = cuboid(100.0, 60.0, 40.0);
+        let faces: Vec<FaceId> = m.faces().map(|(f, _)| f).collect();
+        let mut mx = [0.0; 12];
+        mx[0] = 1.0;
+        mx[4] = 1.0;
+        mx[8] = 1.0;
+        mx[9] = 200.0;
+        m.apply(&Edit::CopyGeometry {
+            faces,
+            edges: Vec::new(),
+            matrix: mx,
+            count: boxes - 1,
+        })
+        .unwrap();
+        let all = all_edges(&m);
+        let t = std::time::Instant::now();
+        let r = m.clone().apply(&Edit::Chamfer {
+            edges: all.clone(),
+            distance: 1.0,
+        });
+        println!(
+            "{} edges: {:.3} s, {}",
+            all.len(),
+            t.elapsed().as_secs_f64(),
+            match r {
+                Ok(()) => "done".to_string(),
+                Err(e) => format!("refused: {e}"),
+            }
+        );
+    }
 }

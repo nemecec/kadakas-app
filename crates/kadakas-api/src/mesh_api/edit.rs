@@ -1020,7 +1020,7 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
                     why,
                     most,
                 } => {
-                    json!({"what": noun, "asked_mm": asked, "reason": why, "max_mm": most.map(|x| (x * 100.0).floor() / 100.0)})
+                    json!({"what": noun, "asked_mm": asked, "reason": why, "max_mm": most})
                 }
                 FilletError::TooSmall {
                     noun,
@@ -1032,6 +1032,11 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
                     json!({"segments": segments, "min": 1, "max": kadakas_core::surface::FILLET_MAX_SEGMENTS})
                 }
                 FilletError::BadSize { noun, asked } => json!({"what": noun, "asked_mm": asked}),
+                FilletError::TooManyEdges {
+                    count,
+                    max,
+                    most_segments,
+                } => json!({"count": count, "max": max, "max_segments": most_segments}),
                 FilletError::NotSolid { edge, why } => json!({"edge": edge, "reason": why}),
                 FilletError::Result(why) => json!({"reason": why}),
             };

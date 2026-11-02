@@ -1070,10 +1070,18 @@ impl ModelerApp {
     /// Fillet or Chamfer (MOD-21) with the values of the panel: one undo step for all models. The
     /// status line says how many edges changed, or why nothing changed.
     fn fillet(&mut self, kind: kadakas_ui_core::modeling::FilletKind) {
-        let actions = self
-            .tray_ui
-            .fillet
-            .actions(self.session.editor.doc(), &self.edit.sub, kind);
+        let actions =
+            match self
+                .tray_ui
+                .fillet
+                .actions(self.session.editor.doc(), &self.edit.sub, kind)
+            {
+                Ok(a) => a,
+                Err(why) => {
+                    self.status = why;
+                    return;
+                }
+            };
         let count: usize = actions
             .iter()
             .map(|a| match a {

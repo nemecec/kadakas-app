@@ -165,6 +165,23 @@ pub enum Edit {
     /// new faces get the paint of the profile; a curve of the path or of the profile gives soft
     /// and smooth edges. See the module `followme`.
     FollowMe { face: FaceId, path: Vec<EdgeId> },
+    /// Fillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of
+    /// `segments` flat faces (by default from the radius and the angle of the edges, see
+    /// `fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins
+    /// the rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and
+    /// `smooth` and the rails get `soft`. A radius that does not fit is refused with the largest
+    /// one that fits (`DoesNotFit` with `most`). See the modules `surface::fillet` (the plan) and `edit::fillet`.
+    Fillet {
+        edges: Vec<EdgeId>,
+        radius: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        segments: Option<u32>,
+        #[serde(default = "yes")]
+        smooth: bool,
+    },
+    /// Chamfer (MOD-21): cuts the `edges` of closed solids flat, `distance` mm from the edge on
+    /// both faces. The rules are those of `Fillet`.
+    Chamfer { edges: Vec<EdgeId>, distance: f64 },
     /// Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and
     /// `second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both
     /// solids use (two boxes through each other in one plane) may be in both lists. The result
@@ -177,23 +194,6 @@ pub enum Edit {
     /// face plane of the other by more than the plane tolerance but not more than the length
     /// tolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of
     /// the face, in the same undo step. Without it the refusal stands.
-    /// Fillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of
-    /// `segments` flat faces (by default from the radius and the angle of the edges, see
-    /// `fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins
-    /// the rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and
-    /// `smooth` and the rails get `soft`. A radius that does not fit is refused with the largest
-    /// one that fits. See the modules `surface::fillet` (the plan) and `edit::fillet`.
-    Fillet {
-        edges: Vec<EdgeId>,
-        radius: f64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        segments: Option<u32>,
-        #[serde(default = "yes")]
-        smooth: bool,
-    },
-    /// Chamfer (MOD-21): cuts the `edges` of closed solids flat, `distance` mm from the edge on
-    /// both faces. The rules are those of `Fillet`.
-    Chamfer { edges: Vec<EdgeId>, distance: f64 },
     Solid {
         op: super::SolidOp,
         first: Vec<FaceId>,
@@ -233,6 +233,7 @@ pub enum IntersectScope {
 
 use super::analytic;
 
+mod contact;
 pub(super) mod fillet;
 mod followme;
 mod hide;
