@@ -10,3 +10,6 @@ uic-fillet-refused-small = The radius is too small for the segments. Use fewer s
 uic-fillet-refused-segments = The number of segments must be from 1 to 64.
 uic-fillet-refused-size = The size must be larger than 0.01 mm.
 uic-fillet-refused-result = The result is not a valid solid, so nothing changed.
+uic-fillet-refused-edges = The edit makes more new edges than one edit allows (10,000). Choose fewer edges, or round them in more than one step.
+uic-fillet-refused-edges-segments = The edit makes more new edges than one edit allows (10,000). Use fewer segments: at most about { $most }.
+uic-fillet-refused-scaled = The model is scaled unequally along its axes, so a round would not be round. Reset its scale first.

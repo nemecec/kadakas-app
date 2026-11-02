@@ -293,5 +293,7 @@ def test_fillet_and_chamfer_round_and_cut_the_edges_of_a_box(doc):
     with pytest.raises(KadakasError) as e:
         doc.api.mesh_fillet(id=model, faces=[top], radius=2000)
     assert e.value.data["error_id"] == "fillet_does_not_fit"
-    assert 1499 < e.value.data["max_mm"] < 1500
+    assert e.value.data["max_mm"] == 1400
+    doc.api.mesh_fillet(id=model, faces=[top], radius=e.value.data["max_mm"])
+    doc.api.undo()
     assert geometry(doc, model) == before

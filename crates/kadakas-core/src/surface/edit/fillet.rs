@@ -32,6 +32,7 @@
 //! closed solid, has a new problem, cuts into other geometry, or changes the volume more than the
 //! wedges of the edges allow.
 
+use super::super::clash::Contact;
 use super::super::fillet::{self, FilletError, Profile, Pt, Shape, ShapeFace};
 use super::super::{CurveId, check, solid};
 use super::style::{ATTR_SMOOTH, ATTR_SOFT, flagged};
@@ -112,9 +113,92 @@ fn kind_of(m: &SurfaceModel, t: &Topo, e: EdgeId) -> Option<(f64, bool)> {
     ))
 }
 
-/// The edit: rounds (`segments` given or the default) or cuts the `edges`.
-#[allow(clippy::too_many_arguments)]
+/// The edit: rounds (`segments` given or the default) or cuts the `edges`. A size that does not
+/// fit is refused with the largest size that the whole edit accepts (see [`largest_working`]).
 pub(super) fn fillet(
+    m: &mut SurfaceModel,
+    before: &SurfaceModel,
+    edges: &[EdgeId],
+    size: f64,
+    round: Option<Option<u32>>,
+    smooth: bool,
+) -> Result<(), SurfaceError> {
+    match fillet_once(m, before, edges, size, round, smooth) {
+        Err(SurfaceError::Fillet(FilletError::DoesNotFit {
+            noun,
+            asked,
+            why,
+            most,
+        })) => {
+            let most = largest_working(before, edges, most.unwrap_or(asked), round, smooth);
+            Err(FilletError::DoesNotFit {
+                noun,
+                asked,
+                why,
+                most: Some(most),
+            }
+            .into())
+        }
+        other => other,
+    }
+}
+
+/// The largest size, from the guess of the planner `guess` down, with which the whole edit works
+/// (the plan and every check of the result), rounded down to two significant digits. Each try
+/// runs the edit on a copy. The planner guess is tried first; when the edit refuses it, the size
+/// is halved between 0 and the guess (at most 10 tries), then stepped down until a try works.
+/// 0 when no size works.
+fn largest_working(
+    before: &SurfaceModel,
+    edges: &[EdgeId],
+    guess: f64,
+    round: Option<Option<u32>>,
+    smooth: bool,
+) -> f64 {
+    let works = |x: f64| {
+        let mut w = before.clone();
+        x > 0.0 && fillet_once(&mut w, before, edges, x, round, smooth).is_ok()
+    };
+    let c = round_down(guess);
+    if works(c) {
+        return c;
+    }
+    let (mut lo, mut hi) = (0.0, c);
+    for _ in 0..10 {
+        let mid = (lo + hi) / 2.0;
+        if works(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let mut c = round_down(lo);
+    for _ in 0..6 {
+        if c <= 0.0 {
+            return 0.0;
+        }
+        if works(c) {
+            return c;
+        }
+        c = round_down(c * 0.8);
+    }
+    0.0
+}
+
+/// `x` rounded down to two significant digits (8.49 to 8.4, 299.99 to 290).
+pub(super) fn round_down(x: f64) -> f64 {
+    if x.is_nan() || x <= 0.0 || !x.is_finite() {
+        return 0.0;
+    }
+    let f = 10f64.powf(x.log10().floor() - 1.0);
+    let r = (x / f).floor() * f;
+    // Clean the digits of the multiplication.
+    (r * 1e9).round() / 1e9
+}
+
+/// One try of the edit (see [`fillet`]). A size that the planner refuses comes back with the
+/// planner's own guess of the largest size in `most`.
+fn fillet_once(
     m: &mut SurfaceModel,
     before: &SurfaceModel,
     edges: &[EdgeId],
@@ -141,8 +225,15 @@ pub(super) fn fillet(
         .iter()
         .map(|e| (*e, m.edges[e].v[0], m.edges[e].v[1]))
         .collect();
-    // Each edge lies between two faces of a closed solid.
-    let mut set: BTreeSet<FaceId> = BTreeSet::new();
+    // Each edge lies between two faces of a closed solid. The shells are found once.
+    let shells = solid::quick_shells(m);
+    let mut shell_of: BTreeMap<FaceId, usize> = BTreeMap::new();
+    for (i, sh) in shells.iter().enumerate() {
+        for f in &sh.faces {
+            shell_of.entry(*f).or_insert(i);
+        }
+    }
+    let mut touched: BTreeSet<usize> = BTreeSet::new();
     let mut max_phi: f64 = 0.0;
     for &(e, _, _) in &list {
         let Some((phi, _)) = kind_of(m, &t, e) else {
@@ -150,10 +241,14 @@ pub(super) fn fillet(
         };
         max_phi = max_phi.max(phi);
         let f = t.faces_of(e).next().expect("two faces");
-        if !set.contains(&f) {
-            set.extend(m.solid_of(f).unwrap_or_default());
+        if let Some(i) = shell_of.get(&f) {
+            touched.insert(*i);
         }
     }
+    let set: BTreeSet<FaceId> = touched
+        .iter()
+        .flat_map(|i| shells[*i].faces.iter().copied())
+        .collect();
     let state = solid::quick_state(m, &set);
     if !state.is_solid() {
         let why = match state.open_edges.first() {
@@ -204,6 +299,34 @@ pub(super) fn fillet(
         },
         None => Profile::Flat { distance: size },
     };
+    // The new edges, counted before the plan: each strip has its lines and the sides of its two
+    // ends, and a corner of three rounds a patch of about 3 n (n + 1) / 2 edges.
+    let mut chosen_at: BTreeMap<VertexId, usize> = BTreeMap::new();
+    for (_, a, b) in &list {
+        *chosen_at.entry(*a).or_default() += 1;
+        *chosen_at.entry(*b).or_default() += 1;
+    }
+    let threes = chosen_at.values().filter(|k| **k >= 3).count();
+    let estimate = |n: usize| list.len() * (3 * n + 1) + threes * 3 * n * (n + 1) / 2;
+    let n = match profile {
+        Profile::Round { segments, .. } => segments as usize,
+        Profile::Flat { .. } => 1,
+    };
+    if estimate(n) > MAX_EDIT_EDGES {
+        let most_segments = match profile {
+            Profile::Round { .. } => (1..n)
+                .rev()
+                .find(|k| estimate(*k) <= MAX_EDIT_EDGES)
+                .map(|k| k as u32),
+            Profile::Flat { .. } => None,
+        };
+        return Err(FilletError::TooManyEdges {
+            count: estimate(n),
+            max: MAX_EDIT_EDGES,
+            most_segments,
+        }
+        .into());
+    }
     let plan = match fillet::plan(&shape, &list, &profile) {
         Ok(p) => p,
         Err(FilletError::DoesNotFit {
@@ -229,12 +352,16 @@ pub(super) fn fillet(
     }
     let curves: BTreeSet<CurveId> = ids.iter().filter_map(|e| m.curve_of(*e)).collect();
     let made = apply(m, before, &plan, &ids, smooth)?;
+    let mut curves = curves;
+    curves.extend(made.curves.iter().copied());
     super::rechain(m, &curves);
     check_result(before, m, &plan, &set, &made, state.volume)
 }
 
 /// What the edit made, for the checks.
 struct Made {
+    /// Curves that lost a trimmed edge.
+    curves: BTreeSet<CurveId>,
     faces: BTreeSet<FaceId>,
     changed: BTreeSet<FaceId>,
     edges: BTreeSet<EdgeId>,
@@ -274,6 +401,7 @@ fn apply(
     for e in chosen {
         w.remove_edge(*e);
     }
+    let mut cut_curves: BTreeSet<CurveId> = BTreeSet::new();
     for (e, old, new) in &trims {
         let Some(ed) = w.m.edges.get(e).copied() else {
             continue;
@@ -287,6 +415,21 @@ fn apply(
         }
         w.m.edges.insert(*e, ne);
         w.t.add_edge(*e, ne);
+        // An edge of an exact circle that loses its end leaves the circle: the rest of the
+        // curve keeps its description (shortened or cut, with a note).
+        let in_curve =
+            w.m.curves
+                .iter()
+                .find(|(_, es)| es.contains(e))
+                .map(|(c, _)| *c);
+        if let Some(c) = in_curve
+            && w.m.analytic.contains_key(&c)
+        {
+            if let Some(es) = w.m.curves.get_mut(&c) {
+                es.retain(|x| x != e);
+            }
+            cut_curves.insert(c);
+        }
     }
     for v in &plan.gone {
         if w.t.degree(*v) != 0 {
@@ -374,10 +517,22 @@ fn apply(
         }
         faces.insert(w.new_face(g));
     }
-    if smooth {
+    let none: BTreeSet<(Pt, Pt)> = BTreeSet::new();
+    let (blend, rails) = if smooth {
+        (&plan.blend, &plan.rails)
+    } else {
+        (&none, &none)
+    };
+    let seam_flags: &[&str] = if smooth {
+        &[ATTR_SOFT, ATTR_SMOOTH]
+    } else {
+        &[ATTR_SOFT]
+    };
+    {
         for (set, flags) in [
-            (&plan.blend, &[ATTR_SOFT, ATTR_SMOOTH][..]),
-            (&plan.rails, &[ATTR_SOFT][..]),
+            (blend, &[ATTR_SOFT, ATTR_SMOOTH][..]),
+            (rails, &[ATTR_SOFT][..]),
+            (&plan.seams, seam_flags),
         ] {
             for (a, b) in set {
                 if let Some(e) = w.t.edge(id(*a), id(*b)) {
@@ -392,6 +547,7 @@ fn apply(
     let verts: BTreeSet<VertexId> = vids.iter().copied().collect();
     let edges: BTreeSet<EdgeId> = made_edges;
     Ok(Made {
+        curves: cut_curves,
         faces,
         changed: plan.faces.keys().copied().collect(),
         edges,
@@ -411,23 +567,35 @@ fn check_result(
 ) -> Result<(), SurfaceError> {
     let invalid = |why: String| SurfaceError::from(FilletError::Result(why));
     check_limits(m)?;
-    if let Some(c) = check::curves(m) {
-        return Err(invalid(c.to_string()));
+    if check::curves(m).is_some() {
+        return Err(invalid("a curve of the model would break".into()));
     }
     let after = check::structure_problems(m);
     if !after.is_empty() {
         let old = check::structure_problems(before);
         if let Some(p) = after.difference(&old).next() {
-            return Err(invalid(p.to_string()));
+            return Err(invalid(plain(m, p)));
         }
     }
     let mut faces = made.faces.clone();
     faces.extend(made.changed.iter().copied());
-    if let Some(why) = pushpull::new_contact_text(before, m, &made.edges, &faces) {
-        return Err(invalid(format!("it would cut into other geometry: {why}")));
+    // The new pieces of one corner touch each other by design: the closed-solid check below
+    // finds them when they pass through each other. Here only the old geometry counts.
+    let start = before.next_id();
+    let both_new = |e: EdgeId, g: FaceId| e.0 >= start && g.0 >= start;
+    if let Some((e, _, c)) = contact::new_contact(before, m, &made.edges, &faces, &both_new) {
+        let how = match c {
+            Contact::Through => "cut through",
+            Contact::EndsOn => "touch",
+            Contact::LiesIn => "lie in",
+        };
+        return Err(invalid(format!(
+            "the new faces would {how} another face of the model {}",
+            near_edge(m, e)
+        )));
     }
-    if let Some(p) = pushpull::new_distance_problem(before, m, &made.edges, &made.verts) {
-        return Err(invalid(p.to_string()));
+    if let Some(p) = contact::new_distance_problem(before, m, &made.edges, &made.verts) {
+        return Err(invalid(plain(m, &p)));
     }
     let mut set: Vec<FaceId> = shell
         .iter()
@@ -437,11 +605,13 @@ fn check_result(
     set.extend(made.faces.iter().copied());
     let state = m
         .solid_state(&set)
-        .ok_or_else(|| invalid("the faces of the solid are missing".into()))?;
+        .ok_or_else(|| invalid("faces of the solid would be missing".into()))?;
     if !state.is_solid() {
         let why = match (state.open_edges.first(), state.crossings.first()) {
-            (Some(o), _) => format!("edge {} would be open ({})", o.edge, o.kind),
-            (None, Some((e, f))) => format!("edge {e} would pass through face {f}"),
+            (Some(o), _) => format!("the solid would be open {}", near_edge(m, o.edge)),
+            (None, Some((e, _))) => {
+                format!("the solid would pass through itself {}", near_edge(m, *e))
+            }
             _ => "it would not close a volume".to_string(),
         };
         return Err(invalid(why));
@@ -459,4 +629,36 @@ fn check_result(
         )));
     }
     Ok(())
+}
+
+/// "near (x, y, z)": the middle of an edge, in local mm with one decimal.
+fn near_edge(m: &SurfaceModel, e: EdgeId) -> String {
+    match m.edges.get(&e) {
+        Some(ed) => near(m.vertices[&ed.v[0]].midpoint(m.vertices[&ed.v[1]])),
+        None => String::new(),
+    }
+}
+
+fn near(p: DVec3) -> String {
+    format!("near ({:.1}, {:.1}, {:.1})", p.x, p.y, p.z)
+}
+
+/// A problem of the model in plain words, with the place and without ids.
+fn plain(m: &SurfaceModel, p: &check::Problem) -> String {
+    use check::Problem as P;
+    let what = match p {
+        P::OffPlane(..) | P::BadNormal(_) => "a face would not be flat",
+        P::CloseVertices(..) | P::VertexOnEdge(..) | P::Crossing(..) | P::ShortEdge(_) => {
+            "new edges would come closer to each other than the length tolerance (0.01 mm)"
+        }
+        P::Overlap(..) => "two faces in one plane would overlap",
+        P::OuterSide(_) | P::HoleSide(_) | P::HoleOutside(_) | P::HoleInHole(_) => {
+            "the outline of a face would turn around"
+        }
+        _ => "the model would not be valid",
+    };
+    match check::place(m, p) {
+        Some(x) => format!("{what} {}", near(x)),
+        None => what.to_string(),
+    }
 }

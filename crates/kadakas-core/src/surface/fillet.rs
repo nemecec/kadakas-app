@@ -101,14 +101,18 @@ impl Profile {
 
 /// The default number of segments of a round of `radius` mm whose edges turn by at most
 /// `angle` radians: at most 15 degrees per segment, and less for a large radius, so the arc
-/// leaves the true circle by at most 0.5 mm. At least 1 and at most [`MAX_DEFAULT_SEGMENTS`].
+/// leaves the true circle by at most 0.5 mm. A small radius gets fewer, so that a segment stays
+/// four length tolerances long. At least 1 and at most [`MAX_DEFAULT_SEGMENTS`].
 pub fn default_segments(radius: f64, angle: f64) -> u32 {
     let mut step = 15f64.to_radians();
     if radius > 0.5 {
         step = step.min(2.0 * (1.0 - 0.5 / radius).acos());
     }
     let n = (angle / step).ceil();
-    if n.is_finite() {
+    // A small radius gets fewer segments, so a segment stays four length tolerances long.
+    let fits = (radius * angle / (4.0 * super::LENGTH_TOLERANCE)).floor();
+    let n = n.min(fits);
+    if n.is_finite() && n >= 1.0 {
         (n as u32).clamp(1, MAX_DEFAULT_SEGMENTS)
     } else {
         1
@@ -192,6 +196,9 @@ pub struct Plan {
     pub blend: BTreeSet<(Pt, Pt)>,
     /// Edges where the round meets a face along a rail: soft with `smooth`.
     pub rails: BTreeSet<(Pt, Pt)>,
+    /// Edges that cut a strip face into triangles where it took a point of another end, so that
+    /// every face stays flat: always soft.
+    pub seams: BTreeSet<(Pt, Pt)>,
     /// An upper bound of the volume that the convex edges take away (mm³).
     pub convex_bound: f64,
     /// An upper bound of the volume that the concave edges add (mm³).
@@ -238,6 +245,18 @@ pub enum FilletError {
         segments: u32,
         edge: EdgeId,
     },
+    #[error(
+        "the edit would make about {count} new edges, more than the {max} of one edit; {}",
+        match most_segments {
+            Some(k) => format!("use fewer segments: at most about {k}"),
+            None => "choose fewer edges, or round them in more than one step".to_string(),
+        }
+    )]
+    TooManyEdges {
+        count: usize,
+        max: usize,
+        most_segments: Option<u32>,
+    },
     #[error("segments must be from 1 to {MAX_SEGMENTS}, not {segments}")]
     Segments { segments: u32 },
     #[error("the {noun} must be a number larger than the length tolerance (0.01 mm), not {asked}")]
@@ -250,7 +269,7 @@ pub enum FilletError {
 
 fn fits_text(most: Option<f64>) -> String {
     match most {
-        Some(x) if x > 0.0 => format!("at most about {} mm fits", (x * 100.0).floor() / 100.0),
+        Some(x) if x > 0.0 => format!("at most about {x} mm fits"),
         Some(_) => "there is no room for it there".to_string(),
         None => "a smaller size fits".to_string(),
     }
@@ -267,6 +286,7 @@ impl FilletError {
             FilletError::DoesNotFit { .. } => "fillet_does_not_fit",
             FilletError::TooSmall { .. } => "fillet_too_small",
             FilletError::Segments { .. } => "fillet_segments_out_of_range",
+            FilletError::TooManyEdges { .. } => "fillet_too_many_edges",
             FilletError::BadSize { .. } => "fillet_bad_size",
             FilletError::NotSolid { .. } => "fillet_not_solid",
             FilletError::Result(_) => "fillet_result_invalid",
@@ -309,6 +329,9 @@ struct Strip {
 struct End {
     pts: Vec<Pt>,
     t: Vec<f64>,
+    /// Points put into each side of the end (side `j` runs from point `j` to `j + 1`), where the
+    /// end of another strip crosses or touches it.
+    between: Vec<Vec<Pt>>,
 }
 
 impl Strip {
@@ -438,8 +461,24 @@ pub fn plan(
         rails: BTreeSet::new(),
     };
     let ends: BTreeSet<VertexId> = strips.iter().flat_map(|s| [s.p, s.q]).collect();
+    // The faces at each end, from one pass over the faces.
+    let mut at_vertex: BTreeMap<VertexId, Vec<(FaceId, VertexId, VertexId)>> = BTreeMap::new();
+    for (id, f) in &shape.faces {
+        for l in &f.loops {
+            let k = l.len();
+            for i in 0..k {
+                if ends.contains(&l[i]) {
+                    at_vertex.entry(l[i]).or_default().push((
+                        *id,
+                        l[(i + k - 1) % k],
+                        l[(i + 1) % k],
+                    ));
+                }
+            }
+        }
+    }
     for v in &ends {
-        let at = around(shape, *v)?;
+        let at = around(*v, at_vertex.remove(v).unwrap_or_default())?;
         let sel: Vec<Option<usize>> = at
             .next
             .iter()
@@ -532,24 +571,16 @@ pub(crate) fn slerp(a: DVec3, b: DVec3, t: f64) -> DVec3 {
     (a * ((1.0 - t) * ang).sin() + b * (t * ang).sin()) / s
 }
 
-/// The faces around `v` as one walk, or the refusal when they are not one fan of three faces.
-fn around(shape: &Shape, v: VertexId) -> Result<Around, FilletError> {
+/// The faces around `v` as one walk (`items`: each use of `v` in a loop as face, previous and next
+/// vertex), or the refusal when they are not one fan of three faces.
+fn around(v: VertexId, items: Vec<(FaceId, VertexId, VertexId)>) -> Result<Around, FilletError> {
     let corner = |why: String| FilletError::Corner { vertex: v, why };
-    let mut items: Vec<(FaceId, VertexId, VertexId)> = Vec::new();
-    for (id, f) in &shape.faces {
-        let mut seen = 0;
-        for l in &f.loops {
-            for i in 0..l.len() {
-                if l[i] == v {
-                    seen += 1;
-                    let k = l.len();
-                    items.push((*id, l[(i + k - 1) % k], l[(i + 1) % k]));
-                }
-            }
-        }
-        if seen > 1 {
+    let mut seen: BTreeSet<FaceId> = BTreeSet::new();
+    for it in &items {
+        if !seen.insert(it.0) {
             return Err(corner(format!(
-                "face {id} passes through the vertex more than once"
+                "face {} passes through the vertex more than once",
+                it.0
             )));
         }
     }
@@ -582,7 +613,9 @@ fn around(shape: &Shape, v: VertexId) -> Result<Around, FilletError> {
     }
     if items.len() != 3 {
         return Err(corner(format!(
-            "{} faces meet there; a fillet or a chamfer works at corners of exactly three faces",
+            "{} faces meet there; a fillet or a chamfer works at corners of exactly three faces. \
+             A corner that an earlier fillet made has more faces: round all edges of a corner in \
+             one step, or round the side edges first and the top after them",
             items.len()
         )));
     }
@@ -608,6 +641,9 @@ fn assemble(
         most: None,
     };
     let mut new_faces: Vec<NewFace> = Vec::new();
+    let mut seams: BTreeSet<(Pt, Pt)> = BTreeSet::new();
+    // A face is flat when no point is farther from its plane than this.
+    let flat_eps = b.tol * 1e-7;
     let (mut convex_bound, mut concave_bound) = (0.0, 0.0);
     for s in &strips {
         let (Some(e0), Some(e1)) = (&s.ends[0], &s.ends[1]) else {
@@ -626,35 +662,138 @@ fn assemble(
             Profile::Round { .. } => None,
             Profile::Flat { .. } => Some(s.normals[0] + s.normals[1]),
         };
-        for j in 0..n {
-            let mut l = vec![e0.pts[j], e0.pts[j + 1], e1.pts[j + 1], e1.pts[j]];
-            l.dedup();
-            let pts: Vec<DVec3> = l.iter().map(|p| b.pos(*p)).collect();
-            let normal = geom::newell(&pts).normalize_or_zero();
-            let want = expect
-                .unwrap_or_else(|| slerp(s.normals[0], s.normals[1], (j as f64 + 0.5) / n as f64));
-            if normal.dot(want) <= 0.0 {
-                return Err(no_fit(format!(
-                    "the strip of edge {} would turn inside out",
-                    s.edge
-                )));
+        // An end whose points left their lines (a point of another end was put in) gets a short
+        // row of its own near the end, cut into triangles, so the rest of the strip stays flat
+        // faces with long sides that never come near another end.
+        let shortest = (0..=n)
+            .map(|j| e1.t[j] - e0.t[j])
+            .fold(f64::INFINITY, f64::min);
+        let delta = (50.0 * b.tol).min(0.3 * shortest);
+        let bent = |b: &Builder<'_>, e: &End| {
+            e.between.iter().any(|w| !w.is_empty())
+                || (0..=n).any(|j| b.pos(e.pts[j]).distance(s.point(j, e.t[j])) > flat_eps)
+        };
+        let cut = |b: &mut Builder<'_>, e: &End, sign: f64| End {
+            pts: (0..=n)
+                .map(|j| b.add(s.point(j, e.t[j] + sign * delta)))
+                .collect(),
+            t: (0..=n).map(|j| e.t[j] + sign * delta).collect(),
+            between: vec![Vec::new(); n],
+        };
+        let c0 = if bent(&b, e0) {
+            Some(cut(&mut b, e0, 1.0))
+        } else {
+            None
+        };
+        let c1 = if bent(&b, e1) {
+            Some(cut(&mut b, e1, -1.0))
+        } else {
+            None
+        };
+        // The rails pass through the cuts: the faces next to the strip get the points.
+        let (fa, fb) = (s.faces[0], s.faces[1]);
+        if let Some(c) = &c0 {
+            if let Some(x) = b.subs.get_mut(&fa).and_then(|m| m.get_mut(&s.p)) {
+                x.push(c.pts[0]);
             }
-            new_faces.push(NewFace {
-                points: l,
-                normal,
-                role: Role::Strip {
+            if let Some(x) = b.subs.get_mut(&fb).and_then(|m| m.get_mut(&s.p)) {
+                x.insert(0, c.pts[n]);
+            }
+        }
+        if let Some(c) = &c1 {
+            if let Some(x) = b.subs.get_mut(&fa).and_then(|m| m.get_mut(&s.q)) {
+                x.insert(0, c.pts[0]);
+            }
+            if let Some(x) = b.subs.get_mut(&fb).and_then(|m| m.get_mut(&s.q)) {
+                x.push(c.pts[n]);
+            }
+        }
+        let mut rows: Vec<(&End, &End)> = Vec::new();
+        if let Some(c) = &c0 {
+            rows.push((e0, c));
+        }
+        rows.push((c0.as_ref().unwrap_or(e0), c1.as_ref().unwrap_or(e1)));
+        if let Some(c) = &c1 {
+            rows.push((c, e1));
+        }
+        for (e0, e1) in rows {
+            for j in 0..n {
+                let mut l = vec![e0.pts[j]];
+                l.extend_from_slice(&e0.between[j]);
+                l.push(e0.pts[j + 1]);
+                l.push(e1.pts[j + 1]);
+                l.extend(e1.between[j].iter().rev());
+                l.push(e1.pts[j]);
+                l.dedup();
+                let pts: Vec<DVec3> = l.iter().map(|p| b.pos(*p)).collect();
+                let normal = geom::newell(&pts).normalize_or_zero();
+                let want = expect.unwrap_or_else(|| {
+                    slerp(s.normals[0], s.normals[1], (j as f64 + 0.5) / n as f64)
+                });
+                if normal.dot(want) <= 0.0 {
+                    return Err(no_fit(format!(
+                        "the strip of edge {} would turn inside out",
+                        s.edge
+                    )));
+                }
+                let role = Role::Strip {
                     edge: s.edge,
                     segment: j,
-                },
-                looks: s.faces.to_vec(),
-            });
-        }
-        for j in 0..=n {
-            let e = pair(e0.pts[j], e1.pts[j]);
-            if j == 0 || j == n {
-                b.rails.insert(e);
-            } else {
-                b.blend.insert(e);
+                };
+                // A strip side that took a point of another end is not flat any more: triangles.
+                let mid = pts.iter().copied().sum::<DVec3>() / pts.len() as f64;
+                let off = pts
+                    .iter()
+                    .map(|p| (*p - mid).dot(normal).abs())
+                    .fold(0.0, f64::max);
+                if off <= flat_eps {
+                    new_faces.push(NewFace {
+                        points: l,
+                        normal,
+                        role,
+                        looks: s.faces.to_vec(),
+                    });
+                    continue;
+                }
+                let plane = Plane::new(mid, normal).expect("a normal");
+                let ring: Vec<DVec2> = pts.iter().map(|p| plane.project(*p)).collect();
+                let tris = geom::triangulate_rings(&[ring]).ok_or_else(|| {
+                    no_fit(format!(
+                        "the strip of edge {} would fold at its end",
+                        s.edge
+                    ))
+                })?;
+                let boundary: BTreeSet<(Pt, Pt)> = (0..l.len())
+                    .map(|i| pair(l[i], l[(i + 1) % l.len()]))
+                    .collect();
+                for t in tris {
+                    let tri: Vec<Pt> = t.iter().map(|i| l[*i as usize]).collect();
+                    let tp: Vec<DVec3> = tri.iter().map(|p| b.pos(*p)).collect();
+                    let tn = geom::newell(&tp).normalize_or_zero();
+                    for i in 0..3 {
+                        let e = pair(tri[i], tri[(i + 1) % 3]);
+                        if !boundary.contains(&e) {
+                            seams.insert(e);
+                        }
+                    }
+                    new_faces.push(NewFace {
+                        points: tri,
+                        normal: tn,
+                        role,
+                        looks: s.faces.to_vec(),
+                    });
+                }
+            }
+            for j in 0..=n {
+                let e = pair(e0.pts[j], e1.pts[j]);
+                if j == 0 || j == n {
+                    // A round of one segment is a flat facet: its rails stay drawn.
+                    if n > 1 {
+                        b.rails.insert(e);
+                    }
+                } else {
+                    b.blend.insert(e);
+                }
             }
         }
         // The wedge between the edge and the rails, a little longer than the edge.
@@ -753,6 +892,7 @@ fn assemble(
         gone,
         blend: b.blend,
         rails: b.rails,
+        seams,
         convex_bound,
         concave_bound,
     })

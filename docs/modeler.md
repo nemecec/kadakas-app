@@ -639,7 +639,7 @@ The arc has `segments` equal parts, so the strip is `segments` flat faces. Each 
 Edges at any angle work: slanted faces, a tapered leg, the end face of an extrusion next to its sides.
 
 The default number of segments comes from the radius and the largest angle of the chosen edges. A segment turns by 15 degrees at most.
-For a large radius a segment stays within 0.5 mm of the true circle. The default is 1 to 24 segments. A given number is 1 to 64.
+For a large radius a segment stays within 0.5 mm of the true circle. The default is 1 to 24 segments. A small radius gets fewer, so that a segment stays four length tolerances long. A given number is 1 to 64. A ball corner whose triangles are shorter than the length tolerance is refused with `fillet_too_small`.
 
 ### The corners
 
@@ -648,13 +648,20 @@ Each end of a chosen edge is a vertex. Exactly three faces meet there. Picture a
 - **One chosen edge.** The strip runs on to the plane of the third face. That face gets the end of the strip in its outline. On a box with one round edge, each end face gets a quarter circle.
 - **Two chosen edges, the third edge stays sharp.** Both strips end on one plane. The plane holds the sharp edge and the corner where the two rails meet in the shared face.
   When the two edges meet their faces at the same angle, the two ends are the same points. The strips then meet as a miter, like a picture frame. Examples are the top edges of a box, the end edges of the U block and a ring of a cylinder.
-  When the angles differ, a flat piece in that plane fills the gap between the two ends. Picture a small flat facet between two moldings of different profiles.
+  When the angles differ, the two ends are two different polylines in that plane. They are joined in four steps:
+  1. A point of one end within five length tolerances of the point of the other end with the same index becomes that point.
+  2. A corner of one end that close to a side of the other end goes into that side.
+  3. Where the two ends cross, the crossing point goes into both ends.
+  4. The shared points cut the two ends into runs. A run where both ends have no point between is a shared side. Any other run is a flat piece in the plane: one end out, the other end back.
+  Picture a small flat facet between two moldings of different profiles. When the ends cross, there are two facets, one on each side of the crossing.
+  A strip whose end took a point that is not on its own line gets a short row of its own near the end. The row is 0.5 mm long, or less on a short edge. It is cut into triangles. So every face stays exactly flat, and the long faces of the strip keep their sides.
 - **Three chosen edges.** Picture a ball that touches the three planes. A fillet ends each strip at the cross section through the center of that ball. A patch of triangles on that ball closes the corner. Its points are rows between two of the end arcs, so the third arc is the last row. For a box corner this is an eighth of a ball. A chamfer closes the corner with the triangle of the three rail corners.
 
 A corner of four or more faces is refused with the vertex. There is no fallback.
 A vertex with chosen convex and concave edges is refused too. So `all` with `concave` on an L shape is refused at the ends of the inner edge. Round the inner edge alone, or leave it out.
-Two chosen edges can continue each other in a straight line. They are refused when they meet the shared face at different angles.
-Two chosen edges at different angles get a flat corner piece. At some radii this piece is thinner than the length tolerance (0.01 mm). Such a radius is refused. The "at most about" value is then the largest radius below that band.
+Two chosen edges that continue each other in a straight line are refused when they meet the shared face at different angles.
+At a few small sizes the pieces of a corner of two edges at different angles come closer to each other than the length tolerance (0.01 mm). Such a size is refused with the place. Measured on a block with a front that leans 20 degrees: the radius of 0.2 mm is refused, and 0.05 to 20 mm otherwise work. On a leg that leans and tapers, 1.25 mm is refused, and 0.05 to 12 mm otherwise work.
+A corner that an earlier fillet made has four to six faces. So `all` on a box that is already rounded is refused. Round all edges of a corner in one step, or round the side edges first and the top after them.
 
 ### What stays and what is new
 
@@ -664,14 +671,14 @@ The chosen edges and their end vertices go. The strips and the corner pieces are
 A new face takes the paint of the largest face next to it. A tie goes to the lower id.
 
 With Smooth (the default of a fillet) the edges inside the round get `soft` and `smooth`. These are the lines between two segments, a miter and the triangles of a ball corner. The round then shades as one surface.
-A rail gets `soft` only. Its line is not drawn, and the big face keeps its own shading. A chamfer gets no flags.
+A rail gets `soft` only. Its line is not drawn, and the big face keeps its own shading. A round of one segment is a flat facet: its rails stay hard. A chamfer gets no flags. The edges that cut the end row of a strip into triangles are soft (and smooth with Smooth).
 
-A chosen edge leaves its curve. The rest of the curve is cut into chains, as Erase does. The exact circle of a curve (MOD-15) stays only where the chain still lies on it. Otherwise it is dropped or shortened with a note. The rails of a rounded arc get no exact circle of their own.
+A chosen edge leaves its curve. The rest of the curve is cut into chains, as Erase does. An edge that stays but loses its end at a corner also leaves a curve with an exact circle (MOD-15), because its end leaves the circle. So the rest of the arc keeps its circle, shorter, with a note. Example: the vertical edge at the join of a line and an arc of a D shape. The exact circle of a curve stays only where the chain still lies on it. Otherwise it is dropped or shortened with a note. The rails of a rounded arc get no exact circle of their own.
 
 ### Choosing edges
 
 The edit takes edge ids. `SurfaceModel::fillet_edges` (`EdgeChoice`) finds them. It joins the given edges and the edges that a filter finds. The filter looks at the edges of `faces`, or of the whole model with `all`.
-The filter keeps an edge between exactly two faces at an angle above 5 degrees (`min_angle`). The edge must not be soft or smooth, so the facets of a curved surface stay. It must be convex, or concave with `concave`.
+The filter keeps an edge between exactly two faces at an angle above 5 degrees (`min_angle`). It leaves out soft and smooth edges, so the facets of a curved surface stay. It keeps convex edges, and concave edges with `concave`.
 
 ### Refusals
 
@@ -687,20 +694,21 @@ Each refusal has a stable id and changes nothing.
 | `fillet_does_not_fit` | The size does not fit. The message ends with "at most about X mm fits", as Offset does. |
 | `fillet_too_small` | A segment is shorter than the length tolerance. |
 | `fillet_segments_out_of_range` | The segments are not 1 to 64. |
+| `fillet_too_many_edges` | More than 10,000 new edges. The message gives the most segments that fit. |
 | `fillet_bad_size` | The size is not a number above the length tolerance. |
 | `fillet_result_invalid` | The result is not a closed solid, has a new problem or cuts into other geometry. |
 
 A size does not fit when a strip loses its length along its edge. It also does not fit when a face turns around or crosses itself. A hole that leaves its face and a corner piece that folds also count.
 Two fillets on opposite sides of a thin arm collide. Take an arm of 17 mm and a radius of 10 mm. The message then gives "at most about 8.49 mm fits".
-The largest size is found by halving down to a sixteenth of the length tolerance, as for Offset.
-More than 10,000 new edges in one edit (`MAX_EDIT_EDGES`) and the model limits are refused with `model_limit`.
+The largest size comes from two searches. First the plan is halved down to a sixteenth of the length tolerance, as for Offset. Then the whole edit, with every check of the result, runs on a copy at that size. When the edit refuses it, the size is halved again with the whole edit, at most 10 times, and then stepped down. The value is rounded down to two significant digits, and that value works. With no working size the message says so.
+The new edges are counted before the plan: each strip has its lines and the sides of its ends, and a ball corner about `3 n (n + 1) / 2` edges. More than 10,000 (`MAX_EDIT_EDGES`) is refused with `fillet_too_many_edges`. The message gives the most segments that fit ("use fewer segments: at most about 9"). The model limits are refused with `model_limit`.
 
-The result is checked like the result of the solid tools (MOD-09). The checks are the limits, new model problems, contacts of the new edges with other faces, and new distance problems. The shell must also close a solid with no crossing.
-The volume must change by no more than the wedges between the edges and their rails allow. Fillet and chamfer are not replayed for collaboration, as the solid tools are not.
+The result is checked like the result of the solid tools (MOD-09). The checks are the limits, new model problems, contacts of the new edges with faces that were there before, and new distance problems. The new pieces of one corner touch each other by design, so the closed-solid check finds a crossing between them. The shell closes a solid with no crossing, or the edit is refused.
+The change of volume stays within the wedges between the edges and their rails, or the edit is refused. A refusal of the result names the kind of problem and the place in local mm, without ids. Fillet and chamfer are not replayed for collaboration, as the solid tools are not.
 
 ### Modeler
 
-The tray has the panel Fillet and Chamfer. It has the radius or distance in world mm, the segments (0 is automatic) and Smooth. The buttons Fillet and Chamfer run it.
+The tray has the panel Fillet and Chamfer. It is closed at the start. It has the radius or distance in world mm, the segments (0 is automatic) and Smooth. The buttons Fillet and Chamfer run it. A model that its placement scales unequally along its axes is refused, because a round would be an ellipse.
 Edit > Fillet and Edit > Chamfer use the values of the panel. The context menu of the 3D view has the same items.
 They work on the selected edges and on the sharp convex edges of the selected faces. The status line says how many edges changed, or why nothing changed, in the language of the window.
 The code is `kadakas_ui_core::modeling::fillet` and `kadakas-modeler/src/fillet.rs`.
@@ -711,7 +719,8 @@ The code is `kadakas_ui_core::modeling::fillet` and `kadakas-modeler/src/fillet.
 - Model tests (`surface/tests_fillet.rs`). The U block has three readings. The first is 69 mm wide (arms 17 and 29, slot 23). The two others are 82 mm wide: a slot of 36, or a slot of 23 and a ledge of 13. Other tests use the plate of 1055 x 160 x 20 mm with two pockets of 8 mm. More tests cover a tapered leg, a cylinder ring and an L shape. The rest cover refusals, the limit of new edges and determinism.
 - Two property tests. The first uses random boxes and edge sets. The removed volume lies between the true round and the true round plus the error bound. The second uses random prisms and tapered prisms with fillet or chamfer. A refusal changes nothing. A result is a smaller closed solid.
 - Document tests (`tests/fillet.rs`) check one undo step and undo and redo byte for byte. They also check the JSON commands and Subtract on a rounded box.
-- Cost, measured once in a debug build: a model of 48,000 vertices, 72,000 edges and 36,000 faces. One edge took 1.05 s and twelve edges with ball corners took 1.05 s. A refusal with the search for the largest size took 0.28 s. In a release build the same calls took 0.56 s, 0.56 s and 0.12 s (`perf_fillet_in_a_big_model`, run with `--release -- --ignored`). The final checks of the whole model take most of the time.
+- Sweeps (`leaning_and_tapered_parts_round_their_top_at_everyday_sizes`): 27 sizes from 0.05 to 20 mm, fillet and chamfer, on a block that leans 5 and 20 degrees and on a leg that leans and tapers. Every result has each vertex within 1e-6 mm of the plane of its face, and every largest size of a refusal works. A property test does the same for random leans of 1 to 40 degrees. Another one checks the largest size of a refusal on 200 random prisms.
+- Cost, measured once in a release build (`perf_fillet_in_a_big_model` and `perf_many_boxes_with_all_edges_cut`, run with `--release -- --ignored`). In a model of 48,000 vertices, 72,000 edges and 36,000 faces, one edge took 0.54 s and twelve edges with ball corners took 0.55 s. A refusal took 0.67 s, because the largest size is checked with the whole edit. The final checks of the whole model take most of the time. The cost grows in line with the edges: a chamfer of all edges of 50 boxes (600 edges) took 0.03 s, of 100 boxes 0.06 s. 2,400 and 9,600 edges are refused for the number of new edges in 0.006 s and 0.026 s.
 
 ## Scenes and styles (MOD-10)
 

@@ -181,7 +181,8 @@ fn one_edge_of_a_box_takes_the_exact_prism() {
         assert!((v - want).abs() < 1e-6, "n {n}: {v} against {want}");
         assert_eq!(p.new_faces.len(), n as usize);
         // The rails and the lines between the segments.
-        assert_eq!(p.rails.len(), 2);
+        // A round of one segment is a flat facet: its rails stay hard.
+        assert_eq!(p.rails.len(), if n > 1 { 2 } else { 0 });
         assert_eq!(p.blend.len(), n as usize - 1);
     }
 }

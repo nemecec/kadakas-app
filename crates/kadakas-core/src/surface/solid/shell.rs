@@ -308,7 +308,7 @@ pub(super) fn crossings_of(warnings: &[Problem]) -> Vec<(EdgeId, FaceId)> {
 }
 
 /// The shells of a model by the walk, with the cavities put into the solids that hold them.
-fn shells(m: &SurfaceModel, topo: &Topo, crossings: &[(EdgeId, FaceId)]) -> Vec<Shell> {
+pub(super) fn shells(m: &SurfaceModel, topo: &Topo, crossings: &[(EdgeId, FaceId)]) -> Vec<Shell> {
     let uses = uses_of(m);
     let mut covered: BTreeSet<FaceId> = BTreeSet::new();
     let mut shells: Vec<Shell> = Vec::new();

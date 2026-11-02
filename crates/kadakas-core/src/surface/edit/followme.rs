@@ -556,7 +556,7 @@ pub(super) fn follow_me(
             return Err(invalid(p));
         }
     }
-    if let Some(p) = pushpull::new_distance_problem(before, m, &edges, &verts) {
+    if let Some(p) = contact::new_distance_problem(before, m, &edges, &verts) {
         return Err(invalid(&p));
     }
     if first_moved_note {

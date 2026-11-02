@@ -10,3 +10,6 @@ uic-fillet-refused-small = Raadius on lõikude arvu jaoks liiga väike. Kasuta v
 uic-fillet-refused-segments = Lõikude arv peab olema 1 kuni 64.
 uic-fillet-refused-size = Suurus peab olema suurem kui 0,01 mm.
 uic-fillet-refused-result = Tulemus ei ole korrektne keha, seega midagi ei muutunud.
+uic-fillet-refused-edges = Muudatus teeb rohkem uusi servi, kui üks muudatus lubab (10 000). Vali vähem servi või ümarda neid mitmes sammus.
+uic-fillet-refused-edges-segments = Muudatus teeb rohkem uusi servi, kui üks muudatus lubab (10 000). Kasuta vähem lõike: kõige rohkem umbes { $most }.
+uic-fillet-refused-scaled = Mudel on telgede suunas erinevalt skaleeritud, seega ümardus ei oleks ümar. Lähtesta enne mõõtkava.

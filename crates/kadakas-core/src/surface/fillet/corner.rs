@@ -110,7 +110,11 @@ fn one(
         to: pt_i,
     });
     let e = strips[si].end_of(v);
-    strips[si].ends[e] = Some(End { pts, t: ts });
+    strips[si].ends[e] = Some(End {
+        between: vec![Vec::new(); n],
+        pts,
+        t: ts,
+    });
     Ok(())
 }
 
@@ -203,17 +207,12 @@ fn two(
             ),
         ));
     }
-    let pinch: Vec<bool> = (0..=n)
-        .map(|k| k == 0 || pa_pos[k].distance(pc_pos[k]) <= b.tol)
-        .collect();
-    let pa: Vec<Pt> = pa_pos.iter().map(|p| b.add(*p)).collect();
-    let pc: Vec<Pt> = (0..=n)
-        .map(|k| if pinch[k] { pa[k] } else { b.add(pc_pos[k]) })
-        .collect();
+    let ends = join_ends(b, v, &pi, &pa_pos, &pc_pos)?;
+    let (pa, pc) = (ends.a.clone(), ends.c.clone());
     // The faces.
     b.sub(fs, v, vec![pa[0]]);
     let (ua, uc) = (pa[n], pc[n]);
-    if pinch[n] {
+    if ua == uc {
         b.sub(fp, v, vec![ua]);
         b.sub(fq, v, vec![ua]);
         b.trims.push(Trim {
@@ -241,28 +240,11 @@ fn two(
             });
         }
     }
-    // Flat pieces in the plane where the two ends part.
     let looks = vec![fs, fp, fq];
-    let mut k = 0;
-    while k < n {
-        if pinch[k + 1] {
-            b.blend.insert(pair(pa[k], pa[k + 1]));
-            k += 1;
-            continue;
-        }
-        let mut j = k + 1;
-        while j <= n && !pinch[j] {
-            j += 1;
-        }
-        let mut poly = vec![pa[k]];
-        if j <= n {
-            poly.extend_from_slice(&pc[k + 1..j]);
-            poly.push(pa[j]);
-            poly.extend(pa[k + 1..j].iter().rev());
-        } else {
-            poly.extend_from_slice(&pc[k + 1..=n]);
-            poly.extend(pa[k + 1..=n].iter().rev());
-        }
+    for e in ends.shared_edges {
+        b.blend.insert(e);
+    }
+    for poly in ends.pieces {
         b.to_orient.push(b.corners.len());
         b.corners.push(NewFace {
             points: poly,
@@ -270,15 +252,225 @@ fn two(
             role: Role::Corner { vertex: v },
             looks: looks.clone(),
         });
-        k = j;
     }
-    // The ends in the order of each profile.
-    let ends_a: Vec<Pt> = (0..=n).map(|j| pa[from_shared(xa, j)]).collect();
-    let ends_c: Vec<Pt> = (0..=n).map(|j| pc[from_shared(xc, j)]).collect();
+    // The ends in the order of each profile, with the points between them.
+    let profile_end = |x: usize, pts: &[Pt], between: &[Vec<Pt>]| -> End {
+        let p: Vec<Pt> = (0..=n).map(|j| pts[from_shared(x, j)]).collect();
+        let w: Vec<Vec<Pt>> = (0..n)
+            .map(|j| {
+                if x == 0 {
+                    between[j].clone()
+                } else {
+                    between[n - 1 - j].iter().rev().copied().collect()
+                }
+            })
+            .collect();
+        End {
+            pts: p,
+            t: Vec::new(),
+            between: w,
+        }
+    };
+    let mut end_a = profile_end(xa, &pa, &ends.a_between);
+    let mut end_c = profile_end(xc, &pc, &ends.c_between);
+    end_a.t = ta;
+    end_c.t = tc;
     let (ea, ec) = (strips[sa].end_of(v), strips[sb].end_of(v));
-    strips[sa].ends[ea] = Some(End { pts: ends_a, t: ta });
-    strips[sb].ends[ec] = Some(End { pts: ends_c, t: tc });
+    strips[sa].ends[ea] = Some(end_a);
+    strips[sb].ends[ec] = Some(end_c);
     Ok(())
+}
+
+/// The two ends of a corner of two chosen edges, joined in their plane.
+struct Joined {
+    /// The points of the two ends, from the shared face. A point of `c` within the length
+    /// tolerance of the point of `a` with the same index is that point.
+    a: Vec<Pt>,
+    c: Vec<Pt>,
+    /// For each side of an end, the points put into it: where the two ends cross, and a corner of
+    /// one end that lies on a side of the other.
+    a_between: Vec<Vec<Pt>>,
+    c_between: Vec<Vec<Pt>>,
+    /// Sides that both ends share (a miter).
+    shared_edges: Vec<(Pt, Pt)>,
+    /// The flat pieces between the ends, each a loop of points (side found later).
+    pieces: Vec<Vec<Pt>>,
+}
+
+/// Joins the two ends `pa` and `pc` (points in the plane `pi`, from the shared face to the sharp
+/// edge). The construction:
+///
+/// 1. A point of `c` within five length tolerances of the point of `a` with the same index becomes
+///    that point (the first points always, as both lie on the corner of the rails).
+/// 2. A corner of one end (not the first) within five length tolerances of a side of the other is
+///    put into that side.
+/// 3. Where a side of one end crosses a side of the other, the crossing point is put into both.
+/// 4. The points that both ends hold split them into runs. A run where both ends have no point
+///    between is a shared side. Any other run is a flat piece: one end out, the other back.
+///
+/// A strip whose side gets a point that is not on it is cut into triangles later, so every face
+/// stays flat. When the shared points come in another order on the two ends, the corner is
+/// refused.
+fn join_ends(
+    b: &mut Builder<'_>,
+    v: VertexId,
+    pi: &Plane,
+    pa: &[DVec3],
+    pc: &[DVec3],
+) -> Result<Joined, FilletError> {
+    let n = pa.len() - 1;
+    // Points this close are joined: five length tolerances, so that no point
+    // of one end stays just outside the tolerance of a side of the other.
+    let tol = 5.0 * b.tol;
+    let a: Vec<Pt> = pa.iter().map(|p| b.add(*p)).collect();
+    // 1. The points of `c` that are points of `a`.
+    let mut c: Vec<Pt> = Vec::with_capacity(n + 1);
+    let mut cpos: Vec<DVec3> = Vec::with_capacity(n + 1);
+    let mut used: BTreeSet<usize> = BTreeSet::new();
+    for k in 0..=n {
+        let same = (k == 0 || pa[k].distance(pc[k]) <= tol).then_some(k);
+        let other = |used: &BTreeSet<usize>| {
+            (1..n)
+                .filter(|i| !used.contains(i) && pa[*i].distance(pc[k]) <= tol)
+                .min_by(|x, y| pa[*x].distance(pc[k]).total_cmp(&pa[*y].distance(pc[k])))
+        };
+        let same = same.filter(|i| !used.contains(i));
+        // The last points lie on the sharp edge: they join only each other.
+        match same.or_else(|| if k > 0 && k < n { other(&used) } else { None }) {
+            Some(i) => {
+                used.insert(i);
+                c.push(a[i]);
+                cpos.push(pa[i]);
+            }
+            None => {
+                c.push(b.add(pc[k]));
+                cpos.push(pc[k]);
+            }
+        }
+    }
+    // The chains: (point, position), the corners of each end first.
+    let mut ca: Vec<(Pt, DVec3)> = a.iter().copied().zip(pa.iter().copied()).collect();
+    let mut cc: Vec<(Pt, DVec3)> = c.iter().copied().zip(cpos.iter().copied()).collect();
+    // 2. A corner of one end on a side of the other goes into that side.
+    let put_on = |to: &mut Vec<(Pt, DVec3)>, from: &[(Pt, DVec3)]| {
+        for &(p, x) in from.iter().skip(1) {
+            if to.iter().any(|q| q.0 == p) {
+                continue;
+            }
+            let at = (0..to.len() - 1).find(|j| {
+                let (d, t) = geom::point_segment(x, to[*j].1, to[*j + 1].1);
+                d <= tol && t > 1e-9 && t < 1.0 - 1e-9
+            });
+            if let Some(j) = at {
+                to.insert(j + 1, (p, x));
+            }
+        }
+    };
+    let snapshot_a = ca.clone();
+    put_on(&mut cc, &snapshot_a);
+    let snapshot_c = cc.clone();
+    put_on(&mut ca, &snapshot_c);
+    // 3. Where the chains cross, the crossing goes into both.
+    let flat = |p: DVec3| pi.project(p);
+    let mut cross_a: Vec<(usize, f64, Pt, DVec3)> = Vec::new();
+    let mut cross_c: Vec<(usize, f64, Pt, DVec3)> = Vec::new();
+    for i in 0..ca.len() - 1 {
+        for j in 0..cc.len() - 1 {
+            let (s0, s1, r0, r1) = (ca[i], ca[i + 1], cc[j], cc[j + 1]);
+            if s0.0 == r0.0 || s0.0 == r1.0 || s1.0 == r0.0 || s1.0 == r1.0 {
+                continue;
+            }
+            let (p, q) = (flat(s0.1), flat(s1.1));
+            let (r, w) = (flat(r0.1), flat(r1.1));
+            let (d1, d2) = (q - p, w - r);
+            let den = d1.perp_dot(d2);
+            if den.abs() <= 1e-12 * d1.length() * d2.length() {
+                continue;
+            }
+            let t = (r - p).perp_dot(d2) / den;
+            let u = (r - p).perp_dot(d1) / den;
+            if !(t > 1e-9 && t < 1.0 - 1e-9 && u > 1e-9 && u < 1.0 - 1e-9) {
+                continue;
+            }
+            let x = s0.1 + (s1.1 - s0.1) * t;
+            let pt = b.add(x);
+            cross_a.push((i, t, pt, x));
+            cross_c.push((j, u, pt, x));
+        }
+    }
+    let insert = |chain: &mut Vec<(Pt, DVec3)>, mut crossings: Vec<(usize, f64, Pt, DVec3)>| {
+        crossings.sort_by(|x, y| y.0.cmp(&x.0).then(y.1.total_cmp(&x.1)));
+        for (i, _, p, x) in crossings {
+            chain.insert(i + 1, (p, x));
+        }
+    };
+    insert(&mut ca, cross_a);
+    insert(&mut cc, cross_c);
+    // The points between the corners of each end.
+    let between = |chain: &[(Pt, DVec3)], ends: &[Pt]| -> Vec<Vec<Pt>> {
+        let mut out = vec![Vec::new(); n];
+        let mut k = 0;
+        for &(p, _) in chain.iter().skip(1) {
+            if k < n && p == ends[k + 1] {
+                k += 1;
+            } else if k < n {
+                out[k].push(p);
+            }
+        }
+        out
+    };
+    let a_between = between(&ca, &a);
+    let c_between = between(&cc, &c);
+    let ca: Vec<Pt> = ca.into_iter().map(|x| x.0).collect();
+    let cc: Vec<Pt> = cc.into_iter().map(|x| x.0).collect();
+    let in_c: BTreeSet<Pt> = cc.iter().copied().collect();
+    let shared_a: Vec<usize> = (0..ca.len()).filter(|i| in_c.contains(&ca[*i])).collect();
+    let pos_c: BTreeMap<Pt, usize> = cc.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    let shared_c: Vec<usize> = shared_a.iter().map(|i| pos_c[&ca[*i]]).collect();
+    if shared_c.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(refuse(
+            v,
+            "the ends of the two rounds cross each other in an order that gives no flat piece"
+                .into(),
+        ));
+    }
+    let mut shared_edges = Vec::new();
+    let mut pieces = Vec::new();
+    for w in 0..shared_a.len() {
+        let (i0, j0) = (shared_a[w], shared_c[w]);
+        let (i1, j1) = match (shared_a.get(w + 1), shared_c.get(w + 1)) {
+            (Some(i), Some(j)) => (*i, *j),
+            _ => (ca.len() - 1, cc.len() - 1),
+        };
+        if w + 1 == shared_a.len() && i0 == ca.len() - 1 && j0 == cc.len() - 1 {
+            break;
+        }
+        let last = w + 1 == shared_a.len();
+        if !last && i1 == i0 + 1 && j1 == j0 + 1 {
+            shared_edges.push(pair(ca[i0], ca[i1]));
+            continue;
+        }
+        // One end out, the other back.
+        let mut poly: Vec<Pt> = cc[j0..=j1].to_vec();
+        let back: Vec<Pt> = if last {
+            ca[i0 + 1..=i1].iter().rev().copied().collect()
+        } else {
+            ca[i0 + 1..i1].iter().rev().copied().collect()
+        };
+        poly.extend(back);
+        poly.dedup();
+        if poly.len() >= 3 {
+            pieces.push(poly);
+        }
+    }
+    Ok(Joined {
+        a,
+        c,
+        a_between,
+        c_between,
+        shared_edges,
+        pieces,
+    })
 }
 
 /// Three rounded edges: the strips end at the cross sections through the centre of the ball that
@@ -342,6 +534,7 @@ fn three_round(
         strips[si].ends[e] = Some(End {
             pts,
             t: vec![t; n + 1],
+            between: vec![Vec::new(); n],
         });
     }
     // A side from the corner in face `from`: the end of strip `k` in that order.
@@ -373,6 +566,22 @@ fn three_round(
         rows.push(row);
     }
     rows.push(bc);
+    // A ball corner of a small radius with many segments has triangles below the tolerance.
+    for i in 0..n {
+        for j in 0..=i {
+            let (p, q) = (b.pos(rows[i][j]), b.pos(rows[i + 1][j]));
+            let w = b.pos(rows[i + 1][j + 1]);
+            if p.distance(q) <= b.tol || q.distance(w) <= b.tol {
+                let s = &strips[sel[0].expect("three chosen")];
+                return Err(FilletError::TooSmall {
+                    noun: "radius",
+                    asked: r,
+                    segments: n as u32,
+                    edge: s.edge,
+                });
+            }
+        }
+    }
     let looks = at.faces.clone();
     let tri = |b: &mut Builder<'_>, p: [Pt; 3]| {
         let pos: Vec<DVec3> = p.iter().map(|q| b.pos(*q)).collect();
@@ -453,7 +662,11 @@ fn three_flat(
         let pts = vec![face_pt[&s.faces[0]], face_pt[&s.faces[1]]];
         let t: Vec<f64> = pts.iter().map(|p| (b.pos(*p) - s.at).dot(s.d)).collect();
         let e = s.end_of(v);
-        strips[si].ends[e] = Some(End { pts, t });
+        strips[si].ends[e] = Some(End {
+            pts,
+            t,
+            between: vec![Vec::new()],
+        });
     }
     let pts: Vec<Pt> = at.faces.iter().map(|f| face_pt[f]).collect();
     let pos: Vec<DVec3> = pts.iter().map(|p| b.pos(*p)).collect();
