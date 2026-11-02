@@ -951,8 +951,8 @@ pub fn position_text(point: Option<DVec2>) -> String {
     let at = point.unwrap_or(DVec2::ZERO);
     let text = tr!(
         "panels-cursor-position",
-        x = format!("{:>10}", u.length_field(at.x, 1)),
-        y = format!("{:>10}", u.length_field(at.y, 1)),
+        x = format!("{:>14}", u.length_field(at.x, 1)),
+        y = format!("{:>14}", u.length_field(at.y, 1)),
         unit = u.length_field_unit()
     );
     if point.is_some() {
@@ -960,6 +960,29 @@ pub fn position_text(point: Option<DVec2>) -> String {
     } else {
         text.chars().map(|_| ' ').collect()
     }
+}
+
+/// The width of the map readout slot in characters. The widest text is `lat -60.2123456  lon
+/// -124.9123456`, which is 33 characters.
+pub const READOUT_SLOT: usize = 34;
+
+/// The text of the map readout slot: the text of the position, or blanks of the same width when
+/// there is none, so that the label keeps its place and stays a target for a click.
+pub fn readout_slot(text: Option<&str>) -> String {
+    format!("{:<width$}", text.unwrap_or(""), width = READOUT_SLOT)
+}
+
+/// The map readout of the Data bar. A click switches between N/E and lat/lon. The text is
+/// blank when there is no position (`readout_slot`), and the label keeps its place.
+pub fn readout_label(ui: &mut Ui, text: &str, lonlat: &mut bool) -> egui::Response {
+    let label = egui::Label::new(egui::RichText::new(text).monospace()).sense(egui::Sense::click());
+    let response = ui
+        .add(label)
+        .on_hover_text(tr!("panels-map-position-of-the-cursor-click-to"));
+    if response.clicked() {
+        *lonlat = !*lonlat;
+    }
+    response
 }
 
 /// Draws the Data bar. `cursor` is the position that the entry fields start from. `pointer` is
@@ -982,15 +1005,7 @@ pub fn data_bar(
         ui.monospace(position_text(pointer));
         if let Some((t, lonlat)) = readout {
             ui.separator();
-            let label =
-                egui::Label::new(egui::RichText::new(t).monospace()).sense(egui::Sense::click());
-            if ui
-                .add(label)
-                .on_hover_text(tr!("panels-map-position-of-the-cursor-click-to"))
-                .clicked()
-            {
-                *lonlat = !*lonlat;
-            }
+            readout_label(ui, t, lonlat);
         }
         ui.separator();
         ui.label(tr!("panels-tool", tool = m.tool().name()));

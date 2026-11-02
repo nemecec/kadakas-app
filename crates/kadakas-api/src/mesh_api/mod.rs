@@ -28,7 +28,7 @@ mod exact;
 mod query;
 mod read;
 
-pub(crate) use query::{QueryCache, nearest_hit};
+pub(crate) use query::{QueryCache, nearest_hit, ray_meets_box};
 
 pub const MESH_SUMMARY: (&str, &str) = (
     "mesh.summary",
@@ -56,7 +56,7 @@ pub const MESH_BOUNDS: (&str, &str) = (
 );
 pub const MESH_NEAR: (&str, &str) = (
     "mesh.near",
-    "Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?, skipped?}, nearest first. Hidden faces and edges and soft edges are left out unless include_hidden. Models on a hidden layer or class are left out unless id names the model. skipped lists a model whose faces cannot be cut into triangles. Component instances are not searched.",
+    "Faces, edges or vertices near a point. params: {id?, point: [x, y, z] (drawing coordinates, mm), radius (mm), kinds? (faces | edges | vertices, default [faces]), limit? (per kind, default 20, at most 200), include_hidden?}. Returns {point, radius, faces?: [{model, id, distance, closest: [x, y, z] (drawing coordinates)}], edges?, vertices?, skipped?}, nearest first. Hidden faces and edges and soft edges are left out unless include_hidden. Models that are not displayed (hidden layer or class, Hide, a phase display rule, a sheet layer) are left out unless id names the model. skipped lists a model whose faces cannot be cut into triangles. Component instances are not searched.",
 );
 pub const MESH_PICK: (&str, &str) = (
     "mesh.pick",
@@ -473,19 +473,17 @@ pub(crate) fn models<'a>(
     Ok(out)
 }
 
-/// Like [`models`], without the models on a hidden layer or class when no model is named.
+/// Like [`models`], without the models that are not displayed (`Document::is_displayed`) when no
+/// model is named.
 pub(crate) fn visible_models<'a>(
     doc: &'a Document,
     only: Option<&str>,
 ) -> Result<Vec<(ObjectId, &'a SurfaceModel)>, RpcError> {
     let mut list = models(doc, only)?;
     if only.is_none() {
-        list.retain(|(id, _)| {
-            doc.object(*id).is_some_and(|o| {
-                doc.layer(o.layer).is_none_or(|l| l.visible)
-                    && doc.class(o.class).is_none_or(|c| c.visible)
-            })
-        });
+        // The rule that drawing and picking use: layer and class visible, a design layer, not
+        // hidden with Hide, not hidden by a phase display rule, not being edited as a symbol.
+        list.retain(|(id, _)| doc.object(*id).is_some_and(|o| doc.is_displayed(o)));
     }
     Ok(list)
 }

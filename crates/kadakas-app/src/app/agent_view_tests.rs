@@ -2591,3 +2591,287 @@ fn the_empty_position_text_has_the_width_of_a_full_one() {
     assert!(empty.trim().is_empty(), "{empty:?}");
     assert!(full.contains('X') && full.contains('Y'));
 }
+
+// ---------------------------------------------------------------- the review of AGR-10
+
+impl Rig {
+    /// The texts of the Data bar with their places, after a frame that draws it.
+    fn databar_places(&mut self) -> Vec<(String, Pos2, f32)> {
+        fn walk(s: &egui::Shape, into: &mut Vec<(String, Pos2, f32)>) {
+            match s {
+                egui::Shape::Text(t) => {
+                    into.push((t.galley.text().to_string(), t.pos, t.galley.size().x))
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, into)),
+                _ => {}
+            }
+        }
+        self.time += 0.016;
+        let input = RawInput {
+            time: Some(self.time),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
+            ..Default::default()
+        };
+        let ctx = self.ctx.clone();
+        let app = &mut self.app;
+        let out = ctx.run_ui(input, |ui| {
+            app.show_databar(ui);
+        });
+        let mut into = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut into);
+        }
+        into
+    }
+
+    fn georeference(&mut self) {
+        self.app.exec(&Command::SetGeoreference {
+            georef: Some(kadakas_core::georef::Georeference {
+                crs: "EPSG:3067".into(),
+                origin: DVec2::new(385_000.0, 6_672_000.0),
+                rotation: 0.0,
+                user_origin: DVec2::ZERO,
+            }),
+        });
+    }
+}
+
+#[test]
+fn the_data_bar_keeps_its_layout_when_the_pointer_comes_and_goes() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.georeference();
+    r.ok("view.zoom", json!({"box": [-500, -500, 4500, 3500]}));
+    r.advance(0.5);
+    let canvas = r.canvas();
+    r.hover(Pos2::new(canvas.min.x + 10.0, canvas.min.y - 5.0));
+    let away = r.databar_places();
+    let on = r.app.view.to_screen(DVec2::new(2000.0, 1500.0));
+    r.hover(on);
+    let over = r.databar_places();
+    assert!(
+        over.iter().any(|(t, _, _)| t.starts_with("N ")),
+        "the readout shows a position: {over:?}"
+    );
+    assert!(
+        away.iter().all(|(t, _, _)| !t.starts_with("N ")),
+        "{away:?}"
+    );
+    // The same widgets with the same widths in the same order: the Tool label and the fields
+    // after the readout stay where they were.
+    // (The snap label at the end says what the pointer snaps to, which is its own text.)
+    let widths = |v: &[(String, Pos2, f32)]| {
+        v.iter()
+            .take_while(|(t, _, _)| !t.starts_with("Snap"))
+            .map(|(_, _, w)| *w)
+            .collect::<Vec<_>>()
+    };
+    assert!(widths(&away).len() >= 3);
+    assert_eq!(widths(&away), widths(&over), "the bar jumps");
+    assert_eq!(away.len(), over.len());
+    // The readout slot is there while the pointer is away.
+    assert!(
+        away.iter().any(
+            |(t, _, _)| t.trim().is_empty() && t.chars().count() == crate::panels::READOUT_SLOT
+        )
+    );
+    // No map: no slot.
+    r.app.exec(&Command::SetGeoreference { georef: None });
+    let none = r.databar_places();
+    assert!(none.len() < away.len());
+}
+
+#[test]
+fn the_blank_map_readout_takes_a_click() {
+    let ctx = egui::Context::default();
+    let mut lonlat = false;
+    let blank = crate::panels::readout_slot(None);
+    let run = |events: Vec<Event>, lonlat: &mut bool| -> Rect {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 100.0))),
+            events,
+            ..Default::default()
+        };
+        let mut rect = Rect::NOTHING;
+        let _ = ctx.run_ui(input, |ui| {
+            rect = crate::panels::readout_label(ui, &blank, lonlat).rect;
+        });
+        rect
+    };
+    let rect = run(vec![], &mut lonlat);
+    assert!(rect.width() > 100.0, "the blank slot has a width: {rect:?}");
+    // The rectangle is the same with a position in it.
+    let full = crate::panels::readout_slot(Some("N 6672000.250  E 385010.500"));
+    let rect_full = {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 100.0))),
+            ..Default::default()
+        };
+        let mut r = Rect::NOTHING;
+        let _ = ctx.run_ui(input, |ui| {
+            let mut l = false;
+            r = crate::panels::readout_label(ui, &full, &mut l).rect;
+        });
+        r
+    };
+    assert_eq!(rect, rect_full);
+    let at = rect.center();
+    let button = |pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    run(vec![Event::PointerMoved(at)], &mut lonlat);
+    run(vec![button(true)], &mut lonlat);
+    run(vec![button(false)], &mut lonlat);
+    assert!(lonlat, "a click on the blank readout switches it");
+}
+
+#[test]
+fn the_position_box_fits_large_georeferenced_numbers() {
+    let big = crate::panels::position_text(Some(DVec2::new(6_672_010_250.5, -385_010_500.5)));
+    let blank = crate::panels::position_text(None);
+    assert_eq!(big.chars().count(), blank.chars().count(), "{big:?}");
+    let slot = crate::panels::readout_slot(Some("lat -60.2123456  lon -124.9123456"));
+    assert_eq!(slot.chars().count(), crate::panels::READOUT_SLOT);
+    assert_eq!(
+        crate::panels::readout_slot(None).chars().count(),
+        crate::panels::READOUT_SLOT
+    );
+}
+
+#[test]
+fn a_hidden_window_has_no_pointer() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.advance(0.3);
+    let on = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    r.hover(on);
+    assert!(r.ok("view.get", json!({}))["pointer"].is_object());
+    // The window is minimised: the last position is not given.
+    r.app.window_hidden = true;
+    r.hover(on);
+    let g = r.ok("view.get", json!({}));
+    assert_eq!(g["pointer"], Value::Null, "{g}");
+    assert_eq!(g["pointer_reason"], "not_over_canvas");
+    r.app.window_hidden = false;
+    r.hover(on + vec2(1.0, 0.0));
+    assert!(r.ok("view.get", json!({}))["pointer"].is_object());
+}
+
+#[test]
+fn the_answer_says_if_the_window_has_the_focus() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.advance(0.3);
+    let on = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    r.hover(on);
+    assert_eq!(r.ok("view.get", json!({}))["pointer"]["focused"], true);
+    r.app.window_focused = false;
+    r.hover(on + vec2(1.0, 0.0));
+    assert_eq!(r.ok("view.get", json!({}))["pointer"]["focused"], false);
+}
+
+#[test]
+fn the_object_under_the_pointer_follows_the_group_that_the_person_entered() {
+    let mut r = Rig::new();
+    let a = r.rect(0.0, 0.0, 4000.0, 3000.0);
+    let b = r.rect(5000.0, 0.0, 1000.0, 1000.0);
+    r.app.exec(&Command::Group {
+        ids: vec![a, b],
+        name: None,
+    });
+    let group = r
+        .app
+        .session
+        .editor
+        .doc()
+        .objects
+        .values()
+        .find(|o| matches!(o.shape, Shape::Group { .. }))
+        .map(|o| o.id)
+        .expect("a group");
+    r.ok("view.zoom", json!({"box": [-500, -500, 6500, 3500]}));
+    r.advance(0.5);
+    let on = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    r.hover(on);
+    let ids = r.ok("view.get", json!({}))["pointer"]["ids"].clone();
+    assert_eq!(ids, json!([group.to_string()]));
+    // The person enters the group with the pointer still: a click now selects the member.
+    r.app.session.context = vec![group];
+    r.time += 0.016;
+    r.frame(vec![]);
+    let ids = r.ok("view.get", json!({}))["pointer"]["ids"].clone();
+    assert_eq!(ids, json!([a.to_string()]));
+}
+
+#[test]
+fn the_person_can_forbid_the_pointer_and_the_lock_of_the_view_does_not_touch_it() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.advance(0.3);
+    let on = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    assert!(r.app.prefs.agents_see_pointer, "on by default");
+    r.hover(on);
+    // The view is locked: moving it is refused, reading the pointer works.
+    r.app.agent_view.locked = true;
+    assert!(
+        r.err("view.zoom", json!({"at": [0, 0]}))
+            .message
+            .contains("turned off")
+    );
+    let g = r.ok("view.get", json!({}));
+    assert!(g["pointer"].is_object(), "{g}");
+    assert!(g.get("pointer_reason").is_none());
+    // The person turns the reading off in Preferences.
+    r.app.prefs.agents_see_pointer = false;
+    r.hover(on + vec2(1.0, 0.0));
+    let g = r.ok("view.get", json!({}));
+    assert_eq!(g["pointer"], Value::Null, "{g}");
+    assert_eq!(g["pointer_reason"], "disabled_by_user");
+    // The position box of the person still shows the position.
+    assert!(has_numbers(&r.databar_text()));
+    r.app.prefs.agents_see_pointer = true;
+    r.hover(on + vec2(2.0, 0.0));
+    assert!(r.ok("view.get", json!({}))["pointer"].is_object());
+}
+
+#[test]
+fn a_read_shows_the_eye_and_a_line_in_the_activity_panel() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.advance(0.3);
+    let draw_eye = |r: &mut Rig| -> bool {
+        r.time += 0.016;
+        let input = RawInput {
+            time: Some(r.time),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
+            ..Default::default()
+        };
+        let ctx = r.ctx.clone();
+        let app = &mut r.app;
+        let mut shown = false;
+        let _ = ctx.run_ui(input, |ui| {
+            shown = KadakasApp::show_pointer_eye(&app.session, ui);
+        });
+        shown
+    };
+    assert!(!draw_eye(&mut r), "no read yet");
+    let on = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    r.hover(on);
+    r.ok("view.get", json!({}));
+    assert!(draw_eye(&mut r));
+    assert_eq!(r.app.session.pointer_read_notes().len(), 1);
+    // 11 seconds later the eye is gone. A read in the same minute adds no line.
+    r.advance(11.0);
+    assert!(!draw_eye(&mut r));
+    r.hover(on);
+    r.ok("view.get", json!({}));
+    assert_eq!(r.app.session.pointer_read_notes().len(), 1);
+    // A read that finds no pointer is not a read of the pointer.
+    r.leave();
+    r.advance(70.0);
+    r.ok("view.get", json!({}));
+    assert_eq!(r.app.session.pointer_read_notes().len(), 1);
+}

@@ -40,6 +40,8 @@ pub struct PrefsEdit<'a> {
     pub max_version_mib: &'a mut u32,
     /// Animate the view when an agent moves it.
     pub animate_agent_view: &'a mut bool,
+    /// Agents may read where the pointer is.
+    pub agents_see_pointer: &'a mut bool,
     /// Mouse or trackpad: what the wheel and the scroll do in the 3D view (PLAT-26).
     pub navigation: &'a mut kadakas_ui_core::nav3d::NavStyle,
     /// Preferences > Privacy (PLAT-20): crash reports and the installation ID. The settings are
@@ -84,6 +86,8 @@ impl PrefsDialog {
                     }
                 });
                 ui.checkbox(edit.animate_agent_view, tr!("prefs-ui-animate-agent-view"));
+                ui.checkbox(edit.agents_see_pointer, tr!("prefs-ui-agents-see-pointer"))
+                    .on_hover_text(tr!("prefs-ui-agents-see-pointer-tip"));
                 ui.horizontal(|ui| {
                     ui.label(tr!("prefs-ui-navigation"));
                     for n in kadakas_ui_core::nav3d::NavStyle::ALL {
@@ -333,6 +337,7 @@ mod tests {
             max_versions: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSIONS)),
             max_version_mib: Box::leak(Box::new(crate::prefs::DEFAULT_MAX_VERSION_MIB)),
             animate_agent_view: Box::leak(Box::new(true)),
+            agents_see_pointer: Box::leak(Box::new(true)),
             navigation: Box::leak(Box::default()),
             privacy: Box::leak(Box::new(kadakas_feedback::Hub::in_memory())),
             updates: Box::leak(Box::new(crate::app_updates::Updates::new(None, None))),

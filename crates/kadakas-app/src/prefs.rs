@@ -53,6 +53,9 @@ pub struct Prefs {
     pub max_version_mib: u32,
     /// Animate the view when an agent moves it (AGR-02). Off: the view jumps.
     pub animate_agent_view: bool,
+    /// Agents may read where the pointer is (`view.get`, AGR-10). Off: the answer is `null` with
+    /// the reason `disabled_by_user`. On by default.
+    pub agents_see_pointer: bool,
     /// The answer to "Soften edges under an angle?" in the import of meshes (MOD-12): off, 20
     /// degrees, until the person changes it. The next import starts with the last answer.
     pub import_soften: kadakas_ui_core::mesh_import::SoftenPref,
@@ -95,6 +98,7 @@ impl Default for Prefs {
             max_versions: DEFAULT_MAX_VERSIONS,
             max_version_mib: DEFAULT_MAX_VERSION_MIB,
             animate_agent_view: true,
+            agents_see_pointer: true,
             import_soften: kadakas_ui_core::mesh_import::SoftenPref::default(),
             navigation: kadakas_ui_core::nav3d::NavStyle::default(),
         }

@@ -156,6 +156,10 @@ pub struct KadakasApp {
     live_cursor: DVec2,
     /// The object under the pointer of the plan, for the agent (AGR-10).
     pointer_memo: crate::agent_pointer::PlanMemo,
+    /// The window is hidden or minimised: it shows no pointer to the agent (AGR-10).
+    window_hidden: bool,
+    /// The window has the focus of the system.
+    window_focused: bool,
     /// View changes from keys; applied in the next canvas pass.
     pending_zoom: f64,
     pending_pan: egui::Vec2,
@@ -581,6 +585,8 @@ impl KadakasApp {
             annot_requests: Default::default(),
             live_cursor: DVec2::ZERO,
             pointer_memo: Default::default(),
+            window_hidden: false,
+            window_focused: true,
             pending_zoom: 1.0,
             pending_pan: egui::Vec2::ZERO,
             canvas_rect: None,
@@ -2704,15 +2710,19 @@ impl KadakasApp {
         // object that a click would select. Not when a window covers the drawing.
         let pointer_frame = crate::agent_pointer::Frame {
             rect,
-            pointer: latest.filter(|_| resp.hovered() || resp.dragged()),
+            pointer: latest.filter(|_| (resp.hovered() || resp.dragged()) && !self.window_hidden),
             navigating: nav.moved,
             now_ms,
+            focused: self.window_focused,
         };
         let revision = self.session.editor.revision();
         let memo = &mut self.pointer_memo;
+        // `point` is where the pointer is. The object is the one that a click at the cursor
+        // selects, and the cursor is snapped.
+        let click_at = self.live_cursor;
         let under = pointer_frame.on_area().map(|(p, _)| {
-            let at = self.view.to_model(p);
-            (at, memo.ids(&cx, at, revision))
+            let point = self.view.to_model(p);
+            (point, memo.ids(&cx, click_at, revision))
         });
         crate::agent_pointer::show_plan(&mut self.session, &pointer_frame, under);
         let frame = canvas::Frame {
@@ -2823,14 +2833,47 @@ impl egui_dock::TabViewer for DockViewer<'_> {
 }
 
 impl KadakasApp {
+    /// The eye in the status bar while an agent has read where the pointer is (AGR-10). Draws
+    /// nothing, and gives false, when no agent did in the last 10 seconds.
+    fn show_pointer_eye(session: &Session, ui: &mut egui::Ui) -> bool {
+        // The web version has no agent server, so nobody reads the pointer.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (session, ui);
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let clock_ms = ui.input(|i| i.time) * 1000.0;
+            if !session.pointer_read_recently(clock_ms) {
+                return false;
+            }
+            crate::agent_status::pointer_eye(ui);
+            if let Some(t) = session.pointer_last_read_ms() {
+                let left = kadakas_api::RECENT_READ_MS - (clock_ms - t);
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(
+                        left.max(0.0) as u64 + 50,
+                    ));
+            }
+            true
+        }
+    }
+
     /// The Data bar at the bottom of the window. Gives true when Enter was pressed in an entry
     /// field. Its position box shows the point under the pointer, or nothing (AGR-10).
     fn show_databar(&mut self, ui: &mut egui::Ui) -> bool {
         let mut commit = false;
         let pointer_point = self.status_point();
-        let readout = pointer_point.and_then(|p| {
-            self.readout
-                .text(self.session.editor.doc().georef.as_ref(), p)
+        let georef = self.session.editor.doc().georef.as_ref();
+        // The slot of the map readout stays when the pointer is away (blank), so the bar does
+        // not jump and the label can still be clicked to switch between N/E and lat/lon.
+        let readout = self.readout.available(georef).then(|| {
+            panels::readout_slot(
+                pointer_point
+                    .and_then(|p| self.readout.text(georef, p))
+                    .as_deref(),
+            )
         });
         egui::Panel::bottom("databar").show(ui, |ui| {
             commit = panels::data_bar(
@@ -3523,6 +3566,8 @@ impl KadakasApp {
         // The pointer that the last frame showed to the session is old unless a canvas of this
         // frame shows it again (AGR-10). The status bar and the agent read it before this point.
         self.session.pointer_new_frame();
+        self.session
+            .set_pointer_enabled(self.prefs.agents_see_pointer);
         self.enforce_read_only();
         let mut state = self
             .layouts
@@ -3582,6 +3627,8 @@ impl KadakasApp {
                                 .clone()
                                 .filter(|_| self.activity_ui.model.show),
                             nav_style: self.prefs.navigation,
+                            window_hidden: self.window_hidden,
+                            window_focused: self.window_focused,
                         },
                     );
                     let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3708,6 +3755,21 @@ impl eframe::App for KadakasApp {
         }
         self.dark = theme::is_dark(&ctx);
         icon_size::set(&ctx, self.prefs.icon_size);
+        // What the pointer data of the agent depends on: the window state and the setting of the
+        // person (AGR-10). A window that is hidden has no pointer, even if the last position is
+        // still known: the agent calls below must not get it.
+        let (hidden, focused) = ctx.input(|i| {
+            let v = i.viewport();
+            (
+                screenshot::window_hidden(v) || v.minimized == Some(true),
+                v.focused.unwrap_or(true),
+            )
+        });
+        self.window_hidden = hidden;
+        self.window_focused = focused;
+        if hidden {
+            self.session.clear_pointer();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(agent) = &self.agent {
             let mut fx = file_io::AgentEffects::default();
@@ -3897,6 +3959,7 @@ impl eframe::App for KadakasApp {
                 max_versions: &mut self.prefs.max_versions,
                 max_version_mib: &mut self.prefs.max_version_mib,
                 animate_agent_view: &mut self.prefs.animate_agent_view,
+                agents_see_pointer: &mut self.prefs.agents_see_pointer,
                 navigation: &mut self.prefs.navigation,
                 privacy: &mut self.session.feedback.hub,
                 #[cfg(not(target_arch = "wasm32"))]
@@ -4113,6 +4176,10 @@ impl eframe::App for KadakasApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some((addr, st)) = &agent_status {
                     agent_click = crate::agent_status::item(ui, *addr, st, agent_locked, now_ms);
+                    ui.separator();
+                }
+                // An agent has read where the pointer is in the last 10 seconds (AGR-10).
+                if Self::show_pointer_eye(&self.session, ui) {
                     ui.separator();
                 }
                 // Hidden objects are not drawn: say how many there are, and bring them back on a click.

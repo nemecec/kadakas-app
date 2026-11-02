@@ -39,6 +39,10 @@ pub struct Canvas3d<'a> {
     pub review: Option<std::sync::Arc<kadakas_ui_core::agent_activity::Review>>,
     /// What the wheel and the two-finger scroll do (Preferences > Mouse or trackpad).
     pub nav_style: kadakas_ui_core::nav3d::NavStyle,
+    /// The window is hidden, so the agent gets no pointer (AGR-10).
+    pub window_hidden: bool,
+    /// The window has the focus of the system.
+    pub window_focused: bool,
 }
 
 /// Draws the canvas and handles its input for one frame.
@@ -57,6 +61,8 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         agent,
         review,
         nav_style,
+        window_hidden,
+        window_focused,
     } = c;
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if !gpu_ready {
@@ -153,9 +159,10 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             .map_or(0.0, |(lo, hi)| (hi - lo).length() + (lo + hi).length());
         let frame = crate::agent_pointer::Frame {
             rect,
-            pointer: hover.filter(|_| resp.hovered() || resp.dragged()),
+            pointer: hover.filter(|_| (resp.hovered() || resp.dragged()) && !window_hidden),
             navigating: nav.moved || nav.dragging,
             now_ms: ui.input(|i| i.time) * 1000.0,
+            focused: window_focused,
         };
         crate::agent_pointer::show_3d(session, &frame, &view3d.camera, scene.origin, reach);
     } else {
@@ -400,6 +407,8 @@ mod tests {
                             agent: None,
                             review: None,
                             nav_style: self.nav_style,
+                            window_hidden: false,
+                            window_focused: true,
                         },
                     );
                 });
@@ -887,6 +896,8 @@ mod tests {
                     agent: None,
                     review: None,
                     nav_style: Default::default(),
+                    window_hidden: false,
+                    window_focused: true,
                 },
             );
         });

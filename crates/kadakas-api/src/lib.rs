@@ -42,7 +42,10 @@ mod libfiles;
 mod massing_api;
 mod mesh_api;
 mod pointer_api;
-pub use pointer_api::{Aim, EDGE_PX, PixelSize, PointerInput};
+pub use pointer_api::{
+    Aim, EDGE_POINTS, PixelSize, PointerInput, READ_NOTE_MS, READS_PER_SECOND, REASON_DISABLED,
+    REASON_NOT_OVER, RECENT_READ_MS,
+};
 mod method_hints;
 pub use mesh_api::ERROR_IDS as MESH_ERROR_IDS;
 mod pattern_api;

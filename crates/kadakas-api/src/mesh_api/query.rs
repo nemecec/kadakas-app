@@ -1,13 +1,14 @@
 //! `mesh.near` and `mesh.pick`: spatial questions about the surface models.
 //!
 //! The triangle tests are in `kadakas_core::surface` (`faces_near`, `ray_faces`). This file keeps
-//! the triangles of each model for a revision of the document, in drawing coordinates, so that
-//! many questions in a row cut the faces once.
+//! the triangles of each model, in drawing coordinates, and cuts a model again only when that
+//! model changed, so that many questions in a row cut the faces once. A ray first meets the box
+//! around a model, and only a ray that meets the box goes through the triangles.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use glam::DVec3;
+use glam::{DAffine3, DVec3};
 use serde_json::{Value, json};
 
 use kadakas_core::model::{Document, ObjectId};
@@ -28,49 +29,118 @@ pub const LIMIT_MAX: usize = 200;
 pub(crate) struct Tris {
     mesh: SurfaceMesh,
     world: Vec<DVec3>,
+    /// The box around the positions (drawing mm), a little wider than the model.
+    lo: DVec3,
+    hi: DVec3,
 }
 
-/// The triangles of the models for one revision of the document. A model whose faces cannot be
-/// cut into triangles is kept as `None`.
+impl Tris {
+    /// True if the ray meets the box of the model.
+    fn ray_meets_box(&self, origin: DVec3, dir: DVec3) -> bool {
+        ray_meets_box(origin, dir, self.lo, self.hi)
+    }
+}
+
+/// True if the ray (a unit direction, from `origin`, forward only) meets the box.
+pub(crate) fn ray_meets_box(origin: DVec3, dir: DVec3, lo: DVec3, hi: DVec3) -> bool {
+    let (mut t0, mut t1) = (0.0f64, f64::INFINITY);
+    for k in 0..3 {
+        let (o, d) = (origin[k], dir[k]);
+        if d.abs() < 1e-12 {
+            if o < lo[k] || o > hi[k] {
+                return false;
+            }
+            continue;
+        }
+        let (a, b) = ((lo[k] - o) / d, (hi[k] - o) / d);
+        t0 = t0.max(a.min(b));
+        t1 = t1.min(a.max(b));
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// What tells that a model is as it was when its triangles were cut: where it is in memory, its
+/// count of edits, its place and the size of its parts.
+#[derive(PartialEq)]
+struct ModelKey {
+    addr: usize,
+    rev: u64,
+    transform: DAffine3,
+    counts: [usize; 3],
+}
+
+impl ModelKey {
+    fn of(m: &SurfaceModel) -> ModelKey {
+        ModelKey {
+            addr: m as *const SurfaceModel as usize,
+            rev: m.rev(),
+            transform: m.transform,
+            counts: [m.vertex_count(), m.edge_count(), m.face_count()],
+        }
+    }
+}
+
+/// The triangles of the models. A model whose faces cannot be cut into triangles is kept as
+/// `None`. Each model is cut again only when it changed, so an edit of one model does not cost
+/// the cut of all the others.
 #[derive(Default)]
 pub(crate) struct QueryCache {
-    revision: u64,
-    models: BTreeMap<ObjectId, Option<Arc<Tris>>>,
+    models: BTreeMap<ObjectId, (ModelKey, Option<Arc<Tris>>)>,
     /// How many times a model was cut (for the tests).
     pub(crate) builds: usize,
 }
 
 impl QueryCache {
-    fn get(&mut self, revision: u64, id: ObjectId, m: &SurfaceModel) -> Option<Arc<Tris>> {
-        if self.revision != revision {
-            self.revision = revision;
-            self.models.clear();
-        }
-        if let Some(t) = self.models.get(&id) {
-            return t.clone();
+    fn get(&mut self, id: ObjectId, m: &SurfaceModel) -> Option<Arc<Tris>> {
+        let key = ModelKey::of(m);
+        if let Some((old, tris)) = self.models.get(&id)
+            && *old == key
+        {
+            return tris.clone();
         }
         self.builds += 1;
         let built = m.mesh().ok().map(|mesh| {
-            let world = mesh
+            let world: Vec<DVec3> = mesh
                 .positions
                 .iter()
                 .map(|p| m.transform.transform_point3(*p))
                 .collect();
-            Arc::new(Tris { mesh, world })
+            let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+            for p in &world {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            // The triangle test has a tolerance; the box is wider than it.
+            let pad = DVec3::splat(1e-3 + 1e-6 * (hi - lo).max_element().max(0.0));
+            Arc::new(Tris {
+                mesh,
+                world,
+                lo: lo - pad,
+                hi: hi + pad,
+            })
         });
-        self.models.insert(id, built.clone());
+        self.models.insert(id, (key, built.clone()));
         built
+    }
+
+    /// Forgets the models that are not in the document any more.
+    fn prune(&mut self, doc: &Document) {
+        if self.models.len() > doc.objects.len() {
+            self.models.retain(|id, _| doc.object(*id).is_some());
+        }
     }
 }
 
 pub(super) fn handle(s: &mut Session, op: &str, p: Value) -> Result<Value, RpcError> {
-    let revision = s.editor.revision();
     let doc = s.editor.doc();
     let cache = &mut s.mesh_query;
     if op == "near" {
-        near(doc, cache, revision, p)
+        near(doc, cache, p)
     } else {
-        pick(doc, cache, revision, p)
+        pick(doc, cache, p, false)
     }
 }
 
@@ -98,16 +168,21 @@ fn limit_of(limit: Option<u32>) -> Result<usize, RpcError> {
 /// The models to look at, with their triangles, and the models that could not be cut.
 type Looked<'a> = (Vec<(ObjectId, &'a SurfaceModel, Arc<Tris>)>, Vec<Value>);
 
+/// `pointer`: the models that the person cannot pick are left out too (grey layers and classes).
 fn look<'a>(
     doc: &'a Document,
     cache: &mut QueryCache,
-    revision: u64,
     only: Option<&str>,
+    pointer: bool,
 ) -> Result<Looked<'a>, RpcError> {
     let mut found = Vec::new();
     let mut skipped = Vec::new();
+    cache.prune(doc);
     for (id, m) in visible_models(doc, only)? {
-        match cache.get(revision, id, m) {
+        if pointer && doc.object(id).is_none_or(|o| doc.is_grey(o)) {
+            continue;
+        }
+        match cache.get(id, m) {
             Some(t) => found.push((id, m, t)),
             None => skipped.push(json!({
                 "model": id,
@@ -118,12 +193,7 @@ fn look<'a>(
     Ok((found, skipped))
 }
 
-fn near(
-    doc: &Document,
-    cache: &mut QueryCache,
-    revision: u64,
-    p: Value,
-) -> Result<Value, RpcError> {
+fn near(doc: &Document, cache: &mut QueryCache, p: Value) -> Result<Value, RpcError> {
     let q: MeshNearParams = serde_json::from_value(p).map_err(bad)?;
     let at = finite(q.point, "point")?;
     if !(q.radius.is_finite() && q.radius >= 0.0) {
@@ -132,7 +202,7 @@ fn near(
     let limit = limit_of(q.limit)?;
     let hidden = q.include_hidden == Some(true);
     let kinds = q.kinds.unwrap_or_else(|| vec![MeshKind::Faces]);
-    let (list, skipped) = look(doc, cache, revision, q.id.as_ref().map(|r| r.0.as_str()))?;
+    let (list, skipped) = look(doc, cache, q.id.as_ref().map(|r| r.0.as_str()), false)?;
     let mut out = json!({"point": point(at), "radius": q.radius});
     if !skipped.is_empty() {
         out["skipped"] = json!(skipped);
@@ -203,7 +273,6 @@ fn near(
 pub(crate) fn nearest_hit(
     doc: &Document,
     cache: &mut QueryCache,
-    revision: u64,
     origin: DVec3,
     direction: DVec3,
 ) -> Option<Value> {
@@ -211,7 +280,7 @@ pub(crate) fn nearest_hit(
         "origin": [origin.x, origin.y, origin.z],
         "direction": [direction.x, direction.y, direction.z],
     });
-    let mut out = pick(doc, cache, revision, params).ok()?;
+    let mut out = pick(doc, cache, params, true).ok()?;
     match out["hit"].take() {
         Value::Null => None,
         hit => Some(hit),
@@ -221,8 +290,8 @@ pub(crate) fn nearest_hit(
 fn pick(
     doc: &Document,
     cache: &mut QueryCache,
-    revision: u64,
     p: Value,
+    pointer: bool,
 ) -> Result<Value, RpcError> {
     let q: MeshPickParams = serde_json::from_value(p).map_err(bad)?;
     let origin = finite(q.origin, "origin")?;
@@ -231,9 +300,12 @@ fn pick(
         .ok_or_else(|| bad("direction: not zero"))?;
     let hidden = q.include_hidden == Some(true);
     let all = q.all == Some(true);
-    let (list, skipped) = look(doc, cache, revision, q.id.as_ref().map(|r| r.0.as_str()))?;
+    let (list, skipped) = look(doc, cache, q.id.as_ref().map(|r| r.0.as_str()), pointer)?;
     let mut hits: Vec<(f64, ObjectId, FaceId)> = Vec::new();
     for (oid, m, tris) in &list {
+        if !tris.ray_meets_box(origin, dir) {
+            continue;
+        }
         for (f, d) in ray_faces(&tris.mesh, &tris.world, origin, dir, |f| {
             !hidden && m.face_hidden(f)
         }) {
@@ -330,5 +402,62 @@ mod tests {
             .unwrap();
         assert_eq!(s.mesh_query.builds, 3);
         assert!((hit["hit"]["distance"].as_f64().unwrap() - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_edit_of_one_model_cuts_only_that_model_again() {
+        let mut s = Session::with_sequential_ids();
+        let mut faces = Vec::new();
+        let mut ids = Vec::new();
+        for k in 0..3 {
+            let id = s
+                .handle("mesh.create", json!({"origin": [k * 1000, 0, 0]}))
+                .unwrap()["id"]
+                .clone();
+            let rect: Vec<Value> = [
+                [[0, 0, 0], [100, 0, 0]],
+                [[100, 0, 0], [100, 100, 0]],
+                [[100, 100, 0], [0, 100, 0]],
+                [[0, 100, 0], [0, 0, 0]],
+            ]
+            .iter()
+            .map(|e| json!(e))
+            .collect();
+            let r = s
+                .handle("mesh.add_edges", json!({"id": id, "edges": rect}))
+                .unwrap();
+            faces.push(r["created"]["faces"][0].clone());
+            ids.push(id);
+        }
+        let ray = json!({"origin": [50, 50, 100], "direction": [0, 0, -1]});
+        s.handle("mesh.pick", ray.clone()).unwrap();
+        assert_eq!(s.mesh_query.builds, 3);
+        s.handle("mesh.pick", ray.clone()).unwrap();
+        assert_eq!(s.mesh_query.builds, 3);
+        // One model changes: only that one is cut again.
+        s.handle(
+            "mesh.push_pull",
+            json!({"id": ids[1], "face": faces[1], "distance": 10}),
+        )
+        .unwrap();
+        s.handle("mesh.pick", ray.clone()).unwrap();
+        assert_eq!(s.mesh_query.builds, 4);
+        // A move of a model (its place, not its edits) cuts it again too.
+        s.handle(
+            "execute",
+            json!({"command": {"op": "move_objects", "ids": [ids[2]], "delta": [5, 0]}}),
+        )
+        .unwrap();
+        s.handle("mesh.pick", ray).unwrap();
+        assert_eq!(s.mesh_query.builds, 5);
+        // A model that is deleted leaves the cache.
+        s.handle("objects.delete", json!({"ids": [ids[0]]}))
+            .unwrap();
+        s.handle(
+            "mesh.pick",
+            json!({"origin": [50, 50, 100], "direction": [0, 0, -1]}),
+        )
+        .unwrap();
+        assert_eq!(s.mesh_query.models.len(), 2);
     }
 }
