@@ -307,6 +307,8 @@ impl Intent {
             },
             // Solid tools cannot be replayed on another model: the solids are sets of faces.
             Edit::Solid { .. } => Intent::Unlogged,
+            // A fillet or a chamfer names its edges by id; it is not replayed (MOD-21).
+            Edit::Fillet { .. } | Edit::Chamfer { .. } => Intent::Unlogged,
             Edit::PushPull { face, distance } => match face_point(m, *face) {
                 Some(p) => Intent::PushPullAt {
                     point: p.to_array(),
