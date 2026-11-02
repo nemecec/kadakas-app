@@ -154,6 +154,8 @@ pub struct KadakasApp {
     annot_requests: crate::annot_ui::PanelRequests,
     /// Cursor before Data bar values are applied.
     live_cursor: DVec2,
+    /// The object under the pointer of the plan, for the agent (AGR-10).
+    pointer_memo: crate::agent_pointer::PlanMemo,
     /// View changes from keys; applied in the next canvas pass.
     pending_zoom: f64,
     pending_pan: egui::Vec2,
@@ -578,6 +580,7 @@ impl KadakasApp {
             annot_cache: Default::default(),
             annot_requests: Default::default(),
             live_cursor: DVec2::ZERO,
+            pointer_memo: Default::default(),
             pending_zoom: 1.0,
             pending_pan: egui::Vec2::ZERO,
             canvas_rect: None,
@@ -2541,6 +2544,8 @@ impl KadakasApp {
         if let Some(doc) = history.as_deref() {
             self.own_cursor = None;
             self.snap_hit = None;
+            // The agent reads the pointer over the open drawing, not over a version.
+            self.session.clear_pointer();
             let frame = canvas::Frame {
                 doc,
                 selection: &[],
@@ -2695,6 +2700,21 @@ impl KadakasApp {
         } else {
             kadakas_ui_core::tools::Preview::None
         };
+        // What the person points at, for the agent (AGR-10): the point under the pointer and the
+        // object that a click would select. Not when a window covers the drawing.
+        let pointer_frame = crate::agent_pointer::Frame {
+            rect,
+            pointer: latest.filter(|_| resp.hovered() || resp.dragged()),
+            navigating: nav.moved,
+            now_ms,
+        };
+        let revision = self.session.editor.revision();
+        let memo = &mut self.pointer_memo;
+        let under = pointer_frame.on_area().map(|(p, _)| {
+            let at = self.view.to_model(p);
+            (at, memo.ids(&cx, at, revision))
+        });
+        crate::agent_pointer::show_plan(&mut self.session, &pointer_frame, under);
         let frame = canvas::Frame {
             doc: self.session.editor.doc(),
             selection: &self.session.selection,
@@ -2803,6 +2823,45 @@ impl egui_dock::TabViewer for DockViewer<'_> {
 }
 
 impl KadakasApp {
+    /// The Data bar at the bottom of the window. Gives true when Enter was pressed in an entry
+    /// field. Its position box shows the point under the pointer, or nothing (AGR-10).
+    fn show_databar(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut commit = false;
+        let pointer_point = self.status_point();
+        let readout = pointer_point.and_then(|p| {
+            self.readout
+                .text(self.session.editor.doc().georef.as_ref(), p)
+        });
+        egui::Panel::bottom("databar").show(ui, |ui| {
+            commit = panels::data_bar(
+                ui,
+                &self.machine,
+                &mut self.settings,
+                &mut self.entry,
+                self.live_cursor,
+                pointer_point,
+                self.snap_hit.as_ref(),
+                self.session.snap.set.any(),
+                readout.as_deref().map(|t| (t, &mut self.readout.lonlat)),
+            );
+        });
+        commit
+    }
+
+    /// The point that the position box of the Data bar shows (AGR-10). In the plan it is the
+    /// cursor (snapped) while the pointer is on the drawing. In 3D it is the point where the ray
+    /// under the pointer meets a surface model, and nothing while the view moves or when the ray
+    /// hits nothing. Outside the drawing it is nothing: the numbers never stay behind.
+    fn status_point(&mut self) -> Option<DVec2> {
+        if self.session.pointer_over_plan() {
+            Some(self.live_cursor)
+        } else {
+            self.session
+                .pointer_hit_point()
+                .map(|p| DVec2::new(p[0], p[1]))
+        }
+    }
+
     /// What the calls of the agent about the view need from the window.
     fn agent_env(&mut self, ctx: &egui::Context) -> crate::agent_view::Env<'_> {
         let window = ctx.content_rect().size();
@@ -3461,6 +3520,9 @@ impl KadakasApp {
 
     /// The dock: the drawing and the palettes as tabs that the user can move.
     fn show_dock(&mut self, ui: &mut egui::Ui) {
+        // The pointer that the last frame showed to the session is old unless a canvas of this
+        // frame shows it again (AGR-10). The status bar and the agent read it before this point.
+        self.session.pointer_new_frame();
         self.enforce_read_only();
         let mut state = self
             .layouts
@@ -4148,22 +4210,7 @@ impl eframe::App for KadakasApp {
             }
             Some(Outcome::Nothing) | None => {}
         }
-        let mut commit = false;
-        let readout = self
-            .readout
-            .text(self.session.editor.doc().georef.as_ref(), self.live_cursor);
-        egui::Panel::bottom("databar").show(ui, |ui| {
-            commit = panels::data_bar(
-                ui,
-                &self.machine,
-                &mut self.settings,
-                &mut self.entry,
-                self.live_cursor,
-                self.snap_hit.as_ref(),
-                self.session.snap.set.any(),
-                readout.as_deref().map(|t| (t, &mut self.readout.lonlat)),
-            );
-        });
+        let commit = self.show_databar(ui);
         if commit {
             self.commit_entry(&ctx);
         }
@@ -4234,6 +4281,7 @@ mod tests {
                     &mut app.settings,
                     &mut app.entry,
                     app.live_cursor,
+                    Some(app.live_cursor),
                     None,
                     app.session.snap.set.any(),
                     None,

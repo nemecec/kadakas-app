@@ -7,6 +7,7 @@ mod about;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent;
 mod agent_activity_ui;
+mod agent_pointer;
 #[cfg(not(target_arch = "wasm32"))]
 mod agent_status;
 mod agent_view;

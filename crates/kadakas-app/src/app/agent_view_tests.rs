@@ -2269,3 +2269,325 @@ fn person_fit_after_startup_still_holds_the_agent_back() {
     let e = r.err("view.zoom", json!({"box": [0, 0, 1000, 1000]}));
     assert_eq!(e.reason, Some(REASON_PERSON_NAVIGATING));
 }
+
+// ---------------------------------------------------------------- the pointer (AGR-10)
+
+impl Rig {
+    /// The pointer moves to `to` and the frames that follow show it (egui finds the widget under
+    /// the pointer in the frame after the move).
+    fn hover(&mut self, to: Pos2) {
+        self.time += 0.016;
+        self.frame(vec![Event::PointerMoved(to)]);
+        self.time += 0.016;
+        self.frame(vec![]);
+    }
+
+    /// The pointer leaves the window.
+    fn leave(&mut self) {
+        self.time += 0.016;
+        self.frame(vec![Event::PointerGone]);
+        self.time += 0.016;
+        self.frame(vec![]);
+    }
+
+    /// The text of the Data bar after a frame that draws it, as the window does.
+    fn databar_text(&mut self) -> Vec<String> {
+        self.time += 0.016;
+        let input = RawInput {
+            time: Some(self.time),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
+            ..Default::default()
+        };
+        let ctx = self.ctx.clone();
+        let app = &mut self.app;
+        let out = ctx.run_ui(input, |ui| {
+            app.show_databar(ui);
+        });
+        texts(&out)
+    }
+
+    /// A closed box of 4000 x 3000 x 1000 mm as a surface model.
+    fn box_model(&mut self) -> String {
+        let session = &mut self.app.session;
+        let id = session
+            .handle("mesh.create", json!({"name": "Box"}))
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let c = |i: usize| -> [f64; 3] {
+            [
+                if i & 1 == 0 { 0.0 } else { 4000.0 },
+                if i & 2 == 0 { 0.0 } else { 3000.0 },
+                if i & 4 == 0 { 0.0 } else { 1000.0 },
+            ]
+        };
+        let mut edges = Vec::new();
+        for i in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                if i & bit == 0 {
+                    edges.push(json!([c(i), c(i | bit)]));
+                }
+            }
+        }
+        session
+            .handle("mesh.add_edges", json!({"id": id, "edges": edges}))
+            .unwrap();
+        id
+    }
+
+    /// The 3D view, looking at the middle of the box from the front and above.
+    fn look_at_the_box(&mut self) {
+        self.ok(
+            "view.camera",
+            json!({"eye": [2000, -7000, 6000], "target": [2000, 1500, 500], "projection": "perspective", "up": [0, 0, 1], "fov": 45}),
+        );
+        self.app.gpu_ready = true;
+        self.frame(vec![]);
+        self.advance(0.5);
+    }
+}
+
+fn has_numbers(texts: &[String]) -> bool {
+    texts
+        .iter()
+        .any(|t| t.contains("X ") && t.chars().any(|c| c.is_ascii_digit()))
+}
+
+#[test]
+fn view_get_has_no_pointer_until_the_pointer_is_on_the_plan_and_none_after_it_leaves() {
+    let mut r = Rig::new();
+    let a = r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.ok("view.zoom", json!({"box": [-500, -500, 4500, 3500]}));
+    r.advance(0.5);
+    let g = r.ok("view.get", json!({}));
+    assert_eq!(g["pointer"], Value::Null, "{g}");
+    // The pointer is on the rectangle.
+    let canvas = r.canvas();
+    // An outline without a fill is hit near its line: the right side.
+    let on_rect = r.app.view.to_screen(DVec2::new(4000.0, 1500.0));
+    r.hover(on_rect);
+    let g = r.ok("view.get", json!({}));
+    let p = &g["pointer"];
+    assert_eq!(p["over_canvas"], true, "{g}");
+    assert_eq!(p["mode"], "plan");
+    // The place is in points from the top left corner of the canvas: the frame of `canvas`.
+    let (cx, cy) = pair(&p["canvas"]);
+    assert!(
+        (cx - f64::from(on_rect.x - canvas.min.x)).abs() < 1e-3,
+        "{p}"
+    );
+    assert!(
+        (cy - f64::from(on_rect.y - canvas.min.y)).abs() < 1e-3,
+        "{p}"
+    );
+    assert!(cx >= 0.0 && cx <= num(&g["canvas"]["width"]));
+    assert!(cy >= 0.0 && cy <= num(&g["canvas"]["height"]));
+    let (x, y) = pair(&p["point"]);
+    assert!((x - 4000.0).abs() < 1.0 && (y - 1500.0).abs() < 1.0, "{p}");
+    assert_eq!(p["ids"], json!([a.to_string()]));
+    assert_eq!(p["navigating"], false);
+    assert!(p.get("ray").is_none() && p.get("hit").is_none());
+    // The age counts from the last move, at the time of the call.
+    let t0 = num(&p["age_ms"]);
+    r.advance(0.25);
+    let later = num(&r.ok("view.get", json!({}))["pointer"]["age_ms"]);
+    assert!(
+        (later - t0 - 250.0).abs() < 2.0,
+        "the age grows by the time that passed: {t0} then {later}"
+    );
+    // Next to the rectangle there is no object.
+    let off = r.app.view.to_screen(DVec2::new(-300.0, 1500.0));
+    r.hover(off);
+    let p = r.ok("view.get", json!({}))["pointer"].clone();
+    assert_eq!(p["ids"], json!([]));
+    assert!(
+        num(&p["age_ms"]) < 100.0,
+        "a move starts the age again: {p}"
+    );
+    // The pointer leaves the window: nothing to read.
+    r.leave();
+    assert_eq!(r.ok("view.get", json!({}))["pointer"], Value::Null);
+    // On the window outside the drawing area (the menu strip): nothing either.
+    r.hover(Pos2::new(canvas.min.x + 10.0, canvas.min.y - 5.0));
+    assert_eq!(r.ok("view.get", json!({}))["pointer"], Value::Null);
+}
+
+#[test]
+fn the_pointer_in_3d_has_a_ray_for_mesh_pick_and_the_hit_that_mesh_pick_gives() {
+    let mut r = Rig::new();
+    let model = r.box_model();
+    r.look_at_the_box();
+    let canvas = r.canvas();
+    // The middle of the canvas looks at the target, which is inside the box.
+    r.hover(canvas.center());
+    let g = r.ok("view.get", json!({}));
+    let p = g["pointer"].clone();
+    assert_eq!(p["mode"], "3d", "{g}");
+    assert_eq!(p["over_canvas"], true);
+    let (cx, cy) = pair(&p["canvas"]);
+    assert!((cx - num(&g["canvas"]["width"]) / 2.0).abs() < 1.0, "{p}");
+    assert!((cy - num(&g["canvas"]["height"]) / 2.0).abs() < 1.0, "{p}");
+    // The ray runs from the eye to the target, in drawing coordinates.
+    let o = &p["ray"]["origin"];
+    assert!(
+        (num(&o[0]) - 2000.0).abs() < 1.0 && (num(&o[1]) + 7000.0).abs() < 1.0,
+        "{p}"
+    );
+    let d = &p["ray"]["direction"];
+    let len = (num(&d[0]).powi(2) + num(&d[1]).powi(2) + num(&d[2]).powi(2)).sqrt();
+    assert!((len - 1.0).abs() < 1e-6);
+    // mesh.pick takes the ray as it is. Its answer is the hit of the pointer.
+    let picked = r
+        .app
+        .session
+        .handle(
+            "mesh.pick",
+            json!({"origin": p["ray"]["origin"], "direction": p["ray"]["direction"]}),
+        )
+        .unwrap();
+    let mut hit = p["hit"].clone();
+    assert!(hit.is_object(), "{p}");
+    assert_eq!(hit["model"], json!(model));
+    assert!(num(&hit["distance"]) > 0.0);
+    let (hp, pp) = (hit["point"].clone(), &picked["hit"]["point"]);
+    for k in 0..3 {
+        assert!((num(&hp[k]) - num(&pp[k])).abs() < 1e-9);
+    }
+    if let Some(h) = hit.as_object_mut() {
+        h.remove("edge");
+    }
+    assert_eq!(hit, picked["hit"]);
+    // The point is on the box: its top (z 1000) or its front (y 0) is in the way.
+    let (px, py, pz) = (num(&hp[0]), num(&hp[1]), num(&hp[2]));
+    assert!(
+        (0.0..=4000.0).contains(&px)
+            && (0.0..=3000.0).contains(&py)
+            && (0.0..=1000.001).contains(&pz)
+            && (pz > 999.0 || py < 1.0),
+        "{hp}"
+    );
+}
+
+#[test]
+fn the_pointer_in_3d_over_empty_space_has_a_ray_and_no_hit() {
+    let mut r = Rig::new();
+    r.box_model();
+    r.look_at_the_box();
+    let canvas = r.canvas();
+    r.hover(canvas.min + vec2(6.0, 6.0));
+    let p = r.ok("view.get", json!({}))["pointer"].clone();
+    assert_eq!(p["mode"], "3d", "{p}");
+    assert!(p["ray"]["origin"].is_array());
+    assert_eq!(p["hit"], Value::Null, "{p}");
+    r.leave();
+    assert_eq!(r.ok("view.get", json!({}))["pointer"], Value::Null);
+}
+
+#[test]
+fn the_pointer_is_old_when_the_drawing_is_not_drawn() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.advance(0.3);
+    let on_rect = r.app.view.to_screen(DVec2::new(2000.0, 1500.0));
+    r.hover(on_rect);
+    assert!(r.ok("view.get", json!({}))["pointer"].is_object());
+    // A frame in which no canvas draws (another tab on top): the pointer is not on the drawing.
+    r.time += 0.016;
+    let input = RawInput {
+        time: Some(r.time),
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
+        ..Default::default()
+    };
+    let ctx = r.ctx.clone();
+    let app = &mut r.app;
+    let _ = ctx.run_ui(input, |_ui| app.session.pointer_new_frame());
+    assert_eq!(r.ok("view.get", json!({}))["pointer"], Value::Null);
+}
+
+#[test]
+fn the_position_box_shows_nothing_when_the_pointer_leaves_the_plan() {
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.ok("view.zoom", json!({"box": [-500, -500, 4500, 3500]}));
+    r.advance(0.5);
+    // No pointer yet: nothing is shown.
+    assert!(!has_numbers(&r.databar_text()));
+    let on_rect = r.app.view.to_screen(DVec2::new(2000.0, 1500.0));
+    r.hover(on_rect);
+    let shown = r.databar_text();
+    assert!(has_numbers(&shown), "{shown:?}");
+    // The pointer leaves the drawing area, and the numbers go. They do not stay at the last place.
+    let canvas = r.canvas();
+    r.hover(Pos2::new(canvas.min.x + 10.0, canvas.min.y - 5.0));
+    let shown = r.databar_text();
+    assert!(!has_numbers(&shown), "{shown:?}");
+    r.hover(on_rect);
+    assert!(has_numbers(&r.databar_text()));
+    r.leave();
+    assert!(!has_numbers(&r.databar_text()));
+}
+
+#[test]
+fn the_position_box_in_3d_shows_the_picked_point_or_nothing() {
+    let mut r = Rig::new();
+    let _model = r.box_model();
+    // The plan was used first and left a cursor behind: it must not show in 3D.
+    r.app.live_cursor = DVec2::new(123_456.0, 654_321.0);
+    r.look_at_the_box();
+    let canvas = r.canvas();
+    assert!(!has_numbers(&r.databar_text()), "no pointer yet");
+    // On the box: the point where the ray meets it.
+    r.hover(canvas.center());
+    let hit = r.ok("view.get", json!({}))["pointer"]["hit"].clone();
+    assert!(hit.is_object());
+    let at = r.app.status_point().expect("a point on the box");
+    assert!((at.x - num(&hit["point"][0])).abs() < 1e-9);
+    assert!((at.y - num(&hit["point"][1])).abs() < 1e-9);
+    let shown = r.databar_text();
+    assert!(has_numbers(&shown), "{shown:?}");
+    assert!(
+        !shown
+            .iter()
+            .any(|t| t.contains("123456") || t.contains("123 456")),
+        "the cursor of the plan is not shown in 3D: {shown:?}"
+    );
+    // On the floor behind the model, where nothing is hit: nothing.
+    r.hover(canvas.min + vec2(6.0, 6.0));
+    assert_eq!(r.app.status_point(), None);
+    assert!(!has_numbers(&r.databar_text()));
+    // While the person moves the view (a drag), nothing either, but the agent reads the ray.
+    r.hover(canvas.center());
+    assert!(r.app.status_point().is_some());
+    let button = |pressed, pos| Event::PointerButton {
+        pos,
+        button: PointerButton::Middle,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let c = canvas.center();
+    r.time += 0.016;
+    r.frame(vec![button(true, c)]);
+    r.time += 0.016;
+    r.frame(vec![Event::PointerMoved(c + vec2(8.0, 0.0))]);
+    assert_eq!(r.app.status_point(), None, "the view moves");
+    assert!(!has_numbers(&r.databar_text()));
+    let moving = r.ok("view.get", json!({}))["pointer"].clone();
+    assert_eq!(moving["navigating"], true, "{moving}");
+    assert!(moving["ray"].is_object());
+    // Out of the window: nothing.
+    r.time += 0.016;
+    r.frame(vec![button(false, c + vec2(8.0, 0.0))]);
+    r.leave();
+    assert_eq!(r.app.status_point(), None);
+    assert!(!has_numbers(&r.databar_text()));
+}
+
+#[test]
+fn the_empty_position_text_has_the_width_of_a_full_one() {
+    let full = crate::panels::position_text(Some(DVec2::new(1.0, 2.0)));
+    let empty = crate::panels::position_text(None);
+    assert_eq!(full.chars().count(), empty.chars().count());
+    assert!(empty.trim().is_empty(), "{empty:?}");
+    assert!(full.contains('X') && full.contains('Y'));
+}

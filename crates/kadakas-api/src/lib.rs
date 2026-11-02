@@ -41,6 +41,8 @@ mod issue_api;
 mod libfiles;
 mod massing_api;
 mod mesh_api;
+mod pointer_api;
+pub use pointer_api::{Aim, EDGE_PX, PixelSize, PointerInput};
 mod method_hints;
 pub use mesh_api::ERROR_IDS as MESH_ERROR_IDS;
 mod pattern_api;
@@ -157,6 +159,9 @@ pub struct Session {
     parts_supported: bool,
     /// `selection.set` changed `parts` and the editor did not take the change yet.
     parts_changed: bool,
+    /// The pointer of the person over the drawing area, shown by the host once per frame (see
+    /// `pointer_api`).
+    pointer: pointer_api::PointerStore,
     /// The groups you have entered, outermost first. A click selects members of the last one.
     pub context: Vec<ObjectId>,
     /// The chosen 3D view. `view.set` changes it, and the app follows it.
@@ -1178,6 +1183,7 @@ impl Session {
             parts: PartSelection::default(),
             parts_supported: true,
             parts_changed: false,
+            pointer: Default::default(),
             context: Vec::new(),
             view: ViewSettings::default(),
             snap: Default::default(),

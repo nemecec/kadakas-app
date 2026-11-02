@@ -943,7 +943,28 @@ fn modify_options(ui: &mut Ui, m: &mut ToolMachine, settings: &mut ToolSettings)
     }
 }
 
-/// Draws the Data bar. Returns true when Enter was pressed in an entry field.
+/// The text of the position box of the Data bar: the X and Y of the point under the pointer, or
+/// blanks of the same width when there is no such point (the pointer is not on the drawing, or
+/// the 3D view shows nothing under it), so that the bar does not jump (AGR-10).
+pub fn position_text(point: Option<DVec2>) -> String {
+    let u = kadakas_units::current();
+    let at = point.unwrap_or(DVec2::ZERO);
+    let text = tr!(
+        "panels-cursor-position",
+        x = format!("{:>10}", u.length_field(at.x, 1)),
+        y = format!("{:>10}", u.length_field(at.y, 1)),
+        unit = u.length_field_unit()
+    );
+    if point.is_some() {
+        text
+    } else {
+        text.chars().map(|_| ' ').collect()
+    }
+}
+
+/// Draws the Data bar. `cursor` is the position that the entry fields start from. `pointer` is
+/// the point that the position box shows: `None` when the pointer is not on the drawing (AGR-10).
+/// Returns true when Enter was pressed in an entry field.
 #[allow(clippy::too_many_arguments)]
 pub fn data_bar(
     ui: &mut Ui,
@@ -951,19 +972,14 @@ pub fn data_bar(
     s: &mut ToolSettings,
     entry: &mut DataEntry,
     cursor: DVec2,
+    pointer: Option<DVec2>,
     snap: Option<&SnapResult>,
     snap_on: bool,
     readout: Option<(&str, &mut bool)>,
 ) -> bool {
     let mut commit = false;
     ui.horizontal_wrapped(|ui| {
-        let u = kadakas_units::current();
-        ui.monospace(tr!(
-            "panels-cursor-position",
-            x = format!("{:>10}", u.length_field(cursor.x, 1)),
-            y = format!("{:>10}", u.length_field(cursor.y, 1)),
-            unit = u.length_field_unit()
-        ));
+        ui.monospace(position_text(pointer));
         if let Some((t, lonlat)) = readout {
             ui.separator();
             let label =
