@@ -169,7 +169,30 @@ fn the_solid_tools_take_a_rounded_box() {
         },
     );
     // A second box through the rounded one, then Subtract.
-    draw_box(&mut ed, id, [800.0, 200.0, 100.0], 500.0, 200.0, 400.0);
+    // Drawn apart, then moved into place (a move may pass through faces; Push/Pull may not).
+    draw_box(&mut ed, id, [3800.0, 200.0, 100.0], 500.0, 200.0, 400.0);
+    let far: Vec<_> = {
+        let m = model(&ed, id);
+        m.faces()
+            .filter(|(_, f)| f.outer.iter().all(|v| m.vertex(*v).unwrap().x >= 3800.0))
+            .map(|(f, _)| f)
+            .collect()
+    };
+    let mut matrix = [0.0; 12];
+    matrix[0] = 1.0;
+    matrix[4] = 1.0;
+    matrix[8] = 1.0;
+    matrix[9] = -3000.0;
+    edit(
+        &mut ed,
+        id,
+        Edit::TransformVertices {
+            vertices: vec![],
+            faces: far,
+            edges: vec![],
+            matrix,
+        },
+    );
     let m = model(&ed, id).clone();
     let first_face = m
         .faces()

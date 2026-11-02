@@ -872,7 +872,68 @@
           "type": "object"
         },
         {
-          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both\nsolids use (two boxes through each other in one plane) may be in both lists. The result\nreplaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,\nsplit along the cut and stuck to `first`. Split makes three solids. An input that is not a\nclosed solid, a limit, or a result that is not a closed solid refuses the edit with a\nreason and changes nothing. See the module `solid`.\n\n`snap_near` (MOD-19, default false) allows a snap: a vertex of one solid that lies off a\nface plane of the other by more than the plane tolerance but not more than the length\ntolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of\nthe face, in the same undo step. Without it the refusal stands.",
+          "description": "Solid tools (MOD-09): a boolean operation of two closed solids of the model. `first` and\n`second` are the faces of the two solids (see `SurfaceModel::solid_of`). A face that both\nsolids use (two boxes through each other in one plane) may be in both lists. The result\nreplaces the two solids. Subtract and Trim take `second` from `first`. Trim keeps `second`,\nsplit along the cut and stuck to `first`. Split makes three solids. An input that is not a\nclosed solid, a limit, or a result that is not a closed solid refuses the edit with a\nreason and changes nothing. See the module `solid`.\n\n`snap_near` (MOD-19, default false) allows a snap: a vertex of one solid that lies off a\nface plane of the other by more than the plane tolerance but not more than the length\ntolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of\nthe face, in the same undo step. Without it the refusal stands.\nFillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of\n`segments` flat faces (by default from the radius and the angle of the edges, see\n`fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins\nthe rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and\n`smooth` and the rails get `soft`. A radius that does not fit is refused with the largest\none that fits. See the modules `surface::fillet` (the plan) and `edit::fillet`.",
+          "properties": {
+            "action": {
+              "const": "fillet",
+              "type": "string"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            },
+            "radius": {
+              "format": "double",
+              "type": "number"
+            },
+            "segments": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "smooth": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "action",
+            "edges",
+            "radius"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Chamfer (MOD-21): cuts the `edges` of closed solids flat, `distance` mm from the edge on\nboth faces. The rules are those of `Fillet`.",
+          "properties": {
+            "action": {
+              "const": "chamfer",
+              "type": "string"
+            },
+            "distance": {
+              "format": "double",
+              "type": "number"
+            },
+            "edges": {
+              "items": {
+                "$ref": "#/$defs/EdgeId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "action",
+            "edges",
+            "distance"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "action": {
               "const": "solid",
