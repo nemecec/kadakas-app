@@ -25,6 +25,8 @@ pub struct TrayState {
     pub materials: bool,
     /// Soften Edges (MOD-08).
     pub soften: bool,
+    /// Fillet and Chamfer (MOD-21).
+    pub fillet: bool,
     pub scenes: bool,
     pub tags: bool,
     /// The style picker (MOD-10).
@@ -37,6 +39,7 @@ impl Default for TrayState {
             entity_info: true,
             materials: true,
             soften: true,
+            fillet: true,
             scenes: true,
             tags: true,
             styles: true,
@@ -54,6 +57,8 @@ pub enum TrayAction {
     Soften,
     /// The slider of the Soften Edges panel is being dragged: show what it would soften.
     SoftenPreview,
+    /// The Fillet or Chamfer button of its panel (MOD-21).
+    Fillet(kadakas_ui_core::modeling::FilletKind),
     /// Entity Info set the number of segments of a circle or an arc (MOD-15).
     CurveSegments {
         model: kadakas_core::model::ObjectId,
@@ -95,6 +100,8 @@ pub struct TrayUi {
     buffer: Option<EditBuffer>,
     /// The values of the Soften Edges panel.
     pub soften: kadakas_ui_core::modeling::SoftenPanel,
+    /// The values of the Fillet and Chamfer panel (MOD-21).
+    pub fillet: kadakas_ui_core::modeling::FilletPanel,
 }
 
 impl TrayUi {
@@ -874,6 +881,17 @@ pub fn show(
                 Some(crate::soften::Change::Apply) => out.push(TrayAction::Soften),
                 Some(crate::soften::Change::Preview) => out.push(TrayAction::SoftenPreview),
                 None => {}
+            },
+        );
+        panel(
+            ui,
+            "tray-fillet",
+            tr!("modeler-tray-fillet"),
+            &mut state.fillet,
+            |ui| {
+                if let Some(k) = crate::fillet::panel(ui, &mut tray.fillet, data.edges_selected) {
+                    out.push(TrayAction::Fillet(k));
+                }
             },
         );
         panel(

@@ -389,6 +389,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas) -> Shown {
         let mut cmds = Vec::new();
         crate::menu::intersect_menu(ui, intersect, &mut cmds);
         crate::soften::context_menu(ui, edges, &mut cmds);
+        crate::fillet::entries(ui, edges, &mut cmds);
         crate::menu::hide_entries(ui, hide, &mut cmds);
         if let Some(c) = cmds.pop() {
             shown.command = Some(c);

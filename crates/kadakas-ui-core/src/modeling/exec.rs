@@ -370,7 +370,13 @@ pub fn run_full(editor: &mut Editor, actions: &[Action], undo_first: bool) -> Re
             if undo_first {
                 editor.redo();
             }
-            Err(super::messages::localize(&e.to_string()))
+            Err(match &e {
+                // A fillet or a chamfer (MOD-21) says why by its kind, not by its English text.
+                kadakas_core::command::CommandError::Surface(
+                    s @ kadakas_core::surface::SurfaceError::Fillet(_),
+                ) => super::messages::localize_error(s),
+                _ => super::messages::localize(&e.to_string()),
+            })
         }
     }
 }

@@ -18,6 +18,7 @@
 
 pub mod curve;
 pub mod exec;
+pub mod fillet;
 pub mod messages;
 pub mod paint;
 mod plane;
@@ -35,6 +36,7 @@ pub use exec::{
     Action, GuideSpec, Ran, Target, run as run_actions, run_full as run_actions_full,
     run_noted as run_actions_noted,
 };
+pub use fillet::{FilletKind, FilletPanel};
 pub use plane::Plane3;
 pub use resize::{ResizePlan, resize_command, resize_plan};
 pub use scenes::{SceneCache, Scenes, ShowOptions, World, elevation, frame_of, model_of};

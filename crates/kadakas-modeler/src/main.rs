@@ -15,6 +15,7 @@ mod canvas;
 mod curve_panel;
 mod edit3d;
 mod files;
+mod fillet;
 mod icons;
 mod interop;
 mod launch;

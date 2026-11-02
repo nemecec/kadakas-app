@@ -267,6 +267,7 @@ pub fn show(ui: &mut egui::Ui, app: &ModelerApp, cmds: &mut Vec<Cmd>) {
             ui.separator();
             intersect_menu(ui, app.intersect_flags(), cmds);
             solid_menu(ui, app, cmds);
+            crate::fillet::entries(ui, !app.edit.sub.is_empty(), cmds);
             ui.separator();
             // Hide, guides (MOD-05).
             hide_entries(ui, [app.can_hide(), app.can_unhide()], cmds);

@@ -2,7 +2,9 @@
 //! with ids (for agents and logs); the window shows the same reason in the language of the UI,
 //! without internal ids. A text that is not known here is shown as it is.
 
-use kadakas_core::surface::{CurveError, Operand, SnapRefusal, SolidError, SurfaceError};
+use kadakas_core::surface::{
+    CurveError, FilletError, Operand, SnapRefusal, SolidError, SurfaceError,
+};
 use kadakas_l10n::tr;
 
 /// The number in "at most about 12.5 mm" of a core message.
@@ -82,8 +84,32 @@ pub fn localize_error(e: &SurfaceError) -> String {
     match e {
         SurfaceError::Solid(s) => solid_text(s),
         SurfaceError::Curve(c) => curve_text(c),
+        SurfaceError::Fillet(f) => fillet_text(f),
         SurfaceError::Limit { .. } => tr!("uic-solid-refused-limit"),
         other => localize(&other.to_string()),
+    }
+}
+
+/// The refusal of a fillet or a chamfer (MOD-21), without ids.
+fn fillet_text(e: &FilletError) -> String {
+    match e {
+        FilletError::NoEdges => tr!("uic-fillet-refused-no-edges"),
+        FilletError::NotSolidEdge { .. } | FilletError::NotSolid { .. } => {
+            tr!("uic-fillet-refused-not-solid")
+        }
+        FilletError::FlatEdge { .. } => tr!("uic-fillet-refused-flat"),
+        FilletError::Corner { .. } => tr!("uic-fillet-refused-corner"),
+        FilletError::DoesNotFit { most, .. } => match most {
+            Some(x) if *x > 0.0 => tr!(
+                "uic-fillet-refused-fit",
+                most = format!("{}", (x * 100.0).floor() / 100.0)
+            ),
+            _ => tr!("uic-fillet-refused-no-room"),
+        },
+        FilletError::TooSmall { .. } => tr!("uic-fillet-refused-small"),
+        FilletError::Segments { .. } => tr!("uic-fillet-refused-segments"),
+        FilletError::BadSize { .. } => tr!("uic-fillet-refused-size"),
+        FilletError::Result(_) => tr!("uic-fillet-refused-result"),
     }
 }
 
@@ -200,6 +226,57 @@ mod tests {
             localize_error(&SurfaceError::NoFace(FaceId(3))),
             "face 3 does not exist"
         );
+    }
+
+    #[test]
+    fn every_refusal_of_a_fillet_is_known_and_loses_its_ids() {
+        use kadakas_core::surface::{EdgeId, VertexId};
+        let errors = [
+            FilletError::NoEdges,
+            FilletError::NotSolidEdge { edge: EdgeId(4) },
+            FilletError::FlatEdge { edge: EdgeId(4) },
+            FilletError::Corner {
+                vertex: VertexId(9),
+                why: "4 faces meet there".into(),
+            },
+            FilletError::DoesNotFit {
+                noun: "radius",
+                asked: 10.0,
+                why: "face 3 would turn inside out".into(),
+                most: Some(8.49),
+            },
+            FilletError::DoesNotFit {
+                noun: "radius",
+                asked: 10.0,
+                why: "x".into(),
+                most: Some(0.0),
+            },
+            FilletError::TooSmall {
+                noun: "radius",
+                asked: 0.1,
+                segments: 64,
+                edge: EdgeId(4),
+            },
+            FilletError::Segments { segments: 70 },
+            FilletError::BadSize {
+                noun: "radius",
+                asked: 0.0,
+            },
+            FilletError::Result("edge 4 passes through face 5".into()),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for e in errors {
+            let text = localize_error(&SurfaceError::Fillet(e.clone()));
+            let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+            assert!(
+                digits.is_empty() || digits == "849" || digits == "164",
+                "{text}"
+            );
+            // Two kinds of a missing solid share a text.
+            if !matches!(e, FilletError::NotSolid { .. }) {
+                assert!(seen.insert(text), "{e}");
+            }
+        }
     }
 
     #[test]

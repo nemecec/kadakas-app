@@ -624,6 +624,95 @@ Edit > Solid Tools holds Check Solid, Union, Subtract, Intersect, Trim, Split an
 - Integration tests (`crates/kadakas-core/tests/solid_tools.rs`): each operation is one undo step and comes back with undo and redo, a refusal makes no step, the edit and the report are JSON. Also lines and circles of the person that survive a union, a cylinder cut in half that keeps its curves as chains, and the count of previews in the window.
 - Tests of the window and of `ui-core`: operands, order, preview in both languages, one undo step, refusals without ids, Check Solid, the menu.
 
+## Fillet and chamfer (MOD-21)
+
+A fillet rounds edges of a closed solid. A chamfer cuts them flat. Both are one edit and one undo step.
+The plan is pure geometry in `kadakas_core::surface::fillet`. The edit in `surface::edit::fillet` applies it and checks the result.
+
+### The strip of an edge
+
+Each chosen edge gets a strip. The strip touches the two faces of the edge along two lines, the rails.
+A rail lies at the setback `s` from the edge. For a fillet `s = r tan(φ/2)`. Here `r` is the radius and `φ` is the angle between the two face normals.
+For a chamfer `s` is the distance. The cross section of a fillet is an arc of radius `r`.
+Its center lies at the distance `r` from both face planes. For a convex edge the center is inside the solid. For a concave edge it is outside, so the fillet adds material.
+The arc has `segments` equal parts, so the strip is `segments` flat faces. Each strip face has two sides parallel to the edge. Such a face is always flat.
+Edges at any angle work: slanted faces, a tapered leg, the end face of an extrusion next to its sides.
+
+The default number of segments comes from the radius and the largest angle of the chosen edges. A segment turns by 15 degrees at most.
+For a large radius a segment stays within 0.5 mm of the true circle. The default is 1 to 24 segments. A given number is 1 to 64.
+
+### The corners
+
+Each end of a chosen edge is a vertex. Exactly three faces meet there. Picture a box corner: three faces, three edges.
+
+- **One chosen edge.** The strip runs on to the plane of the third face. That face gets the end of the strip in its outline. On a box with one round edge, each end face gets a quarter circle.
+- **Two chosen edges, the third edge stays sharp.** Both strips end on one plane. The plane holds the sharp edge and the corner where the two rails meet in the shared face.
+  When the two edges meet their faces at the same angle, the two ends are the same points. The strips then meet as a miter, like a picture frame. Examples are the top edges of a box, the end edges of the U block and a ring of a cylinder.
+  When the angles differ, a flat piece in that plane fills the gap between the two ends. Picture a small flat facet between two moldings of different profiles.
+- **Three chosen edges.** Picture a ball that touches the three planes. A fillet ends each strip at the cross section through the center of that ball. A patch of triangles on that ball closes the corner. Its points are rows between two of the end arcs, so the third arc is the last row. For a box corner this is an eighth of a ball. A chamfer closes the corner with the triangle of the three rail corners.
+
+A corner of four or more faces is refused with the vertex. There is no fallback.
+A vertex with chosen convex and concave edges is refused too. So `all` with `concave` on an L shape is refused at the ends of the inner edge. Round the inner edge alone, or leave it out.
+Two chosen edges can continue each other in a straight line. They are refused when they meet the shared face at different angles.
+Two chosen edges at different angles get a flat corner piece. At some radii this piece is thinner than the length tolerance (0.01 mm). Such a radius is refused. The "at most about" value is then the largest radius below that band.
+
+### What stays and what is new
+
+The faces next to the chosen edges keep their ids, planes and paint. The third face at a corner keeps its id too.
+An edge that stays and loses its end keeps its id, flags and place in a curve. Only its end moves.
+The chosen edges and their end vertices go. The strips and the corner pieces are new faces, with new edges and vertices.
+A new face takes the paint of the largest face next to it. A tie goes to the lower id.
+
+With Smooth (the default of a fillet) the edges inside the round get `soft` and `smooth`. These are the lines between two segments, a miter and the triangles of a ball corner. The round then shades as one surface.
+A rail gets `soft` only. Its line is not drawn, and the big face keeps its own shading. A chamfer gets no flags.
+
+A chosen edge leaves its curve. The rest of the curve is cut into chains, as Erase does. The exact circle of a curve (MOD-15) stays only where the chain still lies on it. Otherwise it is dropped or shortened with a note. The rails of a rounded arc get no exact circle of their own.
+
+### Choosing edges
+
+The edit takes edge ids. `SurfaceModel::fillet_edges` (`EdgeChoice`) finds them. It joins the given edges and the edges that a filter finds. The filter looks at the edges of `faces`, or of the whole model with `all`.
+The filter keeps an edge between exactly two faces at an angle above 5 degrees (`min_angle`). The edge must not be soft or smooth, so the facets of a curved surface stay. It must be convex, or concave with `concave`.
+
+### Refusals
+
+Each refusal has a stable id and changes nothing.
+
+| Id | Reason |
+|---|---|
+| `fillet_no_edges` | No edge was chosen. |
+| `fillet_edge_not_solid` | An edge is not between exactly two faces. |
+| `fillet_not_solid` | The faces of the edge are not a closed solid. The message names an open edge. |
+| `fillet_edge_flat` | The two faces of an edge lie in one plane, or fold onto each other. |
+| `fillet_corner_unsupported` | A corner of four or more faces, convex and concave edges at one vertex, or a loose edge at the vertex. |
+| `fillet_does_not_fit` | The size does not fit. The message ends with "at most about X mm fits", as Offset does. |
+| `fillet_too_small` | A segment is shorter than the length tolerance. |
+| `fillet_segments_out_of_range` | The segments are not 1 to 64. |
+| `fillet_bad_size` | The size is not a number above the length tolerance. |
+| `fillet_result_invalid` | The result is not a closed solid, has a new problem or cuts into other geometry. |
+
+A size does not fit when a strip loses its length along its edge. It also does not fit when a face turns around or crosses itself. A hole that leaves its face and a corner piece that folds also count.
+Two fillets on opposite sides of a thin arm collide. Take an arm of 17 mm and a radius of 10 mm. The message then gives "at most about 8.49 mm fits".
+The largest size is found by halving down to a sixteenth of the length tolerance, as for Offset.
+More than 10,000 new edges in one edit (`MAX_EDIT_EDGES`) and the model limits are refused with `model_limit`.
+
+The result is checked like the result of the solid tools (MOD-09). The checks are the limits, new model problems, contacts of the new edges with other faces, and new distance problems. The shell must also close a solid with no crossing.
+The volume must change by no more than the wedges between the edges and their rails allow. Fillet and chamfer are not replayed for collaboration, as the solid tools are not.
+
+### Modeler
+
+The tray has the panel Fillet and Chamfer. It has the radius or distance in world mm, the segments (0 is automatic) and Smooth. The buttons Fillet and Chamfer run it.
+Edit > Fillet and Edit > Chamfer use the values of the panel. The context menu of the 3D view has the same items.
+They work on the selected edges and on the sharp convex edges of the selected faces. The status line says how many edges changed, or why nothing changed, in the language of the window.
+The code is `kadakas_ui_core::modeling::fillet` and `kadakas-modeler/src/fillet.rs`.
+
+### Tests and cost
+
+- Planner unit tests (`surface/fillet/tests.rs`). One box edge gives the exact volume. All 12 box edges converge to the true rounded box (within 1e-4 at 64 segments). A test checks the error bound of the segments. Other tests cover corners of two and three edges, a tapered leg and a prism of 24 sides. Further tests cover an L shape with a concave edge, flat corner pieces and the thin arm. The last ones cover short edges, bad inputs and a pyramid apex.
+- Model tests (`surface/tests_fillet.rs`). The U block has three readings. The first is 69 mm wide (arms 17 and 29, slot 23). The two others are 82 mm wide: a slot of 36, or a slot of 23 and a ledge of 13. Other tests use the plate of 1055 x 160 x 20 mm with two pockets of 8 mm. More tests cover a tapered leg, a cylinder ring and an L shape. The rest cover refusals, the limit of new edges and determinism.
+- Two property tests. The first uses random boxes and edge sets. The removed volume lies between the true round and the true round plus the error bound. The second uses random prisms and tapered prisms with fillet or chamfer. A refusal changes nothing. A result is a smaller closed solid.
+- Document tests (`tests/fillet.rs`) check one undo step and undo and redo byte for byte. They also check the JSON commands and Subtract on a rounded box.
+- Cost, measured once in a debug build: a model of 48,000 vertices, 72,000 edges and 36,000 faces. One edge took 1.05 s and twelve edges with ball corners took 1.05 s. A refusal with the search for the largest size took 0.28 s. The final checks of the whole model take most of the time.
+
 ## Scenes and styles (MOD-10)
 
 A scene is a saved view of the document. It keeps the camera, which tags and layers are visible, the active tag and layer, and the render style. The scenes of the modeler are the saved views of the document, in the same order. The Vectorworks-like app lists the same saved views in its Navigation palette. One `.kad` file shows the same scenes in both programs. The wording of the panels follows the public SketchUp help for scenes and styles. It is not verified against the product.
