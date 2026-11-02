@@ -277,6 +277,64 @@ The render calls and `view.camera` ignore some keys by design: `view`, `render_m
 
 The camera that `render.png` or `mesh.render` returns has the same six keys. It goes back into any of these calls. The app tests check the round trip `view.get`, `view.camera`, `render.png` for Top, Bottom, far targets, isometric and random views.
 
+## The pointer of the person (AGR-10)
+
+People say "this" and "here" while they point at the view. `view.get` (app only) has the field `pointer`. It tells where the pointer is and what is under it.
+
+```json
+{"method": "view.get"}
+{"mode": "3d", "canvas": {"width": 1180, "height": 760}, "pointer": {
+  "over_canvas": true, "canvas": [412.5, 301.0], "age_ms": 340, "navigating": false, "mode": "3d",
+  "ray": {"origin": [2000, -7000, 6000], "direction": [0.0, 0.62, -0.78]},
+  "hit": {"model": "0190f1c2-...", "face": 14, "edge": 31, "distance": 8120.4,
+          "point": [2000, 727.3, 1000], "local": [2000, 727.3, 1000], "side": "front", "normal": [0, 0, 1]}}}
+```
+
+The fields:
+
+- `pointer` is `null` when the pointer is not over the drawing area. This holds when it is outside the window, over a menu or a palette, or under a dialog. It also holds when another tab covers the drawing area.
+- `canvas` is `[x, y]` in points from the top left corner of the drawing area. `canvas` in the rest of `view.get` has the size of that area, so the two share one frame.
+- `age_ms` is the time since the pointer last moved. The session counts it when you ask. A resting pointer has a growing age.
+- `navigating` is true while the person moves the view, with a drag, the wheel or a key.
+- `mode` is `plan` or `3d`, as in `view.get`.
+
+In the plan, `pointer` adds `point` and `ids`. `point` is `[x, y]` in drawing mm, not snapped. `ids` has the object that a click selects, as a list with one id. It is `[]` when no object is there. A group is named, not its member, as a click does.
+
+In 3D, `pointer` adds `ray` and `hit`:
+
+- `ray` is `{origin, direction}` in drawing mm. `direction` is a unit vector. A parallel view starts the ray in front of the models. Give both to `mesh.pick` as they are.
+- `hit` is the answer of `mesh.pick` for that ray, the key `hit` of it. It has `model`, `face`, `distance`, `point`, `local`, `side` and `normal`. Only visible surface models count. `hit` is `null` when none is hit.
+- `hit.edge` is added when the point is within 6 pixels of a shown edge of the face. It is the id of `mesh.edges`. It is left out otherwise. `mesh.pick` itself never has it.
+
+A test checks that `mesh.pick` with the ray gives the same `hit`, apart from `edge`. Objects that are not surface models, such as a slab or a site model, are not in `hit`. `pointer.hit` is `null` over them.
+
+### Who delivers the pointer
+
+| Host | Pointer data |
+|---|---|
+| The app (`kadakas app --agent-port`) | Yes. The plan and the 3D view show the pointer to the session in each frame. `view.get` answers from it. |
+| `kadakas serve --connect` and `kadakas mcp --connect` | Yes. They forward every request to the live app, so `view.get` is the app's. |
+| `kadakas serve` alone | No. It has no window, so `view.get` is the error that names the app. |
+| The 3D modeler program | No. It has no agent connection, and its status bar has no X and Y box. The mirror that `Session::parts` has (`parts_sync.rs`) is not built for the pointer. |
+
+The session keeps the sample (`kadakas_api::Session::set_pointer`, code in `crates/kadakas-api/src/pointer_api.rs`). A host with an agent connection calls it once per frame. It calls `pointer_new_frame` before it draws the area. A sample that no frame renewed is old, and the answer is `null`.
+
+### Privacy
+
+The position of the pointer stays in the app. Only a `view.get` call of the agent reads it. It is not saved, not in the document, not in the undo history and not sent to collaborators. The cursor that collaborators see (PLAT-07) is a separate, shared position and is not touched. An agent that does not call `view.get` never gets the pointer.
+
+### The status bar
+
+The X and Y numbers in the status bar use the same data. They show the point under the pointer and nothing otherwise:
+
+- In the plan they show the cursor while the pointer is over the drawing area.
+- In 3D they show the point of `hit`. They show nothing while the view moves or when no surface model is under the pointer.
+- Outside the drawing area they show nothing. The text keeps its width, so the bar does not jump.
+
+### Not done
+
+The deliberate gesture is not built: Alt+click or a Point tool that sends `view.pointed {model, face, point, ids}` as an event. Events carry document changes only (PLAT-02). Selection events are still open (API-17). The gesture needs a second kind of event first. Until then the agent reads `pointer` when the person says "this".
+
 ## Errors
 
 A refusal is a validation error (code 3). A missing object, layer, class, vertex, edge or face is `not_found` (code 2). A locked layer is a `conflict` (code 5). A size limit is `limit` (code 6). A wrong parameter is `invalid_params` (code -32602) and has no `error_id`.
@@ -432,5 +490,6 @@ The usual methods work on these objects: `selection.set`, and the commands `move
 | Delete, selection parts, unknown methods (AGR-09) | `crates/kadakas-api/src/objects_api.rs`, `selection_api.rs`, `method_hints.rs`, `tests/agent_gaps.rs`, `tests/behavior/test_agent_gaps.py` |
 | Selected parts of the 3D editor | `crates/kadakas-modeler/src/parts_sync.rs` |
 | Camera round trip | `crates/kadakas-app/src/agent_view.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs` |
+| The pointer of the person (AGR-10) | `crates/kadakas-api/src/pointer_api.rs`, `crates/kadakas-app/src/agent_pointer.rs`, `crates/kadakas-api/tests/pointer.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs`, `tests/behavior/test_agent_view.py` |
 
 After a change to a method, renew the Python client with `python python/tools/codegen.py`.

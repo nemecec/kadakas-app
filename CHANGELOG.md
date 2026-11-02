@@ -10,11 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Agent API gaps from a furniture model (AGR-09). `objects.delete {ids}` is a listed method (MCP, Python, scripts) with the checks of `delete_objects` and one undo step. The answer to an unknown method names listed methods. `selection.get` and `selection.set` have the shape `{ids, faces, edges}` for the selected faces and edges of surface models. The 3D modeler mirrors its picks into the session, but no host connects a face pick to an agent yet. `view.get` gives the 3D camera in the shape that `render.png`, `mesh.render` and `view.camera` take. These calls refuse an `eye` that disagrees with `yaw`, `pitch` and `distance`.
+- The agent sees what the person points at (AGR-10). `view.get` has the field `pointer`: `{over_canvas, canvas [x, y], age_ms, navigating, mode}`. In the plan it has the drawing point and the object under the pointer (`point`, `ids`). In 3D it has the ray under the pointer (`ray {origin, direction}`, accepted by `mesh.pick`). It also has `hit`, the answer of `mesh.pick` for that ray. `hit` has `edge` when the pointer is on an edge. The field is `null` when the pointer is not over the drawing area. Only the app delivers it, only a call of the agent reads it, and it is not saved or shared.
 
 ### Changed
 
 - Release files have one name pattern, `Kadakas-<version>-<os>-<arch>.<ext>`, with the exact version in every name. The notes of a release start with a table that tells which file to download.
 - The macOS app bundles have a valid ad-hoc seal. A browser download no longer says "Kadakas.app is damaged". macOS 15 says "Apple could not verify Kadakas is free of malware" (macOS 14 and older: "cannot be opened because the developer cannot be verified"). The release notes tell how to open the app.
+
+### Fixed
+
+- The X and Y numbers in the status bar no longer stay behind. They show nothing when the pointer is outside the drawing area. In 3D they show the point where the pointer meets a surface model. They show nothing while the view moves or when no model is under the pointer. Before, they kept the last place of the plan.
 
 ## [0.1.0-alpha.1] - 2026-10-27
 

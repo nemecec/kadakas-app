@@ -145,6 +145,22 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     if !resp.hovered() {
         kadakas_view3d::scroll::pointer_left(ui.ctx(), egui::Id::new("scroll3d"));
     }
+    // What the person points at, for the agent and the status bar (AGR-10). The camera is the
+    // one of this frame, after the navigation above. A compare shows another scene.
+    if compare.is_none() {
+        let reach = scene
+            .bounds
+            .map_or(0.0, |(lo, hi)| (hi - lo).length() + (lo + hi).length());
+        let frame = crate::agent_pointer::Frame {
+            rect,
+            pointer: hover.filter(|_| resp.hovered() || resp.dragged()),
+            navigating: nav.moved || nav.dragging,
+            now_ms: ui.input(|i| i.time) * 1000.0,
+        };
+        crate::agent_pointer::show_3d(session, &frame, &view3d.camera, scene.origin, reach);
+    } else {
+        session.clear_pointer();
+    }
     // A click on a pin opens its issue.
     let mut pin_clicked = false;
     if resp.clicked()

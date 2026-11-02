@@ -197,6 +197,27 @@ fn near(
     Ok(out)
 }
 
+/// The nearest hit of a ray with the visible surface models: the `hit` of `mesh.pick` for that
+/// ray, and `None` when nothing is hit. The pointer of the person (AGR-10) uses it, so the hit
+/// under the pointer is the same answer that `mesh.pick` gives.
+pub(crate) fn nearest_hit(
+    doc: &Document,
+    cache: &mut QueryCache,
+    revision: u64,
+    origin: DVec3,
+    direction: DVec3,
+) -> Option<Value> {
+    let params = json!({
+        "origin": [origin.x, origin.y, origin.z],
+        "direction": [direction.x, direction.y, direction.z],
+    });
+    let mut out = pick(doc, cache, revision, params).ok()?;
+    match out["hit"].take() {
+        Value::Null => None,
+        hit => Some(hit),
+    }
+}
+
 fn pick(
     doc: &Document,
     cache: &mut QueryCache,

@@ -628,6 +628,14 @@ impl Env<'_> {
         Ok(out)
     }
 
+    /// `view.get`: the view, and what the person points at (AGR-10). The pointer is read here, on
+    /// the call of the agent, and nowhere else.
+    fn view_get(&mut self) -> Result<Value, RpcError> {
+        let mut out = self.state_json(true)?;
+        out["pointer"] = self.session.pointer_json(self.now_ms);
+        Ok(out)
+    }
+
     // ---------------------------------------------------------------- the calls
 
     /// A zoom. The person's own zoom (a click on a pointer) is not held back by their navigation,
@@ -875,7 +883,7 @@ pub fn call(env: &mut Env, method: &str, params: Value) -> Result<Value, RpcErro
     let params = if params.is_null() { json!({}) } else { params };
     let params = kadakas_api::params::prepare(env.session.editor.doc(), method, params)?;
     match method {
-        "view.get" => env.state_json(true),
+        "view.get" => env.view_get(),
         "view.zoom" => env.zoom(&params, false),
         "view.pan" => env.pan(&params),
         "view.camera" => env.set_camera(&params),

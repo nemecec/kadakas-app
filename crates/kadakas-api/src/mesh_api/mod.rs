@@ -28,7 +28,7 @@ mod exact;
 mod query;
 mod read;
 
-pub(crate) use query::QueryCache;
+pub(crate) use query::{QueryCache, nearest_hit};
 
 pub const MESH_SUMMARY: (&str, &str) = (
     "mesh.summary",
