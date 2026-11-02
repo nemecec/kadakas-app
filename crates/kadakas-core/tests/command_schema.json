@@ -872,7 +872,7 @@
           "type": "object"
         },
         {
-          "description": "Fillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of\n`segments` flat faces (by default from the radius and the angle of the edges, see\n`fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins\nthe rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and\n`smooth` and the rails get `soft`. A radius that does not fit is refused with the largest\none that fits (`DoesNotFit` with `most`). See the modules `surface::fillet` (the plan) and `edit::fillet`.",
+          "description": "Fillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of\n`segments` flat faces (by default from the radius and the angle of the edges, see\n`fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins\nthe rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and\n`smooth` and the rails get `soft`. A radius that does not fit is refused with the largest\none that fits (`DoesNotFit` with `most`). See the modules `surface::fillet` (the plan) and\n`edit::fillet`.",
           "properties": {
             "action": {
               "const": "fillet",

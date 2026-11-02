@@ -79,17 +79,6 @@ impl Profile {
         }
     }
 
-    /// The same profile with another radius or distance.
-    pub fn resized(&self, x: f64) -> Profile {
-        match self {
-            Profile::Round { segments, .. } => Profile::Round {
-                radius: x,
-                segments: *segments,
-            },
-            Profile::Flat { .. } => Profile::Flat { distance: x },
-        }
-    }
-
     /// "radius" or "distance", for the messages.
     pub fn noun(&self) -> &'static str {
         match self {
@@ -117,6 +106,37 @@ pub fn default_segments(radius: f64, angle: f64) -> u32 {
     } else {
         1
     }
+}
+
+/// The most segments with which a round of `radius` mm on an edge that turns by `angle` radians
+/// keeps segments of four length tolerances (at least 1).
+pub fn fitting_segments(radius: f64, angle: f64) -> u32 {
+    let n = (radius * angle / (4.0 * super::LENGTH_TOLERANCE)).floor();
+    if n.is_finite() && n >= 1.0 {
+        n.min(MAX_SEGMENTS as f64) as u32
+    } else {
+        1
+    }
+}
+
+/// The number of new edges of a plan: the sides of the new faces and of the changed faces that
+/// end at a new point, less the edges that stay with a new end.
+pub fn new_edges(plan: &Plan) -> usize {
+    let mut pairs: BTreeSet<(Pt, Pt)> = BTreeSet::new();
+    let loops = plan
+        .new_faces
+        .iter()
+        .map(|f| &f.points)
+        .chain(plan.faces.values().flatten());
+    for l in loops {
+        for i in 0..l.len() {
+            let (x, y) = (l[i], l[(i + 1) % l.len()]);
+            if matches!(x, Pt::New(_)) || matches!(y, Pt::New(_)) {
+                pairs.insert(pair(x, y));
+            }
+        }
+    }
+    pairs.len().saturating_sub(plan.trims.len())
 }
 
 /// The angle between the normals of the two faces of an edge (radians, 0 for one plane) and
@@ -227,13 +247,17 @@ pub enum FilletError {
     FlatEdge { edge: EdgeId },
     #[error("the corner at vertex {vertex} is not supported: {why}")]
     Corner { vertex: VertexId, why: String },
-    #[error("the {noun} of {asked} mm does not fit: {why}; {}", fits_text(*.most))]
+    #[error("the {noun} of {asked} mm does not fit: {why}; {}", fits_text(*.most, gaps, *above))]
     DoesNotFit {
         noun: &'static str,
         asked: f64,
         why: String,
         /// The largest size that fits (mm), when it was looked for; 0 when nothing fits.
         most: Option<f64>,
+        /// Ranges of smaller sizes that do not fit either (mm, from and to).
+        gaps: Vec<[f64; 2]>,
+        /// When no smaller size fits: larger sizes that fit (mm, from and to).
+        above: Option<[f64; 2]>,
     },
     #[error(
         "the {noun} of {asked} mm is too small for {segments} segments at edge {edge}: a segment \
@@ -257,6 +281,17 @@ pub enum FilletError {
         max: usize,
         most_segments: Option<u32>,
     },
+    #[error(
+        "this corner would leave a thin wedge of material ({:.1} degrees, less than {THIN_DEGREES}) \
+         along the edge at ({:.1}, {:.1}, {:.1}); round the third edge too, or use a smaller \
+         size on one edge",
+        degrees, at[0], at[1], at[2]
+    )]
+    ThinFin {
+        vertex: VertexId,
+        degrees: f64,
+        at: [f64; 3],
+    },
     #[error("segments must be from 1 to {MAX_SEGMENTS}, not {segments}")]
     Segments { segments: u32 },
     #[error("the {noun} must be a number larger than the length tolerance (0.01 mm), not {asked}")]
@@ -267,12 +302,34 @@ pub enum FilletError {
     Result(String),
 }
 
-fn fits_text(most: Option<f64>) -> String {
-    match most {
-        Some(x) if x > 0.0 => format!("at most about {x} mm fits"),
-        Some(_) => "there is no room for it there".to_string(),
-        None => "a smaller size fits".to_string(),
+fn fits_text(most: Option<f64>, gaps: &[[f64; 2]], above: Option<[f64; 2]>) -> String {
+    let mut out = match (most, above) {
+        (Some(x), _) if x > 0.0 => format!("at most about {x} mm fits"),
+        (Some(_), Some([a, b])) => format!(
+            "no smaller size fits, but larger ones do: about {} mm and about {} mm fit",
+            two_digits(a),
+            two_digits(b)
+        ),
+        (Some(_), None) => "no size fits there".to_string(),
+        (None, _) => "a smaller size fits".to_string(),
+    };
+    for g in gaps {
+        out.push_str(&format!(
+            "; sizes between about {} and {} mm do not fit either",
+            two_digits(g[0]),
+            two_digits(g[1])
+        ));
     }
+    out
+}
+
+/// A size with two significant digits, for a message.
+fn two_digits(x: f64) -> f64 {
+    if !(x.is_finite() && x > 0.0) {
+        return 0.0;
+    }
+    let f = 10f64.powf(x.log10().floor() - 1.0);
+    ((x / f).round() * f * 1e9).round() / 1e9
 }
 
 impl FilletError {
@@ -287,6 +344,7 @@ impl FilletError {
             FilletError::TooSmall { .. } => "fillet_too_small",
             FilletError::Segments { .. } => "fillet_segments_out_of_range",
             FilletError::TooManyEdges { .. } => "fillet_too_many_edges",
+            FilletError::ThinFin { .. } => "fillet_thin_fin",
             FilletError::BadSize { .. } => "fillet_bad_size",
             FilletError::NotSolid { .. } => "fillet_not_solid",
             FilletError::Result(_) => "fillet_result_invalid",
@@ -386,6 +444,9 @@ struct Builder<'a> {
     to_orient: Vec<usize>,
     blend: BTreeSet<(Pt, Pt)>,
     rails: BTreeSet<(Pt, Pt)>,
+    /// Corners of two chosen edges whose plane halves the angle of the material at the sharp
+    /// edge, because the plane through the corner of the rails left a thin wedge there.
+    bisect: BTreeSet<VertexId>,
 }
 
 impl Builder<'_> {
@@ -411,6 +472,33 @@ pub fn plan(
     shape: &Shape,
     edges: &[(EdgeId, VertexId, VertexId)],
     profile: &Profile,
+) -> Result<Plan, FilletError> {
+    // A corner of two chosen edges whose plane leaves a thin wedge is planned again with the
+    // plane that halves the angle at the sharp edge (once for each corner).
+    let mut chosen_at: BTreeMap<VertexId, usize> = BTreeMap::new();
+    for (_, a, b) in edges {
+        *chosen_at.entry(*a).or_default() += 1;
+        *chosen_at.entry(*b).or_default() += 1;
+    }
+    let mut bisect: BTreeSet<VertexId> = BTreeSet::new();
+    loop {
+        match plan_with(shape, edges, profile, &bisect) {
+            Err(FilletError::ThinFin { vertex, .. })
+                if chosen_at.get(&vertex) == Some(&2) && !bisect.contains(&vertex) =>
+            {
+                bisect.insert(vertex);
+            }
+            other => return other,
+        }
+    }
+}
+
+/// The plan, with the corners of `bisect` cut on the plane that halves the sharp edge.
+fn plan_with(
+    shape: &Shape,
+    edges: &[(EdgeId, VertexId, VertexId)],
+    profile: &Profile,
+    bisect: &BTreeSet<VertexId>,
 ) -> Result<Plan, FilletError> {
     if edges.is_empty() {
         return Err(FilletError::NoEdges);
@@ -459,6 +547,7 @@ pub fn plan(
         to_orient: Vec::new(),
         blend: BTreeSet::new(),
         rails: BTreeSet::new(),
+        bisect: bisect.clone(),
     };
     let ends: BTreeSet<VertexId> = strips.iter().flat_map(|s| [s.p, s.q]).collect();
     // The faces at each end, from one pass over the faces.
@@ -639,6 +728,8 @@ fn assemble(
         asked,
         why,
         most: None,
+        gaps: Vec::new(),
+        above: None,
     };
     let mut new_faces: Vec<NewFace> = Vec::new();
     let mut seams: BTreeSet<(Pt, Pt)> = BTreeSet::new();
@@ -668,7 +759,14 @@ fn assemble(
         let shortest = (0..=n)
             .map(|j| e1.t[j] - e0.t[j])
             .fold(f64::INFINITY, f64::min);
-        let delta = (50.0 * b.tol).min(0.3 * shortest);
+        // At least four length tolerances, so no edge of the row is near the tolerance.
+        let delta = (50.0 * b.tol).min(0.3 * shortest).max(4.0 * b.tol);
+        if 2.0 * delta >= shortest {
+            return Err(no_fit(format!(
+                "edge {} ({:.2} mm) is too short for the rounds at its ends",
+                s.edge, s.len
+            )));
+        }
         let bent = |b: &Builder<'_>, e: &End| {
             e.between.iter().any(|w| !w.is_empty())
                 || (0..=n).any(|j| b.pos(e.pts[j]).distance(s.point(j, e.t[j])) > flat_eps)
@@ -884,6 +982,7 @@ fn assemble(
         }
     }
     new_faces.extend(b.corners);
+    thin_wedges(&b.points, b.shape, &faces, &new_faces, &strips)?;
     Ok(Plan {
         points: b.points,
         faces,
@@ -898,27 +997,171 @@ fn assemble(
     })
 }
 
-/// The largest size up to `upto` with which the plan works (0 when none), found by halving down
-/// to a sixteenth of the length tolerance.
-pub fn largest_fit(
+/// The smallest angle of material (degrees) that the new faces may make with a neighbour face.
+/// A thinner wedge cannot be printed or milled and breaks later solid tools; the fuzz of the
+/// review found knife fins of 0.4 to 26 degrees at corners of two edges at different angles.
+pub const THIN_DEGREES: f64 = 15.0;
+
+/// True for a wedge of material under [`THIN_DEGREES`] (exactly the threshold is not thin).
+pub fn is_thin(degrees: f64) -> bool {
+    degrees < THIN_DEGREES
+}
+
+/// Refuses a wedge of material thinner than [`THIN_DEGREES`] at an edge of a new face.
+fn thin_wedges(
+    points: &[DVec3],
     shape: &Shape,
-    edges: &[(EdgeId, VertexId, VertexId)],
-    profile: &Profile,
-    upto: f64,
-) -> f64 {
-    let all: Vec<DVec3> = shape.points.values().copied().collect();
-    let tol = geom::tol(&all);
-    let (mut lo, mut hi) = (0.0, upto);
-    let steps = ((upto / tol).log2().ceil() + 4.0).clamp(1.0, 48.0) as usize;
-    for _ in 0..steps {
-        let mid = (lo + hi) / 2.0;
-        if plan(shape, edges, &profile.resized(mid)).is_ok() {
-            lo = mid;
-        } else {
-            hi = mid;
+    faces: &BTreeMap<FaceId, Vec<Vec<Pt>>>,
+    new_faces: &[NewFace],
+    strips: &[Strip],
+) -> Result<(), FilletError> {
+    let pos = |p: Pt| match p {
+        Pt::Old(v) => shape.points[&v],
+        Pt::New(i) => points[i],
+    };
+    // Each use of an edge: the normal of the face, the direction of the use and the face.
+    let mut uses: BTreeMap<(Pt, Pt), Vec<(DVec3, Pt, Pt, Option<usize>)>> = BTreeMap::new();
+    for (k, f) in new_faces.iter().enumerate() {
+        let l = &f.points;
+        for i in 0..l.len() {
+            let (x, y) = (l[i], l[(i + 1) % l.len()]);
+            uses.entry(pair(x, y))
+                .or_default()
+                .push((f.normal, x, y, Some(k)));
         }
     }
-    lo
+    for (id, ls) in faces {
+        let n = shape.faces[id].plane.normal;
+        for l in ls {
+            for i in 0..l.len() {
+                let (x, y) = (l[i], l[(i + 1) % l.len()]);
+                if let Some(u) = uses.get_mut(&pair(x, y)) {
+                    u.push((n, x, y, None));
+                }
+            }
+        }
+    }
+    for list in uses.values() {
+        let [(n1, x, y, k1), (n2, _, _, k2)] = list.as_slice() else {
+            continue;
+        };
+        let d = (pos(*y) - pos(*x)).normalize_or_zero();
+        let (phi, convex) = edge_kind(*n1, *n2, d);
+        let inside = if convex {
+            std::f64::consts::PI - phi
+        } else {
+            std::f64::consts::PI + phi
+        };
+        let degrees = inside.to_degrees();
+        if !is_thin(degrees) {
+            continue;
+        }
+        let at = (pos(*x) + pos(*y)) / 2.0;
+        // The corner it belongs to: a corner piece names it, else the nearer end of the strip.
+        let mut vertex = None;
+        for k in [k1, k2].into_iter().flatten() {
+            match new_faces[*k].role {
+                Role::Corner { vertex: v } => vertex = Some(v),
+                Role::Strip { edge, .. } if vertex.is_none() => {
+                    if let Some(s) = strips.iter().find(|s| s.edge == edge) {
+                        let (p, q) = (s.at, s.at + s.d * s.len);
+                        vertex = Some(if at.distance(p) <= at.distance(q) {
+                            s.p
+                        } else {
+                            s.q
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(vertex) = vertex else {
+            continue;
+        };
+        return Err(FilletError::ThinFin {
+            vertex,
+            degrees,
+            at: at.to_array(),
+        });
+    }
+    Ok(())
+}
+
+/// What a scan of sizes found: the largest size below `upto` with which the plan works (0 when
+/// none) and the ranges of smaller sizes that do not work.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SizeScan {
+    pub most: f64,
+    pub gaps: Vec<[f64; 2]>,
+    /// When no smaller size works: the larger sizes that work, from and to (a grid up to the
+    /// size of the shape).
+    pub above: Option<[f64; 2]>,
+}
+
+/// Scans sizes below `upto` with the plan (`profile` gives the profile of each size, so default
+/// segments follow the size). The works and fails of a size need not be in one interval: a
+/// larger size can work where a smaller one fails. So 24 sizes on a geometric grid are tried
+/// first; the largest that works is then pushed up by halving toward the next grid size, down to
+/// a sixteenth of the length tolerance. The failing grid sizes below it make the gaps.
+pub fn size_scan(
+    shape: &Shape,
+    edges: &[(EdgeId, VertexId, VertexId)],
+    profile: &dyn Fn(f64) -> Profile,
+    upto: f64,
+) -> SizeScan {
+    let all: Vec<DVec3> = shape.points.values().copied().collect();
+    let tol = geom::tol(&all);
+    let works = |x: f64| plan(shape, edges, &profile(x)).is_ok();
+    let lo = (2.0 * tol).min(upto / 2.0);
+    let k = 24;
+    let grid: Vec<f64> = (0..k)
+        .map(|i| lo * (upto / lo).powf(i as f64 / k as f64))
+        .collect();
+    let ok: Vec<bool> = grid.iter().map(|x| works(*x)).collect();
+    let Some(best) = (0..k).rev().find(|i| ok[*i]) else {
+        // Larger sizes can work where smaller ones fail (a round that meets a wall at a fold).
+        let (lo3, hi3) = geom::bounds(all.iter().copied()).unwrap_or_default();
+        let limit = (hi3 - lo3).max_element();
+        let up: Vec<f64> = (1..=12)
+            .map(|i| upto * (limit / upto).max(1.0).powf(i as f64 / 12.0))
+            .filter(|x| works(*x))
+            .collect();
+        return SizeScan {
+            above: match (up.first(), up.last()) {
+                (Some(a), Some(b)) => Some([*a, *b]),
+                _ => None,
+            },
+            ..SizeScan::default()
+        };
+    };
+    let (mut good, mut bad) = (grid[best], grid.get(best + 1).copied().unwrap_or(upto));
+    let steps = (((bad - good) / tol).log2().ceil() + 4.0).clamp(1.0, 40.0) as usize;
+    for _ in 0..steps {
+        let mid = (good + bad) / 2.0;
+        if works(mid) {
+            good = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    let mut gaps: Vec<[f64; 2]> = Vec::new();
+    let mut i = 0;
+    while i < best {
+        if ok[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < best && !ok[i] {
+            i += 1;
+        }
+        gaps.push([grid[start], grid[i - 1]]);
+    }
+    SizeScan {
+        most: good,
+        gaps,
+        above: None,
+    }
 }
 
 /// A point of a plane in its 2D axes.

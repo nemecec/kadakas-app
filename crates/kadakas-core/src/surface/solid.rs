@@ -221,6 +221,13 @@ pub enum SolidError {
     SnapRefused(SnapRefusal),
 }
 
+/// True if the point lies inside the closed surface of `faces` (not on it). `None` when the
+/// faces give no surface.
+pub(super) fn inside(m: &SurfaceModel, faces: &[FaceId], p: glam::DVec3) -> Option<bool> {
+    let soup = locate::Soup::of(m, faces.iter().copied())?;
+    Some(soup.locate(p)? == locate::Where::In)
+}
+
 /// All shells of the model without the search for crossings, in one pass (MOD-21 finds the
 /// solids of many edges with it).
 pub(super) fn quick_shells(m: &SurfaceModel) -> Vec<Shell> {

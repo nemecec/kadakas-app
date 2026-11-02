@@ -356,7 +356,7 @@ fn a_radius_that_does_not_fit_a_thin_arm_is_refused_with_the_largest_that_fits()
     let es = [edge(&s, 5, 6), edge(&s, 7, 8)];
     let err = plan(&s, &es, &round(10.0, 6)).unwrap_err();
     assert!(matches!(err, FilletError::DoesNotFit { .. }), "{err}");
-    let most = largest_fit(&s, &es, &round(10.0, 6), 10.0);
+    let most = size_scan(&s, &es, &|x| round(x, 6), 10.0).most;
     assert!(most > 8.4 && most < 8.5, "{most}");
     assert!(plan(&s, &es, &round(most, 6)).is_ok());
 }
@@ -367,7 +367,7 @@ fn an_edge_too_short_for_its_ends_is_refused() {
     // All edges with a radius of 8: the vertical edges (15 mm) are shorter than 2 x 8.
     let err = plan(&s, &edges_of(&s), &round(8.0, 4)).unwrap_err();
     assert!(matches!(err, FilletError::DoesNotFit { .. }), "{err}");
-    let most = largest_fit(&s, &edges_of(&s), &round(8.0, 4), 8.0);
+    let most = size_scan(&s, &edges_of(&s), &|x| round(x, 4), 8.0).most;
     assert!(most > 7.4 && most <= 7.5, "{most}");
 }
 

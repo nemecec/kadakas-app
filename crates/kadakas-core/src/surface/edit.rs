@@ -170,7 +170,8 @@ pub enum Edit {
     /// `fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins
     /// the rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and
     /// `smooth` and the rails get `soft`. A radius that does not fit is refused with the largest
-    /// one that fits (`DoesNotFit` with `most`). See the modules `surface::fillet` (the plan) and `edit::fillet`.
+    /// one that fits (`DoesNotFit` with `most`). See the modules `surface::fillet` (the plan) and
+    /// `edit::fillet`.
     Fillet {
         edges: Vec<EdgeId>,
         radius: f64,

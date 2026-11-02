@@ -695,6 +695,8 @@ proptest! {
             Err(_) => prop_assert_eq!(&m, &before),
             Ok(()) => {
                 sound(&m);
+                let bad = audit(&m, before.next_id());
+                prop_assert!(bad.is_empty(), "{:?}", bad);
                 let v = volume(&m);
                 prop_assert!(v < v0);
             }
@@ -1173,5 +1175,497 @@ fn perf_many_boxes_with_all_edges_cut() {
                 Err(e) => format!("refused: {e}"),
             }
         );
+    }
+}
+
+/// Problems of a result that the review measured: a vertex within 0.005 mm of a face it is not
+/// a corner of, and a wedge of material under [`fillet::THIN_DEGREES`] at an edge of a new face
+/// (`start`: the first id of the edit).
+fn audit(m: &SurfaceModel, start: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    let mesh = m.mesh().unwrap();
+    for (v, p) in m.vertices() {
+        for (ti, t3) in mesh.triangles.iter().enumerate() {
+            let g = mesh.faces[ti];
+            if v.0 < start && g.0 < start {
+                continue;
+            }
+            if m.face(g).unwrap().loops().flatten().any(|x| *x == v) {
+                continue;
+            }
+            let q: Vec<DVec3> = t3.iter().map(|i| mesh.positions[*i as usize]).collect();
+            let d = solid::closest_on_triangle(p, &[q[0], q[1], q[2]]).distance(p);
+            if d < 0.005 {
+                out.push(format!("vertex {v} is {d:.4} mm from face {g}"));
+                break;
+            }
+        }
+    }
+    let t = super::topo::Topo::of(m);
+    for (e, ed) in m.edges() {
+        let fs: Vec<FaceId> = t.faces_of(e).collect();
+        let [f, g] = fs.as_slice() else { continue };
+        if f.0 < start && g.0 < start {
+            continue;
+        }
+        let (ff, gf) = (m.face(*f).unwrap(), m.face(*g).unwrap());
+        let (a, b) = (ed.v[0], ed.v[1]);
+        let (first, second) = if ff.uses().any(|u| u == (a, b)) {
+            (ff, gf)
+        } else {
+            (gf, ff)
+        };
+        let d = (m.vertex(b).unwrap() - m.vertex(a).unwrap()).normalize();
+        let (phi, convex) = fillet::edge_kind(first.plane.normal, second.plane.normal, d);
+        let inside = if convex { PI - phi } else { PI + phi }.to_degrees();
+        if inside < fillet::THIN_DEGREES {
+            out.push(format!("edge {e} has a wedge of {inside:.2} degrees"));
+        }
+    }
+    out
+}
+
+/// A regular prism of `n` sides, radius 50 and height 30, and its side face between corners 0
+/// and 1.
+fn ngon(n: usize) -> SurfaceModel {
+    let outline: Vec<[f64; 2]> = (0..n)
+        .map(|i| {
+            let a = 2.0 * PI * i as f64 / n as f64;
+            [50.0 * a.cos(), 50.0 * a.sin()]
+        })
+        .collect();
+    prism(&outline, 30.0)
+}
+
+fn side_of_ngon(m: &SurfaceModel, n: usize) -> FaceId {
+    let a = PI / n as f64;
+    let dir = DVec3::new(a.cos(), a.sin(), 0.0);
+    m.faces()
+        .find(|(_, f)| f.plane.normal.dot(dir) > 0.999)
+        .unwrap()
+        .0
+}
+
+/// Runs one edit and checks it: a result passes [`audit`] and is sound, a refusal that names a
+/// largest size is right. Returns a line for the table.
+fn try_size(
+    make: &dyn Fn() -> SurfaceModel,
+    es: &dyn Fn(&SurfaceModel) -> Vec<EdgeId>,
+    chamfer: bool,
+    x: f64,
+    segments: Option<u32>,
+) -> Result<String, String> {
+    let edit = |es: Vec<EdgeId>, x: f64| {
+        if chamfer {
+            Edit::Chamfer {
+                edges: es,
+                distance: x,
+            }
+        } else {
+            Edit::Fillet {
+                edges: es,
+                radius: x,
+                segments,
+                smooth: true,
+            }
+        }
+    };
+    let mut m = make();
+    let start = m.next_id();
+    let e = es(&m);
+    match m.apply(&edit(e.clone(), x)) {
+        Ok(()) => {
+            sound(&m);
+            let bad = audit(&m, start);
+            if !bad.is_empty() {
+                return Err(format!("{x}: accepted with {bad:?}"));
+            }
+            if max_off_plane(&m) > 1e-6 {
+                return Err(format!("{x}: accepted bent"));
+            }
+            Ok(format!("{x}: ok"))
+        }
+        Err(err) => {
+            if let SurfaceError::Fillet(FilletError::DoesNotFit {
+                most: Some(most), ..
+            }) = &err
+                && *most > 0.0
+            {
+                let mut w = make();
+                let start = w.next_id();
+                let e = es(&w);
+                if *most >= x {
+                    return Err(format!("{x}: the largest {most} is not smaller"));
+                }
+                if let Err(e2) = w.apply(&edit(e, *most)) {
+                    return Err(format!("{x}: the reported {most} is refused: {e2}"));
+                }
+                let bad = audit(&w, start);
+                if !bad.is_empty() {
+                    return Err(format!("{x}: the reported {most} has {bad:?}"));
+                }
+            }
+            Ok(format!(
+                "{x}: {}",
+                err.to_string().chars().take(140).collect::<String>()
+            ))
+        }
+    }
+}
+
+#[test]
+fn the_side_face_of_a_many_sided_prism_never_leaves_a_thin_wedge() {
+    for n in [6usize, 8, 12, 16, 24, 32] {
+        for x in [0.3, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0] {
+            let r = try_size(
+                &|| ngon(n),
+                &|m| {
+                    m.fillet_edges(&EdgeChoice {
+                        faces: vec![side_of_ngon(m, n)],
+                        ..EdgeChoice::default()
+                    })
+                    .unwrap()
+                },
+                false,
+                x,
+                None,
+            );
+            println!("NGON {n} {r:?}");
+            assert!(r.is_ok(), "{n}-gon: {r:?}");
+        }
+    }
+}
+
+#[test]
+fn a_leaning_frustum_with_one_segment_never_leaves_a_thin_wedge() {
+    let make = || {
+        let n = 15;
+        let outline: Vec<[f64; 2]> = (0..n)
+            .map(|i| {
+                let a = 2.0 * PI * i as f64 / n as f64;
+                [50.0 * a.cos(), 50.0 * a.sin()]
+            })
+            .collect();
+        let mut m = prism(&outline, 30.0);
+        let f = top_face(&m, 30.0);
+        let c = DVec3::new(0.0, 0.0, 30.0);
+        let t =
+            glam::DAffine3::from_translation(DVec3::new(30.0 * 31f64.to_radians().tan(), 0.0, 0.0))
+                * glam::DAffine3::from_translation(c)
+                * glam::DAffine3::from_scale(DVec3::new(0.81, 0.81, 1.0))
+                * glam::DAffine3::from_translation(-c);
+        let mut matrix = [0.0; 12];
+        matrix[..9].copy_from_slice(&t.matrix3.to_cols_array());
+        matrix[9..].copy_from_slice(&t.translation.to_array());
+        m.apply(&Edit::TransformVertices {
+            vertices: Vec::new(),
+            faces: vec![f],
+            edges: Vec::new(),
+            matrix,
+        })
+        .unwrap();
+        m
+    };
+    for side in 0..15 {
+        for x in [0.337, 1.0, 3.0] {
+            let r = try_size(
+                &make,
+                &|m| {
+                    let sides: Vec<FaceId> = m
+                        .faces()
+                        .filter(|(_, f)| f.plane.normal.z.abs() < 0.99)
+                        .map(|(g, _)| g)
+                        .collect();
+                    m.fillet_edges(&EdgeChoice {
+                        faces: vec![sides[side]],
+                        ..EdgeChoice::default()
+                    })
+                    .unwrap()
+                },
+                false,
+                x,
+                Some(1),
+            );
+            assert!(r.is_ok(), "side {side}: {r:?}");
+        }
+    }
+}
+
+#[test]
+fn a_bottom_edge_into_a_reflex_corner_reports_the_largest_size_that_works() {
+    let outline = [
+        [0.0, 0.0],
+        [81.9, 0.0],
+        [81.9, 16.78],
+        [28.95, 16.78],
+        [28.95, 134.4],
+        [0.0, 134.4],
+    ];
+    let make = || prism(&outline, 59.78);
+    let es = |m: &SurfaceModel| vec![edge_at(m, [28.95, 134.4, 0.0], [28.95, 16.78, 0.0])];
+    for x in [0.18, 1.0, 5.2, 6.46, 8.3, 12.0] {
+        let r = try_size(&make, &es, false, x, Some(27));
+        println!("L {r:?}");
+        assert!(r.is_ok(), "{r:?}");
+    }
+}
+
+/// The table of the second review: 27 sizes, default segments, the edges of the top face of a
+/// leg 40 x 40 x 700 (its top scaled by 0.6 and moved by 700 tan(lean)) and of a block 100 x 50
+/// x 60 (its front leaning), for leans of 5, 10, 20 and 30 degrees.
+#[test]
+fn the_review_table_of_leaning_legs_and_blocks() {
+    let leg = |lean: f64| {
+        move || {
+            let mut m = cuboid(40.0, 40.0, 700.0);
+            let top = top_face(&m, 700.0);
+            let (c, k) = (DVec3::new(20.0, 20.0, 700.0), 0.6);
+            let t = glam::DAffine3::from_translation(DVec3::new(
+                700.0 * lean.to_radians().tan(),
+                0.0,
+                0.0,
+            )) * glam::DAffine3::from_translation(c)
+                * glam::DAffine3::from_scale(DVec3::new(k, k, 1.0))
+                * glam::DAffine3::from_translation(-c);
+            let mut matrix = [0.0; 12];
+            matrix[..9].copy_from_slice(&t.matrix3.to_cols_array());
+            matrix[9..].copy_from_slice(&t.translation.to_array());
+            m.apply(&Edit::TransformVertices {
+                vertices: Vec::new(),
+                faces: vec![top],
+                edges: Vec::new(),
+                matrix,
+            })
+            .unwrap();
+            m
+        }
+    };
+    let block = |lean: f64| {
+        move || {
+            let k = 60.0 * lean.to_radians().tan();
+            prism(
+                &[[0.0, 0.0], [100.0, 0.0], [100.0 - k, 60.0], [0.0, 60.0]],
+                50.0,
+            )
+        }
+    };
+    let mut bad = Vec::new();
+    for lean in [5.0, 10.0, 20.0, 30.0] {
+        let shapes: Vec<(
+            String,
+            Box<dyn Fn() -> SurfaceModel>,
+            Box<dyn Fn(&SurfaceModel) -> FaceId>,
+        )> = vec![
+            (
+                format!("leg {lean}"),
+                Box::new(leg(lean)),
+                Box::new(|m: &SurfaceModel| top_face(m, 700.0)),
+            ),
+            (
+                format!("block {lean}"),
+                Box::new(block(lean)),
+                Box::new(|m: &SurfaceModel| face_at_y(m, 60.0)),
+            ),
+        ];
+        for (name, make, face) in &shapes {
+            let mut works: Vec<f64> = Vec::new();
+            let mut no_room: Vec<f64> = Vec::new();
+            for x in sweep_sizes() {
+                let r = try_size(
+                    make.as_ref(),
+                    &|m| {
+                        m.fillet_edges(&EdgeChoice {
+                            faces: vec![face(m)],
+                            ..EdgeChoice::default()
+                        })
+                        .unwrap()
+                    },
+                    false,
+                    x,
+                    None,
+                );
+                match &r {
+                    Ok(line) if line.ends_with(": ok") => works.push(x),
+                    Ok(line) => {
+                        println!("TABLE {name} {line}");
+                        if line.contains("no room") {
+                            no_room.push(x);
+                        }
+                    }
+                    Err(e) => bad.push(format!("{name} {e}")),
+                }
+            }
+            for x in no_room {
+                if works.iter().any(|w| *w < x) {
+                    bad.push(format!("{name} {x}: no room, yet a smaller size works"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn a_wedge_of_exactly_the_threshold_is_not_thin() {
+    assert!(!fillet::is_thin(fillet::THIN_DEGREES));
+    assert!(fillet::is_thin(fillet::THIN_DEGREES - 1e-9));
+    assert!(!fillet::is_thin(90.0));
+}
+
+#[test]
+fn a_thin_wall_between_two_rounds_stays_or_is_refused_with_the_place() {
+    // A plate 17 mm wide: rounds on both long top edges leave a wall of 17 - 2 r between them.
+    let make = || cuboid(200.0, 17.0, 60.0);
+    let es = |m: &SurfaceModel| {
+        vec![
+            edge_at(m, [0.0, 0.0, 60.0], [200.0, 0.0, 60.0]),
+            edge_at(m, [0.0, 17.0, 60.0], [200.0, 17.0, 60.0]),
+        ]
+    };
+    // A wall of 0.03 mm (the rails on the top) stays.
+    let mut m = make();
+    let start = m.next_id();
+    m.apply(&Edit::Chamfer {
+        edges: es(&m),
+        distance: (17.0 - 0.03) / 2.0,
+    })
+    .unwrap();
+    sound(&m);
+    assert!(audit(&m, start).is_empty());
+    // A wall of 0.004 mm is refused.
+    let mut m = make();
+    let err = m
+        .apply(&Edit::Chamfer {
+            edges: es(&m),
+            distance: (17.0 - 0.004) / 2.0,
+        })
+        .unwrap_err();
+    assert!(matches!(err, SurfaceError::Fillet(_)), "{err}");
+}
+
+#[test]
+fn a_concave_round_does_not_swallow_a_small_solid() {
+    let mut m = prism(
+        &[
+            [0.0, 0.0],
+            [100.0, 0.0],
+            [100.0, 20.0],
+            [20.0, 20.0],
+            [20.0, 100.0],
+            [0.0, 100.0],
+        ],
+        50.0,
+    );
+    // A cube of 1 mm in the inner corner, apart from the L.
+    m.apply(&Edit::AddEdges {
+        edges: vec![
+            [[20.5, 20.5, 20.0], [21.5, 20.5, 20.0]],
+            [[21.5, 20.5, 20.0], [21.5, 21.5, 20.0]],
+            [[21.5, 21.5, 20.0], [20.5, 21.5, 20.0]],
+            [[20.5, 21.5, 20.0], [20.5, 20.5, 20.0]],
+        ],
+    })
+    .unwrap();
+    let small = m
+        .faces()
+        .find(|(g, _)| m.face_area(*g).unwrap() < 1.5)
+        .unwrap()
+        .0;
+    m.apply(&Edit::PushPull {
+        face: small,
+        distance: 1.0,
+    })
+    .unwrap();
+    let inner = edge_at(&m, [20.0, 20.0, 0.0], [20.0, 20.0, 50.0]);
+    for edit in [
+        Edit::Fillet {
+            edges: vec![inner],
+            radius: 10.0,
+            segments: None,
+            smooth: true,
+        },
+        Edit::Chamfer {
+            edges: vec![inner],
+            distance: 10.0,
+        },
+    ] {
+        let err = m.clone().apply(&edit).unwrap_err();
+        assert!(err.to_string().contains("swallow"), "{err}");
+    }
+    // A round that stays clear of the cube works.
+    let mut w = m.clone();
+    w.apply(&Edit::Fillet {
+        edges: vec![inner],
+        radius: 0.3,
+        segments: None,
+        smooth: true,
+    })
+    .unwrap();
+}
+
+#[test]
+fn the_count_of_new_edges_lets_a_cut_of_two_hundred_boxes_through() {
+    // 200 boxes, all 2,400 edges cut: 9,600 new edges, below the 10,000 of one edit.
+    let mut m = cuboid(100.0, 60.0, 40.0);
+    let faces: Vec<FaceId> = m.faces().map(|(f, _)| f).collect();
+    let mut mx = [0.0; 12];
+    mx[0] = 1.0;
+    mx[4] = 1.0;
+    mx[8] = 1.0;
+    mx[9] = 200.0;
+    m.apply(&Edit::CopyGeometry {
+        faces,
+        edges: Vec::new(),
+        matrix: mx,
+        count: 199,
+    })
+    .unwrap();
+    let all = all_edges(&m);
+    assert_eq!(all.len(), 2400);
+    let before = m.edge_count();
+    m.apply(&Edit::Chamfer {
+        edges: all,
+        distance: 1.0,
+    })
+    .unwrap();
+    assert_eq!(m.edge_count() - before + 2400, 9600);
+}
+
+#[test]
+fn an_edge_with_a_small_angle_gets_segments_that_fit_it() {
+    // An outline with a bend of 1 degree in its long side: the top edges and the vertical edge at
+    // the bend, at default segments.
+    let b = 1f64.to_radians();
+    let outline = [
+        [0.0, 0.0],
+        [100.0, 0.0],
+        [100.0 + 100.0 * b.cos(), 100.0 * b.sin()],
+        [100.0 + 100.0 * b.cos(), 60.0],
+        [0.0, 60.0],
+    ];
+    for r in [0.5, 1.0, 2.0, 5.0] {
+        let mut m = prism(&outline, 40.0);
+        let start = m.next_id();
+        let top = top_face(&m, 40.0);
+        let mut es = m
+            .fillet_edges(&EdgeChoice {
+                faces: vec![top],
+                ..EdgeChoice::default()
+            })
+            .unwrap();
+        es.push(edge_at(&m, [100.0, 0.0, 0.0], [100.0, 0.0, 40.0]));
+        match fillet(&mut m, es, r, None) {
+            Ok(_) => {
+                sound(&m);
+                assert!(audit(&m, start).is_empty());
+            }
+            // Only a round narrower than the length tolerance is too small: 2 r sin(1/2 degree)
+            // is 0.0087 mm for a radius of 0.5.
+            Err(e) => assert!(
+                !matches!(e, SurfaceError::Fillet(FilletError::TooSmall { .. }))
+                    || 2.0 * r * (b / 2.0).sin() <= 0.01,
+                "{r}: {e}"
+            ),
+        }
     }
 }
