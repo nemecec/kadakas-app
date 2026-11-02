@@ -210,3 +210,6 @@ agent-status-yes = yes
 agent-status-no = no
 agent-status-notice-connected = An agent connected ({ $count } connected).
 agent-status-notice-disconnected = An agent disconnected ({ $count } still connected).
+agent-pointer-read-tip = An agent reads your pointer. You can turn this off in Preferences.
+agent-activity-pointer-reads = Pointer reads (not changes of the drawing, one line a minute at most)
+agent-activity-pointer-read = Read pointer, { $secs } s ago

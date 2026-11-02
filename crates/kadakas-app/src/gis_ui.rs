@@ -281,6 +281,30 @@ impl ReadoutState {
         self.text_native(georef, cursor)
     }
 
+    /// True if the document has a CRS that the readout can convert, so the Data bar has its
+    /// slot. The slot stays when there is no position to show (the pointer is away), so the bar
+    /// does not change its layout and the label stays where it was for a click.
+    pub fn available(&mut self, georef: Option<&kadakas_core::georef::Georeference>) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = georef;
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(g) = georef else { return false };
+            self.refresh(g);
+            self.reader.is_some()
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh(&mut self, g: &kadakas_core::georef::Georeference) {
+        if self.reader.as_ref().is_none_or(|(old, _)| old != g) {
+            self.reader = kadakas_gis::coords::Reader::new(g).map(|r| (g.clone(), r));
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn text_native(
         &mut self,
@@ -288,9 +312,7 @@ impl ReadoutState {
         cursor: DVec2,
     ) -> Option<String> {
         let g = georef?;
-        if self.reader.as_ref().is_none_or(|(old, _)| old != g) {
-            self.reader = kadakas_gis::coords::Reader::new(g).map(|r| (g.clone(), r));
-        }
+        self.refresh(g);
         let (_, reader) = self.reader.as_ref()?;
         reader.at(cursor).map(|r| r.text(self.lonlat))
     }

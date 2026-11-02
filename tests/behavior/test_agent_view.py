@@ -68,12 +68,15 @@ def test_view_get_describes_the_pointer_and_where_it_is_delivered(cad):
     desc = cad.result("describe")
     docs = {m["name"]: m["doc"] for m in desc["methods"]}
     text = docs["view.get"]
-    for word in ["pointer", "over_canvas", "canvas", "age_ms", "navigating", "ray", "hit", "ids", "mesh.pick", "null"]:
+    for word in ["pointer", "over_canvas", "canvas", "age_ms", "navigating", "focused", "ray", "hit", "ids", "mesh.pick", "null",
+                 "nearest_object", "pointer_reason", "disabled_by_user", "Agents may see my pointer", "eye"]:
         assert word in text, word
     assert "modeler" in text and "kadakas serve" in text
     note = desc["review"]["agent_view"]["pointer"]
     assert "Privacy" in note and "not saved" in note and "collaborators" in note
     assert "Only the app delivers" in note
+    assert "Agents may see my pointer" in note and "eye in the status bar" in note and "60 answers" in note
+    assert "focused is false" in note
     recipes = " ".join(desc["review"]["agent_view"]["recipes"])
     assert "pointer.hit" in recipes and "pointer.ray" in recipes
 
@@ -93,3 +96,20 @@ def test_the_ray_of_the_pointer_goes_into_mesh_pick_as_it_is(cad):
     # A ray past the model hits nothing, which is a null hit.
     miss = cad.result("mesh.pick", {"origin": [900.0, 900.0, 500.0], "direction": [0.0, 0.0, -1.0]})
     assert miss["hit"] is None
+
+
+def test_mesh_pick_does_not_meet_a_model_that_is_hidden(cad):
+    """The pointer and mesh.pick use one rule for the models that count: the one that drawing uses."""
+    corner = lambda i, z: [100 if i & 1 else 0, 100 if i & 2 else 0, z + (100 if i & 4 else 0)]
+    ids = []
+    for z in (0, 300):
+        model = cad.result("mesh.create", {"name": f"Box{z}", "origin": [0, 0, z]})["id"]
+        edges = [[corner(i, 0)[:2] + [corner(i, 0)[2]], corner(i | b, 0)] for i in range(8) for b in (1, 2, 4) if not i & b]
+        cad.result("mesh.add_edges", {"id": model, "edges": edges})
+        ids.append(model)
+    ray = {"origin": [50.0, 50.0, 1000.0], "direction": [0.0, 0.0, -1.0]}
+    assert cad.result("mesh.pick", ray)["hit"]["model"] == ids[1]
+    cad.result("execute", {"command": {"op": "set_hidden", "ids": [ids[1]], "hidden": True}})
+    assert cad.result("mesh.pick", ray)["hit"]["model"] == ids[0]
+    cad.result("execute", {"command": {"op": "set_hidden", "ids": [ids[1]], "hidden": False}})
+    assert cad.result("mesh.pick", ray)["hit"]["model"] == ids[1]

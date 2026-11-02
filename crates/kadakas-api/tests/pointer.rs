@@ -14,7 +14,12 @@ fn ok(s: &mut Session, method: &str, params: Value) -> Value {
 
 /// A box of 100 mm at the origin, as a surface model. Its top face is at z = 100.
 fn box_model(s: &mut Session) -> String {
-    let id = ok(s, "mesh.create", json!({"name": "Box"}))["id"]
+    box_at(s, json!({"name": "Box"}))
+}
+
+/// The same box where `params` of `mesh.create` put it (an origin, a layer).
+fn box_at(s: &mut Session, params: Value) -> String {
+    let id = ok(s, "mesh.create", params)["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -50,6 +55,7 @@ fn show(s: &mut Session, canvas: [f64; 2], now_ms: f64, aim: Aim) {
         canvas,
         now_ms,
         navigating: false,
+        focused: true,
         aim,
     });
 }
@@ -287,10 +293,289 @@ fn the_hit_follows_the_model_and_the_status_point_waits_while_the_view_moves() {
         canvas: [5.0, 5.0],
         now_ms: 0.0,
         navigating: true,
+        focused: true,
         aim: ray([50.0, 50.0, 500.0], [0.0, 0.0, -1.0]),
     });
     assert_eq!(s.pointer_hit_point(), None);
     let p = s.pointer_json(0.0);
     assert_eq!(p["navigating"], true);
     assert!(p["hit"].is_object());
+}
+
+/// Looks straight down at (50, 50) from 1000 mm up and gives the pointer answer.
+fn look_down(s: &mut Session) -> Value {
+    show(
+        s,
+        [1.0, 1.0],
+        0.0,
+        ray([50.0, 50.0, 1000.0], [0.0, 0.0, -1.0]),
+    );
+    s.pointer_json(0.0)
+}
+
+fn pick_down(s: &mut Session) -> Value {
+    ok(
+        s,
+        "mesh.pick",
+        json!({"origin": [50.0, 50.0, 1000.0], "direction": [0.0, 0.0, -1.0]}),
+    )["hit"]
+        .clone()
+}
+
+#[test]
+fn a_model_hidden_with_hide_is_not_met_by_the_pointer_or_by_mesh_pick() {
+    let mut s = Session::with_sequential_ids();
+    let low = box_model(&mut s);
+    let high = box_at(&mut s, json!({"name": "High", "origin": [0, 0, 300]}));
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(high));
+    // Hide the model in front: the one behind is met.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_hidden", "ids": [high], "hidden": true}}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(low));
+    assert_eq!(pick_down(&mut s)["model"], json!(low));
+    // Shown again: the front model is back.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_hidden", "ids": [high], "hidden": false}}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(high));
+    assert_eq!(pick_down(&mut s)["model"], json!(high));
+}
+
+#[test]
+fn a_model_on_a_hidden_layer_is_not_met() {
+    let mut s = Session::with_sequential_ids();
+    let low = box_model(&mut s);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Up"}}),
+    );
+    let up = s
+        .editor
+        .doc()
+        .layers
+        .iter()
+        .find(|l| l.name == "Up")
+        .map(|l| l.id)
+        .unwrap();
+    let high = box_at(
+        &mut s,
+        json!({"name": "High", "origin": [0, 0, 300], "layer": up}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(high));
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": up, "visible": false}}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(low));
+}
+
+#[test]
+fn grey_models_are_skipped_and_locked_models_are_met() {
+    let mut s = Session::with_sequential_ids();
+    let low = box_model(&mut s);
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "add_layer", "name": "Up"}}),
+    );
+    let up = s
+        .editor
+        .doc()
+        .layers
+        .iter()
+        .find(|l| l.name == "Up")
+        .map(|l| l.id)
+        .unwrap();
+    let high = box_at(
+        &mut s,
+        json!({"name": "High", "origin": [0, 0, 300], "layer": up}),
+    );
+    // Locked: the person cannot edit it, but points at it, so the agent hears about it.
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "modify_layer", "id": up, "locked": true}}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(high));
+    // Grey: the person cannot pick it, so the pointer is not on it. mesh.pick still reads it.
+    ok(
+        &mut s,
+        "visibility.set",
+        json!({"mode": "grey", "layers": [up]}),
+    );
+    assert_eq!(look_down(&mut s)["hit"]["model"], json!(low));
+    assert_eq!(pick_down(&mut s)["model"], json!(high));
+    assert_eq!(s.pointer_hit_point().map(|p| p[2].round()), Some(100.0));
+}
+
+fn plant(s: &mut Session, at: [f64; 2], height: f64) -> String {
+    ok(
+        s,
+        "execute",
+        json!({"command": {"op": "add_object", "shape": {"kind": "plant", "at": at, "species": "Tilia cordata", "spread": 100, "height": height}}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn an_object_that_is_not_a_surface_model_in_front_takes_the_hit() {
+    let mut s = Session::with_sequential_ids();
+    box_model(&mut s);
+    let tree = plant(&mut s, [50.0, 50.0], 3000.0);
+    let p = look_down(&mut s);
+    assert_eq!(p["hit"], Value::Null, "{p}");
+    let o = &p["nearest_object"];
+    assert_eq!(o["id"], json!(tree), "{p}");
+    assert_eq!(o["kind"], "plant");
+    let d = o["distance"].as_f64().unwrap();
+    assert!(d > 0.0 && d < 900.0, "{o}");
+    assert!((o["point"][2].as_f64().unwrap() - (1000.0 - d)).abs() < 1e-6);
+    // The status bar shows no point there either.
+    assert_eq!(s.pointer_hit_point(), None);
+    // The ray from the side meets the box before the tree behind it.
+    show(
+        &mut s,
+        [1.0, 1.0],
+        0.0,
+        ray([-500.0, 50.0, 50.0], [1.0, 0.0, 0.0]),
+    );
+    let p = s.pointer_json(0.0);
+    assert!(p["hit"].is_object(), "{p}");
+    assert!(p.get("nearest_object").is_none());
+    // Far from the tree there is nothing but the box, as before.
+    show(
+        &mut s,
+        [1.0, 1.0],
+        0.0,
+        ray([97.0, 3.0, 1000.0], [0.0, 0.0, -1.0]),
+    );
+    let p = s.pointer_json(0.0);
+    assert!(
+        p["hit"].is_object() && p.get("nearest_object").is_none(),
+        "{p}"
+    );
+    // An object that is hidden is not met.
+    show(
+        &mut s,
+        [1.0, 1.0],
+        0.0,
+        ray([50.0, 50.0, 1000.0], [0.0, 0.0, -1.0]),
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "set_hidden", "ids": [tree], "hidden": true}}),
+    );
+    let p = s.pointer_json(0.0);
+    assert!(
+        p["hit"].is_object() && p.get("nearest_object").is_none(),
+        "{p}"
+    );
+}
+
+#[test]
+fn the_reading_can_be_forbidden_and_says_why() {
+    let mut s = Session::with_sequential_ids();
+    assert!(s.pointer_enabled());
+    assert_eq!(s.pointer_reason(), Some("not_over_canvas"));
+    let aim = || Aim::Plan {
+        point: DVec2::ZERO,
+        ids: vec![],
+    };
+    show(&mut s, [1.0, 1.0], 0.0, aim());
+    assert_eq!(s.pointer_reason(), None);
+    s.set_pointer_enabled(false);
+    assert_eq!(s.pointer_json(10.0), Value::Null);
+    assert_eq!(s.pointer_reason(), Some("disabled_by_user"));
+    // Nothing was read.
+    assert_eq!(s.pointer_last_read_ms(), None);
+    assert!(s.pointer_read_notes().is_empty());
+    // The status bar of the person is not affected.
+    show(&mut s, [1.0, 1.0], 20.0, aim());
+    assert!(s.pointer_over_plan());
+    s.set_pointer_enabled(true);
+    assert!(s.pointer_json(30.0).is_object());
+}
+
+#[test]
+fn a_read_is_noted_for_the_status_bar_and_once_a_minute_for_the_panel() {
+    let mut s = Session::with_sequential_ids();
+    let aim = || Aim::Plan {
+        point: DVec2::ZERO,
+        ids: vec![],
+    };
+    show(&mut s, [1.0, 1.0], 0.0, aim());
+    assert!(!s.pointer_read_recently(5.0));
+    let _ = s.pointer_json(1_000.0);
+    assert_eq!(s.pointer_last_read_ms(), Some(1_000.0));
+    assert!(s.pointer_read_recently(10_999.0));
+    assert!(!s.pointer_read_recently(11_001.0));
+    // More reads inside a minute: still one line.
+    for t in [2_000.0, 30_000.0, 60_000.0] {
+        let _ = s.pointer_json(t);
+    }
+    assert_eq!(s.pointer_read_notes(), &[1_000.0]);
+    let _ = s.pointer_json(61_500.0);
+    assert_eq!(s.pointer_read_notes(), &[1_000.0, 61_500.0]);
+    // A read that finds no pointer is not a read of the pointer.
+    s.clear_pointer();
+    let _ = s.pointer_json(200_000.0);
+    assert_eq!(s.pointer_read_notes().len(), 2);
+}
+
+#[test]
+fn a_client_that_reads_too_fast_gets_the_last_answer_and_no_error() {
+    let mut s = Session::with_sequential_ids();
+    let aim = |x: f64| Aim::Plan {
+        point: DVec2::new(x, 0.0),
+        ids: vec![],
+    };
+    show(&mut s, [1.0, 1.0], 0.0, aim(1.0));
+    let first = s.pointer_json(0.0);
+    for _ in 1..60 {
+        assert_eq!(s.pointer_json(0.0), first);
+    }
+    // The pointer moves. The 61st read in the same second gets the old answer.
+    show(&mut s, [2.0, 1.0], 2.0, aim(2.0));
+    let limited = s.pointer_json(0.0);
+    assert_eq!(limited, first);
+    // A new second: a new answer.
+    let fresh = s.pointer_json(1_500.0);
+    assert_eq!(fresh["point"], json!([2.0, 0.0]));
+}
+
+#[test]
+fn the_answer_tells_if_the_window_has_the_focus() {
+    let mut s = Session::with_sequential_ids();
+    s.pointer_new_frame();
+    s.set_pointer(PointerInput {
+        canvas: [1.0, 1.0],
+        now_ms: 0.0,
+        navigating: false,
+        focused: false,
+        aim: Aim::Plan {
+            point: DVec2::ZERO,
+            ids: vec![],
+        },
+    });
+    assert_eq!(s.pointer_json(0.0)["focused"], false);
+    show(
+        &mut s,
+        [1.0, 1.0],
+        0.0,
+        Aim::Plan {
+            point: DVec2::ZERO,
+            ids: vec![],
+        },
+    );
+    assert_eq!(s.pointer_json(5_000.0)["focused"], true);
 }

@@ -461,6 +461,20 @@ impl ActivityUi {
         acts: &mut Vec<Act>,
     ) {
         ui.small(tr!("agent-activity-intro"));
+        // Reads of the pointer are not changes of the drawing, so they are not steps of the log.
+        // They are listed apart, at most one line a minute (AGR-10).
+        let notes = session.pointer_read_notes();
+        if !notes.is_empty() {
+            let now_ms = ui.ctx().input(|i| i.time) * 1000.0;
+            ui.separator();
+            ui.small(tr!("agent-activity-pointer-reads"));
+            for t in notes.iter().rev().take(3) {
+                ui.weak(tr!(
+                    "agent-activity-pointer-read",
+                    secs = ((now_ms - t).max(0.0) / 1000.0) as u64
+                ));
+            }
+        }
         let log = &session.activity;
         if log.is_empty() {
             ui.separator();

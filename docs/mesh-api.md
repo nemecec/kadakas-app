@@ -284,7 +284,8 @@ People say "this" and "here" while they point at the view. `view.get` (app only)
 ```json
 {"method": "view.get"}
 {"mode": "3d", "canvas": {"width": 1180, "height": 760}, "pointer": {
-  "over_canvas": true, "canvas": [412.5, 301.0], "age_ms": 340, "navigating": false, "mode": "3d",
+  "over_canvas": true, "canvas": [412.5, 301.0], "age_ms": 340, "navigating": false,
+  "focused": true, "mode": "3d",
   "ray": {"origin": [2000, -7000, 6000], "direction": [0.0, 0.62, -0.78]},
   "hit": {"model": "0190f1c2-...", "face": 14, "edge": 31, "distance": 8120.4,
           "point": [2000, 727.3, 1000], "local": [2000, 727.3, 1000], "side": "front", "normal": [0, 0, 1]}}}
@@ -292,21 +293,25 @@ People say "this" and "here" while they point at the view. `view.get` (app only)
 
 The fields:
 
-- `pointer` is `null` when the pointer is not over the drawing area. This holds when it is outside the window, over a menu or a palette, or under a dialog. It also holds when another tab covers the drawing area.
+- `pointer` is `null` when the pointer is not over the drawing area. This holds when it is outside the window, over a menu or a palette, or under a dialog. It also holds when another tab covers the drawing area or the window is minimised. Then `pointer_reason` is `not_over_canvas`.
+- `pointer` is also `null` when the person turned off "Agents may see my pointer" in Preferences. Then `pointer_reason` is `disabled_by_user`. The setting is on by default.
 - `canvas` is `[x, y]` in points from the top left corner of the drawing area. `canvas` in the rest of `view.get` has the size of that area, so the two share one frame.
-- `age_ms` is the time since the pointer last moved. The session counts it when you ask. A resting pointer has a growing age.
+- `age_ms` is the time since the pointer last moved. The session counts it when you ask. A resting pointer has a growing age. It counts the movement of the pointer only. A camera that moves under a still pointer does not reset it.
 - `navigating` is true while the person moves the view, with a drag, the wheel or a key.
+- `focused` is true when the window has the focus of the system.
 - `mode` is `plan` or `3d`, as in `view.get`.
 
-In the plan, `pointer` adds `point` and `ids`. `point` is `[x, y]` in drawing mm, not snapped. `ids` has the object that a click selects, as a list with one id. It is `[]` when no object is there. A group is named, not its member, as a click does.
+In the plan, `pointer` adds `point` and `ids`. `point` is `[x, y]` in drawing mm, not snapped. `ids` has the object that a click at the cursor selects, as a list with one id. The cursor is snapped, as it is for a click. The list is `[]` when no object is there. A group is named, not its member, until the person enters the group.
 
-In 3D, `pointer` adds `ray` and `hit`:
+In 3D, `pointer` adds `ray`, `hit` and, sometimes, `nearest_object`:
 
 - `ray` is `{origin, direction}` in drawing mm. `direction` is a unit vector. A parallel view starts the ray in front of the models. Give both to `mesh.pick` as they are.
-- `hit` is the answer of `mesh.pick` for that ray, the key `hit` of it. It has `model`, `face`, `distance`, `point`, `local`, `side` and `normal`. Only visible surface models count. `hit` is `null` when none is hit.
-- `hit.edge` is added when the point is within 6 pixels of a shown edge of the face. It is the id of `mesh.edges`. It is left out otherwise. `mesh.pick` itself never has it.
+- `hit` is the answer of `mesh.pick` for that ray, the key `hit` of it. It has `model`, `face`, `distance`, `point`, `local`, `side` and `normal`. It is `null` when no surface model is hit. A group member is named by its model, so the group of the plan is not in `hit`.
+- `hit.edge` is added when the point is within 6 points of the screen from a shown edge of the face. It is the id of `mesh.edges`. It is left out otherwise. `mesh.pick` itself never has it.
+- Only surface models that are displayed count. These are not met: a model hidden with Hide, a model hidden by a phase rule, and a model on a hidden layer, a hidden class or a sheet layer. `mesh.pick` has the same rule. A model on a grey layer or class is skipped by the pointer, because the person cannot pick it. `mesh.pick` still reads it. A model on a locked layer is met, so the agent can say what the person points at.
+- Objects that are not surface models are components, slabs, site models, plants, imported meshes and the like. A ray meets them too. When one is nearer than every surface model, `hit` is `null` and `nearest_object` is `{id, kind, distance, point}`. `mesh.pick` knows no such object, so the test compares with the same ray: if `nearest_object` is set, the ray meets that object first. The test uses the triangles that the 3D view draws, after a box test per object.
 
-A test checks that `mesh.pick` with the ray gives the same `hit`, apart from `edge`. Objects that are not surface models, such as a slab or a site model, are not in `hit`. `pointer.hit` is `null` over them.
+A test checks that `mesh.pick` with the ray gives the same `hit`, apart from `edge` and apart from grey models.
 
 ### Who delivers the pointer
 
@@ -317,19 +322,38 @@ A test checks that `mesh.pick` with the ray gives the same `hit`, apart from `ed
 | `kadakas serve` alone | No. It has no window, so `view.get` is the error that names the app. |
 | The 3D modeler program | No. It has no agent connection, and its status bar has no X and Y box. The mirror that `Session::parts` has (`parts_sync.rs`) is not built for the pointer. |
 
-The session keeps the sample (`kadakas_api::Session::set_pointer`, code in `crates/kadakas-api/src/pointer_api.rs`). A host with an agent connection calls it once per frame. It calls `pointer_new_frame` before it draws the area. A sample that no frame renewed is old, and the answer is `null`.
+The session keeps the sample (`kadakas_api::Session::set_pointer`, code in `crates/kadakas-api/src/pointer_api.rs`). A host with an agent connection calls it once per frame. It calls `pointer_new_frame` before it draws the area. A sample that no frame renewed is old, and the answer is `null`. The app also clears the sample when the window is hidden or minimised.
 
-### Privacy
+### A window that is not in front
 
-The position of the pointer stays in the app. Only a `view.get` call of the agent reads it. It is not saved, not in the document, not in the undo history and not sent to collaborators. The cursor that collaborators see (PLAT-07) is a separate, shared position and is not touched. An agent that does not call `view.get` never gets the pointer.
+For the main use case the person types "this" in a terminal while the pointer is over the Kadakas window. The Kadakas window then has no focus. On macOS the system does not always tell a window without focus where the pointer moves. So the position can be old. `focused` is `false` in that case. `age_ms` then shows the time since the last move that the app saw, and it keeps growing. An agent that reads a large `age_ms` together with `focused: false` asks the person.
+
+### Privacy and consent
+
+The position of the pointer stays in the app. Only a `view.get` call of the agent reads it. It is not saved, not in the document, not in the undo history and not sent to collaborators. The cursor that collaborators see (PLAT-07) is a separate, shared position and is not touched.
+
+The person controls the reading:
+
+- The setting "Agents may see my pointer" in Preferences is on by default. Off: `pointer` is `null` and `pointer_reason` is `disabled_by_user`. Nothing else changes. The status bar of the person keeps working.
+- An eye in the status bar shows for 10 seconds after an agent read the pointer. Its tooltip says "An agent reads your pointer."
+- The Agent Activity panel lists the reads as "Read pointer, N s ago". It lists at most one line a minute. A read is not a change of the drawing, so it is not a step of the activity log. The panel shows these lines apart, and they are not saved.
+- A client gets at most 60 pointer answers in a second. After that it gets its last answer again, not an error.
+- The lock "Agent may move my view" is about moving the view. It does not touch the pointer. `view.get` works while the view is locked.
 
 ### The status bar
 
 The X and Y numbers in the status bar use the same data. They show the point under the pointer and nothing otherwise:
 
 - In the plan they show the cursor while the pointer is over the drawing area.
-- In 3D they show the point of `hit`. They show nothing while the view moves or when no surface model is under the pointer.
+- In 3D they show the point of `hit`. They show nothing in three cases. The view moves, no surface model is under the pointer, or another object is nearer.
 - Outside the drawing area they show nothing. The text keeps its width, so the bar does not jump.
+- The map readout (N and E, or lat and lon) keeps its place in the same way. It is blank while the pointer is away. A click on it still switches between the two forms. Its slot is 34 characters wide.
+
+The setting of the consent does not change the status bar.
+
+### Cost
+
+A pointer move in 3D runs one ray against the surface models. A box around each model keeps most models from being tried. A model is cut into triangles again only when it changed. Take a drawing of 200 surface models with about 2,000 triangles each. In a debug build a pointer move took 27.3 ms before this and 0.23 ms after. A release build is faster. The next pick after an edit of one model took 297 ms before (with the edit) and 2.3 ms after. Run the measure by hand: `cargo test -p kadakas-api --test pointer_cost -- --ignored --nocapture`.
 
 ### Not done
 
@@ -447,7 +471,7 @@ An older program keeps the field it does not know. A row whose curve is gone or 
 
 ## Questions about space
 
-`mesh.near` takes a point in drawing coordinates and a radius. It returns faces, edges or vertices, nearest first, at most `limit` of each kind (200 at the most). It leaves out hidden faces and edges and soft edges unless `include_hidden` is true. It leaves out the models on a hidden layer or class unless you name the model with `id`. A model whose faces cannot be cut into triangles is listed in `skipped` and not searched.
+`mesh.near` takes a point in drawing coordinates and a radius. It returns faces, edges or vertices, nearest first, at most `limit` of each kind (200 at the most). It leaves out hidden faces and edges and soft edges unless `include_hidden` is true. It leaves out the models that are not displayed unless you name the model with `id`. A model whose faces cannot be cut into triangles is listed in `skipped` and not searched.
 
 `mesh.pick` shoots a ray. The answer says which face was hit, the distance, the point, and the `side` that was met (`front` or `back`). With `all` it lists every face on the ray, nearest first. It lists at most 200 and then `truncated` is true. It has the same rules for hidden items, layers, classes and `skipped` as `mesh.near`. Both methods keep the triangles of a model for a revision of the document, so many calls in a row cut the faces once.
 
@@ -490,6 +514,6 @@ The usual methods work on these objects: `selection.set`, and the commands `move
 | Delete, selection parts, unknown methods (AGR-09) | `crates/kadakas-api/src/objects_api.rs`, `selection_api.rs`, `method_hints.rs`, `tests/agent_gaps.rs`, `tests/behavior/test_agent_gaps.py` |
 | Selected parts of the 3D editor | `crates/kadakas-modeler/src/parts_sync.rs` |
 | Camera round trip | `crates/kadakas-app/src/agent_view.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs` |
-| The pointer of the person (AGR-10) | `crates/kadakas-api/src/pointer_api.rs`, `crates/kadakas-app/src/agent_pointer.rs`, `crates/kadakas-api/tests/pointer.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs`, `tests/behavior/test_agent_view.py` |
+| The pointer of the person (AGR-10) | `crates/kadakas-api/src/pointer_api.rs`, `crates/kadakas-app/src/agent_pointer.rs`, `crates/kadakas-api/tests/pointer.rs`, `crates/kadakas-api/tests/pointer_cost.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs`, `tests/behavior/test_agent_view.py` |
 
 After a change to a method, renew the Python client with `python python/tools/codegen.py`.

@@ -101,6 +101,21 @@ impl Watch {
     }
 }
 
+/// The sign in the status bar while an agent has read the pointer lately: an eye, with a tooltip.
+pub fn pointer_eye(ui: &mut Ui) {
+    let size = egui::vec2(18.0, 12.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let stroke = egui::Stroke::new(1.5, color());
+    let painter = ui.painter_at(rect);
+    painter.add(egui::Shape::ellipse_stroke(
+        rect.center(),
+        egui::vec2(size.x / 2.0 - 1.0, size.y / 2.0 - 1.0),
+        stroke,
+    ));
+    painter.circle_filled(rect.center(), 2.5, color());
+    response.on_hover_text(tr!("agent-pointer-read-tip"));
+}
+
 pub fn color() -> Color32 {
     Color32::from_rgb(AGENT_RGB[0], AGENT_RGB[1], AGENT_RGB[2])
 }

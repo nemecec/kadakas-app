@@ -13,18 +13,34 @@ use kadakas_core::model::ObjectId;
 use kadakas_render::{Camera, Projection};
 use kadakas_ui_core::tools::Ctx;
 
-/// The object under the pointer of the plan, kept while the pointer, the drawing and the zoom
-/// stay as they are, so that a still pointer costs no search.
+/// What the object under the pointer of the plan depends on.
+#[derive(PartialEq)]
+struct PlanKey {
+    at: [u64; 2],
+    revision: u64,
+    tol: u64,
+    /// The group that the person has entered: a click selects its members.
+    context: Option<ObjectId>,
+}
+
+/// The object under the pointer of the plan, kept while the pointer, the drawing, the zoom and
+/// the entered group stay as they are, so that a still pointer costs no search.
 #[derive(Default)]
 pub struct PlanMemo {
-    key: Option<([u64; 2], u64, u64)>,
+    key: Option<PlanKey>,
     ids: Vec<ObjectId>,
 }
 
 impl PlanMemo {
+    /// What a click at `at` selects: none or one object.
     pub fn ids(&mut self, cx: &Ctx, at: DVec2, revision: u64) -> Vec<ObjectId> {
-        let key = ([at.x.to_bits(), at.y.to_bits()], revision, cx.tol.to_bits());
-        if self.key != Some(key) {
+        let key = PlanKey {
+            at: [at.x.to_bits(), at.y.to_bits()],
+            revision,
+            tol: cx.tol.to_bits(),
+            context: cx.context,
+        };
+        if self.key.as_ref() != Some(&key) {
             self.ids = kadakas_ui_core::hit::hit_test_in(cx.annot, cx.doc, at, cx.tol, cx.context)
                 .into_iter()
                 .collect();
@@ -44,6 +60,8 @@ pub struct Frame {
     pub navigating: bool,
     /// The clock of the window in ms.
     pub now_ms: f64,
+    /// The window has the focus of the system.
+    pub focused: bool,
 }
 
 impl Frame {
@@ -59,7 +77,8 @@ impl Frame {
 }
 
 /// Shows the pointer of the plan. `under` is the place in the drawing under the pointer (not
-/// snapped) and the object under it, for a pointer that is on the area, else `None`.
+/// snapped) and the object that a click at the cursor selects, for a pointer that is on the
+/// area, else `None`.
 pub fn show_plan(session: &mut Session, frame: &Frame, under: Option<(DVec2, Vec<ObjectId>)>) {
     let (Some((_, canvas)), Some((point, ids))) = (frame.on_area(), under) else {
         session.clear_pointer();
@@ -69,15 +88,18 @@ pub fn show_plan(session: &mut Session, frame: &Frame, under: Option<(DVec2, Vec
         canvas,
         now_ms: frame.now_ms,
         navigating: frame.navigating,
+        focused: frame.focused,
         aim: Aim::Plan { point, ids },
     });
 }
 
 /// The ray under a point of a 3D view, in drawing coordinates. `at` is in points from the top
 /// left corner of a view of `size` points. `scene_origin` is the origin of the scene: the camera
-/// works in coordinates less this point. A parallel view starts its ray on the plane through the
-/// target, which can be inside the models, so the ray starts back at `reach` (mm) in front of
-/// them, as the picking of objects does.
+/// works in coordinates less this point. A perspective ray starts at the eye. A parallel ray
+/// starts on a plane of the view, which can be inside the models, so it starts back by the
+/// distance of the camera and `reach` (mm), as the picking of objects does. The size of a
+/// point on the screen is given along the ray, so the size at the depth of a hit is the depth
+/// over the cosine of the angle between the ray and the view direction.
 pub fn ray_under(
     camera: &Camera,
     scene_origin: DVec3,
@@ -102,9 +124,12 @@ pub fn ray_under(
             per_distance: 0.0,
         }
     } else {
+        // The size at a depth is depth * 2 tan(fov / 2) / height. The depth of a point at a
+        // distance along the ray is distance * cos(angle to the view direction).
+        let cos = f64::from(dir.dot(camera.forward())).max(0.0);
         PixelSize {
             constant: 0.0,
-            per_distance: f64::from(2.0 * (camera.fov_y / 2.0).tan() / size.y),
+            per_distance: f64::from(2.0 * (camera.fov_y / 2.0).tan() / size.y) * cos,
         }
     };
     Some(Aim::Ray {
@@ -132,6 +157,7 @@ pub fn show_3d(
             canvas,
             now_ms: frame.now_ms,
             navigating: frame.navigating,
+            focused: frame.focused,
             aim,
         }),
         None => session.clear_pointer(),

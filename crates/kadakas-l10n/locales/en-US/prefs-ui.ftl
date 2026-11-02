@@ -32,3 +32,5 @@ prefs-ui-navigation = Mouse or trackpad
 prefs-ui-nav-mouse = Mouse
 prefs-ui-nav-trackpad = Trackpad
 prefs-ui-navigation-hint = Mouse: the wheel zooms. Trackpad: two fingers move the view (with Shift they orbit) and a pinch zooms.
+prefs-ui-agents-see-pointer = Agents may see my pointer
+prefs-ui-agents-see-pointer-tip = An agent that asks for the view gets the place of your pointer over the drawing and the object under it. Off: it gets nothing. The pointer is not saved and not sent to other people.

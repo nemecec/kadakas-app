@@ -32,3 +32,5 @@ prefs-ui-navigation = Hiir või puuteplaat
 prefs-ui-nav-mouse = Hiir
 prefs-ui-nav-trackpad = Puuteplaat
 prefs-ui-navigation-hint = Hiir: ratas suumib. Puuteplaat: kaks sõrme liigutavad vaadet (Shiftiga pööravad) ja näpistus suumib.
+prefs-ui-agents-see-pointer = Agendid tohivad minu kursorit näha
+prefs-ui-agents-see-pointer-tip = Agent, kes küsib vaadet, saab teada sinu kursori koha joonisel ja objekti selle all. Väljas: ta ei saa midagi. Kursorit ei salvestata ega saadeta teistele.

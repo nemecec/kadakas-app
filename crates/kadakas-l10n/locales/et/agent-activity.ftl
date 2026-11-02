@@ -210,3 +210,6 @@ agent-status-yes = jah
 agent-status-no = ei
 agent-status-notice-connected = Agent ühendus ({ $count } ühendatud).
 agent-status-notice-disconnected = Agent katkestas ühenduse ({ $count } on veel ühendatud).
+agent-pointer-read-tip = Agent loeb sinu kursorit. Selle saad seadetes välja lülitada.
+agent-activity-pointer-reads = Kursori lugemised (ei ole joonise muudatused, kuni üks rida minutis)
+agent-activity-pointer-read = Luges kursorit { $secs } s tagasi

@@ -632,7 +632,11 @@ impl Env<'_> {
     /// the call of the agent, and nowhere else.
     fn view_get(&mut self) -> Result<Value, RpcError> {
         let mut out = self.state_json(true)?;
+        // The pointer works while the view is locked: the lock is about moving the view.
         out["pointer"] = self.session.pointer_json(self.now_ms);
+        if out["pointer"].is_null() {
+            out["pointer_reason"] = json!(self.session.pointer_reason());
+        }
         Ok(out)
     }
 
