@@ -309,8 +309,8 @@ fn three_round(
     let x = mtx.inverse() * rhs;
     let mut face_pt: BTreeMap<FaceId, Pt> = BTreeMap::new();
     let mut side_pts: Vec<Vec<Pt>> = Vec::with_capacity(3);
-    for k in 0..3 {
-        let si = sel[k].expect("three chosen");
+    for chosen in sel.iter().take(3) {
+        let si = chosen.expect("three chosen");
         let s = &strips[si];
         let n = s.n();
         let t = (x - s.at).dot(s.d);
@@ -447,8 +447,8 @@ fn three_flat(
         face_pt.insert(f, pt);
         b.sub(f, v, vec![pt]);
     }
-    for k in 0..3 {
-        let si = sel[k].expect("three chosen");
+    for chosen in sel.iter().take(3) {
+        let si = chosen.expect("three chosen");
         let s = &strips[si];
         let pts = vec![face_pt[&s.faces[0]], face_pt[&s.faces[1]]];
         let t: Vec<f64> = pts.iter().map(|p| (b.pos(*p) - s.at).dot(s.d)).collect();
