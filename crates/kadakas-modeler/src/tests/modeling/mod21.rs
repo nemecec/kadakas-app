@@ -26,14 +26,15 @@ fn rounded_box(app: &mut ModelerApp) -> ObjectId {
         [500.0, 300.0, 0.0],
         [-500.0, 300.0, 0.0],
     ];
-    for e in [Edit::AddEdges {
-        edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
-    }] {
-        app.session
-            .editor
-            .execute(&Command::EditSurface { id, edit: e })
-            .unwrap();
-    }
+    app.session
+        .editor
+        .execute(&Command::EditSurface {
+            id,
+            edit: Edit::AddEdges {
+                edges: (0..4).map(|i| [p[i], p[(i + 1) % 4]]).collect(),
+            },
+        })
+        .unwrap();
     let face = surface(app).faces().next().unwrap().0;
     app.session
         .editor

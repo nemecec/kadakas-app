@@ -274,6 +274,9 @@ impl FilletError {
     }
 }
 
+/// The uses of each edge (by its vertex pair): the face and the direction.
+type Uses = BTreeMap<(VertexId, VertexId), Vec<(FaceId, VertexId, VertexId)>>;
+
 /// The strip of one chosen edge.
 #[derive(Clone, Debug)]
 struct Strip {
@@ -404,8 +407,7 @@ pub fn plan(
         });
     }
     // The uses of each edge: (face, from, to).
-    let mut uses: BTreeMap<(VertexId, VertexId), Vec<(FaceId, VertexId, VertexId)>> =
-        BTreeMap::new();
+    let mut uses: Uses = BTreeMap::new();
     for (id, f) in &shape.faces {
         for l in &f.loops {
             for i in 0..l.len() {
@@ -451,7 +453,7 @@ pub fn plan(
 /// The strip of one edge, without its ends.
 fn strip(
     shape: &Shape,
-    uses: &BTreeMap<(VertexId, VertexId), Vec<(FaceId, VertexId, VertexId)>>,
+    uses: &Uses,
     edge: EdgeId,
     a: VertexId,
     b: VertexId,
