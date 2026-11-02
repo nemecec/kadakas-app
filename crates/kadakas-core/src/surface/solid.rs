@@ -221,6 +221,12 @@ pub enum SolidError {
     SnapRefused(SnapRefusal),
 }
 
+/// The state of a set of faces without the search for crossings, so it is cheap: the open edges,
+/// the volume and whether it closes a solid (MOD-21 uses it before a fillet).
+pub(super) fn quick_state(m: &SurfaceModel, set: &BTreeSet<FaceId>) -> Shell {
+    shell::state_with(m, &super::topo::Topo::of(m), set, &[])
+}
+
 impl SurfaceModel {
     /// The closed-solid check (MOD-09): the shells of the model, whether each closes a volume, the
     /// edges that make a shell open, and the volume of each. See [`SolidReport`]. It takes

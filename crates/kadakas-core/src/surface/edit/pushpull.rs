@@ -1093,6 +1093,32 @@ fn validate(before: &SurfaceModel, m: &SurfaceModel, t: &Touched) -> Result<(), 
     }
 }
 
+/// The first contact of the `edges` and `faces` (new or changed) with other faces and edges that
+/// the model `before` did not have at the same place, as a text (the fillet of MOD-21 checks its
+/// strips with it).
+pub(super) fn new_contact_text(
+    before: &SurfaceModel,
+    m: &SurfaceModel,
+    edges: &BTreeSet<EdgeId>,
+    faces: &BTreeSet<FaceId>,
+) -> Option<String> {
+    let t = Touched {
+        verts: BTreeSet::new(),
+        edges: edges.clone(),
+        faces: faces.clone(),
+        face: FaceId(0),
+        hole: None,
+    };
+    new_contact(before, m, &t).map(|(e, g, c)| {
+        let how = match c {
+            Contact::Through => "passes through",
+            Contact::EndsOn => "ends on",
+            Contact::LiesIn => "lies in",
+        };
+        format!("edge {e} {how} face {g}")
+    })
+}
+
 /// The first new distance problem (see `check::near`) of the vertices `verts` and the edges
 /// `edges` of `m`: one that the model `before` did not have at the same place with the same kind.
 pub(super) fn new_distance_problem(

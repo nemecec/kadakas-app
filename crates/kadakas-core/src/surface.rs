@@ -85,6 +85,8 @@
 //!   `edit::transform`.
 //! - **Copy geometry** ([`Edit::CopyGeometry`]): copies of faces and edges in the same model, with
 //!   new ids, welded to the geometry they land on.
+//! - **Fillet and chamfer** ([`Edit::Fillet`], [`Edit::Chamfer`], MOD-21): round or cut edges of
+//!   closed solids. The plan is pure geometry (module `fillet`), the edit applies and checks it.
 //! - **Solid tools** ([`Edit::Solid`], MOD-09): union, subtract, intersect, trim and split of two
 //!   closed solids of the model, and the closed-solid check [`SurfaceModel::solid_report`], which
 //!   names the edges that make a shell open. See the module `solid`.
@@ -140,6 +142,7 @@ mod arrange;
 mod check;
 mod clash;
 mod edit;
+mod fillet;
 mod frommesh;
 mod geom;
 mod index;
@@ -158,6 +161,8 @@ mod tests;
 mod tests_absorb;
 #[cfg(test)]
 mod tests_analytic;
+#[cfg(test)]
+mod tests_fillet;
 #[cfg(test)]
 mod tests_followme;
 #[cfg(test)]
@@ -187,10 +192,15 @@ mod tests_transform;
 
 pub use analytic::{Analytic, CurveError};
 pub use check::{At, Problem, Report};
+pub use edit::fillet::EdgeChoice;
 pub use edit::style::{
     ATTR_FACETED, ATTR_SMOOTH, ATTR_SOFT, SoftSurfaces, dihedral_of, flagged, soften_plan,
 };
 pub use edit::{ATTR_BACK_MATERIAL, ATTR_MATERIAL, Edit, IntersectScope, PaintSide};
+pub use fillet::{
+    DEFAULT_MIN_ANGLE as FILLET_MIN_ANGLE, FilletError, MAX_SEGMENTS as FILLET_MAX_SEGMENTS,
+    default_segments as fillet_default_segments,
+};
 pub use frommesh::{
     ConvertError, ConvertOptions, ConvertReport, Converted, Counts, MAX_CONVERT_TRIANGLES,
     OverLimit, softened_count, surface_from_triangles,
@@ -408,6 +418,15 @@ pub enum SurfaceError {
     /// A curve edit (MOD-15) was refused, see [`CurveError`].
     #[error("{0}")]
     Curve(CurveError),
+    /// A fillet or a chamfer (MOD-21) was refused, see [`FilletError`].
+    #[error("{0}")]
+    Fillet(FilletError),
+}
+
+impl From<FilletError> for SurfaceError {
+    fn from(e: FilletError) -> Self {
+        SurfaceError::Fillet(e)
+    }
 }
 
 /// A surface model: vertices, edges and faces in local coordinates, placed by `transform`.

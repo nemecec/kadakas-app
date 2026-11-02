@@ -177,6 +177,23 @@ pub enum Edit {
     /// face plane of the other by more than the plane tolerance but not more than the length
     /// tolerance (a near-touch, which refuses the cut) goes onto the plane along the normal of
     /// the face, in the same undo step. Without it the refusal stands.
+    /// Fillet (MOD-21): rounds the `edges` of closed solids with a round of `radius` mm made of
+    /// `segments` flat faces (by default from the radius and the angle of the edges, see
+    /// `fillet::default_segments`). Where two or three chosen edges meet, a corner piece joins
+    /// the rounds. With `smooth` (the default) the edges inside the round get the flags `soft` and
+    /// `smooth` and the rails get `soft`. A radius that does not fit is refused with the largest
+    /// one that fits. See the modules `surface::fillet` (the plan) and `edit::fillet`.
+    Fillet {
+        edges: Vec<EdgeId>,
+        radius: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        segments: Option<u32>,
+        #[serde(default = "yes")]
+        smooth: bool,
+    },
+    /// Chamfer (MOD-21): cuts the `edges` of closed solids flat, `distance` mm from the edge on
+    /// both faces. The rules are those of `Fillet`.
+    Chamfer { edges: Vec<EdgeId>, distance: f64 },
     Solid {
         op: super::SolidOp,
         first: Vec<FaceId>,
@@ -216,6 +233,7 @@ pub enum IntersectScope {
 
 use super::analytic;
 
+pub(super) mod fillet;
 mod followme;
 mod hide;
 mod intersect;
@@ -321,6 +339,15 @@ fn run_noted(
             second,
             snap_near,
         } => super::solid::solid_edit(m, *op, first, second, *snap_near, notes),
+        Edit::Fillet {
+            edges,
+            radius,
+            segments,
+            smooth,
+        } => fillet::fillet(m, before, edges, *radius, Some(*segments), *smooth),
+        Edit::Chamfer { edges, distance } => {
+            fillet::fillet(m, before, edges, *distance, None, false)
+        }
         Edit::SetEdgeStyle {
             edges,
             soft,
