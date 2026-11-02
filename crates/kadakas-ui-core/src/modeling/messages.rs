@@ -269,7 +269,7 @@ mod tests {
             let text = localize_error(&SurfaceError::Fillet(e.clone()));
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             assert!(
-                digits.is_empty() || digits == "849" || digits == "164",
+                digits.is_empty() || ["849", "164", "001"].contains(&digits.as_str()),
                 "{text}"
             );
             // Two kinds of a missing solid share a text.

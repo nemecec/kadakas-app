@@ -20,7 +20,6 @@ pub fn panel(ui: &mut egui::Ui, p: &mut FilletPanel, enabled: bool) -> Option<Fi
             egui::DragValue::new(&mut p.size)
                 .range(0.01..=100_000.0)
                 .speed(0.1)
-                .suffix(" mm")
                 .ui_number(),
         );
         ui.label(tr!("modeler-fillet-segments"));
