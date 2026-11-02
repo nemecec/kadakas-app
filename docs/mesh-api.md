@@ -43,6 +43,8 @@ Edits. Each one is one undo step.
 | `mesh.push_pull` | Push or pull a face. |
 | `mesh.follow_me` | Sweep a face along edges. |
 | `mesh.offset` | Offset a face or a chain of edges. |
+| `mesh.fillet` | Round edges of a closed solid (MOD-21). |
+| `mesh.chamfer` | Cut edges of a closed solid flat (MOD-21). |
 | `mesh.intersect_faces` | Cut faces where they cross. |
 | `mesh.transform` | Move, rotate or scale. |
 | `mesh.copy` | Copy faces and edges in the model. |
@@ -182,6 +184,31 @@ Cost. Measured once (release build, one run each, other load not controlled, `pe
 | Split with `snap_near` | 0.82 s |
 
 So a refusal is cheaper than a successful operation, and the snap adds no measurable time to it. The check of the model dominates. This is one measurement on one model, not a campaign.
+
+## Fillet and chamfer (MOD-21)
+
+`mesh.fillet` rounds edges of a closed solid. `mesh.chamfer` cuts them flat. Each call is one undo step.
+
+```json
+{"method": "mesh.fillet", "params": {"id": "<model>", "faces": [9], "radius": 50}}
+{"method": "mesh.chamfer", "params": {"id": "<model>", "all": true, "distance": 20}}
+```
+
+Choose the edges in three ways. They add up.
+
+- `edges`: these edge ids, taken as given.
+- `faces`: the sharp edges of these faces.
+- `all`: every sharp edge of the model.
+
+A sharp edge lies between two faces at an angle above `min_angle` (5 degrees by default). It is not soft or smooth, so the facets of a cylinder stay. It is convex, or concave with `concave: true`.
+
+`mesh.fillet` takes `radius`, `segments` (1 to 64) and `smooth` (default true). The default number of segments turns at most 15 degrees per segment. With `smooth` the edges inside the round become soft and smooth, and the rails become soft. `mesh.chamfer` takes `distance`, the distance from the edge on both faces.
+
+Faces stay flat and the result is a closed solid. The faces next to the edges keep their ids. The new faces and edges are in `created`, and the removed edges in `removed`.
+
+Corners: exactly three faces meet at each end of a chosen edge. One chosen edge runs to the third face. Two chosen edges meet on a plane through the sharp third edge. Three meet on a ball patch, or on a triangle for a chamfer. A corner of four or more faces is refused. A corner with chosen convex and concave edges is refused too. See `docs/modeler.md`, section "Fillet and chamfer", for the pictures and the limits.
+
+A size that does not fit is refused with `fillet_does_not_fit`. The message ends with "at most about X mm fits", and `max_mm` holds X. Both work in `mesh.batch` as `fillet` and `chamfer`.
 
 ## Batch
 
@@ -413,6 +440,16 @@ The data of the error has `error_id`, a stable name. It also has the ids that ma
 | `curve_loop_unclear` | A loop of a face does not run once along the whole chain. | `face` |
 | `curve_result_invalid` | The new chain makes the model invalid, for example edges that are too short. | `reason` |
 | `curve_unknown_kind` | The circle has a kind from a newer program. It is read only. | `curve` |
+| `fillet_no_edges` | `mesh.fillet` or `mesh.chamfer` found no edge to change. | |
+| `fillet_edge_not_solid` | An edge is not between exactly two faces. | `edge` |
+| `fillet_not_solid` | The faces of the edge are not a closed solid. | `edge`, `reason` |
+| `fillet_edge_flat` | The faces of an edge lie in one plane. | `edge` |
+| `fillet_corner_unsupported` | A corner of four or more faces, or of convex and concave edges. | `vertex`, `reason` |
+| `fillet_does_not_fit` | The radius or distance does not fit. | `what`, `asked_mm`, `max_mm`, `reason` |
+| `fillet_too_small` | A segment is shorter than the length tolerance. | `edge`, `segments` |
+| `fillet_segments_out_of_range` | The segments are not 1 to 64. | `segments`, `min`, `max` |
+| `fillet_bad_size` | The size is not a number above 0.01 mm. | `asked_mm` |
+| `fillet_result_invalid` | The result is not a valid closed solid. | `reason` |
 | `exact_stale` | `mesh3d.retessellate`: the triangles were edited after the import, so the exact data no longer fits. | `object` |
 
 `operand` is `first` or `second`. `open_kind` is `border`, `non_manifold` or `reversed`. In a batch the data also has `step`.

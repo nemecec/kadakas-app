@@ -1560,7 +1560,7 @@ fn every_mesh_method_is_listed_documented_and_has_an_example() {
         .map(|(n, _)| *n)
         .filter(|n| n.starts_with("mesh."))
         .collect();
-    assert_eq!(names.len(), 32, "{names:?}");
+    assert_eq!(names.len(), 34, "{names:?}");
     for (n, d) in METHODS.iter().filter(|(n, _)| n.starts_with("mesh.")) {
         assert!(
             d.contains("params:") || d.contains("params "),
@@ -1811,10 +1811,11 @@ fn every_describe_example_runs_in_order_on_a_fresh_session() {
             r.err().map(|e| e.message)
         );
     }
-    // The example model exists and was pulled up, painted and softened.
+    // The example model exists and was pulled up, rounded along its top (four strips of six
+    // segments), painted and softened.
     let sum = ok(&mut s, "mesh.summary", json!({}));
     assert_eq!(sum["models"].as_array().unwrap().len(), 1);
-    assert_eq!(sum["models"][0]["faces"], 6);
+    assert_eq!(sum["models"][0]["faces"], 6 + 4 * 6);
 }
 
 #[test]
@@ -2528,4 +2529,132 @@ fn describe_documents_the_snap_flag() {
     ] {
         assert!(text.contains(needle), "{needle}: {text}");
     }
+}
+
+/// A box of 1000 x 600 x 400 mm as a closed solid.
+fn solid_box(s: &mut Session) -> String {
+    let id = new_model(s);
+    draw_boxes(s, &id, &[([0.0, 0.0, 0.0], [1000.0, 600.0, 400.0])]);
+    id
+}
+
+#[test]
+fn fillet_and_chamfer_round_and_cut_edges_in_one_step() {
+    let mut s = Session::with_sequential_ids();
+    let id = solid_box(&mut s);
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
+    let top = face_facing(&mut s, &id, [0.0, 0.0, 1.0]);
+    // The four edges of the top, with the default segments.
+    let r = ok(
+        &mut s,
+        "mesh.fillet",
+        json!({"id": id, "faces": [top], "radius": 50}),
+    );
+    assert_eq!(depth(&s), d + 1);
+    assert_eq!(r["op"], "fillet");
+    assert!(!r["created"]["faces"].as_array().unwrap().is_empty());
+    assert!(!r["created"]["edges"].as_array().unwrap().is_empty());
+    assert_eq!(r["removed"]["edges"].as_array().unwrap().len(), 4);
+    let report = ok(&mut s, "mesh.solid_report", json!({"id": id}));
+    assert_eq!(report["closed"], json!(true));
+    // The top keeps its id.
+    let faces = ids(&all(&mut s, "mesh.faces", &id));
+    assert!(faces.contains(&top));
+    ok(&mut s, "undo", json!({}));
+    assert_eq!(snapshot(&mut s, &id), before);
+    // All edges with a chamfer, by `all`.
+    ok(
+        &mut s,
+        "mesh.chamfer",
+        json!({"id": id, "all": true, "distance": 30}),
+    );
+    let report = ok(&mut s, "mesh.solid_report", json!({"id": id}));
+    assert_eq!(report["closed"], json!(true));
+    ok(&mut s, "undo", json!({}));
+    // One edge by id, in a batch with a second edit.
+    let e = edge_between(&mut s, &id, [0.0, 0.0, 400.0], [1000.0, 0.0, 400.0]);
+    let r = ok(
+        &mut s,
+        "mesh.batch",
+        json!({"id": id, "edits": [
+            {"method": "fillet", "edges": [e], "radius": 40, "segments": 4, "smooth": false},
+            {"method": "hide", "faces": [top]}
+        ]}),
+    );
+    assert_eq!(r["count"], 2);
+    assert_eq!(depth(&s), d + 1);
+    ok(&mut s, "undo", json!({}));
+    assert_eq!(snapshot(&mut s, &id), before);
+}
+
+#[test]
+fn fillet_refusals_have_stable_ids_and_the_largest_size_that_fits() {
+    let mut s = Session::with_sequential_ids();
+    let id = solid_box(&mut s);
+    let before = snapshot(&mut s, &id);
+    let d = depth(&s);
+    let top = face_facing(&mut s, &id, [0.0, 0.0, 1.0]);
+    let e = err(
+        &mut s,
+        "mesh.fillet",
+        json!({"id": id, "faces": [top], "radius": 450}),
+    );
+    assert_eq!(error_id(&e), "fillet_does_not_fit");
+    assert_eq!(e.code, 3);
+    assert!(e.message.contains("at most about"), "{}", e.message);
+    let max = e.details.as_ref().unwrap()["max_mm"].as_f64().unwrap();
+    assert!(max > 299.0 && max < 300.0, "{max}");
+    let e = err(
+        &mut s,
+        "mesh.fillet",
+        json!({"id": id, "faces": [top], "radius": 50, "segments": 65}),
+    );
+    assert_eq!(error_id(&e), "fillet_segments_out_of_range");
+    let e = err(
+        &mut s,
+        "mesh.chamfer",
+        json!({"id": id, "faces": [9999], "distance": 5}),
+    );
+    assert_eq!(error_id(&e), "no_such_face");
+    assert_eq!(e.code, 2);
+    let e = err(&mut s, "mesh.chamfer", json!({"id": id, "distance": 5}));
+    assert_eq!(e.code, -32602);
+    // A batch with a refused fillet undoes all and names the step.
+    let e = err(
+        &mut s,
+        "mesh.batch",
+        json!({"id": id, "edits": [
+            {"method": "hide", "faces": [top]},
+            {"method": "chamfer", "faces": [top], "distance": 450}
+        ]}),
+    );
+    assert_eq!(error_id(&e), "fillet_does_not_fit");
+    assert_eq!(e.details.as_ref().unwrap()["step"], 1);
+    assert_eq!(depth(&s), d);
+    assert_eq!(snapshot(&mut s, &id), before);
+}
+
+#[test]
+fn a_fillet_of_an_agent_is_marked_as_an_agent_change() {
+    let mut s = Session::with_sequential_ids();
+    let id = solid_box(&mut s);
+    let top = face_facing(&mut s, &id, [0.0, 0.0, 1.0]);
+    s.handle_as(
+        7,
+        Origin::Agent,
+        "mesh.fillet",
+        json!({"id": id, "faces": [top], "radius": 20}),
+    )
+    .unwrap();
+    let log = s
+        .handle_as(9, Origin::User, "agent.activity", json!({}))
+        .unwrap();
+    let methods: Vec<&str> = log["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(methods, ["mesh.fillet"]);
 }

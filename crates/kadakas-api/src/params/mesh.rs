@@ -320,6 +320,60 @@ pub struct MeshOffsetParams {
     pub toward: Option<[f64; 3]>,
 }
 
+// Parameters of `mesh.fillet`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeshFilletParams {
+    pub id: ObjectRef,
+    /// edges to round, taken as given
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<u32>>,
+    /// round the sharp edges of these faces
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<Vec<u32>>,
+    /// round every sharp convex edge of the model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<bool>,
+    /// faces and all: also concave edges (default false)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concave: Option<bool>,
+    /// faces and all: degrees, edges at a smaller angle are left out (default 5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_angle: Option<f64>,
+    /// mm, more than the length tolerance
+    pub radius: f64,
+    /// 1 to 64 flat faces per round (default from the radius and the angle)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<u32>,
+    /// soft and smooth edges inside the round (default true)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
+}
+
+// Parameters of `mesh.chamfer`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeshChamferParams {
+    pub id: ObjectRef,
+    /// edges to cut, taken as given
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<Vec<u32>>,
+    /// cut the sharp edges of these faces
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<Vec<u32>>,
+    /// cut every sharp convex edge of the model
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<bool>,
+    /// faces and all: also concave edges (default false)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concave: Option<bool>,
+    /// faces and all: degrees, edges at a smaller angle are left out (default 5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_angle: Option<f64>,
+    /// mm from the edge on both faces, more than the length tolerance
+    pub distance: f64,
+}
+
 // Parameters of `mesh.intersect_faces`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -544,7 +598,8 @@ pub struct MeshBatchParams {
     pub id: Option<ObjectRef>,
     /// 1 to 50 edits, run in this order. Each is {method, ...params of mesh.<method>} where method
     /// is one of add_edges, add_curve, set_segments, erase, reverse_faces, push_pull, follow_me,
-    /// offset, intersect_faces, transform, copy, paint, hide, soften, soften_edges, solid,
+    /// offset, fillet, chamfer, intersect_faces, transform, copy, paint, hide, soften,
+    /// soften_edges, solid,
     /// make_group, make_component, explode. All succeed or none does
     pub edits: Vec<Obj>,
 }
@@ -625,6 +680,8 @@ entries! {
     "mesh.push_pull" => MeshPushPullParams,
     "mesh.follow_me" => MeshFollowMeParams,
     "mesh.offset" => MeshOffsetParams,
+    "mesh.fillet" => MeshFilletParams,
+    "mesh.chamfer" => MeshChamferParams,
     "mesh.intersect_faces" => MeshIntersectFacesParams,
     "mesh.transform" => MeshTransformParams,
     "mesh.copy" => MeshCopyParams,
