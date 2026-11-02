@@ -179,6 +179,71 @@ fn window(root: PathBuf, factory: &UpdaterFactory, status: Option<String>) -> ef
     )
 }
 
+/// The options and the variables for the app (PLAT-32). The app starts in the folder of its
+/// version, so the folders are made absolute against the folder where the person started the
+/// launcher, and the variables `KADAKAS_AGENT_PORT` and `KADAKAS_ALLOW_DIR` become options too.
+/// No start folder is added: the app may use the folders that the person names, and no others.
+/// `--collab-token` never becomes a word of the command line of the app: it goes in the
+/// environment. `KADAKAS_ALLOW_DIR` is set to nothing for the app, because its folders are options
+/// now (a relative entry would be read again in the folder of the version).
+fn app_launch(
+    app_options: Vec<std::ffi::OsString>,
+) -> (Vec<std::ffi::OsString>, Vec<(String, String)>) {
+    use kadakas_update::options;
+    let cwd = std::env::current_dir().ok();
+    let allow = std::env::var_os(options::ENV_ALLOW_DIR);
+    let port = std::env::var(options::ENV_AGENT_PORT).ok();
+    let plan = plan_app_launch(
+        app_options,
+        port.as_deref(),
+        allow.as_deref(),
+        cwd.as_deref(),
+    );
+    for note in &plan.notes {
+        eprintln!("kadakas-launcher: {note}");
+    }
+    (plan.options, plan.env)
+}
+
+/// What [`app_launch`] decides.
+#[derive(Debug, PartialEq, Eq)]
+struct AppLaunch {
+    options: Vec<std::ffi::OsString>,
+    env: Vec<(String, String)>,
+    notes: Vec<String>,
+}
+
+/// The pure part of [`app_launch`], for the tests.
+fn plan_app_launch(
+    app_options: Vec<std::ffi::OsString>,
+    env_port: Option<&str>,
+    env_allow_dir: Option<&std::ffi::OsStr>,
+    cwd: Option<&Path>,
+) -> AppLaunch {
+    use kadakas_update::options;
+    let (rest, token) = options::split_token(app_options);
+    let prepared = options::prepare(rest, env_port, env_allow_dir, cwd);
+    let mut notes = prepared.notes;
+    notes.extend(options::missing_dir_notes(&options::allow_dirs_in(
+        &prepared.options,
+    )));
+    let mut env = Vec::new();
+    if env_allow_dir.is_some() {
+        env.push((options::ENV_ALLOW_DIR.to_string(), String::new()));
+    }
+    if let Some(token) = token {
+        match token.to_str() {
+            Some(t) => env.push((options::ENV_COLLAB_TOKEN.to_string(), t.to_string())),
+            None => notes.push("--collab-token is not text and is ignored".to_string()),
+        }
+    }
+    AppLaunch {
+        options: prepared.options,
+        env,
+        notes,
+    }
+}
+
 /// macOS, from inside the app bundle: the launcher is the program of the outer `Kadakas.app`. It
 /// runs the system event loop on the main thread, so that the open-documents Apple event of a
 /// double click arrives (also while the app runs), and the supervisor on a worker thread. The app
@@ -189,6 +254,7 @@ fn start_in_bundle(
     exe: PathBuf,
     files: Vec<std::ffi::OsString>,
     site: Option<String>,
+    app_options: Vec<std::ffi::OsString>,
 ) -> ExitCode {
     use kadakas_update::inbox::Inbox;
     use kadakas_update::supervisor::{Spawner, Supervisor};
@@ -198,7 +264,9 @@ fn start_in_bundle(
     let system = Arc::new(appkit::AppKitEvents);
     let forwarder = events::Forwarder::new(inbox.clone(), system.clone(), spawner.clone());
     let welcome_root = root.clone();
+    let (options, env) = app_launch(app_options);
     let supervisor = Supervisor::new(root, factory, spawner)
+        .with_app_options(options, env)
         .with_inbox(inbox)
         .with_welcome(Arc::new(welcome::show_again));
     let ok = events::run_with_events(
@@ -301,22 +369,28 @@ fn main() -> ExitCode {
                 }
             }
         }
-        cli::Command::Start { files, site } => {
+        cli::Command::Start {
+            files,
+            site,
+            app_options,
+        } => {
             #[cfg(target_os = "macos")]
             if let Some(exe) = std::env::current_exe()
                 .ok()
                 .filter(|e| events::in_app_bundle(e))
             {
-                return start_in_bundle(root, exe, files, site);
+                return start_in_bundle(root, exe, files, site, app_options);
             }
             let factory = updater_factory(root.clone(), exe_dir(), sites_from_env(site));
             // The first start waits for the welcome dialog (PLAT-26) before anything starts.
             welcome::before_start(&root);
+            let (options, env) = app_launch(app_options);
             let supervisor = kadakas_update::supervisor::Supervisor::new(
                 root.clone(),
                 factory.clone(),
                 Arc::new(SystemSpawner),
             )
+            .with_app_options(options, env)
             .with_welcome(Arc::new(welcome::show_again));
             match supervisor.run(files) {
                 Ok(_) => ExitCode::SUCCESS,
@@ -348,6 +422,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_app_gets_the_options_but_never_the_token_on_its_command_line() {
+        use std::ffi::{OsStr, OsString};
+        let os = |l: &[&str]| l.iter().map(OsString::from).collect::<Vec<_>>();
+        let tmp = std::env::temp_dir();
+        let dir = tmp.display().to_string();
+        let plan = plan_app_launch(
+            os(&[
+                "--agent-port",
+                "0",
+                "--collab-token",
+                "s3cret",
+                "--allow-dir",
+                &dir,
+            ]),
+            None,
+            Some(OsStr::new("/")),
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(
+            plan.options,
+            os(&["--agent-port", "0", "--allow-dir", &dir])
+        );
+        assert!(
+            plan.options
+                .iter()
+                .all(|w| !w.to_string_lossy().contains("s3cret")),
+            "{:?}",
+            plan.options
+        );
+        // The token and the emptied folder list are in the environment of the app.
+        assert!(
+            plan.env
+                .contains(&("KADAKAS_COLLAB_TOKEN".into(), "s3cret".into()))
+        );
+        assert!(
+            plan.env
+                .contains(&("KADAKAS_ALLOW_DIR".into(), String::new()))
+        );
+        // The root in the variable is refused with a note.
+        assert!(
+            plan.notes.iter().any(|n| n.contains("root")),
+            "{:?}",
+            plan.notes
+        );
+        // No start folder is added, whatever the start folder is.
+        let none = plan_app_launch(
+            os(&["--agent-port=0"]),
+            None,
+            None,
+            Some(Path::new("/home/me")),
+        );
+        assert_eq!(none.options, os(&["--agent-port=0"]));
+        assert!(none.env.is_empty());
+        // The spawn spec of the supervisor has the token in the environment only.
+        let spec_words: Vec<String> = plan
+            .options
+            .iter()
+            .map(|w| w.to_string_lossy().into_owned())
+            .collect();
+        assert!(!spec_words.join(" ").contains("s3cret"));
     }
 
     #[test]

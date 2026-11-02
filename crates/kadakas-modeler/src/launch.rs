@@ -219,14 +219,22 @@ impl Launch {
     }
 }
 
-/// The files named on the command line: the paths that are not options. The launcher passes the
-/// files of the person this way.
+/// The files named on the command line: the paths that are not options, and everything after
+/// `--`. The launcher passes the files of the person this way, after the options of the app
+/// (`--agent-port 0`, `--profile NAME`): the value of such an option is no file (PLAT-32).
 pub fn files_from_args(args: &[String]) -> Vec<PathBuf> {
-    args.iter()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .map(PathBuf::from)
-        .collect()
+    let mut files = Vec::new();
+    let mut it = args.iter().skip(1);
+    while let Some(a) = it.next() {
+        if a == "--" {
+            files.extend(it.by_ref().map(PathBuf::from));
+        } else if kadakas_update::options::WITH_VALUE.contains(&a.as_str()) {
+            it.next();
+        } else if !a.starts_with('-') {
+            files.push(PathBuf::from(a));
+        }
+    }
+    files
 }
 
 #[cfg(test)]
@@ -355,5 +363,24 @@ mod tests {
             vec![PathBuf::from("a.kad"), PathBuf::from("dir/b.kad")]
         );
         assert!(files_from_args(&args[..1]).is_empty());
+        // The value of an option of the app is no file, and a name after `--` is one.
+        let args: Vec<String> = [
+            "kadakas-modeler",
+            "--agent-port",
+            "0",
+            "--profile",
+            "acad",
+            "--allow-dir=/x",
+            "--",
+            "a.kad",
+            "-odd.kad",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            files_from_args(&args),
+            vec![PathBuf::from("a.kad"), PathBuf::from("-odd.kad")]
+        );
     }
 }

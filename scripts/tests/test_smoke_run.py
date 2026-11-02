@@ -2,7 +2,8 @@
 
 The fake launcher is a small Python program that does what the real one does in the smoke test:
 it writes the state file and the settings at the first start, makes a run record at the next
-starts, and serves auth and describe on a port when KADAKAS_AGENT_PORT is set. FAKE_MODE makes it
+starts, and serves auth, describe and file.save on a port when KADAKAS_AGENT_PORT or --agent-port is
+given (file.save works only inside the folder of --allow-dir or KADAKAS_ALLOW_DIR). FAKE_MODE makes it
 fail in one way. Unix only (the fake is a script with a shebang).
 """
 import contextlib
@@ -50,6 +51,11 @@ def dialog():
         put(os.path.join(prefs, "prefs.json"), {{}})
     put(os.path.join(feedback, "settings.json"), {{}})
 
+def allowed_dirs():
+    dirs = [a for p, a in zip(sys.argv, sys.argv[1:]) if p == "--allow-dir"]
+    dirs += [d for d in os.environ.get("KADAKAS_ALLOW_DIR", "").split(os.pathsep) if d]
+    return dirs
+
 def serve():
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -64,6 +70,11 @@ def serve():
         if req["method"] == "auth":
             ok = req["params"]["token"] == "t0k"
             out = {{"result": {{"ok": True}}}} if ok else {{"error": {{"message": "no"}}}}
+        elif req["method"] == "file.save":
+            if mode == "open_folders" or (mode != "no_folders" and any(req["params"]["path"].startswith(d) for d in allowed_dirs())):
+                out = {{"result": {{"ok": True}}}}
+            else:
+                out = {{"error": {{"message": "x is outside the folders that agents may use (none)"}}}}
         else:
             out = {{"result": {{"version": "0.0.1" if mode == "wrong_ping" else version, "methods": [{{"name": "a"}}]}}}}
         out.update({{"jsonrpc": "2.0", "id": req["id"]}})
@@ -82,7 +93,8 @@ elif not first:
     if mode == "exits":
         sys.exit(3)
     flavor = json.load(open(os.path.join(root, "launcher.json"))).get("flavor")
-    if os.environ.get("KADAKAS_AGENT_PORT") is not None and mode != "no_agent" and flavor == "kadakas-app":
+    asked = os.environ.get("KADAKAS_AGENT_PORT") is not None or "--agent-port" in sys.argv
+    if asked and mode != "no_agent" and flavor == "kadakas-app":
         threading.Thread(target=serve, daemon=True).start()
 time.sleep(120)
 '''
@@ -121,6 +133,8 @@ class SmokeRun(unittest.TestCase):
         code, out, err = self.run_it()
         self.assertEqual(code, 0, out + err)
         self.assertIn("the app answered the ping with version 1.2.3", out)
+        self.assertIn("the app answered the ping with the variables, version 1.2.3", out)
+        self.assertTrue(os.path.isfile(os.path.join(self.artifacts, "fourth.log")))
         self.assertTrue(os.path.isfile(os.path.join(self.artifacts, "third.log")))
         self.assertTrue(os.path.isfile(os.path.join(self.artifacts, "welcome-state.json")))
         self.assertEqual(self.leftovers(), [])
@@ -151,6 +165,22 @@ class SmokeRun(unittest.TestCase):
         self.failure("exits", "the launcher ended at the second start (3)")
         self.failure("wrong_ping", "the app answers version '0.0.1'")
         self.failure("no_agent", "timeout (15.0 s) while we waited for agent.json")
+        self.failure("no_folders", "the app refuses a save in the allowed folder")
+        # An app that allows every folder is caught by the check of the refused folder.
+        self.failure("open_folders", "the app does not refuse a save outside the allowed folder")
+
+    def test_the_handover_check_reads_the_parent_of_the_app(self):
+        rows = [
+            (10, 1, "/Applications/Kadakas.app/Contents/MacOS/kadakas-launcher"),
+            (11, 10, "/x/Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir /w/allowed -- /w/a.kad"),
+            (12, 1, "/x/Kadakas Engine.app/Contents/MacOS/kadakas-app --agent-port 0 --allow-dir /other"),
+        ]
+        found = smoke_run.find_apps(rows, "/w/allowed")
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0], 11)
+        self.assertIn("kadakas-launcher", found[0][1])
+        self.assertEqual(smoke_run.find_apps(rows, "/nowhere"), [])
+        self.assertTrue(smoke_run.processes())
 
     def test_a_launcher_that_never_opens_the_dialog_times_out_with_its_log(self):
         os.environ["FAKE_MODE"] = "no_state"

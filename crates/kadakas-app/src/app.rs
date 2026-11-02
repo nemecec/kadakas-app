@@ -301,15 +301,16 @@ impl KadakasApp {
         let requested_profile =
             crate::agent::parse_profile(&args, std::env::var("KADAKAS_PROFILE").ok().as_deref());
         // Agents start a DWG converter only with --allow-converters (default: off). The file dialogs are not limited.
-        app.session.paths = kadakas_api::PathPolicy::restricted(allow_dirs)
-            .with_converters(args.iter().any(|a| a == "--allow-converters"));
+        app.session.paths = kadakas_api::PathPolicy::restricted(allow_dirs).with_converters(
+            kadakas_update::options::has_switch(&args, "--allow-converters"),
+        );
         // Agents may fetch only the addresses of --allow-url (default: none). Network calls never block the UI.
         app.session.gis.urls =
             kadakas_api::UrlPolicy::allow_list(crate::agent::parse_allow_urls(&args));
         app.session.gis.blocking = false;
         // Agents run their own scripts only if the user starts the app with this flag.
         app.session.scripting.allow_agent_scripts =
-            args.iter().any(|a| a == "--allow-agent-scripts");
+            kadakas_update::options::has_switch(&args, "--allow-agent-scripts");
         // The scripts of plug-in objects that the user trusted before.
         app.session.scripting.trust = kadakas_api::TrustStore::load_default();
         // The WebAssembly plug-in modules that the user installed and trusted before.

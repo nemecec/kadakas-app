@@ -155,7 +155,8 @@ struct RemoteArgs {
     #[arg(long, requires = "connect")]
     token: Option<String>,
     /// A folder that agents may read and write (repeat for more). Default: the current folder.
-    /// The folder of the open document is always allowed. Not used with --connect: the app decides.
+    /// The variable `KADAKAS_ALLOW_DIR` adds a list of folders, separated like `PATH`. The folder
+    /// of the open document is always allowed. Not used with --connect: the app decides.
     #[arg(long = "allow-dir", value_name = "DIR")]
     allow_dir: Vec<PathBuf>,
     /// A collaboration server that is not on this computer and that agents may connect to with
@@ -273,11 +274,10 @@ impl Backend {
             session.set_limits(limits);
         }
         // Requests come from agents: they may only use the allowed folders.
-        let dirs = if remote.allow_dir.is_empty() {
-            vec![PathBuf::from(".")]
-        } else {
-            remote.allow_dir
-        };
+        let dirs = allowed_dirs(
+            remote.allow_dir,
+            std::env::var_os("KADAKAS_ALLOW_DIR").as_deref(),
+        );
         session.paths =
             kadakas_api::PathPolicy::restricted(dirs).with_converters(remote.allow_converters);
         // Collaboration servers that are not on this computer have a list of their own.
@@ -450,6 +450,25 @@ fn own_file_fits(len: u64, container: bool, memory: Option<u64>) -> Result<(), S
 
 /// Loads a `.kad` file of at most `max` bytes (default: the limit of a session). This is for a file
 /// that an agent session starts with. A file over the limit says how to raise it.
+/// The folders that agents may use: the flags `--allow-dir`, then the list in `KADAKAS_ALLOW_DIR`
+/// (separated like `PATH`, empty entries skipped), each folder once. Default: the current folder.
+/// The app reads the flags and the variable in the same way.
+fn allowed_dirs(flags: Vec<PathBuf>, env: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let from_env = env
+        .map(|v| std::env::split_paths(v).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for d in flags.into_iter().chain(from_env) {
+        if !d.as_os_str().is_empty() && !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    if dirs.is_empty() {
+        dirs.push(PathBuf::from("."));
+    }
+    dirs
+}
+
 #[cfg(test)]
 fn load(path: &std::path::Path, max: Option<u64>) -> Result<Document, String> {
     load_opened(path, max).map(|o| o.doc)
@@ -986,6 +1005,33 @@ fn main() {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn allowed_folders_come_from_the_flags_and_the_variable() {
+        let flags = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        let list = std::env::join_paths(["/b", "", "/c"]).unwrap();
+        // Flags first, then the variable, each folder once, no empty entry.
+        assert_eq!(
+            allowed_dirs(flags.clone(), Some(&list)),
+            [
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c")
+            ]
+        );
+        assert_eq!(allowed_dirs(flags, None).len(), 2);
+        // The variable alone replaces the default folder.
+        assert_eq!(
+            allowed_dirs(vec![], Some(&list)),
+            [PathBuf::from("/b"), PathBuf::from("/c")]
+        );
+        // Nothing named: the current folder.
+        assert_eq!(allowed_dirs(vec![], None), [PathBuf::from(".")]);
+        assert_eq!(
+            allowed_dirs(vec![], Some(std::ffi::OsStr::new(""))),
+            [PathBuf::from(".")]
+        );
+    }
 
     #[cfg(unix)]
     #[test]

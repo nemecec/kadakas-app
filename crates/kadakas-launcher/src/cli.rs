@@ -1,7 +1,7 @@
 //! The command line of the launcher.
 //!
 //! ```text
-//! kadakas-launcher [--site URL] [FILE...]    start Kadakas (the default; shortcuts and .kad files)
+//! kadakas-launcher [--site URL] [APP OPTION...] [FILE...]   start Kadakas (the default; shortcuts and .kad files)
 //! kadakas-launcher manage                    open the window with the versions
 //! kadakas-launcher welcome                   show the welcome dialog again (PLAT-26)
 //! kadakas-launcher add PATH [--version X.Y.Z]   put a local build in the store (PLAT-17)
@@ -18,6 +18,10 @@ pub enum Command {
         files: Vec<OsString>,
         /// A local update site for this run (`--site file:///...`).
         site: Option<String>,
+        /// The options of the app (`--agent-port 0`, `--allow-dir DIR`, see
+        /// `kadakas_update::options`), in the order of the command line. The launcher passes
+        /// them to every start of the app (PLAT-32).
+        app_options: Vec<OsString>,
     },
     /// Open the window.
     Manage,
@@ -36,10 +40,12 @@ pub enum Command {
 }
 
 pub const USAGE: &str = "Usage:
-  kadakas-launcher [--site file:///FOLDER] [FILE...]   start Kadakas
+  kadakas-launcher [--site file:///FOLDER] [OPTION...] [FILE...]   start Kadakas
   kadakas-launcher manage                              show the versions
   kadakas-launcher welcome                             show the welcome dialog
-  kadakas-launcher add PATH [--version X.Y.Z]          add a local build (a folder with kadakas-app)";
+  kadakas-launcher add PATH [--version X.Y.Z]          add a local build (a folder with kadakas-app)
+The options go to the app: --agent-port N, --allow-dir DIR (repeat), --allow-url URL, --allow-converters,
+--allow-agent-scripts, --collab-url URL, --collab-token TOKEN, --allow-collab-url URL, --profile NAME.";
 
 /// Reads the arguments (without the program name).
 pub fn parse(args: &[OsString]) -> Result<Command, String> {
@@ -54,6 +60,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     }
     let mut files = Vec::new();
     let mut site = None;
+    let mut app_options = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let t = text(a);
@@ -63,6 +70,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             site = Some(text(it.next().ok_or("--site needs an address")?));
         } else if let Some(v) = t.strip_prefix("--site=") {
             site = Some(v.to_string());
+        } else if let Some(words) = kadakas_update::options::take(a, &mut it)? {
+            app_options.extend(words);
         } else if t.starts_with("-psn_") {
             // The process serial number that macOS adds when Finder opens a program.
         } else if t.starts_with('-') && t.len() > 1 {
@@ -76,7 +85,11 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     {
         return Err("--site needs a file:// address".into());
     }
-    Ok(Command::Start { files, site })
+    Ok(Command::Start {
+        files,
+        site,
+        app_options,
+    })
 }
 
 fn parse_welcome(args: &[OsString]) -> Result<Command, String> {
@@ -128,14 +141,16 @@ mod tests {
             p(&[]).unwrap(),
             Command::Start {
                 files: vec![],
-                site: None
+                site: None,
+                app_options: vec![]
             }
         );
         assert_eq!(
             p(&["/a/one.kad", "two.kad"]).unwrap(),
             Command::Start {
                 files: vec!["/a/one.kad".into(), "two.kad".into()],
-                site: None
+                site: None,
+                app_options: vec![]
             }
         );
         // After `--` everything is a file, also a name that starts with a dash.
@@ -143,7 +158,8 @@ mod tests {
             p(&["--", "-odd.kad", "--site"]).unwrap(),
             Command::Start {
                 files: vec!["-odd.kad".into(), "--site".into()],
-                site: None
+                site: None,
+                app_options: vec![]
             }
         );
         // The serial number of macOS is not a file.
@@ -151,10 +167,62 @@ mod tests {
             p(&["-psn_0_12345", "a.kad"]).unwrap(),
             Command::Start {
                 files: vec!["a.kad".into()],
-                site: None
+                site: None,
+                app_options: vec![]
             }
         );
         assert!(p(&["--nope"]).is_err());
+    }
+
+    #[test]
+    fn the_options_of_the_app_are_kept_in_order() {
+        assert_eq!(
+            p(&[
+                "--agent-port",
+                "0",
+                "a.kad",
+                "--allow-dir=/d",
+                "--allow-converters",
+                "--allow-dir",
+                "/e"
+            ])
+            .unwrap(),
+            Command::Start {
+                files: vec!["a.kad".into()],
+                site: None,
+                app_options: vec![
+                    "--agent-port".into(),
+                    "0".into(),
+                    "--allow-dir=/d".into(),
+                    "--allow-converters".into(),
+                    "--allow-dir".into(),
+                    "/e".into()
+                ],
+            }
+        );
+        // The value is not a document, also when it looks like one.
+        match p(&["--profile", "acad"]).unwrap() {
+            Command::Start {
+                files, app_options, ..
+            } => {
+                assert!(files.is_empty());
+                assert_eq!(app_options, ["--profile", "acad"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        // After `--` all words are documents.
+        match p(&["--", "--agent-port", "0"]).unwrap() {
+            Command::Start {
+                files, app_options, ..
+            } => {
+                assert_eq!(files, ["--agent-port", "0"]);
+                assert!(app_options.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
+        // An option without its value is an error.
+        assert!(p(&["--allow-dir"]).is_err());
+        assert!(USAGE.contains("--allow-dir"));
     }
 
     #[test]

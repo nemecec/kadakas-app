@@ -53,6 +53,8 @@ pub struct SpawnSpec {
     pub dir: PathBuf,
     pub flavor: flavors::Flavor,
     pub profile: String,
+    /// The options of the person (`--agent-port 0`, `--allow-dir DIR`), see `options`.
+    pub options: Vec<OsString>,
     /// The documents to open.
     pub files: Vec<OsString>,
     /// Variables for the program.
@@ -153,10 +155,11 @@ pub struct SystemSpawner;
 
 impl Spawner for SystemSpawner {
     fn spawn(&self, spec: &SpawnSpec) -> Result<Box<dyn Process>> {
-        let mut cmd = launch::command_with(
+        let mut cmd = launch::command_with_options(
             &spec.dir,
             &spec.flavor,
             &spec.profile,
+            &spec.options,
             &spec.files,
             &spec.env,
         )?;
@@ -208,6 +211,11 @@ pub struct Supervisor {
     inbox: Arc<Inbox>,
     /// What to do when the app asks for the welcome dialog (it must not block).
     welcome: Option<WelcomeHook>,
+    /// The options of the person (`--agent-port 0`, `--allow-dir DIR`). Every start of the app
+    /// gets them, also the start after a restart for an update (PLAT-32).
+    app_options: Vec<OsString>,
+    /// Variables that replace the ones the app would inherit (`KADAKAS_ALLOW_DIR` with absolute folders).
+    app_env: Vec<(String, String)>,
 }
 
 /// Called when the running app asks for the welcome dialog.
@@ -300,7 +308,20 @@ impl Supervisor {
             timing: Timing::default(),
             inbox: Inbox::new(root_for_inbox),
             welcome: None,
+            app_options: Vec::new(),
+            app_env: Vec::new(),
         }
+    }
+
+    /// Sets the options of the person and the variables for the app (see `options::prepare`).
+    pub fn with_app_options(
+        mut self,
+        options: Vec<OsString>,
+        env: Vec<(String, String)>,
+    ) -> Supervisor {
+        self.app_options = options;
+        self.app_env = env;
+        self
     }
 
     /// Sets what happens when the app asks for the welcome dialog (Help > Show welcome).
@@ -445,6 +466,7 @@ impl Supervisor {
                 skipped: choice.skipped.clone(),
             };
             let mut env = vec![(handshake::ENV_VIA.to_string(), "1".to_string())];
+            env.extend(self.app_env.iter().cloned());
             if let Some(g) = &guard {
                 let _ = handshake::write_status(store.root(), g.id(), &base);
                 env.push((ENV_ROOT.into(), store.root().to_string_lossy().into_owned()));
@@ -454,6 +476,7 @@ impl Supervisor {
                 dir: choice.active.dir.clone(),
                 flavor,
                 profile: settings.profile.clone(),
+                options: self.app_options.clone(),
                 files: files.to_vec(),
                 env,
             };
@@ -934,6 +957,38 @@ mod tests {
         let want: Vec<OsString> = docs.into_iter().map(Into::into).collect();
         assert_eq!(reports[1].files, want);
         assert_eq!(w.started()[1].files, want);
+        crate::store::tests::rm_dir(&w.root);
+    }
+
+    #[test]
+    fn the_options_of_the_person_reach_every_start_also_after_a_restart() {
+        let (w, sup) = world("sup-options", "1.0.0");
+        let options: Vec<OsString> = ["--agent-port", "0", "--allow-dir", "/d"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        let env = vec![("KADAKAS_ALLOW_DIR".to_string(), "/d".to_string())];
+        let sup = sup.with_app_options(options.clone(), env);
+        publish(&w.http, "1.1.0", Channel::Stable, &key(1));
+        w.script(Script {
+            polls: 300,
+            clean: true,
+            restart: Some(vec![PathBuf::from("/d/a.kad")]),
+            ..Script::default()
+        });
+        w.script(Script {
+            clean: true,
+            ..Script::default()
+        });
+        let reports = sup.run(vec![]).unwrap();
+        assert_eq!(reports.len(), 2, "{reports:?}");
+        for spec in w.started() {
+            assert_eq!(spec.options, options);
+            assert!(
+                spec.env
+                    .contains(&("KADAKAS_ALLOW_DIR".to_string(), "/d".to_string()))
+            );
+        }
         crate::store::tests::rm_dir(&w.root);
     }
 

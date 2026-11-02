@@ -100,9 +100,11 @@ for lic in LICENSE-APACHE LICENSE-MIT THIRD_PARTY_NOTICES.txt; do
 done
 [ -n "$("$installed/Contents/MacOS/kadakas" --version)" ] || fail "kadakas --version prints nothing"
 
-run_smoke "$launcher" "$version" "$artifacts" "screencapture -x {out}" "$work/run"
+# The fifth start is the inner program of the bundle, started by hand with options (PLAT-32).
+KADAKAS_SMOKE_ENGINE="$inner/Contents/MacOS/kadakas-app" \
+  run_smoke "$launcher" "$version" "$artifacts" "screencapture -x {out}" "$work/run"
 
-# The program ran three times. The seal must still be valid: a write into the bundle breaks it.
+# The program ran five times. The seal must still be valid: a write into the bundle breaks it.
 step "codesign --verify --deep --strict after the runs"
 codesign --verify --deep --strict --verbose=2 "$installed" || fail "the seal of the bundle broke while the program ran"
 
