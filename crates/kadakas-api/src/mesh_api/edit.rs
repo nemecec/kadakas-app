@@ -14,8 +14,8 @@ use kadakas_core::command::{Command, CommandError};
 use kadakas_core::model::{Document, ObjectId};
 use kadakas_core::resource::ResourceId;
 use kadakas_core::surface::{
-    CurveError, CurveId, EdgeId, Edit, FaceId, IntersectScope, PaintSide, SnapMove, SnapRefusal,
-    SolidError, SolidOp, SurfaceError, SurfaceModel, VertexId, soften_plan,
+    CurveError, CurveId, EdgeId, Edit, FaceId, FilletError, IntersectScope, PaintSide, SnapMove,
+    SnapRefusal, SolidError, SolidOp, SurfaceError, SurfaceModel, VertexId, soften_plan,
 };
 
 use super::{create_command, model_of, object_id, typed};
@@ -912,6 +912,36 @@ fn classify(e: &SurfaceError) -> (Kind, &'static str, Value) {
                 _ => Validation,
             };
             (kind, c.code(), facts)
+        }
+        SurfaceError::Fillet(f) => {
+            let facts = match f {
+                FilletError::NoEdges => json!({}),
+                FilletError::NotSolidEdge { edge } | FilletError::FlatEdge { edge } => {
+                    json!({"edge": edge})
+                }
+                FilletError::Corner { vertex, why } => json!({"vertex": vertex, "reason": why}),
+                FilletError::DoesNotFit {
+                    noun,
+                    asked,
+                    why,
+                    most,
+                } => {
+                    json!({"what": noun, "asked_mm": asked, "reason": why, "max_mm": most.map(|x| (x * 100.0).floor() / 100.0)})
+                }
+                FilletError::TooSmall {
+                    noun,
+                    asked,
+                    segments,
+                    edge,
+                } => json!({"what": noun, "asked_mm": asked, "segments": segments, "edge": edge}),
+                FilletError::Segments { segments } => {
+                    json!({"segments": segments, "min": 1, "max": kadakas_core::surface::FILLET_MAX_SEGMENTS})
+                }
+                FilletError::BadSize { noun, asked } => json!({"what": noun, "asked_mm": asked}),
+                FilletError::NotSolid { edge, why } => json!({"edge": edge, "reason": why}),
+                FilletError::Result(why) => json!({"reason": why}),
+            };
+            (Validation, f.code(), facts)
         }
         SurfaceError::Solid(s) => {
             let (id, facts) = match s {

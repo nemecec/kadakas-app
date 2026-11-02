@@ -92,6 +92,9 @@ pub enum Cmd {
     SolidSnap(kadakas_core::surface::SolidOp),
     /// Soften, Smooth or Unsoften the selected edges (MOD-08).
     EdgeStyle(kadakas_ui_core::modeling::EdgeStyle),
+    /// Fillet or Chamfer of the selected edges and of the sharp edges of the selected faces, with
+    /// the values of the panel (MOD-21).
+    Fillet(kadakas_ui_core::modeling::FilletKind),
     /// Hide the selected objects, or the selected faces and edges (MOD-05).
     Hide,
     /// Unhide the selected hidden objects, faces and edges.
@@ -729,6 +732,7 @@ impl ModelerApp {
                 };
             }
             Cmd::EdgeStyle(style) => self.edge_style(style),
+            Cmd::Fillet(kind) => self.fillet(kind),
             Cmd::Hide => self.set_hidden(true),
             Cmd::Unhide => self.set_hidden(false),
             Cmd::UnhideAll => self.unhide_all(),
@@ -1061,6 +1065,55 @@ impl ModelerApp {
         );
         self.tray_ui.soften.forget();
         self.status = self.edit.message.take().unwrap_or_default();
+    }
+
+    /// Fillet or Chamfer (MOD-21) with the values of the panel: one undo step for all models. The
+    /// status line says how many edges changed, or why nothing changed.
+    fn fillet(&mut self, kind: kadakas_ui_core::modeling::FilletKind) {
+        let actions = self
+            .tray_ui
+            .fillet
+            .actions(self.session.editor.doc(), &self.edit.sub, kind);
+        let count: usize = actions
+            .iter()
+            .map(|a| match a {
+                modeling::Action::Edit {
+                    edit:
+                        kadakas_core::surface::Edit::Fillet { edges, .. }
+                        | kadakas_core::surface::Edit::Chamfer { edges, .. },
+                    ..
+                } => edges.len(),
+                _ => 0,
+            })
+            .sum();
+        if actions.is_empty() {
+            self.status = tr!("modeler-fillet-select");
+            return;
+        }
+        let depth = self.session.editor.undo_depth();
+        self.edit.run(
+            &mut self.session,
+            modeling::Out {
+                actions,
+                ..modeling::Out::default()
+            },
+        );
+        let message = self.edit.message.take();
+        self.status = if self.session.editor.undo_depth() > depth {
+            // The rounded edges are gone: the selection keeps only what is still there.
+            self.edit.sub.retain_existing(self.session.editor.doc());
+            let kind = match kind {
+                kadakas_ui_core::modeling::FilletKind::Fillet => "fillet",
+                kadakas_ui_core::modeling::FilletKind::Chamfer => "chamfer",
+            };
+            let done = tr!("modeler-fillet-done", kind = kind, count = count);
+            match message {
+                Some(m) if !m.is_empty() => format!("{done} {m}"),
+                _ => done,
+            }
+        } else {
+            message.unwrap_or_default()
+        };
     }
 
     /// A change of the Soften Edges panel: applied to the selection at once; a row of changes is
@@ -1789,6 +1842,7 @@ impl ModelerApp {
                 self.edit.soften_preview.clear();
                 self.soften_changed();
             }
+            TrayAction::Fillet(kind) => self.fillet(kind),
             TrayAction::SoftenPreview => {
                 self.edit.soften_preview = self
                     .tray_ui
