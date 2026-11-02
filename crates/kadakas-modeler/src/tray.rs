@@ -39,7 +39,8 @@ impl Default for TrayState {
             entity_info: true,
             materials: true,
             soften: true,
-            fillet: true,
+            // Closed at the start: the panel is opened when it is needed.
+            fillet: false,
             scenes: true,
             tags: true,
             styles: true,
