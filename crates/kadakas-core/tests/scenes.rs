@@ -451,3 +451,115 @@ proptest! {
         }
     }
 }
+
+// ---------------------------------------------------------------- the position of a camera (AGR-09)
+
+mod orbit {
+    use kadakas_core::sheets::{Orbit, OrbitError, PITCH_LIMIT, orbit_eye, orbit_from};
+    use std::f64::consts::FRAC_PI_2;
+
+    /// A small deterministic generator, so that the cases are the same on every run.
+    fn next(state: &mut u64) -> f64 {
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (*state >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    #[test]
+    fn the_eye_and_the_orbit_of_random_cameras_give_each_other_back() {
+        let mut rng = 7u64;
+        for _ in 0..500 {
+            let target = [
+                (next(&mut rng) - 0.5) * 6e5,
+                (next(&mut rng) - 0.5) * 6e5,
+                (next(&mut rng) - 0.5) * 1e4,
+            ];
+            let yaw = (next(&mut rng) - 0.5) * 6.0;
+            let pitch = (next(&mut rng) - 0.5) * 3.1;
+            let distance = 10.0 + next(&mut rng) * 1e5;
+            let eye = orbit_eye(target, yaw, pitch, distance);
+            let from_eye = orbit_from(target, Some(eye), None, None, None).unwrap();
+            assert!(
+                (from_eye.pitch - pitch).abs() < 1e-7,
+                "{pitch} {}",
+                from_eye.pitch
+            );
+            assert!((from_eye.distance - distance).abs() < 1e-5 * distance);
+            let d = (from_eye.yaw.unwrap() - yaw).rem_euclid(std::f64::consts::TAU);
+            assert!(
+                d < 1e-6 || std::f64::consts::TAU - d < 1e-6,
+                "{yaw} {:?}",
+                from_eye.yaw
+            );
+            // Both forms that agree give the orbit as it is.
+            let both =
+                orbit_from(target, Some(eye), Some(yaw), Some(pitch), Some(distance)).unwrap();
+            assert_eq!(
+                both,
+                Orbit {
+                    target,
+                    yaw: Some(yaw),
+                    pitch,
+                    distance
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn top_and_bottom_keep_their_turn_and_the_range_is_the_one_of_render_png() {
+        let up = f64::from(std::f32::consts::FRAC_PI_2);
+        assert!(up > FRAC_PI_2 && up <= PITCH_LIMIT);
+        for pitch in [up, -up] {
+            let o = orbit_from(
+                [1.5e5, 9e4, 0.0],
+                None,
+                Some(-FRAC_PI_2),
+                Some(pitch),
+                Some(2e4),
+            )
+            .unwrap();
+            assert_eq!(o.yaw, Some(-FRAC_PI_2));
+        }
+        // An eye straight above has no turn.
+        let o = orbit_from([0.0; 3], Some([0.0, 0.0, 500.0]), None, None, None).unwrap();
+        assert_eq!(o.yaw, None);
+        for pitch in [1.58, -1.58, f64::NAN] {
+            assert!(orbit_from([0.0; 3], None, Some(0.0), Some(pitch), Some(100.0)).is_err());
+        }
+        assert!(orbit_from([0.0; 3], None, Some(0.0), None, None).is_err());
+        assert!(orbit_from([0.0; 3], None, None, None, None).is_err());
+        assert!(orbit_from([0.0; 3], Some([0.0; 3]), None, None, None).is_err());
+    }
+
+    #[test]
+    fn forms_that_disagree_are_a_conflict() {
+        let e = orbit_from(
+            [0.0; 3],
+            Some([1000.0, 0.0, 0.0]),
+            Some(1.0),
+            Some(0.0),
+            Some(1000.0),
+        )
+        .unwrap_err();
+        assert!(matches!(e, OrbitError::Conflict(_)));
+        // A small gap is fine: 1e-3 of the distance.
+        orbit_from(
+            [0.0; 3],
+            Some([1000.5, 0.0, 0.0]),
+            Some(0.0),
+            Some(0.0),
+            Some(1000.0),
+        )
+        .unwrap();
+        orbit_from(
+            [0.0; 3],
+            Some([1002.0, 0.0, 0.0]),
+            Some(0.0),
+            Some(0.0),
+            Some(1000.0),
+        )
+        .unwrap_err();
+    }
+}

@@ -682,6 +682,170 @@ fn the_camera_of_view_get_round_trips_through_view_camera_and_render_png() {
     assert_eq!(again["png_base64"], from_view_get["png_base64"]);
 }
 
+/// AGR-09, review: Top and Bottom (pitch `FRAC_PI_2` as an f32), a far target, the isometric
+/// views and random cameras go through `view.get` and back into `view.camera` unchanged, in the
+/// form with the eye, in the orbit form and in both.
+#[test]
+fn the_camera_round_trip_keeps_top_and_bottom_far_targets_and_random_views() {
+    use std::f32::consts::FRAC_PI_2;
+    let mut r = Rig::new();
+    r.rect(0.0, 0.0, 4000.0, 3000.0);
+    r.frame(vec![]);
+    r.ok(
+        "view.camera",
+        json!({"eye": [8000, -9000, 6000], "target": [2000, 1500, 0]}),
+    );
+    r.app.gpu_ready = true;
+    r.frame(vec![]);
+    let mut seed = 11u64;
+    let mut rnd = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    // (yaw, pitch, distance, target in drawing mm)
+    let mut cases: Vec<(f32, f32, f32, [f64; 3])> = vec![
+        (-FRAC_PI_2, FRAC_PI_2, 20000.0, [2000.0, 1500.0, 0.0]),
+        (-FRAC_PI_2, FRAC_PI_2, 20000.0, [150000.0, 90000.0, 0.0]),
+        (-FRAC_PI_2, -FRAC_PI_2, 20000.0, [150000.0, 90000.0, 0.0]),
+        (-FRAC_PI_2, -FRAC_PI_2, 5000.0, [-150000.0, 90000.0, 0.0]),
+        (
+            std::f32::consts::FRAC_PI_4,
+            0.615_479_7,
+            14000.0,
+            [2000.0, 1500.0, 0.0],
+        ),
+        (
+            -2.356_194_5,
+            0.615_479_7,
+            14000.0,
+            [150000.0, 90000.0, 100.0],
+        ),
+    ];
+    for _ in 0..12 {
+        cases.push((
+            ((rnd() - 0.5) * 6.0) as f32,
+            ((rnd() - 0.5) * 3.0) as f32,
+            (200.0 + rnd() * 50000.0) as f32,
+            [(rnd() - 0.5) * 3e5, (rnd() - 0.5) * 3e5, rnd() * 500.0],
+        ));
+    }
+    for (yaw, pitch, dist, target) in cases {
+        let label = format!("yaw {yaw} pitch {pitch} distance {dist} target {target:?}");
+        r.advance(0.5);
+        r.ok(
+            "view.camera",
+            json!({"eye": [target[0] + 1000.0, target[1], target[2] + 1000.0], "target": target}),
+        );
+        r.advance(0.5);
+        // The camera as the person has it: the angles in f32, as the standard views have them.
+        r.app.view3d.camera.yaw = yaw;
+        r.app.view3d.camera.pitch = pitch;
+        r.app.view3d.camera.distance = dist;
+        let before = r.app.view3d.camera;
+        let g = r.ok("view.get", json!({}));
+        let cam = g["camera"].clone();
+        assert!(
+            (num(&cam["yaw"]) - f64::from(yaw)).abs() < 1e-6,
+            "{label}: {cam}"
+        );
+        assert!(
+            (num(&cam["pitch"]) - f64::from(pitch)).abs() < 1e-6,
+            "{label}: {cam}"
+        );
+        for k in 0..3 {
+            assert!(
+                (num(&cam["target"][k]) - target[k]).abs() < 0.05,
+                "{label}: {cam}"
+            );
+        }
+        // The camera of view.get with both forms, as it is.
+        let same = |r: &mut Rig, params: Value, what: &str| {
+            r.advance(0.5);
+            r.ok("view.camera", params);
+            r.advance(0.5);
+            let now = r.app.view3d.camera;
+            let turn = (now.yaw - before.yaw).rem_euclid(std::f32::consts::TAU);
+            assert!(
+                turn < 1e-4 || std::f32::consts::TAU - turn < 1e-4,
+                "{what}: {label}: yaw {} became {}",
+                before.yaw,
+                now.yaw
+            );
+            assert!(
+                (now.pitch - before.pitch).abs() < 1e-4,
+                "{what}: {label}: pitch"
+            );
+            assert!(
+                (now.distance - before.distance).abs() < before.distance * 1e-4,
+                "{what}: {label}: distance"
+            );
+            let g = r.ok("view.get", json!({}));
+            for k in 0..3 {
+                assert!(
+                    (num(&g["camera"]["target"][k]) - target[k]).abs() < 0.1,
+                    "{what}: {label}"
+                );
+            }
+        };
+        same(&mut r, cam.clone(), "both forms");
+        // Another view in between, so that each form has to move the camera back.
+        let mut orbit = cam.clone();
+        orbit.as_object_mut().unwrap().remove("eye");
+        r.advance(0.5);
+        r.ok("view.camera", json!({"eye": [target[0] + 100.0, target[1] + 100.0, target[2] + 3000.0], "target": target}));
+        same(&mut r, orbit, "orbit form");
+        // The form with the eye alone: the turn is only known when the eye is not straight above.
+        if (f64::from(pitch).abs() - f64::from(FRAC_PI_2)).abs() > 1e-3 {
+            let eye = json!({"eye": cam["eye"], "target": cam["target"]});
+            r.advance(0.5);
+            r.ok("view.camera", json!({"eye": [target[0], target[1] + 100.0, target[2] + 3000.0], "target": target}));
+            same(&mut r, eye, "eye form");
+        }
+    }
+    // A conflict between the forms names the keys and does not move the view.
+    r.advance(0.5);
+    let before = r.app.view3d.camera;
+    let e = r.err(
+        "view.camera",
+        json!({"target": [0, 0, 0], "eye": [1000, 0, 0], "yaw": 1.0, "pitch": 0.0, "distance": 1000}),
+    );
+    assert_eq!(e.code, -32602);
+    assert_eq!(e.details.as_ref().unwrap()["error_id"], "camera_conflict");
+    assert!(
+        e.message.contains("eye") && e.message.contains("yaw"),
+        "{}",
+        e.message
+    );
+    // The pitch range is the one of render.png.
+    let e = r.err(
+        "view.camera",
+        json!({"target": [0, 0, 0], "yaw": 0, "pitch": 1.6, "distance": 1000}),
+    );
+    assert_eq!(e.code, -32602);
+    assert_eq!(r.app.view3d.camera, before);
+}
+
+/// AGR-09, review: the app has no editor for selected faces and edges, so it refuses them and
+/// a click on an object leaves whole objects only.
+#[test]
+fn the_app_refuses_selected_parts() {
+    let mut r = Rig::new();
+    let a = r.rect(0.0, 0.0, 100.0, 100.0);
+    let e = r
+        .app
+        .session
+        .handle("selection.set", json!({"faces": {a.to_string(): [1]}}))
+        .unwrap_err();
+    assert_eq!(
+        e.details.as_ref().unwrap()["error_id"],
+        "parts_not_supported"
+    );
+    let g = r.ok("view.get", json!({}));
+    assert_eq!(g["selection_parts"], json!({"faces": {}, "edges": {}}));
+}
+
 #[test]
 fn a_view_set_through_the_session_is_kept_for_back() {
     let mut r = Rig::new();

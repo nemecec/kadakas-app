@@ -559,9 +559,9 @@ pub struct MeshRenderParams {
     /// a name from view.list; default the current view
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
-    /// {target [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection}; wins over view
+    /// {target [x, y, z], yaw, pitch (radians), distance (mm), fov (degrees), projection} or {target, eye, ...}. It wins over view. The camera of view.get is taken as it is
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub camera: Option<super::layers::SavedViewCamera>,
+    pub camera: Option<super::layers::RenderCamera>,
     /// pixels, 16 to 2048, default 800
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Int>,

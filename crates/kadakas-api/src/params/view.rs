@@ -70,33 +70,33 @@ pub struct ViewPanParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewCameraParams {
-    /// [x, y, z] in drawing mm; left out when yaw, pitch and distance give the orbit
+    /// [x, y, z] in drawing mm. Left out when yaw, pitch and distance give the orbit
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eye: Option<Vec<Num>>,
     /// [x, y, z] in drawing mm
     pub target: Vec<Num>,
-    /// radians; with pitch and distance instead of eye (the camera of render.png)
+    /// radians, from the camera of render.png. Give yaw, pitch and distance together, instead of eye or with an eye that agrees
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yaw: Option<Num>,
-    /// radians; see yaw
+    /// radians, from -pi/2 to pi/2. See yaw
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<Num>,
-    /// mm; see yaw
+    /// mm. See yaw
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance: Option<Num>,
-    /// read-only keys of the camera of view.get; they are ignored, so that camera can be passed back as it is
+    /// read only key of the camera of view.get, ignored, so that camera can be passed back as it is
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
-    /// see view
+    /// read only key of the camera of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_mode: Option<String>,
-    /// see view
+    /// read only key of the camera of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fov_deg: Option<Num>,
-    /// see view
+    /// read only key of the camera of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aspect: Option<Num>,
-    /// see view
+    /// read only key of the camera of view.get, ignored
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible_box: Option<Obj>,
     /// must point upward (z above 0): the camera has no roll

@@ -3483,19 +3483,19 @@ class Api:
         return self._call("objects.get", params or None)
 
     def objects_delete(self, **params: "Unpack[ObjectsDeleteParams]") -> Any:
-        """Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: "delete_objects", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).
+        """Delete objects. params: {ids: [id]}. It runs the command delete_objects (execute {command: {op: "delete_objects", ids}}) with its checks: a locked layer, a grey layer or class and an object that is not editable refuse the call. A group goes with its members, and deleted lists the ids in id order. An unknown id is the error no_such_object and nothing is deleted. One undo step. To delete objects together with other edits in one step, use delete_objects in a batch command of execute. Returns {count, deleted: [id]} (also the members of a deleted group).
 
         JSON-RPC method ``objects.delete``."""
         return self._call("objects.delete", params or None)
 
     def selection_get(self, **params: "Unpack[SelectionGetParams]") -> Any:
-        """The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The app without that editor has no parts of its own, so the maps stay empty unless selection.set filled them.
+        """The selection. No params. Returns {ids: [object id], faces: {model id: [face id]}, edges: {model id: [edge id]}}. The face and edge ids are the ones of mesh.faces and mesh.edges. ids holds whole objects. faces and edges hold the parts of surface models that the person picked in the 3D editor of the modeler. Both maps are empty when no part is selected, and the editor never selects whole objects and parts together. The modeler has no agent connection yet and the app has no face picking, so today only selection.set (for example in kadakas serve) fills the maps. A selection of whole objects ends the selection of parts. Deleted objects leave the selection, and an undo does not bring the selection back.
 
         JSON-RPC method ``selection.get``."""
         return self._call("selection.get", params or None)
 
     def selection_set(self, **params: "Unpack[SelectionSetParams]") -> Any:
-        """Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids cannot be combined with faces or edges. Returns the selection as selection.get does.
+        """Select objects or parts of surface models. params: {ids?: [id], faces?: {model id: [face id]}, edges?: {model id: [edge id]}}. At least one is needed, and what is left out is empty. Objects of grey layers and classes cannot be selected. A model that is not a surface model is the error not_a_surface_model, and a face or edge that does not exist is no_such_face or no_such_edge. ids is refused together with faces or edges. A program without an editor for parts (the app) refuses faces and edges as parts_not_supported. Returns the selection as selection.get does.
 
         JSON-RPC method ``selection.set``."""
         return self._call("selection.set", params or None)
@@ -5427,7 +5427,7 @@ class Api:
         return self._call("view.pan", params or None)
 
     def view_camera(self, **params: "Unpack[ViewCameraParams]") -> Any:
-        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z] (or yaw, pitch in radians and distance in mm instead of eye), target: [x, y, z], up?, fov?, projection?}. The camera of view.get is accepted as it is. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
+        """Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z] (or yaw, pitch in radians and distance in mm instead of eye), target: [x, y, z], up?, fov?, projection?}. The camera of view.get is accepted as it is. With both forms they must give the same eye, else the call is refused as camera_conflict. pitch is from -pi/2 to pi/2, as in render.png. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.
 
         JSON-RPC method ``view.camera``."""
         return self._call("view.camera", params or None)

@@ -28,7 +28,7 @@ pub const VIEW_PAN: (&str, &str) = (
 );
 pub const VIEW_CAMERA: (&str, &str) = (
     "view.camera",
-    "Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z] (or yaw, pitch in radians and distance in mm instead of eye), target: [x, y, z], up?, fov?, projection?}. The camera of view.get is accepted as it is. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.",
+    "Set the 3D camera of the person (only the app) and show the 3D view. params: {eye: [x, y, z] (or yaw, pitch in radians and distance in mm instead of eye), target: [x, y, z], up?, fov?, projection?}. The camera of view.get is accepted as it is. With both forms they must give the same eye, else the call is refused as camera_conflict. pitch is from -pi/2 to pi/2, as in render.png. The camera orbits its target and has no roll: up must point upward (z above 0) and fov must be 45 (degrees), which is the field of view of the camera. projection: ortho or perspective. Animated; never changes the document; the person wins as for view.zoom. Returns the same as view.zoom.",
 );
 pub const VIEW_HIGHLIGHT: (&str, &str) = (
     "view.highlight",

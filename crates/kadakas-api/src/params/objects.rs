@@ -64,7 +64,7 @@ pub struct ObjectsGetParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectsDeleteParams {
-    /// the objects to delete; a group goes with its members
+    /// the objects to delete, in any order. A group goes with its members
     pub ids: Vec<ObjectRef>,
 }
 
@@ -80,10 +80,10 @@ pub struct SelectionSetParams {
     /// whole objects
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ids: Option<Vec<ObjectRef>>,
-    /// {surface model id: [face id]}; the ids of mesh.faces; not together with ids
+    /// {surface model id: [face id]}, the ids of mesh.faces. Not together with ids
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub faces: Option<BTreeMap<String, Vec<u32>>>,
-    /// {surface model id: [edge id]}; the ids of mesh.edges; not together with ids
+    /// {surface model id: [edge id]}, the ids of mesh.edges. Not together with ids
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edges: Option<BTreeMap<String, Vec<u32>>>,
 }
