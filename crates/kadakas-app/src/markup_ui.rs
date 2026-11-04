@@ -37,7 +37,7 @@ const ACCENT: Color32 = Color32::from_rgb(214, 40, 40);
 #[derive(Clone, Debug)]
 pub enum Request {
     /// A change of the document, one undo step.
-    Cmd(Command),
+    Cmd(Box<Command>),
     /// Start a markup with the view as it is now.
     New,
     /// Close the open markup. An empty one is removed.
@@ -48,6 +48,24 @@ pub enum Request {
     GoTo(MarkupId),
     /// Go to the viewpoint and draw on the markup again.
     Resume(MarkupId),
+}
+
+impl Request {
+    /// A change of the document.
+    pub fn cmd(c: Command) -> Request {
+        Request::Cmd(Box::new(c))
+    }
+}
+
+/// What a canvas tells the markup UI in a frame.
+pub struct CanvasFrame<'a> {
+    pub rect: Rect,
+    /// The view now.
+    pub now: MarkupViewpoint,
+    /// The person pans with the key held: no drawing.
+    pub suspend: bool,
+    pub doc: &'a Document,
+    pub read_only: bool,
 }
 
 /// A note that waits for its text.
@@ -222,6 +240,7 @@ impl MarkupUi {
 
     /// True if the marks of the markup that the canvas shows are drawn now: it is shown and the
     /// view is the view of the markup.
+    #[cfg(test)]
     pub fn marks_visible(&self, doc: &Document) -> bool {
         match (self.shown(doc), &self.current) {
             (Some(m), Some(now)) => view_matches(&m.viewpoint, now),
@@ -233,7 +252,7 @@ impl MarkupUi {
     #[cfg(test)]
     pub fn finish_note_for_test(&mut self, text: &str) {
         if let (Some(n), Some(id)) = (self.note.take(), self.open) {
-            self.requests.push(Request::Cmd(Command::AddMark {
+            self.requests.push(Request::cmd(Command::AddMark {
                 markup: id,
                 mark: Box::new(note_at(self.brush, n.canvas, n.at, text)),
             }));
@@ -273,16 +292,14 @@ impl MarkupUi {
 
     /// Called by a canvas in every frame in which it is on the screen. Gives true when the markup
     /// took the pointer. `suspend` is true while the person pans with the key held.
-    pub fn canvas_frame(
-        &mut self,
-        ui: &Ui,
-        resp: &egui::Response,
-        rect: Rect,
-        now: MarkupViewpoint,
-        suspend: bool,
-        doc: &Document,
-        read_only: bool,
-    ) -> bool {
+    pub fn canvas_frame(&mut self, ui: &Ui, resp: &egui::Response, f: CanvasFrame) -> bool {
+        let CanvasFrame {
+            rect,
+            now,
+            suspend,
+            doc,
+            read_only,
+        } = f;
         self.current = Some(now.clone());
         let Some(open) = self.open.and_then(|id| doc.markups.get(id)) else {
             self.draft = None;
@@ -332,39 +349,42 @@ impl MarkupUi {
             self.note = None;
         }
         let drawable = view_matches(&open.viewpoint, &now) && !read_only;
-        if pressed && resp.hovered() && self.draft.is_none() && self.note.is_none() {
-            if let (true, Some(p)) = (drawable, latest) {
-                let at = local(p);
-                match self.tool {
-                    Tool::Select => {
-                        self.selected = hit_mark(open, canvas, at, HIT_POINTS);
-                    }
-                    Tool::Eraser => {
-                        if let Some(mark) = hit_mark(open, canvas, at, HIT_POINTS) {
-                            if self.selected == Some(mark) {
-                                self.selected = None;
-                            }
-                            self.requests.push(Request::Cmd(Command::DeleteMark {
-                                markup: open.id,
-                                mark,
-                            }));
-                        }
-                    }
-                    Tool::Note => {
-                        if open.marks.len() >= MAX_MARKS {
-                            self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
-                        } else {
-                            self.note = Some(PendingNote {
-                                at,
-                                canvas,
-                                screen: p + vec2(12.0, 12.0),
-                                text: String::new(),
-                                focus: true,
-                            });
-                        }
-                    }
-                    t => self.draft = Draft::begin(t, self.brush, canvas, at),
+        if pressed
+            && resp.hovered()
+            && self.draft.is_none()
+            && self.note.is_none()
+            && let (true, Some(p)) = (drawable, latest)
+        {
+            let at = local(p);
+            match self.tool {
+                Tool::Select => {
+                    self.selected = hit_mark(open, canvas, at, HIT_POINTS);
                 }
+                Tool::Eraser => {
+                    if let Some(mark) = hit_mark(open, canvas, at, HIT_POINTS) {
+                        if self.selected == Some(mark) {
+                            self.selected = None;
+                        }
+                        self.requests.push(Request::cmd(Command::DeleteMark {
+                            markup: open.id,
+                            mark,
+                        }));
+                    }
+                }
+                Tool::Note => {
+                    if open.marks.len() >= MAX_MARKS {
+                        self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
+                    } else {
+                        self.note = Some(PendingNote {
+                            at,
+                            canvas,
+                            screen: p + vec2(12.0, 12.0),
+                            text: String::new(),
+                            focus: true,
+                        });
+                    }
+                }
+                t => self.draft = Draft::begin(t, self.brush, canvas, at),
             }
         }
         if let Some(d) = &mut self.draft {
@@ -383,7 +403,7 @@ impl MarkupUi {
                     self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
                 } else {
                     for mark in marks {
-                        self.requests.push(Request::Cmd(Command::AddMark {
+                        self.requests.push(Request::cmd(Command::AddMark {
                             markup: open.id,
                             mark: Box::new(mark),
                         }));
@@ -501,7 +521,7 @@ impl MarkupUi {
             Some(true) => {
                 if let (Some(n), Some(id)) = (self.note.take(), self.open) {
                     let mark = note_at(self.brush, n.canvas, n.at, &n.text);
-                    self.requests.push(Request::Cmd(Command::AddMark {
+                    self.requests.push(Request::cmd(Command::AddMark {
                         markup: id,
                         mark: Box::new(mark),
                     }));
@@ -633,7 +653,7 @@ impl MarkupUi {
             {
                 self.selected = None;
                 self.requests
-                    .push(Request::Cmd(Command::ClearMarkup { markup: id }));
+                    .push(Request::cmd(Command::ClearMarkup { markup: id }));
             }
             if ui
                 .add_enabled(
@@ -809,7 +829,7 @@ impl MarkupUi {
     }
 
     fn patch(&mut self, id: MarkupId, patch: MarkupPatch) {
-        self.requests.push(Request::Cmd(Command::ModifyMarkup {
+        self.requests.push(Request::cmd(Command::ModifyMarkup {
             id,
             patch: Box::new(patch),
         }));
@@ -824,21 +844,21 @@ impl MarkupUi {
             self.picked = None;
         }
         self.requests
-            .push(Request::Cmd(Command::DeleteMarkup { id }));
+            .push(Request::cmd(Command::DeleteMarkup { id }));
     }
 
     /// Deletes the mark that the select tool picked.
     pub fn delete_selected(&mut self) {
         if let (Some(markup), Some(mark)) = (self.open, self.selected.take()) {
             self.requests
-                .push(Request::Cmd(Command::DeleteMark { markup, mark }));
+                .push(Request::cmd(Command::DeleteMark { markup, mark }));
         }
     }
 
     fn set_color(&mut self, c: Rgb) {
         self.brush.color = c;
         if let (Some(markup), Some(mark)) = (self.open, self.selected) {
-            self.requests.push(Request::Cmd(Command::SetMarkStyle {
+            self.requests.push(Request::cmd(Command::SetMarkStyle {
                 markup,
                 mark,
                 color: Some(c),
@@ -849,7 +869,7 @@ impl MarkupUi {
 
     fn set_width(&mut self) {
         if let (Some(markup), Some(mark)) = (self.open, self.selected) {
-            self.requests.push(Request::Cmd(Command::SetMarkStyle {
+            self.requests.push(Request::cmd(Command::SetMarkStyle {
                 markup,
                 mark,
                 color: None,

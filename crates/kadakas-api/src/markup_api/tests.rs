@@ -643,7 +643,7 @@ fn deleting_and_clearing_the_work_of_somebody_else_needs_the_consent() {
         ("markup.delete", json!({"ids": [mine, user]})),
     ] {
         let e = fail(&mut s, method, params);
-        assert_eq!(e.reason.as_deref(), Some("confirm_needed"), "{method}");
+        assert_eq!(e.reason, Some("confirm_needed"), "{method}");
         assert_eq!(e.details.as_ref().unwrap()["ask_the_person"], true);
         assert_eq!(e.details.as_ref().unwrap()["markups"][0]["id"], user);
     }

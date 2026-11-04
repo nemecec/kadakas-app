@@ -45,7 +45,7 @@ fn the_cost_of_markup_get_on_200_models_of_2000_triangles() {
         );
     }
     let view = json!({
-        "view": {"kind": "camera", "target": [4000, 2000, 0], "yaw": -1.5707963, "pitch": 1.5707963,
+        "view": {"kind": "camera", "target": [4000, 2000, 0], "yaw": -std::f64::consts::FRAC_PI_2, "pitch": std::f64::consts::FRAC_PI_2,
                  "distance": 12000, "perspective": false},
         "canvas": [800, 600],
     });

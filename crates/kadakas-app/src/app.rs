@@ -2636,11 +2636,13 @@ impl KadakasApp {
             self.markup_ui.canvas_frame(
                 ui,
                 &resp,
-                rect,
-                now,
-                panning || space,
-                self.session.editor.doc(),
-                read_only,
+                crate::markup_ui::CanvasFrame {
+                    rect,
+                    now,
+                    suspend: panning || space,
+                    doc: self.session.editor.doc(),
+                    read_only,
+                },
             )
         };
         // Pins: a press on one opens its issue. After "New Issue at a Click" the next press places

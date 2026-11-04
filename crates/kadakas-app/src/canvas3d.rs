@@ -130,11 +130,13 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
             m.canvas_frame(
                 ui,
                 &resp,
-                rect,
-                now,
-                mods.shift || space,
-                session.editor.doc(),
-                false,
+                crate::markup_ui::CanvasFrame {
+                    rect,
+                    now,
+                    suspend: mods.shift || space,
+                    doc: session.editor.doc(),
+                    read_only: false,
+                },
             )
         });
     // Mouse: drag orbits, Shift-drag, Space-drag and middle-drag pan, the wheel zooms to the pointer.
