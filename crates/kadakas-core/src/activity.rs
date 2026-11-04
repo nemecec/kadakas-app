@@ -42,6 +42,7 @@ pub struct Summary {
     pub document: bool,
     pub versions: bool,
     pub issues: bool,
+    pub markups: bool,
     /// What changed, when the step changed one object and nothing else.
     pub detail: Option<Detail>,
     /// What changed, when the step changed one resource and nothing else.
@@ -74,7 +75,8 @@ impl Summary {
             && data.resources.is_empty()
             && !data.document
             && !data.versions
-            && !data.issues;
+            && !data.issues
+            && !data.markups;
         let detail = if only_one {
             data.objects
                 .iter()
@@ -90,7 +92,8 @@ impl Summary {
             && data.classes.is_empty()
             && !data.document
             && !data.versions
-            && !data.issues;
+            && !data.issues
+            && !data.markups;
         Summary {
             detail,
             resource_detail: data.resource_detail.clone().filter(|_| only_resource),
@@ -104,6 +107,7 @@ impl Summary {
             document: data.document,
             versions: data.versions,
             issues: data.issues,
+            markups: data.markups,
         }
     }
 
@@ -205,6 +209,9 @@ impl Summary {
         }
         if self.issues {
             parts.push("changed issues".into());
+        }
+        if self.markups {
+            parts.push("changed markups".into());
         }
         if parts.is_empty() {
             return "no visible change".into();
@@ -778,6 +785,7 @@ mod tests {
             document: true,
             versions: true,
             issues: true,
+            markups: true,
             detail: None,
             resource_detail: None,
         };
@@ -786,7 +794,7 @@ mod tests {
             "Added 2 objects; changed 1 object; removed 1 object; added layer Trees; changed 1 layer; \
              removed 1 layer; added 2 classes; changed 1 class; removed 1 class; added 1 resource; \
              changed 2 resources; removed 1 resource; changed document settings; changed the versions; \
-             changed issues"
+             changed issues; changed markups"
         );
         // One kind of change shows the kinds of shape, with the rest counted.
         let only = Summary {

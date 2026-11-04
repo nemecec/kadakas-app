@@ -1206,6 +1206,10 @@ pub struct Document {
     /// Older files have none.
     #[serde(default, skip_serializing_if = "crate::issue::Issues::is_empty")]
     pub issues: crate::issue::Issues,
+    /// Markup on the view (REV-11): ink drawn on a plan or 3D view. Review data like the issues,
+    /// not drawing objects. Older files have none.
+    #[serde(default, skip_serializing_if = "crate::markup::Markups::is_empty")]
+    pub markups: crate::markup::Markups,
     /// The history of versions that waits in the file this document was opened from, not read yet
     /// (`crate::history::HistoryLoader`, DOC-21). While it is set, `history` is `None`. A host
     /// resolves it before it uses the history or writes the document in any other way than a
@@ -1237,6 +1241,7 @@ impl PartialEq for Document {
             && self.drawing == other.drawing
             && self.history == other.history
             && self.issues == other.issues
+            && self.markups == other.markups
             && self.extra == other.extra
             && self.objects.len() == other.objects.len()
             && self.objects.iter().eq(other.objects.iter())
@@ -1403,6 +1408,7 @@ impl Default for Document {
             drawing: Default::default(),
             history: None,
             issues: Default::default(),
+            markups: Default::default(),
             lazy_history: None,
             ids: IdGen::default(),
             load_notes: Vec::new(),
@@ -1881,6 +1887,7 @@ impl Document {
         }
         notes.extend(crate::provenance::repair(self));
         notes.extend(self.issues.repair());
+        notes.extend(self.markups.repair());
         // An instance that cannot be drawn (a definition that is missing, is not a component,
         // contains itself or is over the limits) stays in the file and is reported.
         notes.extend(crate::component::load_findings(self));

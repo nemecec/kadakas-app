@@ -484,7 +484,7 @@ impl Session {
 
     /// The view of the session as a viewpoint view: a plan view that frames the objects, or the
     /// orbit camera of the standard view.
-    fn current_view(&mut self, objects: &[ObjectId]) -> ViewSpec {
+    pub(crate) fn current_view(&mut self, objects: &[ObjectId]) -> ViewSpec {
         use kadakas_render::camera::Camera;
         use kadakas_render::views::StandardView;
         let settings = self.view;
@@ -1084,16 +1084,82 @@ impl Session {
                     .then(|| select(&doc.issues, &filter).iter().map(|i| i.id).collect())
             }
         };
+        // A markup (REV-11) of an issue goes into the file as one more viewpoint, with the
+        // picture that has the marks as its snapshot.
+        let scope: Vec<IssueId> = match &only {
+            Some(l) => l.clone(),
+            None => doc.issues.iter().map(|i| i.id).collect(),
+        };
+        let linked: Vec<kadakas_core::markup::Markup> = doc
+            .markups
+            .iter()
+            .filter(|m| m.issue.is_some_and(|i| scope.contains(&i)))
+            .cloned()
+            .collect();
+        let mut markup_notes: Vec<String> = Vec::new();
+        let mut markup_pictures: std::collections::HashMap<String, Vec<u8>> = Default::default();
+        let mut issues = self.editor.doc().issues.clone();
+        for m in &linked {
+            let Some(issue_id) = m.issue else { continue };
+            let at = issues.data().issues.iter().position(|i| i.id == issue_id);
+            let Some(at) = at else { continue };
+            if issues.data().issues[at].viewpoints.len() >= kadakas_core::issue::MAX_VIEWPOINTS {
+                markup_notes.push(format!(
+                    "markup {} is not in the file: issue {issue_id} has {} viewpoints already",
+                    m.id,
+                    kadakas_core::issue::MAX_VIEWPOINTS
+                ));
+                continue;
+            }
+            let png = match self.markup_snapshot_png(m, 1600) {
+                Ok(png) if png.len() <= MAX_SNAPSHOT_BYTES => png,
+                Ok(png) => {
+                    markup_notes.push(format!(
+                        "markup {} is not in the file: its picture is {} bytes, over {MAX_SNAPSHOT_BYTES}",
+                        m.id,
+                        png.len()
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    markup_notes.push(format!("markup {} is not in the file: {}", m.id, e.message));
+                    continue;
+                }
+            };
+            use sha2::{Digest, Sha256};
+            let hash: String = Sha256::digest(&png)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            markup_pictures.insert(hash.clone(), png);
+            let vp = Viewpoint {
+                id: ViewpointId(Uid::derive(m.id.0, 2, 0)),
+                name: format!(
+                    "Markup: {}",
+                    m.name.clone().unwrap_or_else(|| m.id.to_string())
+                ),
+                time: m.time,
+                view: Some(m.viewpoint.view.clone()),
+                layers: m.viewpoint.layers.clone(),
+                classes: m.viewpoint.classes.clone(),
+                selection: vec![],
+                snapshot: Some(hash),
+            };
+            issues.issues_mut()[at].viewpoints.push(vp);
+        }
+        let doc = self.editor.doc();
         let lookup = |hash: &str| {
-            doc.resources
-                .find_image(hash)
-                .and_then(|r| doc.resources.image(r))
-                .and_then(ImageResource::bytes)
+            markup_pictures.get(hash).cloned().or_else(|| {
+                doc.resources
+                    .find_image(hash)
+                    .and_then(|r| doc.resources.image(r))
+                    .and_then(ImageResource::bytes)
+            })
         };
         let (bytes, report) = export(
             version,
             &ExportInput {
-                issues: &doc.issues,
+                issues: &issues,
                 only: only.as_deref(),
                 snapshot: &lookup,
                 to_png: &|bytes: &[u8]| {
@@ -1116,6 +1182,10 @@ impl Session {
             "comments": report.comments,
             "notes": report.notes,
         });
+        if !linked.is_empty() {
+            let added = linked.len() - markup_notes.len().min(linked.len());
+            out["markups"] = json!({"in_file": added, "left_out": markup_notes});
+        }
         match text_param(&m, "path")? {
             Some(path) => {
                 #[cfg(not(target_arch = "wasm32"))]

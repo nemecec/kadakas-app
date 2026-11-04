@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::change::{self, ChangeLog, ChangeSet, DocumentChanged, IdsByKind, Origin};
 use crate::history::HistoryData;
+use crate::markup::{Mark, Markup};
 use crate::model::*;
 use crate::resource::{Resource, ResourceBody, ResourceId, Resources};
 use crate::uid::Uid;
@@ -22,6 +23,7 @@ mod drawing_ops;
 mod graphic_ops;
 mod group_ops;
 mod issue_ops;
+mod markup_ops;
 mod plant_ops;
 mod present_ops;
 mod record_ops;
@@ -676,6 +678,47 @@ pub enum Command {
         viewpoint: crate::issue::ViewpointId,
         now: i64,
     },
+    /// Add a markup (REV-11, `crate::markup`): ink drawn on a view, with its viewpoint and its
+    /// marks. A nil `markup.id` makes a new ID (returned first in `created`). Marks without a
+    /// number get one. One undo step.
+    AddMarkup {
+        markup: Box<crate::markup::Markup>,
+    },
+    /// Change the name, the note or the issue of a markup. A patch that changes nothing makes no
+    /// undo step.
+    ModifyMarkup {
+        id: crate::markup::MarkupId,
+        patch: Box<crate::markup::MarkupPatch>,
+    },
+    /// Delete a markup with its marks.
+    DeleteMarkup {
+        id: crate::markup::MarkupId,
+    },
+    /// Add a mark to a markup. A mark number of 0 makes the next number (returned in `created`
+    /// as the markup ID is not new, the number is in the `report` of the outcome as `mark`).
+    /// One undo step, so one drawn stroke is one step.
+    AddMark {
+        markup: crate::markup::MarkupId,
+        mark: Box<crate::markup::Mark>,
+    },
+    /// Delete one mark of a markup.
+    DeleteMark {
+        markup: crate::markup::MarkupId,
+        mark: u32,
+    },
+    /// Change the colour or the width of a mark.
+    SetMarkStyle {
+        markup: crate::markup::MarkupId,
+        mark: u32,
+        #[serde(default)]
+        color: Option<crate::markup::Rgb>,
+        #[serde(default)]
+        width: Option<f64>,
+    },
+    /// Delete all marks of a markup. The markup, its viewpoint and its note stay.
+    ClearMarkup {
+        markup: crate::markup::MarkupId,
+    },
     /// Edit a surface model (MOD-06, see `crate::surface`): add edges, erase edges or faces, or
     /// reverse faces. One undo step; an edit that fails changes nothing.
     EditSurface {
@@ -852,6 +895,10 @@ pub enum CommandError {
     NoIssue(crate::issue::IssueId),
     #[error("comment {0} does not exist")]
     NoComment(crate::issue::CommentId),
+    #[error("markup {0} does not exist")]
+    NoMarkup(crate::markup::MarkupId),
+    #[error("markup {0} has no mark {1}")]
+    NoMark(crate::markup::MarkupId, u32),
     #[error("invalid value: {0}")]
     Invalid(String),
     /// An edit of a surface model was refused (MOD-11 keeps the reason typed, so that the API can
@@ -984,6 +1031,8 @@ pub struct Patch {
     /// The issues before and after, if the step changed them (REV-04). The data is shared
     /// (`Arc`), so a step that did not touch the issues holds nothing.
     issues: Option<(crate::issue::Issues, crate::issue::Issues)>,
+    /// The markups before and after, if the step changed them (REV-11). Shared like the issues.
+    markups: Option<(crate::markup::Markups, crate::markup::Markups)>,
     /// A rough size in bytes, for the history limit (see [`Editor::set_history_limit`]).
     bytes: u64,
     /// The identity of the step, which stays through undo and redo (revisions do not). Counts
@@ -1108,6 +1157,7 @@ impl Patch {
             };
             issue_changes(old, new, &mut added, &mut changed, &mut removed);
         }
+        let markups_changed = self.markups.is_some();
         if let Some((before, after)) = &self.meta {
             let (old, new) = if forward {
                 (before, after)
@@ -1135,8 +1185,10 @@ impl Patch {
                 georef: old.georef != new.georef,
                 drawing: old.drawing != new.drawing,
                 history: self.history.is_some(),
+                markups: false,
             };
         }
+        document.markups = markups_changed;
         ChangeSet {
             revision,
             op: op.to_string(),
@@ -1156,6 +1208,7 @@ impl Patch {
             && self.meta.is_none()
             && self.history.is_none()
             && self.issues.is_none()
+            && self.markups.is_none()
     }
 
     fn apply(&self, doc: &mut Document, forward: bool) {
@@ -1184,6 +1237,9 @@ impl Patch {
         }
         if let Some((before, after)) = &self.issues {
             doc.issues = if forward { after } else { before }.clone();
+        }
+        if let Some((before, after)) = &self.markups {
+            doc.markups = if forward { after } else { before }.clone();
         }
     }
 }
@@ -2119,6 +2175,13 @@ impl<'a> Tx<'a> {
             | Command::AddIssueViewpoint { .. }
             | Command::ModifyIssueViewpoint { .. }
             | Command::DeleteIssueViewpoint { .. } => self.run_issue(cmd, out)?,
+            Command::AddMarkup { .. }
+            | Command::ModifyMarkup { .. }
+            | Command::DeleteMarkup { .. }
+            | Command::AddMark { .. }
+            | Command::DeleteMark { .. }
+            | Command::SetMarkStyle { .. }
+            | Command::ClearMarkup { .. } => self.run_markup(cmd, out)?,
             Command::AttachRecord { .. }
             | Command::DetachRecord { .. }
             | Command::SetRecordFields { .. } => self.run_record(cmd)?,
@@ -2392,6 +2455,7 @@ impl<'a> Tx<'a> {
         meta_before: Meta,
         history_before: Option<HistoryData>,
         issues_before: crate::issue::Issues,
+        markups_before: crate::markup::Markups,
     ) -> Patch {
         let doc = &*self.doc;
         let removed: Vec<(usize, Object)> = self
@@ -2423,6 +2487,8 @@ impl<'a> Tx<'a> {
             (history_before != doc.history).then(|| (history_before, doc.history.clone()));
         let issues =
             (issues_before != doc.issues).then(|| (issues_before.lean(), doc.issues.lean()));
+        let markups =
+            (markups_before != doc.markups).then(|| (markups_before.clone(), doc.markups.clone()));
         let objects = |l: &[(usize, Object)]| l.iter().map(|(_, o)| object_bytes(o)).sum::<u64>();
         let bytes = objects(&removed)
             + objects(&added)
@@ -2442,6 +2508,10 @@ impl<'a> Tx<'a> {
             + issues
                 .as_ref()
                 .map_or(0, |(b, a)| crate::issue::Issues::step_bytes(b, a))
+            // The markup of a step: the pointers and the parts that the two states do not share.
+            + markups
+                .as_ref()
+                .map_or(0, |(b, a)| b.approx_bytes().min(4096) + a.approx_bytes().min(65536))
             + history.as_ref().map_or(0, |(b, a)| {
                 a.as_ref()
                     .map_or(0, |h| h.bytes_not_in(b.as_ref()) as u64)
@@ -2453,6 +2523,7 @@ impl<'a> Tx<'a> {
             meta,
             history,
             issues,
+            markups,
             bytes,
             serial: 0,
             origin: Origin::User,
@@ -2764,6 +2835,7 @@ impl Editor {
         let history_before = self.doc.history.clone();
         // Without the index: the live data keeps it from one command to the next.
         let issues_before = self.doc.issues.lean();
+        let markups_before = self.doc.markups.clone();
         let mut tx = Tx::new(&mut self.doc);
         let mut out = Outcome::default();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2779,12 +2851,12 @@ impl Editor {
             Err(payload) => {
                 // Every change was recorded by `touch` and the lists of the transaction, so the
                 // patch of a failed command undoes it.
-                let patch = tx.finish(meta_before, history_before, issues_before);
+                let patch = tx.finish(meta_before, history_before, issues_before, markups_before);
                 patch.apply(&mut self.doc, false);
                 std::panic::resume_unwind(payload);
             }
         };
-        let mut patch = tx.finish(meta_before, history_before, issues_before);
+        let mut patch = tx.finish(meta_before, history_before, issues_before, markups_before);
         let result = result.and_then(|()| match &patch.meta {
             Some((_, after)) if !after.is_finite() => Err(CommandError::Invalid(NOT_FINITE.into())),
             _ => Ok(()),
@@ -3159,6 +3231,7 @@ impl Editor {
             georef: old.georef != new.georef,
             drawing: old.drawing != new.drawing,
             history: false,
+            markups: self.doc.markups != doc.markups,
         };
         // The generator of IDs belongs to this editor, not to the document that came in.
         doc.swap_ids(&mut self.doc);
@@ -3403,6 +3476,7 @@ impl Editor {
         }
         self.redo.clear();
         let (history, issues) = (after.history.clone(), after.issues.clone());
+        let markups = after.markups.clone();
         let merged = self.transact(
             || op.to_string(),
             None,
@@ -3412,6 +3486,7 @@ impl Editor {
                 tx.doc.active_class = after.active_class;
                 tx.doc.history = history;
                 tx.doc.issues = issues;
+                tx.doc.markups = markups;
                 Ok(())
             },
         );

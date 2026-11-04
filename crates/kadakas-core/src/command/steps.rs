@@ -83,6 +83,8 @@ pub struct StepData {
     pub versions: bool,
     /// Review issues or their comments changed.
     pub issues: bool,
+    /// Markups on the view changed (REV-11).
+    pub markups: bool,
     /// What changed in the resource, when the step changed exactly one resource and added or
     /// removed none.
     pub resource_detail: Option<crate::activity::detail::ResourceDetail>,
@@ -109,6 +111,7 @@ impl StepData {
             || self.document
             || self.versions
             || self.issues
+            || self.markups
     }
 
     /// The change the other way round: what an undo of the step did.
@@ -136,6 +139,7 @@ impl StepData {
             document: self.document,
             versions: self.versions,
             issues: self.issues,
+            markups: self.markups,
             resource_detail: None,
         }
     }
@@ -372,6 +376,7 @@ fn compose(patches: &[&Patch]) -> StepData {
             || cs.document.georef
             || cs.document.drawing;
         data.versions |= cs.document.history;
+        data.markups |= cs.document.markups;
         data.issues |= !(cs.added.issues.is_empty()
             && cs.changed.issues.is_empty()
             && cs.removed.issues.is_empty()

@@ -56,13 +56,14 @@ impl Origin {
 }
 
 /// The names of the parts of a change set, for `events.subscribe {kinds}`.
-pub const KINDS: [&str; 6] = [
+pub const KINDS: [&str; 7] = [
     "objects",
     "layers",
     "classes",
     "resources",
     "document",
     "issues",
+    "markups",
 ];
 
 /// IDs by kind: objects, layers, classes and resources (styles, symbols, worksheets, ...).
@@ -116,11 +117,19 @@ pub struct DocumentChanged {
     /// The named versions of the file (REV-01).
     #[serde(default)]
     pub history: bool,
+    /// The markups on the view (REV-11).
+    #[serde(default)]
+    pub markups: bool,
 }
 
 impl DocumentChanged {
     pub fn any(&self) -> bool {
-        self.active_layer || self.active_class || self.georef || self.drawing || self.history
+        self.active_layer
+            || self.active_class
+            || self.georef
+            || self.drawing
+            || self.history
+            || self.markups
     }
 }
 
@@ -168,7 +177,8 @@ impl ChangeSet {
                     && self.changed.resources.is_empty()
                     && self.removed.resources.is_empty())
             }
-            "document" => self.document.any(),
+            "document" => self.document.any() && !self.document_only_markups(),
+            "markups" => self.document.markups,
             "issues" => {
                 !(self.added.issues.is_empty()
                     && self.changed.issues.is_empty()
@@ -179,6 +189,13 @@ impl ChangeSet {
             }
             _ => false,
         }
+    }
+
+    /// True if the only change of the document settings is the markups (they have a part of
+    /// their own).
+    fn document_only_markups(&self) -> bool {
+        let d = self.document;
+        d.markups && !(d.active_layer || d.active_class || d.georef || d.drawing || d.history)
     }
 
     /// The change set with only the given parts; the other parts are empty. The revision, the
@@ -227,12 +244,19 @@ impl ChangeSet {
             added: pick(&self.added),
             changed: pick(&self.changed),
             removed: pick(&self.removed),
-            document: if want("document") {
-                self.document
-            } else {
-                DocumentChanged::default()
+            document: {
+                let mut d = if want("document") {
+                    self.document
+                } else {
+                    DocumentChanged::default()
+                };
+                d.markups = want("markups") && self.document.markups;
+                d
             },
-            detail: if want("document") || (want("issues") && self.touches("issues")) {
+            detail: if want("document")
+                || (want("issues") && self.touches("issues"))
+                || (want("markups") && self.touches("markups"))
+            {
                 self.detail.clone()
             } else {
                 None

@@ -33,6 +33,7 @@ pub mod landscape;
 pub mod layout;
 pub mod leftout;
 pub mod library;
+pub mod markup;
 pub mod massing;
 pub mod massing_batch;
 pub mod mesh;

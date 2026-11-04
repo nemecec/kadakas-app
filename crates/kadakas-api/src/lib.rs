@@ -39,12 +39,13 @@ mod irrigation_api;
 mod issue_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod libfiles;
+mod markup_api;
 mod massing_api;
 mod mesh_api;
 mod pointer_api;
 pub use pointer_api::{
     Aim, EDGE_POINTS, PixelSize, PointerInput, READ_NOTE_MS, READS_PER_SECOND, REASON_DISABLED,
-    REASON_NOT_OVER, RECENT_READ_MS,
+    REASON_NOT_OVER, RECENT_READ_MS, ray_under,
 };
 mod method_hints;
 pub use mesh_api::ERROR_IDS as MESH_ERROR_IDS;
@@ -1102,6 +1103,14 @@ pub const METHODS: &[(&str, &str)] = &[
     issue_api::ISSUE_DELETE,
     issue_api::ISSUE_IMPORT_BCF,
     issue_api::ISSUE_EXPORT_BCF,
+    // Markup on the view (see markup_api.rs).
+    markup_api::MARKUP_LIST,
+    markup_api::MARKUP_GET,
+    markup_api::MARKUP_CREATE,
+    markup_api::MARKUP_UPDATE,
+    markup_api::MARKUP_DELETE,
+    markup_api::MARKUP_CLEAR,
+    markup_api::MARKUP_RENDER,
     #[cfg(not(target_arch = "wasm32"))]
     dxf_compare_api::DXF_COMPARE,
     // Collaboration (see collab_api.rs).
@@ -1587,6 +1596,9 @@ impl Session {
         if let Some(r) = self.handle_issue(method, p.clone()) {
             return r;
         }
+        if let Some(r) = self.handle_markup(method, p.clone()) {
+            return r;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = update_api::handle(self, method, p.clone()) {
             return r;
@@ -1677,6 +1689,7 @@ impl Session {
                 }
                 d["plugins"] = wasm_plugin_api::describe();
                 d["review"]["issues"] = issue_api::describe();
+                d["review"]["markup"] = markup_api::describe();
                 d["review"]["agent_view"] = agent_view_api::describe();
                 d["review"]["agent_activity"] = agent_activity_api::describe();
                 d["schemas"] = json!({

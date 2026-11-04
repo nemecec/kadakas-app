@@ -173,7 +173,7 @@ pub fn pickable(doc: &Document, o: &Object) -> bool {
 }
 
 /// True if the object is hit at `p`. A symbol instance is hit through the shapes of its definition.
-fn object_hit(pk: Prims, doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
+pub fn object_hit(pk: Prims, doc: &Document, o: &Object, p: DVec2, tol: f64) -> bool {
     if matches!(o.shape, Shape::Symbol { .. }) {
         return kadakas_core::symbols::hit_instance(doc, o, p, tol);
     }
