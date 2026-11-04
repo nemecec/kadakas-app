@@ -74,7 +74,7 @@ def test_the_agent_sees_what_the_person_drew(cad):
 def test_an_agent_draws_a_markup_in_one_undo_step(cad):
     filled_rect(cad)
     made = cad.result("markup.create", {
-        "viewpoint": PLAN_VIEW, "note": "Check the edge.", "now_ms": 5,
+        "viewpoint": PLAN_VIEW, "note": "Check the edge.", "now_ms": 1_700_000_000_005,
         "marks": [{"kind": "rectangle", "points": [[0.3, 0.3], [0.7, 0.7]]},
                   {"kind": "pen", "points_canvas": [[10, 10], [100, 20]], "color": "#2a9d8f"}],
     })

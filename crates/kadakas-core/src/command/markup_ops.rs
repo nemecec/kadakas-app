@@ -56,7 +56,9 @@ impl Tx<'_> {
                 if new == old {
                     return Ok(());
                 }
-                new.validate().map_err(invalid)?;
+                // Only what the patch changes is checked: a mark of a file that is out of range
+                // does not stop a rename.
+                new.validate_meta().map_err(invalid)?;
                 self.doc.markups.set(at, new);
             }
             Command::DeleteMarkup { id } => {

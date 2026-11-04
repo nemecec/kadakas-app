@@ -33,6 +33,8 @@ pub struct Canvas3d<'a> {
     /// The ink of the markup (REV-11): drawn over the scene, and it takes the pointer while the
     /// markup mode is on and a markup is open.
     pub markup: Option<&'a mut crate::markup_ui::MarkupUi>,
+    /// The drawing is read only now (a compare or an update is open): no ink.
+    pub read_only: bool,
     /// Tells the app that the person navigates (the agent never wins against that).
     pub nav: &'a mut crate::agent_view::NavSignal,
     /// What an agent shows: the pointers and the agent cursor (AGR-03).
@@ -61,6 +63,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         frame,
         mut issues,
         mut markup,
+        read_only,
         nav,
         agent,
         review,
@@ -135,7 +138,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
                     now,
                     suspend: mods.shift || space,
                     doc: session.editor.doc(),
-                    read_only: false,
+                    read_only,
                 },
             )
         });
@@ -353,6 +356,7 @@ mod tests {
         ctx: egui::Context,
         issues: crate::issues_ui::IssuesUi,
         markup: crate::markup_ui::MarkupUi,
+        size: egui::Vec2,
         nav_style: kadakas_ui_core::nav3d::NavStyle,
     }
 
@@ -368,6 +372,7 @@ mod tests {
                 ctx: egui::Context::default(),
                 issues: Default::default(),
                 markup: Default::default(),
+                size: egui::vec2(800.0, 600.0),
                 nav_style: Default::default(),
             }
         }
@@ -410,10 +415,7 @@ mod tests {
             let input = egui::RawInput {
                 events,
                 modifiers,
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 600.0),
-                )),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
                 ..Default::default()
             };
             let ctx = self.ctx.clone();
@@ -434,6 +436,7 @@ mod tests {
                             frame: None,
                             issues: Some(&mut self.issues),
                             markup: Some(&mut self.markup),
+                            read_only: false,
                             nav: &mut Default::default(),
                             agent: None,
                             review: None,
@@ -924,6 +927,7 @@ mod tests {
                     frame: None,
                     issues: None,
                     markup: None,
+                    read_only: false,
                     nav: &mut Default::default(),
                     agent: None,
                     review: None,
@@ -972,7 +976,11 @@ mod tests {
             h.session
                 .editor
                 .execute(&kadakas_ui_core::markup::new_markup(
-                    viewpoint, "Ann", 1, None,
+                    viewpoint,
+                    "Ann",
+                    1,
+                    None,
+                    String::new(),
                 ))
                 .unwrap()
                 .created[0],
@@ -1028,5 +1036,93 @@ mod tests {
         assert!(h.markup.take_requests().is_empty());
         // The view moved: the markup is not drawn on it and the viewpoint tells.
         assert!(!h.markup.marks_visible(h.session.editor.doc()));
+    }
+
+    #[test]
+    fn a_resize_between_new_markup_and_the_stroke_keeps_the_marks_on_the_model_in_3d() {
+        use kadakas_core::markup::MarkupId;
+        for size in [
+            egui::vec2(800.0, 450.0),
+            egui::vec2(800.0, 600.0),
+            egui::vec2(900.0, 600.0),
+        ] {
+            let mut h = Harness::new();
+            let model = add_surface_box(&mut h);
+            h.session.view.view = StandardView::RightIsometric;
+            h.frame(vec![]);
+            h.frame(vec![]);
+            let viewpoint = h.markup.current_view().cloned().unwrap();
+            let id = MarkupId(
+                h.session
+                    .editor
+                    .execute(&kadakas_ui_core::markup::new_markup(
+                        viewpoint,
+                        "Ann",
+                        1,
+                        None,
+                        String::new(),
+                    ))
+                    .unwrap()
+                    .created[0],
+            );
+            h.markup.open = Some(id);
+            h.markup.set_mode(true);
+            // The window changes its shape before the first stroke.
+            h.size = size;
+            h.frame(vec![]);
+            h.frame(vec![]);
+            // A stroke with a start that is not in the middle: 120 points right of the middle.
+            let at = egui::pos2(size.x / 2.0 + 120.0, size.y / 2.0 - 30.0);
+            h.markup.tool = kadakas_ui_core::markup::Tool::Arrow;
+            h.drag(at, egui::vec2(-40.0, 10.0), egui::Modifiers::NONE);
+            run_markup_requests(&mut h);
+            let m = h.session.editor.doc().markups.get(id).unwrap().clone();
+            assert_eq!(m.marks.len(), 1, "{size:?}");
+            // The tip is at `at` + (-40, 10). The ray through the current camera and the window
+            // is the ray that the agent casts through the stored frame.
+            let tip = at + egui::vec2(-40.0, 10.0);
+            let scene = h.session.scene();
+            let reach = scene
+                .bounds
+                .map_or(0.0, |(lo, hi)| (hi - lo).length() + (lo + hi).length());
+            let aim = kadakas_api::ray_under(
+                &h.view3d.camera,
+                scene.origin,
+                glam::Vec2::new(tip.x, tip.y),
+                glam::Vec2::new(size.x, size.y),
+                reach,
+            )
+            .unwrap();
+            let kadakas_api::Aim::Ray {
+                origin, direction, ..
+            } = aim
+            else {
+                panic!()
+            };
+            let want = h
+                .session
+                .handle(
+                    "mesh.pick",
+                    serde_json::json!({
+                        "origin": [origin.x, origin.y, origin.z],
+                        "direction": [direction.x, direction.y, direction.z],
+                    }),
+                )
+                .unwrap();
+            let got = h
+                .session
+                .handle("markup.get", serde_json::json!({"id": id, "render": false}))
+                .unwrap();
+            let hint = &got["marks"][0]["hint3d"];
+            assert_eq!(hint["kind"], "surface", "{size:?}: {hint}");
+            assert_eq!(hint["model"], serde_json::json!(model));
+            for k in 0..3 {
+                let (a, b) = (
+                    hint["point"][k].as_f64().unwrap(),
+                    want["hit"]["point"][k].as_f64().unwrap(),
+                );
+                assert!((a - b).abs() < 6.0, "{size:?}: {a} against {b} (axis {k})");
+            }
+        }
     }
 }

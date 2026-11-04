@@ -71,3 +71,6 @@ markup-ui-note-cancel = Loobu
 markup-ui-delete-agent = See märgistus on agendi töö. Kas kustutada?
 markup-ui-delete-yes = Kustuta
 markup-ui-delete-no = Jäta alles
+markup-ui-no-fit = Aken on märgistuse "{ $name }" raami jaoks liiga kitsas, seepärast on selle märgid peidetud. Tee aken laiemaks või madalamaks.
+markup-ui-limit-points = Märgistuses on kuni { $points } punkti. Lõpeta see märgistus ja alusta uut.
+markup-ui-stale = Mudel on muutunud

@@ -32,7 +32,6 @@ kadakas-render = { path = "../kadakas-render" }
 kadakas-review = { path = "../kadakas-review" }
 kadakas-sheet = { path = "../kadakas-sheet" }
 kadakas-site = { path = "../kadakas-site" }
-kadakas-ui-core = { path = "../kadakas-ui-core" }
 glam = { version = "0.34.1", features = ["serde"] }
 sha2 = "0.11.0"
 serde = { version = "1.0.229", features = ["derive"] }

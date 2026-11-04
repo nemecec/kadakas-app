@@ -15,6 +15,7 @@ struct Rig {
     app: KadakasApp,
     ctx: egui::Context,
     time: f64,
+    size: egui::Vec2,
 }
 
 impl Rig {
@@ -23,6 +24,7 @@ impl Rig {
             app: KadakasApp::blank(),
             ctx: egui::Context::default(),
             time: 1.0,
+            size: vec2(W, H),
         };
         rig.frame(vec![]);
         rig.frame(vec![]);
@@ -34,7 +36,7 @@ impl Rig {
         let input = RawInput {
             time: Some(self.time),
             events,
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(W, H))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             ..Default::default()
         };
         let ctx = self.ctx.clone();
@@ -284,7 +286,7 @@ fn the_eraser_the_select_tool_and_clear_change_marks_in_single_steps() {
 }
 
 #[test]
-fn marks_hide_when_the_view_moves_and_come_back_with_the_viewpoint() {
+fn in_the_plan_marks_follow_the_view_and_a_new_stroke_lands_on_the_same_model_point() {
     let mut rig = Rig::new();
     let id = rig.start();
     rig.drag(&line(&rig, 10));
@@ -294,32 +296,96 @@ fn marks_hide_when_the_view_moves_and_come_back_with_the_viewpoint() {
             .markup_ui
             .marks_visible(rig.app.session.editor.doc())
     );
-    // The view moves: the marks are hidden, and a drag does not draw.
+    // The view pans: the marks stay in the drawing, so they stay shown, and a new stroke lands on
+    // the point of the drawing under the pointer.
     rig.app.view.pan(vec2(120.0, 40.0));
-    rig.frame(vec![]);
-    assert!(
-        !rig.app
-            .markup_ui
-            .marks_visible(rig.app.session.editor.doc())
-    );
-    let depth = rig.app.session.editor.undo_depth();
-    rig.drag(&line(&rig, 10));
-    assert_eq!(
-        rig.markup(id).marks.len(),
-        1,
-        "no drawing on a view that moved"
-    );
-    assert_eq!(rig.app.session.editor.undo_depth(), depth);
-    // Go to the viewpoint: the view is back and the marks show.
-    rig.app.markup_ui.push_request(Request::GoTo(id));
-    rig.frame(vec![]);
     rig.frame(vec![]);
     assert!(
         rig.app
             .markup_ui
             .marks_visible(rig.app.session.editor.doc())
     );
-    assert!(rig.app.status.contains("Markup"), "{}", rig.app.status);
+    let at = rig.at(0.4, 0.5);
+    let model = rig.app.view.to_model(at);
+    rig.click(at);
+    assert_eq!(rig.markup(id).marks.len(), 2);
+    let want = plan_point(&rig.markup(id).viewpoint, rig.markup(id).marks[1].points[0]);
+    assert!(
+        (want.x - model.x).abs() < 1.0 && (want.y - model.y).abs() < 1.0,
+        "{want:?} against {model:?}"
+    );
+    // Go to the viewpoint: the view is back where the markup was started.
+    rig.app.markup_ui.push_request(Request::GoTo(id));
+    rig.frame(vec![]);
+    rig.frame(vec![]);
+    let vp = rig.markup(id).viewpoint.clone();
+    let now = rig.app.markup_ui.current_view().unwrap().clone();
+    let (
+        kadakas_core::issue::ViewSpec::Plan { center: c0, .. },
+        kadakas_core::issue::ViewSpec::Plan { center: c1, .. },
+    ) = (&vp.view, &now.view)
+    else {
+        panic!()
+    };
+    assert!(
+        (c0[0] - c1[0]).abs() < 5.0 && (c0[1] - c1[1]).abs() < 5.0,
+        "{c0:?} {c1:?}"
+    );
+    assert!(
+        rig.app
+            .markup_ui
+            .marks_visible(rig.app.session.editor.doc())
+    );
+}
+
+/// The point of the drawing (mm) that a relative point of the frame of a plan markup means.
+fn plan_point(vp: &kadakas_core::markup::MarkupViewpoint, rel: [f64; 2]) -> DVec2 {
+    let kadakas_core::issue::ViewSpec::Plan { center, zoom } = &vp.view else {
+        panic!()
+    };
+    DVec2::new(
+        center[0] + (rel[0] - 0.5) * vp.canvas[0] / zoom,
+        center[1] - (rel[1] - 0.5) * vp.canvas[1] / zoom,
+    )
+}
+
+#[test]
+fn a_resize_between_new_markup_and_the_stroke_keeps_the_marks_on_the_model_in_the_plan() {
+    for (w, h) in [(1000.0, 520.0), (820.0, 700.0), (1000.0, 700.0)] {
+        let mut rig = Rig::new();
+        let id = rig.start();
+        rig.size = vec2(w, h);
+        rig.frame(vec![]);
+        rig.frame(vec![]);
+        // A note and a stroke at places that are not the middle.
+        for (u, v) in [(0.3, 0.3), (0.7, 0.6)] {
+            let at = rig.at(u, v);
+            let model = rig.app.view.to_model(at);
+            rig.app.markup_ui.tool = Tool::Pen;
+            rig.click(at);
+            let m = rig.markup(id);
+            let rel = m.marks.last().unwrap().points[0];
+            let want = plan_point(&m.viewpoint, rel);
+            assert!(
+                (want.x - model.x).abs() < 1.0 && (want.y - model.y).abs() < 1.0,
+                "{w} x {h}: {want:?} against {model:?}"
+            );
+        }
+        // The agent reads the same place.
+        let m = rig.markup(id).clone();
+        let model = rig.app.view.to_model(rig.at(0.7, 0.6));
+        let got = rig
+            .app
+            .session
+            .handle("markup.get", serde_json::json!({"id": id, "render": false}))
+            .unwrap();
+        let hint = &got["marks"][1]["hint3d"]["point"];
+        assert!(
+            (hint[0].as_f64().unwrap() - model.x).abs() < 1.0
+                && (hint[1].as_f64().unwrap() - model.y).abs() < 1.0,
+            "{hint} against {model:?} ({m:?})"
+        );
+    }
 }
 
 #[test]

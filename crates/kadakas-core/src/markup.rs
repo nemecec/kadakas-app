@@ -111,17 +111,22 @@ impl Serialize for Rgb {
 
 impl<'de> Deserialize<'de> for Rgb {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Rgb, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Form {
-            Text(String),
-            Parts([u8; 3]),
-        }
-        match Form::deserialize(d)? {
-            Form::Text(t) => {
-                Rgb::parse(&t).ok_or_else(|| serde::de::Error::custom("a colour is #rrggbb"))
+        let bad = || {
+            serde::de::Error::custom("a colour is #rrggbb or a list of three numbers from 0 to 255")
+        };
+        match Value::deserialize(d)? {
+            Value::String(t) => Rgb::parse(&t).ok_or_else(bad),
+            Value::Array(a) if a.len() == 3 => {
+                let mut out = [0u8; 3];
+                for (o, v) in out.iter_mut().zip(&a) {
+                    *o = v
+                        .as_u64()
+                        .and_then(|n| u8::try_from(n).ok())
+                        .ok_or_else(bad)?;
+                }
+                Ok(Rgb(out))
             }
-            Form::Parts(p) => Ok(Rgb(p)),
+            _ => Err(bad()),
         }
     }
 }
@@ -227,30 +232,107 @@ impl JsonSchema for MarkKind {
 }
 
 /// One mark of a markup.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// A mark that this version does not understand (an unknown kind, a colour or a point that does
+/// not read) is kept as JSON ([`Mark::is_raw`]) and written again with the same content. It is
+/// not drawn and not picked. A mark that reads but has a value out of range (a width of -5, a point
+/// of 1e300, a text of 100000 characters) is kept as it is and is not drawn either
+/// ([`Mark::drawable`]). The load notes say how many.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     /// The number of the mark in its markup. Numbers go up, so the order of creation shows. A
     /// number of 0 in a command means "make the next one".
-    #[serde(default)]
     pub id: u32,
     pub kind: MarkKind,
-    #[serde(default = "default_color")]
     pub color: Rgb,
+    /// The width of the line in points of the canvas the markup was drawn on.
+    pub width: f64,
+    /// Points relative to the view.
+    pub points: Vec<[f64; 2]>,
+    /// The text of a note.
+    pub text: String,
+    /// Fields that this version does not know. They are written again unchanged.
+    pub extra: Map<String, Value>,
+    /// The JSON of a mark that this version cannot read. When it is set, the other fields are
+    /// empty and the mark is written as this value.
+    raw: Option<Value>,
+}
+
+/// The form of a mark in a file and in a command.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[schemars(rename = "Mark")]
+struct MarkRepr {
+    /// The number of the mark in its markup. Numbers go up, so the order of creation shows. A
+    /// number of 0 in a command means "make the next one".
+    #[serde(default)]
+    id: u32,
+    kind: MarkKind,
+    #[serde(default = "default_color")]
+    color: Rgb,
     /// The width of the line in points of the canvas the markup was drawn on. A highlighter is
     /// drawn [`HIGHLIGHT_FACTOR`] times wider.
     #[serde(default = "default_width")]
-    pub width: f64,
+    width: f64,
     /// Points relative to the view: x and y from 0 to 1, y down. A pen or highlighter stroke has
     /// any number of points. An arrow has two (tail, tip). A rectangle and an ellipse have two
     /// opposite corners. A note has one.
-    pub points: Vec<[f64; 2]>,
+    points: Vec<[f64; 2]>,
     /// The text of a note.
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
+    text: String,
     /// Fields that this version does not know. They are written again unchanged.
     #[serde(flatten, default, skip_serializing_if = "Map::is_empty")]
     #[schemars(skip)]
-    pub extra: Map<String, Value>,
+    extra: Map<String, Value>,
+}
+
+/// A borrowed mark for writing: the same form as [`MarkRepr`].
+#[derive(Serialize)]
+struct MarkOut<'a> {
+    id: u32,
+    kind: &'a MarkKind,
+    color: Rgb,
+    width: f64,
+    points: &'a [[f64; 2]],
+    #[serde(skip_serializing_if = "str::is_empty")]
+    text: &'a str,
+    #[serde(flatten, skip_serializing_if = "Map::is_empty")]
+    extra: &'a Map<String, Value>,
+}
+
+impl Serialize for Mark {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if let Some(raw) = &self.raw {
+            return raw.serialize(s);
+        }
+        MarkOut {
+            id: self.id,
+            kind: &self.kind,
+            color: self.color,
+            width: self.width,
+            points: &self.points,
+            text: &self.text,
+            extra: &self.extra,
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Mark {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Mark, D::Error> {
+        let v = Value::deserialize(d)?;
+        Ok(Mark::from_json(v))
+    }
+}
+
+impl JsonSchema for Mark {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Mark".into()
+    }
+
+    fn json_schema(g: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        MarkRepr::json_schema(g)
+    }
 }
 
 fn default_color() -> Rgb {
@@ -378,6 +460,11 @@ pub struct Markup {
     /// A text note for the whole markup.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// A short digest of the model when the markup was made ([`model_digest`]). A markup is not
+    /// part of a version, so this tells when the model has changed since: the picture and what
+    /// is under the marks then belong to an older model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Fields that this version does not know. They are written again unchanged.
     #[serde(flatten, default, skip_serializing_if = "Map::is_empty")]
     #[schemars(skip)]
@@ -391,6 +478,38 @@ fn chars(s: &str) -> usize {
 /// Rounds a relative coordinate to the stored precision.
 pub fn round_rel(v: f64) -> f64 {
     (v * DECIMALS).round() / DECIMALS
+}
+
+/// A short digest of the model: the objects with their kind, layer and box, and the edit count
+/// of each surface model. It is cheap (no object is written out) and it changes with an edit
+/// of the model. It does not change with a markup, an issue or the visibility.
+pub fn model_digest(doc: &crate::model::Document) -> String {
+    use crate::model::Shape;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut put = |x: u64| {
+        for b in x.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for o in doc.objects.values() {
+        put(o.id.0.low_u64());
+        put(o.layer.0.low_u64());
+        put(o.shape.kind().len() as u64);
+        let (lo, hi) = o.shape.bounds();
+        for v in [lo.x, lo.y, hi.x, hi.y] {
+            put(v.to_bits());
+        }
+        if let Shape::SurfaceModel(m) = &o.shape {
+            put(m.rev());
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// A relative point rounded to the stored precision.
+pub fn round_rel_point(p: [f64; 2]) -> [f64; 2] {
+    [round_rel(p[0]), round_rel(p[1])]
 }
 
 /// A point of the canvas (in points from the top left corner) as a relative point (0 to 1, y
@@ -443,7 +562,56 @@ impl Mark {
             points,
             text: String::new(),
             extra: Map::new(),
+            raw: None,
         }
+    }
+
+    /// Reads a mark from JSON. What does not read is kept as it is ([`Mark::is_raw`]).
+    pub fn from_json(v: Value) -> Mark {
+        match MarkRepr::deserialize(&v) {
+            Ok(r) if r.kind.is_known() => Mark {
+                id: r.id,
+                kind: r.kind,
+                color: r.color,
+                width: r.width,
+                points: r.points,
+                text: r.text,
+                extra: r.extra,
+                raw: None,
+            },
+            _ => {
+                let name = v
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let id = v
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0);
+                Mark {
+                    id,
+                    kind: MarkKind::from_name(&name),
+                    color: default_color(),
+                    width: DEFAULT_WIDTH,
+                    points: Vec::new(),
+                    text: String::new(),
+                    extra: Map::new(),
+                    raw: Some(v),
+                }
+            }
+        }
+    }
+
+    /// True if the mark is kept as JSON because this version cannot read it.
+    pub fn is_raw(&self) -> bool {
+        self.raw.is_some()
+    }
+
+    /// True if the mark can be drawn and picked: it reads, and its values are in range.
+    pub fn drawable(&self) -> bool {
+        self.raw.is_none() && self.kind.is_known() && self.validate().is_ok()
     }
 
     /// The box around the points, relative: `(lo, hi)`. `None` for a mark without points.
@@ -475,8 +643,11 @@ impl Mark {
     }
 
     /// Checks the mark: the number of points for its kind, finite coordinates from 0 to 1, the
-    /// width and the text. A kind this version does not know is checked for the bounds only.
+    /// width and the text. A mark that is kept as JSON is not checked.
     pub fn validate(&self) -> Result<(), String> {
+        if self.raw.is_some() {
+            return Ok(());
+        }
         let name = self.kind.name();
         if chars(name) > MAX_NAME_CHARS {
             return Err("the kind of a mark is too long".into());
@@ -495,8 +666,7 @@ impl Mark {
         let want = match self.kind {
             MarkKind::Arrow | MarkKind::Rectangle | MarkKind::Ellipse => Some(2),
             MarkKind::Note => Some(1),
-            MarkKind::Pen | MarkKind::Highlighter => None,
-            MarkKind::Other(_) => None,
+            MarkKind::Pen | MarkKind::Highlighter | MarkKind::Other(_) => None,
         };
         if let Some(n) = want
             && self.points.len() != n
@@ -536,6 +706,7 @@ impl Markup {
             marks: Vec::new(),
             issue: None,
             note: String::new(),
+            model: None,
             extra: Map::new(),
         }
     }
@@ -553,6 +724,24 @@ impl Markup {
     /// The number a new mark gets: one above the highest.
     pub fn next_mark_id(&self) -> u32 {
         self.marks.iter().map(|m| m.id).max().unwrap_or(0) + 1
+    }
+
+    /// Checks the name, the author and the note only: what a rename or a new note changes.
+    pub fn validate_meta(&self) -> Result<(), String> {
+        if self
+            .name
+            .as_deref()
+            .is_some_and(|n| chars(n) > MAX_NAME_CHARS)
+        {
+            return Err(format!("a name has at most {MAX_NAME_CHARS} characters"));
+        }
+        if chars(&self.author) > MAX_NAME_CHARS {
+            return Err(format!("an author has at most {MAX_NAME_CHARS} characters"));
+        }
+        if chars(&self.note) > MAX_NOTE_CHARS {
+            return Err(format!("a note has at most {MAX_NOTE_CHARS} characters"));
+        }
+        Ok(())
     }
 
     /// Checks the bounds and the values of a markup and its marks.
@@ -662,7 +851,8 @@ impl MarkupPatch {
 #[derive(Clone, Debug, Default)]
 pub struct Markups {
     list: Arc<Vec<Arc<Markup>>>,
-    unreadable: Arc<Vec<Value>>,
+    /// Entries that this version cannot read, with their place in the list of the file.
+    unreadable: Arc<Vec<(usize, Value)>>,
 }
 
 impl PartialEq for Markups {
@@ -696,8 +886,42 @@ impl Markups {
     }
 
     /// The entries that this version cannot read.
-    pub fn unreadable(&self) -> &[Value] {
-        &self.unreadable
+    pub fn unreadable(&self) -> impl Iterator<Item = &Value> {
+        self.unreadable.iter().map(|(_, v)| v)
+    }
+
+    /// How many entries this version cannot read.
+    pub fn unreadable_count(&self) -> usize {
+        self.unreadable.len()
+    }
+
+    /// The marks, in all markups, that this version keeps as JSON or does not draw.
+    pub fn undrawable_marks(&self) -> usize {
+        self.list
+            .iter()
+            .flat_map(|m| m.marks.iter())
+            .filter(|k| !k.drawable())
+            .count()
+    }
+
+    /// The bytes that a step of the history holds when the markups change from `before` to
+    /// `after`: the markups that are not shared by the two states, and the lists.
+    pub fn step_bytes(before: &Markups, after: &Markups) -> u64 {
+        let own = |m: &Markup| (m.point_count() * 16 + m.marks.len() * 160 + 512) as u64;
+        let mut n = ((before.list.len() + after.list.len()) * 8) as u64;
+        for m in after.list.iter() {
+            let same = before.list.iter().any(|b| Arc::ptr_eq(b, m));
+            if !same {
+                n += own(m);
+            }
+        }
+        for m in before.list.iter() {
+            let same = after.list.iter().any(|a| Arc::ptr_eq(a, m));
+            if !same {
+                n += own(m);
+            }
+        }
+        n
     }
 
     /// The points in all markups.
@@ -732,6 +956,12 @@ impl Markups {
             notes.push(format!(
                 "{} markup(s) in the file could not be read by this version. They are kept as they are",
                 self.unreadable.len()
+            ));
+        }
+        let undrawn = self.undrawable_marks();
+        if undrawn > 0 {
+            notes.push(format!(
+                "{undrawn} mark(s) of markups cannot be drawn: this version does not know them or a value is out of range. They are kept as they are"
             ));
         }
         let mut seen = std::collections::HashSet::new();
@@ -784,12 +1014,25 @@ impl Markups {
 impl Serialize for Markups {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeSeq;
-        let mut seq = s.serialize_seq(Some(self.list.len() + self.unreadable.len()))?;
-        for m in self.list.iter() {
-            seq.serialize_element(&**m)?;
-        }
-        for v in self.unreadable.iter() {
-            seq.serialize_element(v)?;
+        let total = self.list.len() + self.unreadable.len();
+        let mut seq = s.serialize_seq(Some(total))?;
+        let mut readable = self.list.iter();
+        let mut raw = self.unreadable.iter().peekable();
+        for i in 0..total {
+            match raw.peek() {
+                Some((at, v)) if *at <= i => {
+                    seq.serialize_element(v)?;
+                    raw.next();
+                }
+                _ => match readable.next() {
+                    Some(m) => seq.serialize_element(&**m)?,
+                    None => {
+                        if let Some((_, v)) = raw.next() {
+                            seq.serialize_element(v)?;
+                        }
+                    }
+                },
+            }
         }
         seq.end()
     }
@@ -797,19 +1040,37 @@ impl Serialize for Markups {
 
 impl<'de> Deserialize<'de> for Markups {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Markups, D::Error> {
-        let items = Vec::<Value>::deserialize(d)?;
-        let mut list = Vec::with_capacity(items.len());
-        let mut unreadable = Vec::new();
-        for v in items {
-            match serde_json::from_value::<Markup>(v.clone()) {
-                Ok(m) => list.push(Arc::new(m)),
-                Err(_) => unreadable.push(v),
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Markups;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of markups")
+            }
+
+            // One entry at a time: the text of an entry is held while it is read, and a
+            // readable entry is not copied.
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Markups, A::Error> {
+                let mut list = Vec::new();
+                let mut unreadable = Vec::new();
+                let mut at = 0usize;
+                while let Some(v) = seq.next_element::<Value>()? {
+                    match Markup::deserialize(&v) {
+                        Ok(m) => list.push(Arc::new(m)),
+                        Err(_) => unreadable.push((at, v)),
+                    }
+                    at += 1;
+                }
+                Ok(Markups {
+                    list: Arc::new(list),
+                    unreadable: Arc::new(unreadable),
+                })
             }
         }
-        Ok(Markups {
-            list: Arc::new(list),
-            unreadable: Arc::new(unreadable),
-        })
+        d.deserialize_seq(V)
     }
 }
 

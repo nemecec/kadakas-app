@@ -3645,6 +3645,7 @@ impl KadakasApp {
                     let mut nav = crate::agent_view::NavSignal::default();
                     let compare = self.compare_ui.scene_3d(&mut self.session);
                     let frame = self.compare_ui.take_zoom().map(|z| z.id);
+                    let read_only = self.read_only();
                     canvas3d::show(
                         ui,
                         canvas3d::Canvas3d {
@@ -3658,6 +3659,7 @@ impl KadakasApp {
                             frame,
                             issues: Some(&mut self.issues_ui),
                             markup: Some(&mut self.markup_ui),
+                            read_only,
                             nav: &mut nav,
                             agent: Some(&self.agent_view),
                             review: self

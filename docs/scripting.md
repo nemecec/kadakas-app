@@ -198,7 +198,7 @@ doc.view_camera([20000, -20000, 12000], [5000, 5000, 0], projection="perspective
 
 ### Review: markup on the view
 
-A person can ink a comment on the plan or on the 3D view (View > Markup in the app). The ink is a markup. `doc.markups` reads it and draws markups of its own. A markup is review data of the document, not part of the model.
+A person inks a comment on the plan or on the 3D view (View > Markup in the app). The ink is a markup. `doc.markups` reads it and draws markups of its own. A markup is review data of the document, not part of the model.
 
 ```python
 for item in doc.markups.list()["markups"]:

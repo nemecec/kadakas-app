@@ -15,7 +15,7 @@ use super::pick::{plan_camera, view_camera};
 use crate::{RpcError, Session};
 
 /// The width of a picture when the caller gives none, in pixels.
-pub const DEFAULT_WIDTH: u32 = 800;
+pub const DEFAULT_WIDTH: u32 = 640;
 
 /// A PNG with its size.
 pub(super) struct Picture {
@@ -35,6 +35,34 @@ impl Picture {
 }
 
 impl Session {
+    /// The size of a picture of a canvas, about `width` pixels wide: the shape of the canvas is
+    /// kept, and the size fits the limits of the session (the longest side and the pixels). A
+    /// canvas so long and thin that it cannot keep its shape within the limits (the short side
+    /// would be under 16 pixels) is refused with a message.
+    pub(super) fn fit_picture(&self, canvas: [f64; 2], width: u32) -> Result<(u32, u32), RpcError> {
+        let limits = self.limits();
+        let side = f64::from(limits.render_side.max(16));
+        let pixels = limits.render_pixels as f64;
+        let (mut w, mut h) = (
+            f64::from(width.max(1)),
+            f64::from(width.max(1)) * canvas[1] / canvas[0],
+        );
+        let k = (side / w.max(h)).min((pixels / (w * h)).sqrt()).min(1.0);
+        (w, h) = (w * k, h * k);
+        // The short side is at least 16 pixels: scale up if the shape allows it.
+        let up = 16.0 / w.min(h);
+        if up > 1.0 {
+            if w.max(h) * up > side || w * up * h * up > pixels {
+                return Err(RpcError::limit(format!(
+                    "a canvas of {} by {} points is too long and thin for a picture of at most {side} pixels on a side: use a canvas with a shape nearer to a square",
+                    canvas[0], canvas[1]
+                )));
+            }
+            (w, h) = (w * up, h * up);
+        }
+        Ok((w.floor().max(16.0) as u32, h.floor().max(16.0) as u32))
+    }
+
     /// The model at the viewpoint, without marks, `width` pixels wide (the height follows the
     /// shape of the canvas). The size is bounded by the limits of the session.
     pub(super) fn markup_clean(
@@ -45,7 +73,7 @@ impl Session {
         let camera = view_camera(vp)
             .or_else(|| plan_camera(vp))
             .ok_or_else(|| RpcError::validation("the viewpoint has no view"))?;
-        let height = ((f64::from(width) * vp.canvas[1] / vp.canvas[0]).round() as u32).max(16);
+        let (width, height) = self.fit_picture(vp.canvas, width)?;
         let r = self.dispatch(
             "render.png",
             json!({"camera": camera, "width": width, "height": height}),

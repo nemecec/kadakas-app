@@ -25,7 +25,9 @@ use kadakas_sheet::eval::eval;
 use kadakas_sheet::formula::{self, Expr};
 use kadakas_sheet::value::Value;
 
+pub mod annot_pick;
 mod cache;
+pub mod hit;
 pub mod svg;
 mod tags;
 
