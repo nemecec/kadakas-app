@@ -60,6 +60,8 @@ commands! {
     // The window that compares two DXF or DWG files without importing them (IOP-24).
     // The Activity panel of the agent: its steps, what each changed, undo and revert (AGR-06).
     AgentActivity => "view.agent_activity", msg!("panels-agent-activity"), false;
+    // View > Markup: ink on the live view (REV-11).
+    Markup => "view.markup", msg!("panels-markup"), false;
     CompareDrawings => "file.compare_drawings", msg!("panels-compare-drawings"), true;
     // A block: the submenu File > Collaboration (Connect, Disconnect, People).
     Collaboration => "file.collaboration", msg!("panels-collaboration"), false;
@@ -147,6 +149,7 @@ impl Cmd {
             Cmd::Extrude => Action::CmdExtrude,
             Cmd::Sweep => Action::CmdSweep,
             Cmd::AgentActivity => Action::ViewAgentActivity,
+            Cmd::Markup => Action::ViewMarkup,
             Cmd::CreateFromShapes => Action::CmdCreateFromShapes,
             Cmd::SplitHardscape => Action::CmdSplitHardscape,
             Cmd::CheckUnitPatterns => Action::CmdCheckUnitPatterns,
@@ -402,6 +405,8 @@ pub fn default_menus() -> Vec<Menu> {
                 "view.zoom_fit",
                 "view.history_previous",
                 "view.history_next",
+                "-",
+                "view.markup",
                 "-",
                 "view.show_grid",
                 "view.snapping",

@@ -127,3 +127,4 @@ action-nav-zoom = Zoom
 action-nav-zoom-window = Zoom Window
 action-view-bottom = Bottom view
 action-edit-select-none = Select None
+action-view-markup = Switch the markup mode on or off

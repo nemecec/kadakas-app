@@ -27,10 +27,12 @@ pub enum Tab {
     People,
     /// Review issues (REV-05).
     Issues,
+    /// Markup on the view (REV-11).
+    Markup,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 9] = [
+    pub const ALL: [Tab; 10] = [
         Tab::Drawing,
         Tab::Tools,
         Tab::ObjectInfo,
@@ -40,6 +42,7 @@ impl Tab {
         Tab::Snapping,
         Tab::People,
         Tab::Issues,
+        Tab::Markup,
     ];
 
     pub fn title(self) -> String {
@@ -53,6 +56,7 @@ impl Tab {
             Tab::Snapping => tr!("layout-snapping"),
             Tab::People => tr!("layout-people"),
             Tab::Issues => tr!("layout-issues"),
+            Tab::Markup => tr!("layout-markup"),
         }
     }
 
@@ -77,6 +81,7 @@ pub fn default_state() -> DockState<Tab> {
             Tab::Schedule,
             Tab::People,
             Tab::Issues,
+            Tab::Markup,
         ],
     );
     // The fraction is the share of the new (left) node: 0.82 here gave the tools 82 percent of the

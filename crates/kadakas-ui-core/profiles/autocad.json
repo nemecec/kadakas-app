@@ -285,6 +285,8 @@
         "view.history_previous",
         "view.history_next",
         "-",
+        "view.markup",
+        "-",
         "view.show_grid",
         "view.snapping",
         "view.theme",

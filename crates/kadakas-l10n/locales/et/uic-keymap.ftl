@@ -127,3 +127,4 @@ action-nav-zoom = Suumimine
 action-nav-zoom-window = Suumi aknasse
 action-view-bottom = Vaade alt
 action-edit-select-none = Tühista valik
+action-view-markup = Lülita märgistusrežiim sisse või välja

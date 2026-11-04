@@ -705,6 +705,83 @@ class Issues:
         return self._doc.api.issue_import_bcf(**p)
 
 
+class Markups:
+    """Markup on the view (``doc.markups``, REV-11): ink that a person or an agent drew on a plan
+    or 3D view, kept with the viewpoint. A markup is review data, not part of the model.
+
+    A markup made through this class has the origin ``agent``. Every change is one undo step.
+    ``delete`` and ``clear`` of the work of somebody else raise ``KadakasError`` (reason
+    ``confirm_needed``) until the person has said yes and you pass ``confirm=True``.
+
+    ``get`` is the call that shows what the person drew: the marks as JSON, the model at the
+    stored viewpoint without and with the marks (base64 PNG), and for every mark what is under it
+    (``under``) and the surface or ground point behind it (``hint3d``). Limits: 200 marks and
+    20000 points in a markup, 1000 points in a mark, 2000 markups in a document. See
+    ``describe()["review"]["markup"]``."""
+
+    def __init__(self, doc: "Document") -> None:
+        self._doc = doc
+
+    def create(self, marks: Sequence[JsonDict], **params: Any) -> JsonDict:
+        """Draw a markup. A mark is ``{kind, points, color?, width?, text?}``: ``kind`` is
+        ``pen``, ``highlighter``, ``arrow``, ``rectangle``, ``ellipse`` or ``note``; ``points``
+        are 0 to 1 of the canvas width and height, y down (or ``points_canvas`` in points).
+        Useful params: ``viewpoint`` (``{view, fov, canvas}``; default the current view),
+        ``name``, ``note``, ``issue``. Returns ``{id, marks, markup}``."""
+        return self._doc.api.markup_create(marks=list(marks), **params)
+
+    def list(self, **params: Any) -> JsonDict:
+        """The markups. Filters: ``issue``, ``origin``; ``limit`` and ``offset``."""
+        return self._doc.api.markup_list(**params)
+
+    def get(self, id: str, *, render: bool = True, width: int | None = None,
+            samples: int | None = None, pick: bool = True) -> JsonDict:
+        """One markup with its marks, the pictures ``clean`` and ``with_marks`` (base64 PNG, left
+        out with ``render=False``), and ``under`` and ``hint3d`` for each mark (left out with
+        ``pick=False``)."""
+        p: JsonDict = {"id": id}
+        if not render:
+            p["render"] = False
+        if width is not None:
+            p["width"] = width
+        if samples is not None:
+            p["samples"] = samples
+        if not pick:
+            p["pick"] = False
+        return self._doc.api.markup_get(**p)
+
+    def render(self, id: str, *, with_marks: bool = True, width: int | None = None) -> JsonDict:
+        """A picture of the markup: the model at its viewpoint, with the marks (default) or
+        without. Returns ``{png_base64, width, height}``."""
+        p: JsonDict = {"id": id}
+        if not with_marks:
+            p["with_marks"] = False
+        if width is not None:
+            p["width"] = width
+        return self._doc.api.markup_render(**p)
+
+    def update(self, id: str, **params: Any) -> JsonDict:
+        """Change ``name``, ``note`` or ``issue`` (an issue ID, or ``None`` to take the markup
+        off its issue). A markup of an issue goes into the BCF file of that issue."""
+        return self._doc.api.markup_update(id=id, **params)
+
+    def clear(self, id: str, *, confirm: bool = False) -> JsonDict:
+        """Remove all marks and keep the markup. The work of somebody else needs
+        ``confirm=True``, which you may pass only after the person said yes."""
+        p: JsonDict = {"id": id}
+        if confirm:
+            p["confirm"] = True
+        return self._doc.api.markup_clear(**p)
+
+    def delete(self, id: str | Sequence[str], *, confirm: bool = False) -> JsonDict:
+        """Delete a markup, or several in one undo step. The work of somebody else needs
+        ``confirm=True``, which you may pass only after the person said yes."""
+        p: JsonDict = {"id": id} if isinstance(id, str) else {"ids": list(id)}
+        if confirm:
+            p["confirm"] = True
+        return self._doc.api.markup_delete(**p)
+
+
 class Feedback:
     """Bug reports and feature requests for the Kadakas team (``doc.feedback``).
 
@@ -768,6 +845,7 @@ class Document:
         self.collab = Collab(self)
         self.versions = Versions(self)
         self.issues = Issues(self)
+        self.markups = Markups(self)
         self.feedback = Feedback(self)
         from .plugins import Plugins, Scripts  # late: plugins import this module
 

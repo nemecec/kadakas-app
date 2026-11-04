@@ -891,6 +891,107 @@ The fields are read only. A line says that the geometry is edited in the 3D mode
 - A plan of a big model is the outline at every zoom. It does not show more when you zoom in.
 - Editing geometry in the app. The modeler does it.
 
+## Markup on the view (REV-11)
+
+Markup is ink on the live view. You draw on the plan or on the 3D view. The ink is review data, like an issue. It is saved in the `.kad` file. It is not part of the model. It is in no quantity and in no IFC or DXF export.
+
+### When to use it
+
+There are two kinds of comment. A comment about something that exists is marked on the model. That is stage 2 and it is planned. A comment about something that is missing and needs to be added is inked on the live view. That is stage 1 and it is done. Circle the empty corner and write "hedge here".
+
+### How to use it
+
+1. Choose View > Markup (`Cmd/Ctrl+Alt+M`). The Markup palette opens and the mode is on. A red frame and a badge show the mode.
+2. Press New Markup. The markup keeps the view as it is now. That is the plan area or the camera, the visible layers and classes, and the size of the canvas.
+3. Choose a tool, a color and a width. Draw on the view. Each mark is one undo step.
+4. Press Finish Markup. A markup without marks is removed.
+
+While the mode is on and a markup is open, the pointer draws. The normal tools wait. With the mode off, all tools work as before.
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| Pen | A freehand stroke. A click makes a dot. |
+| Highlighter | A wide stroke, half transparent. |
+| Arrow | Press at the tail, drag to the tip. |
+| Rectangle, Ellipse | Press at one corner, drag to the opposite corner. |
+| Note | Click, then type the text of the note. |
+| Select | Click a mark to pick it. Then a color or the width changes it, and Delete removes it. |
+| Eraser | Click a mark to remove it. |
+
+The palette has eight colors and a color picker. The selected color has a check mark, so the color is not the only sign. Undo takes back the last step. Clear removes all marks of the open markup in one step.
+
+### Marks scale with the window
+
+A point of a mark is a share of the canvas. It is 0 to 1 of the width and of the height, y down. A bigger window shows the same ink at the same relative places. The width of a line grows with the width of the window. A stroke keeps a point only when it is 1.5 points from the one before it. So the data stays small. A very long stroke becomes several marks that join. Nothing is lost.
+
+### The list and the viewpoint
+
+The palette lists the markups with their mode (Plan or 3D), their marks and their author. A click on a row restores the viewpoint. That is the layers and classes, the plan area or the camera, and the projection. The marks show. The marks of a markup show only when the view is the view it was drawn in. If you pan or orbit away, the marks hide and a hint says so. Drawing stops too. Go to Viewpoint brings the view back. Continue Drawing opens one of your own markups again. A markup of an agent is only shown or deleted, and the delete asks first.
+
+A markup can have a name, a note and an issue. A markup of an issue goes into the BCF snapshot of that issue (see below).
+
+### Keyboard
+
+Every button of the palette is reached with Tab and pressed with Enter or Space. `Cmd/Ctrl+Alt+M` switches the mode. Escape drops the stroke or the note that waits. Delete removes the picked mark. Drawing itself needs a pointer. Pressure of a tablet pen is not read yet.
+
+### BCF
+
+A markup that belongs to an issue is written with that issue as one more viewpoint. The snapshot is the picture of the model with the marks drawn on it. The camera is the camera of the markup. A BCF import keeps a snapshot as a picture and reads no marks from it.
+
+### Privacy and consent
+
+The markup is data of the file. It goes to whoever gets the file. Nothing is sent anywhere. An agent never deletes or clears the work of somebody else without a yes from the person.
+
+### Versions
+
+A markup is not part of a named version. A restore of a version leaves the markups as they are, like the issues. The undo history keeps every step of the markup.
+
+### Limits
+
+The limits come from the measurements below. A value over a limit is refused with a message. Nothing is cut.
+
+| Limit | Value |
+|---|---|
+| Markups in a document | 2000 |
+| Marks in a markup | 200 |
+| Points in a mark | 1000 |
+| Points in a markup | 20000 |
+| Points in a document | 400000 |
+| Text of a note | 500 characters |
+| Width of a line | 0.5 to 64 points |
+
+Measured with `crates/kadakas-core/tests/markups.rs` (release build, Apple M-series, one thread):
+
+| Document | Points | File (JSON) | Write | Read |
+|---|---|---|---|---|
+| 100 markups, 20 marks of 100 points | 200000 | 3.0 MiB | 11 ms | 28 ms |
+| 2000 markups, 20 marks of 10 points | 400000 | 8.1 MiB | 29 ms | 183 ms |
+| 50 markups, 200 marks of 100 points | 1000000 | 14.7 MiB | 52 ms | 128 ms |
+
+A point costs 15 to 21 bytes in the file. A relative coordinate has five decimals, which is 0.01 point on a canvas of 1000 points. One more stroke takes 0.07 to 0.3 ms. An undo step shares the data of the markups, so it holds pointers and the one markup that changed. The cost of picking is in [mesh-api.md](mesh-api.md).
+
+### Not done
+
+- Stage 2, marks on the model that follow the objects. It stays planned.
+- Stage 3, sync of markup in collaboration, pressure of a tablet pen, and export of the view with marks as PNG or PDF. It stays planned.
+- A markup is not in the collaboration log. In a shared document each person keeps the markups of their own copy.
+- The picking of the agent uses the layers and classes that show now. The markup lists the ones that differ.
+- Not tried in a real window: the drawing, the pointer capture outside the window and a tablet pen. The tests use synthetic egui events.
+
+### Where the code is
+
+| What | Where |
+|---|---|
+| Data, limits, reader, geometry | `crates/kadakas-core/src/markup.rs`, `markup/draw.rs` |
+| Commands (one undo step each) | `crates/kadakas-core/src/command/markup_ops.rs` |
+| Tools, strokes, hit test | `crates/kadakas-ui-core/src/markup.rs` |
+| Palette and ink | `crates/kadakas-app/src/markup_ui.rs`, `app/markup.rs` |
+| Marks in a PNG | `crates/kadakas-print/src/markup.rs` |
+| Agent API and picking | `crates/kadakas-api/src/markup_api.rs`, `markup_api/pick.rs` |
+| Tests | `crates/kadakas-core/tests/markups.rs`, `crates/kadakas-api/src/markup_api/tests.rs`, `crates/kadakas-app/src/app/markup_tests.rs`, `tests/behavior/test_markup.py`, `python/tests/test_markup.py` |
+
 ## Clean room
 
 The layout, the tool names, the logic of the tools and the default keys follow public documentation of programs of this kind (`docs/research/sketchup-public-features.md`). No program of that kind was downloaded or run. No icon, image or text was copied. SketchUp is a trademark of Trimble Inc. The About window says that Kadakas Modeler is not affiliated with it.

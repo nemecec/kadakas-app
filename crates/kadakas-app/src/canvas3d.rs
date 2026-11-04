@@ -30,6 +30,9 @@ pub struct Canvas3d<'a> {
     pub frame: Option<kadakas_core::model::ObjectId>,
     /// The pins of the issues (REV-05): drawn over the scene, and a click on one opens its issue.
     pub issues: Option<&'a mut crate::issues_ui::IssuesUi>,
+    /// The ink of the markup (REV-11): drawn over the scene, and it takes the pointer while the
+    /// markup mode is on and a markup is open.
+    pub markup: Option<&'a mut crate::markup_ui::MarkupUi>,
     /// Tells the app that the person navigates (the agent never wins against that).
     pub nav: &'a mut crate::agent_view::NavSignal,
     /// What an agent shows: the pointers and the agent cursor (AGR-03).
@@ -57,6 +60,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         compare,
         frame,
         mut issues,
+        mut markup,
         nav,
         agent,
         review,
@@ -119,6 +123,20 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         view3d.pan(glam::Vec2::new(d.x, d.y), size.y);
     }
 
+    // Markup (REV-11): the pointer draws while the mode is on and a markup is open.
+    let markup_took = compare.is_none()
+        && markup.as_deref_mut().is_some_and(|m| {
+            let now = crate::markup_ui::camera_viewpoint(&view3d.camera, scene.origin, rect);
+            m.canvas_frame(
+                ui,
+                &resp,
+                rect,
+                now,
+                mods.shift || space,
+                session.editor.doc(),
+                false,
+            )
+        });
     // Mouse: drag orbits, Shift-drag, Space-drag and middle-drag pan, the wheel zooms to the pointer.
     let delta = glam::Vec2::new(resp.drag_delta().x, resp.drag_delta().y);
     if resp.dragged_by(egui::PointerButton::Middle)
@@ -127,7 +145,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
         view3d.pan(delta, size.y);
         nav.moved = true;
         nav.dragging = true;
-    } else if resp.dragged_by(egui::PointerButton::Primary) {
+    } else if resp.dragged_by(egui::PointerButton::Primary) && !markup_took {
         view3d.orbit(delta);
         nav.moved = true;
         nav.dragging = true;
@@ -172,6 +190,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     let mut pin_clicked = false;
     if resp.clicked()
         && compare.is_none()
+        && !markup_took
         && let (Some(ui_issues), Some(p)) = (issues.as_deref_mut(), resp.interact_pointer_pos())
         && let Some(id) = ui_issues.pin_at(p)
     {
@@ -181,6 +200,7 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     // A compare is read only: a click selects nothing.
     if resp.clicked()
         && !pin_clicked
+        && !markup_took
         && compare.is_none()
         && let Some(p) = resp.interact_pointer_pos()
     {
@@ -266,6 +286,12 @@ pub fn show(ui: &mut egui::Ui, c: Canvas3d) {
     {
         issues.paint_3d(&ui.painter_at(rect), rect, view_proj, scene.origin, session);
     }
+    // The ink of the markup: over the scene and the pins.
+    if compare.is_none()
+        && let Some(markup) = markup.as_deref()
+    {
+        markup.paint(&ui.painter_at(rect), rect, session.editor.doc());
+    }
     // What the agent changed and the person has not seen (AGR-05; never part of the document).
     if compare.is_none()
         && let Some(review) = &review
@@ -324,6 +350,7 @@ mod tests {
         pending_pan: egui::Vec2,
         ctx: egui::Context,
         issues: crate::issues_ui::IssuesUi,
+        markup: crate::markup_ui::MarkupUi,
         nav_style: kadakas_ui_core::nav3d::NavStyle,
     }
 
@@ -338,6 +365,7 @@ mod tests {
                 pending_pan: egui::Vec2::ZERO,
                 ctx: egui::Context::default(),
                 issues: Default::default(),
+                markup: Default::default(),
                 nav_style: Default::default(),
             }
         }
@@ -403,6 +431,7 @@ mod tests {
                             compare: None,
                             frame: None,
                             issues: Some(&mut self.issues),
+                            markup: Some(&mut self.markup),
                             nav: &mut Default::default(),
                             agent: None,
                             review: None,
@@ -892,6 +921,7 @@ mod tests {
                     compare: None,
                     frame: None,
                     issues: None,
+                    markup: None,
                     nav: &mut Default::default(),
                     agent: None,
                     review: None,
@@ -906,5 +936,95 @@ mod tests {
             c.target.is_finite() && c.distance.is_finite() && c.distance > 0.0,
             "{c:?}"
         );
+    }
+
+    /// Starts a markup on the view that the harness shows and runs the requests like the app.
+    fn run_markup_requests(h: &mut Harness) {
+        for r in h.markup.take_requests() {
+            if let crate::markup_ui::Request::Cmd(c) = r {
+                h.session.editor.execute(&c).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn ink_on_the_3d_view_is_a_mark_with_a_camera_viewpoint_and_the_view_does_not_orbit() {
+        use kadakas_core::markup::MarkupId;
+        let mut h = Harness::new();
+        let model = add_surface_box(&mut h);
+        h.session.view.view = StandardView::Front;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let none = egui::Modifiers::NONE;
+        // Start a markup with the camera as it is now.
+        let viewpoint = h
+            .markup
+            .current_view()
+            .cloned()
+            .expect("the canvas was drawn");
+        assert!(matches!(
+            viewpoint.view,
+            kadakas_core::issue::ViewSpec::Camera { .. }
+        ));
+        let id = MarkupId(
+            h.session
+                .editor
+                .execute(&kadakas_ui_core::markup::new_markup(
+                    viewpoint, "Ann", 1, None,
+                ))
+                .unwrap()
+                .created[0],
+        );
+        h.markup.open = Some(id);
+        h.markup.set_mode(true);
+        let camera = h.view3d.camera;
+        let depth = h.session.editor.undo_depth();
+        // A drag across the middle of the box.
+        h.drag(egui::pos2(300.0, 300.0), egui::vec2(200.0, 40.0), none);
+        run_markup_requests(&mut h);
+        let doc = h.session.editor.doc();
+        let m = doc.markups.get(id).unwrap();
+        assert_eq!(m.marks.len(), 1);
+        assert_eq!(h.session.editor.undo_depth(), depth + 1, "one undo step");
+        assert_eq!(h.view3d.camera, camera, "the drag did not orbit");
+        assert!(h.session.selection.is_empty(), "and selected nothing");
+        assert_eq!(m.viewpoint.canvas, [800.0, 600.0]);
+        assert!((m.viewpoint.fov_degrees() - 45.0).abs() < 1e-3);
+        // The pen marks relative to the canvas: the start is at 300/800, 300/600.
+        let first = m.marks[0].points[0];
+        assert!(
+            (first[0] - 0.375).abs() < 0.01 && (first[1] - 0.5).abs() < 0.01,
+            "{first:?}"
+        );
+        // The agent API sees what was drawn and the model under the stroke.
+        let got = h
+            .session
+            .handle("markup.get", serde_json::json!({"id": id, "render": false}))
+            .unwrap();
+        assert_eq!(
+            got["marks"][0]["under"]["ids"],
+            serde_json::json!([model]),
+            "{got}"
+        );
+        assert_eq!(got["marks"][0]["hint3d"]["kind"], "surface");
+        // Undo takes the mark back.
+        assert!(h.session.editor.undo());
+        assert!(
+            h.session
+                .editor
+                .doc()
+                .markups
+                .get(id)
+                .unwrap()
+                .marks
+                .is_empty()
+        );
+        // With the mode off the same drag orbits as before.
+        h.markup.set_mode(false);
+        h.drag(egui::pos2(300.0, 300.0), egui::vec2(120.0, 40.0), none);
+        assert_ne!(h.view3d.camera, camera, "the view orbits again");
+        assert!(h.markup.take_requests().is_empty());
+        // The view moved: the markup is not drawn on it and the viewpoint tells.
+        assert!(!h.markup.marks_visible(h.session.editor.doc()));
     }
 }

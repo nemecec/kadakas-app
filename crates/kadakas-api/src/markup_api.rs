@@ -31,7 +31,7 @@ mod render;
 
 pub const MARKUP_LIST: (&str, &str) = (
     "markup.list",
-    "List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset}.",
+    "List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset, unreadable (entries of the file that this version cannot read and keeps as they are)}.",
 );
 pub const MARKUP_GET: (&str, &str) = (
     "markup.get",
@@ -313,6 +313,7 @@ impl Session {
             "total": total,
             "offset": offset,
             "next_offset": (next < total).then_some(next),
+            "unreadable": doc.markups.unreadable().len(),
         }))
     }
 
