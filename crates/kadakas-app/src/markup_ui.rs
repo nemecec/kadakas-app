@@ -15,13 +15,14 @@ use egui::{Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Shape, Strok
 use kadakas_api::Session;
 use kadakas_core::change::Origin;
 use kadakas_core::command::Command;
-use kadakas_core::markup::draw::{NOTE_BACKGROUND_ALPHA, Prim, markup_prims};
+use kadakas_core::markup::draw::{NOTE_BACKGROUND_ALPHA, Prim, mark_prims_with, markup_prims_with};
 use kadakas_core::markup::{
-    MAX_MARKS, Markup, MarkupId, MarkupPatch, MarkupViewpoint, PALETTE, Rgb,
+    MAX_MARK_TEXT_CHARS, MAX_MARKS, MAX_POINTS_PER_MARKUP, MAX_POINTS_TOTAL, Mark, Markup,
+    MarkupId, MarkupPatch, MarkupViewpoint, PALETTE, Rgb,
 };
 use kadakas_core::model::Document;
 use kadakas_l10n::tr;
-use kadakas_ui_core::markup::{Brush, Draft, Tool, hit_mark, note_at, view_matches};
+use kadakas_ui_core::markup::{Brush, Draft, FrameState, Tool, frame_state, hit_mark, note_at};
 use kadakas_ui_number::UiNumber;
 
 /// How far from a mark the eraser and the select tool still hit it, in points.
@@ -70,9 +71,8 @@ pub struct CanvasFrame<'a> {
 
 /// A note that waits for its text.
 struct PendingNote {
-    /// The place in the canvas, in points.
-    at: [f64; 2],
-    canvas: [f64; 2],
+    /// The note without its text, in the frame of the markup.
+    proto: Mark,
     /// Where the window of the text opens, on the screen.
     screen: Pos2,
     text: String,
@@ -102,6 +102,8 @@ pub struct MarkupUi {
     notice: Option<String>,
     name_buf: (Option<MarkupId>, String, String),
     confirm_delete: Option<MarkupId>,
+    /// The digest of the model for a revision of the document (for the badge of a stale markup).
+    digest: (u64, String),
 }
 
 impl Default for MarkupUi {
@@ -121,6 +123,7 @@ impl Default for MarkupUi {
             notice: None,
             name_buf: (None, String::new(), String::new()),
             confirm_delete: None,
+            digest: (u64::MAX, String::new()),
         }
     }
 }
@@ -243,7 +246,7 @@ impl MarkupUi {
     #[cfg(test)]
     pub fn marks_visible(&self, doc: &Document) -> bool {
         match (self.shown(doc), &self.current) {
-            (Some(m), Some(now)) => view_matches(&m.viewpoint, now),
+            (Some(m), Some(now)) => matches!(frame_state(&m.viewpoint, now), FrameState::Mapped(_)),
             _ => false,
         }
     }
@@ -252,9 +255,11 @@ impl MarkupUi {
     #[cfg(test)]
     pub fn finish_note_for_test(&mut self, text: &str) {
         if let (Some(n), Some(id)) = (self.note.take(), self.open) {
+            let mut mark = n.proto;
+            mark.text = text.trim().to_string();
             self.requests.push(Request::cmd(Command::AddMark {
                 markup: id,
-                mark: Box::new(note_at(self.brush, n.canvas, n.at, text)),
+                mark: Box::new(mark),
             }));
         }
     }
@@ -315,11 +320,17 @@ impl MarkupUi {
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         }
-        if suspend {
-            self.draft = None;
+        // Panning with a key held stops a stroke only when none is being drawn: a Shift that is
+        // pressed in the middle of a stroke does not drop it.
+        if suspend && self.draft.is_none() {
             return true;
         }
-        let canvas = [f64::from(rect.width()), f64::from(rect.height())];
+        // Where the frame of the markup is on this canvas. A canvas that cannot show it does
+        // not draw: the hint on the canvas says why.
+        let FrameState::Mapped(map) = frame_state(&open.viewpoint, &now) else {
+            self.draft = None;
+            return true;
+        };
         let local = |p: Pos2| {
             [
                 f64::from((p.x - rect.min.x).clamp(0.0, rect.width())),
@@ -348,7 +359,7 @@ impl MarkupUi {
             self.draft = None;
             self.note = None;
         }
-        let drawable = view_matches(&open.viewpoint, &now) && !read_only;
+        let drawable = !read_only;
         if pressed
             && resp.hovered()
             && self.draft.is_none()
@@ -358,10 +369,10 @@ impl MarkupUi {
             let at = local(p);
             match self.tool {
                 Tool::Select => {
-                    self.selected = hit_mark(open, canvas, at, HIT_POINTS);
+                    self.selected = hit_mark(open, &map, at, HIT_POINTS);
                 }
                 Tool::Eraser => {
-                    if let Some(mark) = hit_mark(open, canvas, at, HIT_POINTS) {
+                    if let Some(mark) = hit_mark(open, &map, at, HIT_POINTS) {
                         if self.selected == Some(mark) {
                             self.selected = None;
                         }
@@ -376,15 +387,14 @@ impl MarkupUi {
                         self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
                     } else {
                         self.note = Some(PendingNote {
-                            at,
-                            canvas,
+                            proto: note_at(self.brush, &map, at, "..."),
                             screen: p + vec2(12.0, 12.0),
                             text: String::new(),
                             focus: true,
                         });
                     }
                 }
-                t => self.draft = Draft::begin(t, self.brush, canvas, at),
+                t => self.draft = Draft::begin(t, self.brush, at),
             }
         }
         if let Some(d) = &mut self.draft {
@@ -397,72 +407,100 @@ impl MarkupUi {
             }
             ui.ctx().request_repaint();
             if released || !down {
-                let marks = d.finish();
+                let marks = d.finish(&map);
                 self.draft = None;
-                if open.marks.len() + marks.len() > MAX_MARKS {
-                    self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
-                } else {
-                    for mark in marks {
-                        self.requests.push(Request::cmd(Command::AddMark {
-                            markup: open.id,
-                            mark: Box::new(mark),
-                        }));
-                    }
-                }
+                self.queue_marks(open, doc.markups.point_count(), marks);
             }
         }
         true
     }
 
+    /// Queues the marks of one stroke as one undo step. The limits are checked first, so a long
+    /// stroke is stored whole or not at all.
+    fn queue_marks(&mut self, open: &Markup, document_points: usize, marks: Vec<Mark>) {
+        let points: usize = marks.iter().map(|m| m.points.len()).sum();
+        if open.marks.len() + marks.len() > MAX_MARKS {
+            self.notice = Some(tr!("markup-ui-limit", marks = MAX_MARKS));
+            return;
+        }
+        if open.point_count() + points > MAX_POINTS_PER_MARKUP {
+            self.notice = Some(tr!(
+                "markup-ui-limit-points",
+                points = MAX_POINTS_PER_MARKUP
+            ));
+            return;
+        }
+        if document_points + points > MAX_POINTS_TOTAL {
+            self.notice = Some(tr!("markup-ui-limit-points", points = MAX_POINTS_TOTAL));
+            return;
+        }
+        let commands: Vec<Command> = marks
+            .into_iter()
+            .map(|mark| Command::AddMark {
+                markup: open.id,
+                mark: Box::new(mark),
+            })
+            .collect();
+        match commands.len() {
+            0 => {}
+            1 => self.requests.extend(commands.into_iter().map(Request::cmd)),
+            _ => self
+                .requests
+                .push(Request::cmd(Command::Batch { commands })),
+        }
+    }
+
     /// Paints the marks, the stroke that is being drawn and the sign of the mode over a canvas.
     pub fn paint(&self, painter: &Painter, rect: Rect, doc: &Document) {
-        let canvas = [f64::from(rect.width()), f64::from(rect.height())];
         if let (Some(m), Some(now)) = (self.shown(doc), &self.current) {
-            if view_matches(&m.viewpoint, now) {
-                paint_prims(painter, rect.min, &markup_prims(m, canvas));
-                if let Some(mark) = self.selected.and_then(|id| m.mark(id))
-                    && self.open == Some(m.id)
-                    && let Some((lo, hi)) = mark.bounds()
-                {
-                    let r = Rect::from_min_max(
-                        rect.min + vec2((lo[0] * canvas[0]) as f32, (lo[1] * canvas[1]) as f32),
-                        rect.min + vec2((hi[0] * canvas[0]) as f32, (hi[1] * canvas[1]) as f32),
-                    )
-                    .expand(6.0);
-                    let c = [
-                        r.left_top(),
-                        r.right_top(),
-                        r.right_bottom(),
-                        r.left_bottom(),
-                    ];
-                    painter.add(Shape::dashed_line(
-                        &[c[0], c[1], c[2], c[3], c[0]],
-                        Stroke::new(1.5, ACCENT),
-                        5.0,
-                        4.0,
-                    ));
+            match frame_state(&m.viewpoint, now) {
+                FrameState::Mapped(map) => {
+                    let place = |p: [f64; 2]| map.to_screen(p);
+                    paint_prims(painter, rect.min, &markup_prims_with(m, &place, map.scale));
+                    if let Some(mark) = self.selected.and_then(|id| m.mark(id))
+                        && self.open == Some(m.id)
+                        && let Some((lo, hi)) = mark.bounds()
+                    {
+                        let (a, b) = (map.to_screen(lo), map.to_screen(hi));
+                        let r = Rect::from_min_max(
+                            rect.min + vec2(a[0] as f32, a[1] as f32),
+                            rect.min + vec2(b[0] as f32, b[1] as f32),
+                        )
+                        .expand(6.0);
+                        let c = [
+                            r.left_top(),
+                            r.right_top(),
+                            r.right_bottom(),
+                            r.left_bottom(),
+                        ];
+                        painter.add(Shape::dashed_line(
+                            &[c[0], c[1], c[2], c[3], c[0]],
+                            Stroke::new(1.5, ACCENT),
+                            5.0,
+                            4.0,
+                        ));
+                    }
+                    if let Some(d) = &self.draft {
+                        paint_prims(painter, rect.min, &d.preview(&map));
+                    }
+                    if let Some(n) = &self.note {
+                        paint_prims(
+                            painter,
+                            rect.min,
+                            &mark_prims_with(&n.proto, &place, map.scale),
+                        );
+                    }
                 }
-            } else {
-                let name = display_name(doc, m);
-                let text = if self.open == Some(m.id) {
-                    tr!("markup-ui-paused")
-                } else {
-                    tr!("markup-ui-view-differs", name = name)
-                };
-                label(painter, rect.left_bottom() + vec2(8.0, -8.0), &text);
+                state => {
+                    let name = display_name(doc, m);
+                    let text = match (state, self.open == Some(m.id)) {
+                        (FrameState::DoesNotFit, _) => tr!("markup-ui-no-fit", name = name),
+                        (_, true) => tr!("markup-ui-paused"),
+                        _ => tr!("markup-ui-view-differs", name = name),
+                    };
+                    label(painter, rect.left_bottom() + vec2(8.0, -8.0), &text);
+                }
             }
-        }
-        if let Some(d) = &self.draft {
-            paint_prims(painter, rect.min, &d.preview());
-        }
-        if let Some(n) = &self.note {
-            let mut m = note_at(self.brush, n.canvas, n.at, "...");
-            m.points = vec![kadakas_core::markup::rel_of(n.at, n.canvas)];
-            paint_prims(
-                painter,
-                rect.min,
-                &kadakas_core::markup::draw::mark_prims(&m, canvas, 1.0),
-            );
         }
         if self.captures() {
             painter.rect_stroke(
@@ -520,7 +558,8 @@ impl MarkupUi {
         match done {
             Some(true) => {
                 if let (Some(n), Some(id)) = (self.note.take(), self.open) {
-                    let mark = note_at(self.brush, n.canvas, n.at, &n.text);
+                    let mut mark = n.proto;
+                    mark.text = n.text.trim().chars().take(MAX_MARK_TEXT_CHARS).collect();
                     self.requests.push(Request::cmd(Command::AddMark {
                         markup: id,
                         mark: Box::new(mark),
@@ -535,6 +574,12 @@ impl MarkupUi {
     /// The Markup palette.
     pub fn palette(&mut self, ui: &mut Ui, session: &Session) {
         let doc = session.editor.doc();
+        if self.digest.0 != session.editor.revision() {
+            self.digest = (
+                session.editor.revision(),
+                kadakas_core::markup::model_digest(doc),
+            );
+        }
         let mut mode = self.mode;
         if ui
             .checkbox(&mut mode, tr!("markup-ui-mode"))
@@ -608,10 +653,20 @@ impl MarkupUi {
                         Stroke::new(2.0, ink),
                     ));
                 }
-                if resp
-                    .on_hover_text(tr!("markup-ui-color-name", index = i))
-                    .clicked()
-                {
+                let name = tr!("markup-ui-color-name", index = i);
+                // A name and a state for a screen reader, and a ring for the keyboard focus.
+                resp.widget_info(|| {
+                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name.clone())
+                });
+                if resp.has_focus() {
+                    ui.painter().rect_stroke(
+                        rect.expand(2.0),
+                        4.0,
+                        Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if resp.on_hover_text(name).clicked() {
                     self.set_color(*c);
                 }
             }
@@ -710,9 +765,15 @@ impl MarkupUi {
         } else {
             m.author.clone()
         };
+        let stale = m.model.as_ref().is_some_and(|d| *d != self.digest.1);
         let text = format!(
-            "{}\n{}",
+            "{}{}\n{}",
             display_name(doc, m),
+            if stale {
+                format!("  [{}]", tr!("markup-ui-stale"))
+            } else {
+                String::new()
+            },
             tr!(
                 "markup-ui-row-info",
                 mode = mode,

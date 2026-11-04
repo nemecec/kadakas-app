@@ -29,13 +29,18 @@ use crate::{RpcError, Session};
 mod pick;
 mod render;
 
+pub(crate) use pick::PlanIndex;
+
+/// The times that `now_ms` accepts: 2000-01-01 to 2100-01-01.
+const TIME_RANGE_MS: std::ops::RangeInclusive<i64> = 946_684_800_000..=4_102_444_800_000;
+
 pub const MARKUP_LIST: (&str, &str) = (
     "markup.list",
     "List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset, unreadable (entries of the file that this version cannot read and keeps as they are)}.",
 );
 pub const MARKUP_GET: (&str, &str) = (
     "markup.get",
-    "One markup with everything an agent needs to see what was drawn. params: {id, render? (default true: add the two pictures), width? (pixels of the pictures, default 800), samples? (picks per mark, default 25, at most 100), pick? (default true: find what is under each mark)}. Returns {id, name, author, origin, created, created_ms, note, issue, viewpoint: {mode, view, fov, canvas (points), layers, classes, visibility: {matches, layers_differ, classes_differ}}, marks: [{id, kind, color, width, points (0 to 1 of the canvas, y down), points_canvas (points of the stored canvas), text, bbox: {relative: [x0, y0, x1, y1], canvas: [x0, y0, x1, y1]}, closed, under, hint3d}], clean: {png_base64, width, height} (the model at the stored viewpoint, no marks), with_marks: {png_base64, width, height}, notes}. `under` lists what the mark points at. A plan gives object ids found by hit testing along a stroke or inside a closed shape. A 3D view casts a ray for each sample like mesh.pick and gives {models: [{model, faces, hits}], objects: [{id, kind, hits}], ids}. An arrow gives {tip, tail, ids}. `hint3d` is the first surface or ground point behind the arrow tip, the center of a shape, the first point of a stroke or the place of a note, in drawing coordinates: {at, kind (surface, object, ground, plan, none), point, model?, face?, id?}. Picking uses the layers and classes that show now and skips grey ones. A call makes at most 5000 samples. `truncated` is true when that budget ran out.",
+    "One markup with everything an agent needs to see what was drawn. params: {id, render? (default true: add the two pictures), width? (pixels of the pictures, default 640), samples? (picks per mark, default 16, at most 100), pick? (default true: find what is under each mark)}. Returns {id, name, author, origin, created, created_ms, note, issue, viewpoint: {mode, view, fov, canvas (points), layers, classes, visibility: {matches, layers_differ, classes_differ}}, marks: [{id, kind, color, width, points (0 to 1 of the canvas, y down), points_canvas (points of the stored canvas), text, bbox: {relative: [x0, y0, x1, y1], canvas: [x0, y0, x1, y1]}, closed, under, hint3d}], clean: {png_base64, width, height} (the model at the stored viewpoint, no marks), with_marks: {png_base64, width, height}, notes}. `under` lists what the mark points at. A plan gives object ids found by hit testing along a stroke or inside a closed shape. A 3D view casts a ray for each sample like mesh.pick and gives {models: [{model, faces, hits}], objects: [{id, kind, hits}], ids}. An arrow gives {tip, tail, ids}. `hint3d` is the first surface or ground point behind the arrow tip, the center of a shape, the first point of a stroke or the place of a note, in drawing coordinates: {at, kind (surface, object, ground, plan, none), point, model?, face?, id?}. Picking uses the layers and classes that show now and skips grey ones. A call makes at most 5000 samples. `truncated` is true when that budget ran out. A sample costs about 0.1 ms with the triangles cut, and the first call after an edit cuts them, so a big model takes seconds: the app host reads these calls on the thread of the window. `stale` is true when the model changed since the markup was made (markups are not part of a version), and the pictures and `under` then belong to the newer model. In a plan, an object of a group also has `selects` (the group that a click selects).",
 );
 pub const MARKUP_CREATE: (&str, &str) = (
     "markup.create",
@@ -55,7 +60,7 @@ pub const MARKUP_CLEAR: (&str, &str) = (
 );
 pub const MARKUP_RENDER: (&str, &str) = (
     "markup.render",
-    "A picture of a markup: the model at its stored viewpoint, with the marks drawn on it (default) or without. params: {id, with_marks? (default true), width? (pixels, default 800)}. Returns {id, with_marks, png_base64, width, height}. The same pictures are in markup.get.",
+    "A picture of a markup: the model at its stored viewpoint, with the marks drawn on it (default) or without. params: {id, with_marks? (default true), width? (pixels, default 640)}. Returns {id, with_marks, png_base64, width, height}. The same pictures are in markup.get.",
 );
 
 /// Extra text for `describe`.
@@ -136,8 +141,9 @@ fn consent_reason(m: &Markup, me: Origin, my_author: &str) -> Option<String> {
     None
 }
 
-fn summary(m: &Markup) -> Value {
+fn summary(m: &Markup, now_model: Option<&str>) -> Value {
     json!({
+        "stale": m.model.as_deref().zip(now_model).map(|(then, now)| then != now),
         "id": m.id,
         "name": m.name,
         "author": m.author,
@@ -170,7 +176,13 @@ fn mark_json(m: &Mark, canvas: [f64; 2]) -> Value {
             .map(|p| canvas_of(*p, canvas))
             .collect::<Vec<_>>()
     );
-    v["known"] = json!(m.kind.is_known());
+    // `known` and `drawable`: this version reads the mark and its values are in range. A mark
+    // that it does not read is kept as it is. `raw` says that the fields above are the JSON.
+    v["known"] = json!(m.drawable());
+    v["drawable"] = json!(m.drawable());
+    if m.is_raw() {
+        v["raw"] = json!(true);
+    }
     v["closed"] = json!(m.is_closed(canvas));
     if let Some((lo, hi)) = m.bounds() {
         let (clo, chi) = (canvas_of(lo, canvas), canvas_of(hi, canvas));
@@ -299,12 +311,13 @@ impl Session {
             .filter(|m| q.issue.is_none_or(|i| m.issue == Some(i)))
             .filter(|m| origin.is_none_or(|o| m.origin == o))
             .collect();
+        let digest = kadakas_core::markup::model_digest(doc);
         let total = list.len();
         let shown: Vec<Value> = list
             .iter()
             .skip(offset)
             .take(limit)
-            .map(|m| summary(m))
+            .map(|m| summary(m, Some(&digest)))
             .collect();
         let next = offset.saturating_add(shown.len());
         Ok(json!({
@@ -313,7 +326,7 @@ impl Session {
             "total": total,
             "offset": offset,
             "next_offset": (next < total).then_some(next),
-            "unreadable": doc.markups.unreadable().len(),
+            "unreadable": doc.markups.unreadable_count(),
         }))
     }
 
@@ -336,7 +349,10 @@ impl Session {
         let vp = markup.viewpoint.clone();
         let canvas = vp.canvas;
         let mut notes: Vec<String> = Vec::new();
-        let mut out = summary(&markup);
+        let mut out = summary(
+            &markup,
+            Some(&kadakas_core::markup::model_digest(self.editor.doc())),
+        );
         out["viewpoint"] = viewpoint_json(self.editor.doc(), &vp);
         let mut marks: Vec<Value> = markup.marks.iter().map(|m| mark_json(m, canvas)).collect();
         let mut truncated = false;
@@ -345,16 +361,16 @@ impl Session {
             let index = matches!(frame, pick::Frame::Plan { .. }).then(|| self.plan_index());
             let mut budget = pick::Budget::new();
             for (m, j) in markup.marks.iter().zip(marks.iter_mut()) {
-                if !m.kind.is_known() {
+                if !m.drawable() {
                     notes.push(format!(
-                        "mark {} has the kind {}, which this version does not know: it is not picked",
+                        "mark {} ({}) is kept as it is but not drawn or picked: this version does not read it or a value is out of range",
                         m.id,
                         m.kind.name()
                     ));
                     continue;
                 }
                 let (under, hint) =
-                    self.mark_picks(&frame, index.as_ref(), m, samples, &mut budget);
+                    self.mark_picks(&frame, index.as_deref(), m, samples, &mut budget);
                 j["under"] = under;
                 j["hint3d"] = hint;
             }
@@ -453,11 +469,19 @@ impl Session {
         markup.note = q.note.unwrap_or_default();
         markup.issue = q.issue;
         markup.origin = self.editor.origin();
-        markup.author = match q.author {
-            Some(a) => a.trim().to_string(),
-            None => session_author(self),
+        // The consent rule uses the author, so an agent cannot choose it: the session says who it is.
+        markup.author = match (markup.origin, q.author) {
+            (Origin::Agent, _) | (_, None) => session_author(self),
+            (_, Some(a)) => a.trim().to_string(),
         };
-        markup.time = q.now_ms.unwrap_or_else(|| default_now() as i64);
+        let time = q.now_ms.unwrap_or_else(|| default_now() as i64);
+        if !TIME_RANGE_MS.contains(&time) && time != 0 {
+            return Err(bad(
+                "now_ms is milliseconds since 1970, between 2000-01-01 and 2100-01-01",
+            ));
+        }
+        markup.time = time;
+        markup.model = Some(kadakas_core::markup::model_digest(self.editor.doc()));
         markup.marks = marks;
         let n = markup.marks.len();
         let out = self
@@ -470,7 +494,7 @@ impl Session {
         Ok(json!({
             "id": id,
             "marks": n,
-            "markup": summary(find(self.editor.doc(), id)?),
+            "markup": summary(find(self.editor.doc(), id)?, None),
         }))
     }
 
@@ -511,7 +535,7 @@ impl Session {
         Ok(json!({
             "id": q.id,
             "changed": self.editor.undo_depth() != depth,
-            "markup": summary(find(self.editor.doc(), q.id)?),
+            "markup": summary(find(self.editor.doc(), q.id)?, None),
         }))
     }
 
@@ -550,7 +574,16 @@ impl Session {
         let q: P = parse(p)?;
         let ids = match (q.id, q.ids) {
             (Some(i), None) => vec![i],
-            (None, Some(l)) => l,
+            (None, Some(l)) => {
+                // The same ID twice is one delete.
+                let mut seen = Vec::new();
+                for i in l {
+                    if !seen.contains(&i) {
+                        seen.push(i);
+                    }
+                }
+                seen
+            }
             _ => return Err(bad("give id or ids")),
         };
         self.check_markup_consent(&ids, q.confirm.unwrap_or(false))?;
@@ -581,6 +614,33 @@ impl Session {
     }
 }
 
+/// The objects under the marks of a markup, for the selection of its BCF viewpoint.
+impl Session {
+    pub(crate) fn markup_under_ids(
+        &mut self,
+        markup: &Markup,
+    ) -> Vec<kadakas_core::model::ObjectId> {
+        let frame = self.markup_frame(&markup.viewpoint);
+        let index = matches!(frame, pick::Frame::Plan { .. }).then(|| self.plan_index());
+        let mut budget = pick::Budget::new();
+        let mut ids: Vec<kadakas_core::model::ObjectId> = Vec::new();
+        for m in markup.marks.iter().filter(|m| m.drawable()) {
+            let (under, _) = self.mark_picks(&frame, index.as_deref(), m, 8, &mut budget);
+            if let Some(list) = under["ids"].as_array() {
+                for v in list {
+                    if let Ok(id) = serde_json::from_value(v.clone())
+                        && !ids.contains(&id)
+                        && ids.len() < kadakas_core::issue::MAX_OBJECTS
+                    {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        ids
+    }
+}
+
 /// The PNG of a markup with its marks, for the BCF snapshot of its issue. The picture is at most
 /// `max_side` pixels on the longer side.
 impl Session {
@@ -591,7 +651,7 @@ impl Session {
     ) -> Result<Vec<u8>, RpcError> {
         let c = markup.viewpoint.canvas;
         let scale = (f64::from(max_side) / c[0].max(c[1])).min(1.0);
-        let width = ((c[0] * scale).round() as u32).max(16);
+        let width = ((c[0] * scale).round() as u32).max(1);
         let clean = self.markup_clean(&markup.viewpoint, width)?;
         let marked = self.markup_marked(markup, &clean)?;
         Ok(marked.png)

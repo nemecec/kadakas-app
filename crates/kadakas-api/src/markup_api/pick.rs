@@ -1,7 +1,7 @@
 //! What is under the marks of a markup (REV-11): picking at the stored viewpoint.
 //!
 //! In the plan a point of a mark is a point of the drawing (the center and the zoom of the
-//! viewpoint), and the objects there are found with the hit test of the plan (`kadakas_ui_core::hit`,
+//! viewpoint), and the objects there are found with the hit test of the plan (`kadakas_annot::hit`,
 //! the code that a click uses, except that a locked layer is met too). In 3D a point of a mark is
 //! a ray through the camera of the viewpoint, and the ray is cast with the code of the pointer
 //! of the person (AGR-10, `Session::ray_pick`), which is the code of `mesh.pick`.
@@ -18,20 +18,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use glam::{DVec2, DVec3, Vec2};
 use serde_json::{Value, json};
 
+use kadakas_annot::annot_pick::Prims;
+use kadakas_annot::hit::object_hit;
 use kadakas_core::issue::ViewSpec;
 use kadakas_core::markup::{Mark, MarkKind, MarkupViewpoint, canvas_of};
 use kadakas_core::model::{Document, ObjectId, Shape};
 use kadakas_core::sheets::ViewCamera;
 use kadakas_render::Camera;
-use kadakas_ui_core::annot_pick::Prims;
-use kadakas_ui_core::hit::object_hit;
 
 use crate::{Aim, Session, ray_under};
 
 /// The most samples for one mark.
 pub const MAX_SAMPLES: usize = 100;
 /// The default number of samples for one mark.
-pub const DEFAULT_SAMPLES: usize = 25;
+pub const DEFAULT_SAMPLES: usize = 16;
 /// The most samples (rays or hit tests) for one call.
 pub const MAX_RAYS: usize = 5_000;
 /// The distance in points of the canvas within which a plan hit counts.
@@ -174,6 +174,9 @@ impl Budget {
     }
 }
 
+/// An object that samples met: its kind, the hits and the group that a click on it selects.
+type ObjectHits = (&'static str, usize, Option<ObjectId>);
+
 /// What a set of samples met.
 #[derive(Default)]
 pub(super) struct Sampled {
@@ -182,7 +185,7 @@ pub(super) struct Sampled {
     /// Surface models: the hits and the faces.
     models: BTreeMap<ObjectId, (usize, BTreeSet<u32>)>,
     /// Other objects (plan objects, components, plants): kind and hits.
-    objects: BTreeMap<ObjectId, (&'static str, usize)>,
+    objects: BTreeMap<ObjectId, ObjectHits>,
     /// The ids in the order they were met first.
     order: Vec<ObjectId>,
     truncated: bool,
@@ -202,7 +205,7 @@ impl Sampled {
     pub fn to_json(&self) -> Value {
         let mut models: Vec<(&ObjectId, &(usize, BTreeSet<u32>))> = self.models.iter().collect();
         models.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(b.0)));
-        let mut objects: Vec<(&ObjectId, &(&'static str, usize))> = self.objects.iter().collect();
+        let mut objects: Vec<(&ObjectId, &ObjectHits)> = self.objects.iter().collect();
         objects.sort_by(|a, b| b.1.1.cmp(&a.1.1).then(a.0.cmp(b.0)));
         let mut out = json!({
             "samples": self.samples,
@@ -214,9 +217,13 @@ impl Sampled {
                 "faces": faces.iter().take(MAX_FACES_LISTED).collect::<Vec<_>>(),
                 "faces_truncated": faces.len() > MAX_FACES_LISTED,
             })).collect::<Vec<_>>(),
-            "objects": objects.iter().map(|(id, (kind, hits))| json!({
-                "id": id, "kind": kind, "hits": hits,
-            })).collect::<Vec<_>>(),
+            "objects": objects.iter().map(|(id, (kind, hits, selects))| {
+                let mut o = json!({"id": id, "kind": kind, "hits": hits});
+                if let Some(g) = selects.filter(|g| g != *id) {
+                    o["selects"] = json!(g);
+                }
+                o
+            }).collect::<Vec<_>>(),
         });
         if self.truncated {
             out["truncated"] = json!(true);
@@ -357,7 +364,7 @@ pub(super) fn anchor_of(mark: &Mark) -> Option<(&'static str, [f64; 2])> {
 }
 
 /// The objects of the plan that can be met, with the box of each (drawing mm), the topmost last.
-pub(super) struct PlanIndex {
+pub(crate) struct PlanIndex {
     items: Vec<(ObjectId, DVec2, DVec2)>,
 }
 
@@ -382,9 +389,19 @@ impl PlanIndex {
 }
 
 impl Session {
-    pub(super) fn plan_index(&self) -> PlanIndex {
-        let pk = Prims::cached(&self.annot_cache, self.editor.revision());
-        PlanIndex::new(self.editor.doc(), pk)
+    /// The index of the objects of the plan. It is kept for the revision of the document, so a
+    /// call with many samples, and the next call, do not read the whole document again.
+    pub(super) fn plan_index(&mut self) -> std::sync::Arc<PlanIndex> {
+        let revision = self.editor.revision();
+        if let Some((r, i)) = &self.markup_index
+            && *r == revision
+        {
+            return i.clone();
+        }
+        let pk = Prims::cached(&self.annot_cache, revision);
+        let index = std::sync::Arc::new(PlanIndex::new(self.editor.doc(), pk));
+        self.markup_index = Some((revision, index.clone()));
+        index
     }
 
     /// The objects of the plan at a drawing point, the topmost first.
@@ -469,7 +486,9 @@ impl Session {
                     let doc = self.editor.doc();
                     for id in hits {
                         let kind = doc.object(id).map_or("object", |o| o.shape.kind());
-                        let e = out.objects.entry(id).or_insert((kind, 0));
+                        // What a click on the object selects: the group that holds it.
+                        let selects = doc.selection_target(id, None);
+                        let e = out.objects.entry(id).or_insert((kind, 0, selects));
                         e.1 += 1;
                         out.meet(id);
                     }
@@ -498,7 +517,7 @@ impl Session {
                             .object(id.unwrap_or_default())
                             .map_or("object", |ob| ob.shape.kind());
                         if let Some(id) = id {
-                            out.objects.entry(id).or_insert((kind, 0)).1 += 1;
+                            out.objects.entry(id).or_insert((kind, 0, None)).1 += 1;
                             out.meet(id);
                         }
                     } else {

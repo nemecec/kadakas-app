@@ -893,7 +893,7 @@ The fields are read only. A line says that the geometry is edited in the 3D mode
 
 ## Markup on the view (REV-11)
 
-Markup is ink on the live view. You draw on the plan or on the 3D view. The ink is review data, like an issue. It is saved in the `.kad` file. It is not part of the model. It is in no quantity and in no IFC or DXF export.
+Markup is ink on the live view. You draw on the plan or on the 3D view. The ink is review data, like an issue. It is saved in the `.kad` file. It is not part of the model. It is in no quantity and in no IFC or DXF export. It is not part of a named version either.
 
 ### When to use it
 
@@ -922,15 +922,22 @@ While the mode is on and a markup is open, the pointer draws. The normal tools w
 
 The palette has eight colors and a color picker. The selected color has a check mark, so the color is not the only sign. Undo takes back the last step. Clear removes all marks of the open markup in one step.
 
-### Marks scale with the window
+### Marks follow the view and the window
 
-A point of a mark is a share of the canvas. It is 0 to 1 of the width and of the height, y down. A bigger window shows the same ink at the same relative places. The width of a line grows with the width of the window. A stroke keeps a point only when it is 1.5 points from the one before it. So the data stays small. A very long stroke becomes several marks that join. Nothing is lost.
+A point of a mark is a share of the frame of the markup. The frame has the shape of the canvas where you pressed New Markup. It is 0 to 1 of the width and of the height, y down. The frame is put on the canvas that is on the screen now, so a mark stays on the part of the drawing you marked.
+
+- **Plan.** The frame follows the pan and the zoom, like an object. A line grows with the zoom. A window of another size or shape does not move a mark. A stroke outside the frame is held at its edge.
+- **3D.** The ink sticks to the view. The camera must be the camera of the markup. The frame has the height of the canvas and the shape of the first canvas, centered. If you make the window lower or wider, the marks stay on the model. If the window is too narrow for the frame, the marks hide and drawing stops. A hint says so.
+
+A stroke keeps a point only when it is 1.5 points from the one before it. So the data stays small. A very long stroke becomes several marks that join in one undo step. Nothing is lost.
 
 ### The list and the viewpoint
 
-The palette lists the markups with their mode (Plan or 3D), their marks and their author. A click on a row restores the viewpoint. That is the layers and classes, the plan area or the camera, and the projection. The marks show. The marks of a markup show only when the view is the view it was drawn in. If you pan or orbit away, the marks hide and a hint says so. Drawing stops too. Go to Viewpoint brings the view back. Continue Drawing opens one of your own markups again. A markup of an agent is only shown or deleted, and the delete asks first.
+The palette lists the markups with their mode (Plan or 3D), their marks and their author. A click on a row restores the viewpoint. That is the layers and classes, the plan area or the camera, and the projection. The marks show. In 3D the marks show only when the camera is the camera of the markup. If you orbit away, the marks hide, drawing stops and a hint says so. Go to Viewpoint brings the view back. Restoring the layers and classes is an edit of the document. It is one undo step, and it syncs to the people of a shared document, as opening an issue does. Continue Drawing opens one of your own markups again. A markup of an agent is only shown or deleted, and the delete asks first.
 
-A markup can have a name, a note and an issue. A markup of an issue goes into the BCF snapshot of that issue (see below).
+A markup has a name, a note and an optional issue. A markup of an issue goes into the BCF snapshot of that issue (see below).
+
+The model moves on after a markup is made, because a markup is not part of a version. The row of a markup shows `Model changed` when the model changed after the markup was made. The marks are right for the model of that time.
 
 ### Keyboard
 
@@ -938,7 +945,7 @@ Every button of the palette is reached with Tab and pressed with Enter or Space.
 
 ### BCF
 
-A markup that belongs to an issue is written with that issue as one more viewpoint. The snapshot is the picture of the model with the marks drawn on it. The camera is the camera of the markup. A BCF import keeps a snapshot as a picture and reads no marks from it.
+A markup that belongs to an issue is written with that issue as one more viewpoint. The snapshot is the picture of the model with the marks drawn on it. The camera is the camera of the markup. The viewpoint selects the objects under the marks. A BCF import keeps a snapshot as a picture and reads no marks from it. An import of a file that you exported from the same document finds the extra viewpoint of the markup and treats the issue as changed. The import asks, as for any conflict.
 
 ### Privacy and consent
 
@@ -946,7 +953,7 @@ The markup is data of the file. It goes to whoever gets the file. Nothing is sen
 
 ### Versions
 
-A markup is not part of a named version. A restore of a version leaves the markups as they are, like the issues. The undo history keeps every step of the markup.
+A markup is not part of a named version. A restore of a version leaves the markups as they are, like the issues. A restore that brought them back would delete newer markups without asking. The undo history keeps every step of the markup.
 
 ### Limits
 
@@ -970,13 +977,13 @@ Measured with `crates/kadakas-core/tests/markups.rs` (release build, Apple M-ser
 | 2000 markups, 20 marks of 10 points | 400000 | 8.1 MiB | 29 ms | 183 ms |
 | 50 markups, 200 marks of 100 points | 1000000 | 14.7 MiB | 52 ms | 128 ms |
 
-A point costs 15 to 21 bytes in the file. A relative coordinate has five decimals, which is 0.01 point on a canvas of 1000 points. One more stroke takes 0.07 to 0.3 ms. An undo step shares the data of the markups, so it holds pointers and the one markup that changed. The cost of picking is in [mesh-api.md](mesh-api.md).
+A point costs 15 to 21 bytes in the file. A relative coordinate has five decimals, which is 0.01 point on a canvas of 1000 points. One more stroke takes 0.07 to 0.3 ms. An undo step shares the data of the markups. It holds pointers and the one markup that changed, and the history counts the bytes of that markup. The cost of picking is in [mesh-api.md](mesh-api.md).
 
 ### Not done
 
 - Stage 2, marks on the model that follow the objects. It stays planned.
 - Stage 3, sync of markup in collaboration, pressure of a tablet pen, and export of the view with marks as PNG or PDF. It stays planned.
-- A markup is not in the collaboration log. In a shared document each person keeps the markups of their own copy.
+- A markup is not in the collaboration log. In a shared document each person keeps the markups of their own copy. A person who joins a shared document brings the local markups into it, with viewpoints from the other file. Nothing is lost.
 - The picking of the agent uses the layers and classes that show now. The markup lists the ones that differ.
 - Not tried in a real window: the drawing, the pointer capture outside the window and a tablet pen. The tests use synthetic egui events.
 

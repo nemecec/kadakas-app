@@ -71,3 +71,6 @@ markup-ui-note-cancel = Cancel
 markup-ui-delete-agent = This markup is the work of an agent. Delete it?
 markup-ui-delete-yes = Delete
 markup-ui-delete-no = Keep
+markup-ui-no-fit = The window is too narrow for the frame of "{ $name }", so its marks are hidden. Make the window wider or lower.
+markup-ui-limit-points = A markup holds at most { $points } points. Finish this markup and start a new one.
+markup-ui-stale = Model changed

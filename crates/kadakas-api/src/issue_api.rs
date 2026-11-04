@@ -1111,6 +1111,7 @@ impl Session {
                 ));
                 continue;
             }
+            let under = self.markup_under_ids(m);
             let png = match self.markup_snapshot_png(m, 1600) {
                 Ok(png) if png.len() <= MAX_SNAPSHOT_BYTES => png,
                 Ok(png) => {
@@ -1142,7 +1143,7 @@ impl Session {
                 view: Some(m.viewpoint.view.clone()),
                 layers: m.viewpoint.layers.clone(),
                 classes: m.viewpoint.classes.clone(),
-                selection: vec![],
+                selection: under,
                 snapshot: Some(hash),
             };
             issues.issues_mut()[at].viewpoints.push(vp);

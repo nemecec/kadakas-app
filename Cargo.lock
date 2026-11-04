@@ -2484,7 +2484,6 @@ dependencies = [
  "kadakas-site",
  "kadakas-step",
  "kadakas-sys",
- "kadakas-ui-core",
  "kadakas-x3d",
  "png",
  "proptest",

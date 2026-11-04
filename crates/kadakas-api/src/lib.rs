@@ -196,6 +196,8 @@ pub struct Session {
     mesh_cache: MeshCache,
     /// The triangles of surface models for `mesh.near` and `mesh.pick` (see `mesh_api`).
     mesh_query: mesh_api::QueryCache,
+    /// The objects of the plan for the picking of markups (REV-11), kept for a revision.
+    markup_index: Option<(u64, std::sync::Arc<markup_api::PlanIndex>)>,
     /// The scene at a coarser detail than the count rule gives, for a view far from the plants.
     lod_scene: Option<(u64, kadakas_core::plants::form3d::Detail, Arc<Scene>)>,
     /// Which files requests may read and write (`import.file`, `export.file`, `file.open`, `file.save`).
@@ -1214,6 +1216,7 @@ impl Session {
             blocked: None,
             mesh_cache: MeshCache::default(),
             mesh_query: Default::default(),
+            markup_index: None,
             lod_scene: None,
             #[cfg(not(target_arch = "wasm32"))]
             paths: PathPolicy::default(),

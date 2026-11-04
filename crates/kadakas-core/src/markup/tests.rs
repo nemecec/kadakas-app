@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn view() -> MarkupViewpoint {
     MarkupViewpoint {
@@ -128,7 +128,7 @@ fn the_reader_keeps_what_it_does_not_know() {
     ]);
     let ms: Markups = serde_json::from_value(raw).unwrap();
     assert_eq!(ms.len(), 1);
-    assert_eq!(ms.unreadable().len(), 2);
+    assert_eq!(ms.unreadable_count(), 2);
     let m = ms.iter().next().unwrap();
     assert_eq!(m.marks[1].kind, MarkKind::Other("lasso".into()));
     assert!(m.marks[1].kind.name() == "lasso");
@@ -138,7 +138,11 @@ fn the_reader_keeps_what_it_does_not_know() {
     let back = serde_json::to_value(&ms).unwrap();
     assert_eq!(back[0]["future"], json!({"a": 1}));
     assert_eq!(back[0]["marks"][0]["pressure"], json!([1, 2]));
-    assert_eq!(back[0]["marks"][1]["kind"], json!("lasso"));
+    assert_eq!(
+        back[0]["marks"][1],
+        json!({"id": 2, "kind": "lasso", "points": [[0.3, 0.3]], "color": "#112233"}),
+        "a mark of an unknown kind is written as it was, with nothing added"
+    );
     assert_eq!(back[1], json!("not a markup"));
     assert_eq!(back[2], json!({"id": 7}));
     let again: Markups = serde_json::from_value(back).unwrap();
@@ -247,4 +251,103 @@ fn marks_give_primitives_that_scale_with_the_canvas() {
         }
         _ => panic!("a highlighter line"),
     }
+}
+
+#[test]
+fn a_bad_value_of_one_mark_keeps_that_mark_and_not_the_markup() {
+    let raw = json!([{
+        "id": "00000000-0000-4000-8000-000000000001",
+        "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 0.1}, "canvas": [800, 600]},
+        "marks": [
+            {"id": 1, "kind": "pen", "color": "red", "points": [[0.1, 0.1]]},
+            {"id": 2, "kind": "pen", "points": [[0.2, 0.2], [0.3, "x"]]},
+            {"id": 3, "kind": "pen", "points": [[0.4, 0.4]], "width": -5},
+            {"id": 4, "kind": "pen", "points": [[1e300, 0.4]]},
+            {"id": 5, "kind": "note", "points": [[0.5, 0.5]], "text": "x".repeat(100_000)},
+            {"id": 6, "kind": "pen", "points": [[0.6, 0.6]], "color": [1, 2, 3]}
+        ]
+    }]);
+    let mut ms: Markups = serde_json::from_value(raw.clone()).unwrap();
+    assert_eq!((ms.len(), ms.unreadable_count()), (1, 0));
+    let m = ms.iter().next().unwrap();
+    assert!(
+        m.marks[0].is_raw() && m.marks[1].is_raw(),
+        "bad colour and bad point"
+    );
+    assert!(!m.marks[2].is_raw() && !m.marks[2].drawable(), "width -5");
+    assert!(!m.marks[3].drawable() && !m.marks[4].drawable());
+    assert!(
+        m.marks[5].drawable(),
+        "[1, 2, 3] is a colour that is understood"
+    );
+    let notes = ms.repair();
+    assert!(notes.iter().any(|n| n.contains("5 mark(s)")), "{notes:?}");
+    // Nothing is cut or changed.
+    let back = serde_json::to_value(&ms).unwrap();
+    assert_eq!(back[0]["marks"][0], raw[0]["marks"][0]);
+    assert_eq!(back[0]["marks"][1], raw[0]["marks"][1]);
+    assert_eq!(back[0]["marks"][2]["width"], json!(-5.0));
+    assert_eq!(back[0]["marks"][4]["text"].as_str().unwrap().len(), 100_000);
+    // Nothing is drawn from the marks that are not drawable.
+    let m = ms.iter().next().unwrap();
+    let prims = draw::markup_prims(m, [800.0, 600.0]);
+    assert_eq!(prims.len(), 1, "only the mark 6");
+}
+
+#[test]
+fn a_hand_edited_file_round_trips_and_keeps_the_order_of_entries() {
+    let text = r#"[
+        "first, not a markup",
+        {"id": "00000000-0000-4000-8000-000000000001",
+         "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 0.1}, "canvas": [800, 600]},
+         "marks": [{"id": 1, "kind": "cloud", "points": [[0.1, 0.1]], "future": {"a": [1, 2.50]}}],
+         "from_the_future": 12345678901234567890},
+        {"id": 7},
+        {"id": "00000000-0000-4000-8000-000000000002",
+         "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 0.1}, "canvas": [800, 600]}}
+    ]"#;
+    let ms: Markups = serde_json::from_str(text).unwrap();
+    assert_eq!((ms.len(), ms.unreadable_count()), (2, 2));
+    let back = serde_json::to_value(&ms).unwrap();
+    let want: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(back[0], want[0]);
+    assert_eq!(back[2], want[2]);
+    assert_eq!(back[1]["from_the_future"], want[1]["from_the_future"]);
+    assert_eq!(back[1]["marks"][0], want[1]["marks"][0]);
+    assert_eq!(back[3]["id"], want[3]["id"]);
+    // The second write is the same as the first.
+    let again: Markups = serde_json::from_value(back.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&again).unwrap(), back);
+}
+
+#[test]
+fn a_rename_works_when_a_mark_is_out_of_range() {
+    use crate::command::{Command, Editor};
+    let raw = json!([{
+        "id": "00000000-0000-4000-8000-000000000001",
+        "viewpoint": {"view": {"kind": "plan", "center": [0, 0], "zoom": 0.1}, "canvas": [800, 600]},
+        "marks": [{"id": 1, "kind": "pen", "points": [[1e300, 0.4]]}]
+    }]);
+    let mut doc = crate::model::Document::default();
+    doc.markups = serde_json::from_value(raw).unwrap();
+    let id = doc.markups.iter().next().unwrap().id;
+    let mut ed = Editor::new(doc);
+    let patch: MarkupPatch = serde_json::from_value(json!({"name": "Renamed"})).unwrap();
+    ed.execute(&Command::ModifyMarkup {
+        id,
+        patch: Box::new(patch),
+    })
+    .unwrap();
+    assert_eq!(
+        ed.doc().markups.get(id).unwrap().name.as_deref(),
+        Some("Renamed")
+    );
+}
+
+#[test]
+fn colours_that_do_not_read_say_so() {
+    let e = serde_json::from_value::<Rgb>(json!([1, 2, 300]))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("colour"), "{e}");
 }

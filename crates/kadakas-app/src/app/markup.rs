@@ -63,7 +63,8 @@ impl KadakasApp {
         let (layers, classes) = capture_visibility(self.session.editor.doc());
         viewpoint.layers = layers;
         viewpoint.classes = classes;
-        let cmd = logic::new_markup(viewpoint, &author_name(), now_ms(), None);
+        let model = kadakas_core::markup::model_digest(self.session.editor.doc());
+        let cmd = logic::new_markup(viewpoint, &author_name(), now_ms(), None, model);
         let Some(out) = self.exec_out(&cmd) else {
             return;
         };

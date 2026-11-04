@@ -2511,7 +2511,7 @@ impl<'a> Tx<'a> {
             // The markup of a step: the pointers and the parts that the two states do not share.
             + markups
                 .as_ref()
-                .map_or(0, |(b, a)| b.approx_bytes().min(4096) + a.approx_bytes().min(65536))
+                .map_or(0, |(b, a)| crate::markup::Markups::step_bytes(b, a))
             + history.as_ref().map_or(0, |(b, a)| {
                 a.as_ref()
                     .map_or(0, |h| h.bytes_not_in(b.as_ref()) as u64)

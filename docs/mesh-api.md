@@ -394,10 +394,10 @@ The methods are in the `review` domain of MCP, in `describe` (`describe.review.m
 
 | Method | What it does |
 |---|---|
-| `markup.list {issue?, origin?, limit?, offset?}` | The markups with a summary. `unreadable` counts entries of the file that this version keeps but cannot read. |
+| `markup.list {issue?, origin?, limit?, offset?}` | The markups with a summary. `unreadable` counts entries of the file that this version keeps but does not read. |
 | `markup.get {id, render?, width?, samples?, pick?}` | The marks, the viewpoint, the two pictures, `under` and `hint3d` for each mark. |
 | `markup.render {id, with_marks?, width?}` | One picture: the model at the viewpoint, with or without the marks. |
-| `markup.create {marks, viewpoint?, name?, note?, issue?}` | Draw a markup. Origin `agent`. One undo step. |
+| `markup.create {marks, viewpoint?, name?, note?, issue?}` | Draw a markup. Origin `agent`, author of the session, `now_ms` between 2000 and 2100. One undo step. |
 | `markup.update {id, name?, note?, issue?}` | Name, note and issue. `issue: null` takes the markup off its issue. |
 | `markup.clear {id, confirm?}` | Remove all marks. |
 | `markup.delete {id | ids, confirm?}` | Delete markups. |
@@ -416,13 +416,20 @@ A mark has these fields:
 - `width` is in points of the canvas.
 - `points` and `text` (notes). The points are relative to the view. X and y are 0 to 1 of the canvas width and height, y down. An arrow has two points (tail, tip). A rectangle and an ellipse have two opposite corners. A note has one. `markup.get` adds `points_canvas` (points of the stored canvas) and `bbox` (`relative` and `canvas`). It adds `known` too. It adds `closed`: a pen stroke that ends near its start counts as a closed shape.
 
-The reader keeps what it does not know. A newer file can have other fields, other kinds of mark and other entries. They stay in the document and go back to the file as they were.
+The reader keeps what it does not understand, as JSON values. This holds for four cases:
+
+- A field that this version does not know, in a markup or a mark.
+- A mark of a kind that this version does not know, or a mark with a colour or a point that does not read. The mark is kept as it was, flagged `known: false` and `raw: true`, and not drawn or picked. The other marks of the markup are not affected.
+- A whole entry that does not read as a markup. It stays in its place in the list.
+- A mark that reads but has a value out of range (a width of -5, a point of 1e300, a text of 100000 characters). It is kept as it is and not drawn. A load note counts these marks.
+
+Known fields are written in the form of this version (`800` becomes `800.0`, `[1, 2, 3]` becomes `#010203`), and the order of the keys of a kept value can change. The content is the same. A rename or a new note works also when a mark is out of range, because a command checks only what it changes.
 
 ### What is under a mark
 
 `under` comes from picking at the stored viewpoint.
 
-- **Plan.** The point of a mark is a point of the drawing. The hit test is the one a click uses (`kadakas_ui_core::hit`), except that a locked layer is met. A stroke is sampled along its length. A rectangle, an ellipse and a closed stroke are sampled inside. `under` is `{samples, nothing, ids, objects: [{id, kind, hits}], models: []}`.
+- **Plan.** The point of a mark is a point of the drawing. The hit test is the one a click uses (`kadakas_annot::hit`), except that a locked layer is met. A stroke is sampled along its length. A rectangle, an ellipse and a closed stroke are sampled inside. `under` is `{samples, nothing, ids, objects: [{id, kind, hits, selects?}], models: []}`. `ids` are the objects that the samples hit. `selects` is the group that a click on the object selects, when the object is a member of a group.
 - **3D.** Each sample casts a ray through the camera of the viewpoint. The code is the code of the pointer (AGR-10), so it is the code of `mesh.pick`. A surface model gives `models: [{model, faces, hits}]`. A nearer object that is not a surface model (a plant, a slab, a component) gives `objects`. `ids` lists both.
 - **Arrow.** `under` is `{tip, tail, ids}`. `tip` and `tail` have the shape above.
 - **Note.** The point of the note.
@@ -433,13 +440,19 @@ Only what is displayed (`Document::is_displayed`) is met. Grey layers and classe
 
 ### Bounds and cost
 
-At most 100 samples for a mark (25 by default) and 5000 samples for a call. When the budget runs out, `truncated` is true and a note says so. Ask for one markup at a time or lower `samples`.
+At most 100 samples for a mark (16 by default) and 5000 samples for a call. The app host runs these calls on the thread of its window, so a big model needs a small `samples`. The first call after an edit cuts the triangles of the models, which is the main cost. The index of the plan is kept for a revision of the document. When the budget runs out, `truncated` is true and a note says so. Ask for one markup at a time or lower `samples`.
 
 Measured with `crates/kadakas-api/tests/markup_cost.rs`: 200 surface models of about 2,000 triangles each, a top view, a debug build. The first call cuts the triangles of every model and takes 1.2 s. After that 25 samples take 3 ms, 250 samples take 39 ms, and the 4951 samples of a full budget take 0.86 s. One arrow with both pictures at 800 pixels takes 1.2 s in a debug build. The pictures cost the most.
 
 ### The pictures
 
+The pictures keep the shape of the canvas. `width` is the width you ask for, and the picture is fitted into the limits of the session (the longest side and the pixels) with the same shape. A canvas that is so long and thin that its short side would be under 16 pixels is refused with a message. The BCF snapshot follows the same rule.
+
 The clean picture is `render.png` with the camera of the viewpoint. A plan viewpoint becomes a parallel camera that looks straight down. It shows the part of the drawing that the canvas showed. The marks are painted over it with the geometry that the app uses (`kadakas_core::markup::draw`). They are antialiased, and a highlighter is half transparent. A build for the browser has no painter for the marks: `markup.get` leaves out `with_marks` and says so in `notes`.
+
+### Stale markups
+
+A markup is not part of a version. A restore leaves it, so a restore does not delete newer markups. The model moves on, though. A markup keeps a short digest of the model from the time it was made (objects with their kind, layer and box, and the edit count of each surface model). `markup.list` and `markup.get` give `stale`: true when the digest differs from the model now, `null` for a markup without a digest. The pictures and `under` always use the model now. The app shows `Model changed` in the list.
 
 ### Consent
 
@@ -447,7 +460,7 @@ A markup of another origin or author is never removed silently. `markup.delete` 
 
 ### BCF
 
-`issue.export_bcf` adds each markup of an exported issue as one more viewpoint. The snapshot is the picture with the marks, at most 1600 pixels on the long side. The answer has `markups: {in_file, left_out}`. The document does not change. `issue.import_bcf` keeps a snapshot as a picture and makes no markup from it.
+`issue.export_bcf` adds each markup of an exported issue as one more viewpoint. The snapshot is the picture with the marks, at most 1600 pixels on the long side. The selection of the viewpoint is the objects under the marks. An import of that file into the same document sees an extra viewpoint and reports a conflict for the issue, as for any other change. The answer has `markups: {in_file, left_out}`. The document does not change. `issue.import_bcf` keeps a snapshot as a picture and makes no markup from it.
 
 ### Events
 

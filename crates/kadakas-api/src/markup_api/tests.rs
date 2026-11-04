@@ -83,7 +83,7 @@ fn make(s: &mut Session, viewpoint: Value, marks: Value) -> String {
     ok(
         s,
         "markup.create",
-        json!({"viewpoint": viewpoint, "marks": marks, "now_ms": 7000}),
+        json!({"viewpoint": viewpoint, "marks": marks, "now_ms": 1_700_000_000_000_i64}),
     )["id"]
         .as_str()
         .unwrap()
@@ -118,7 +118,7 @@ fn an_agent_draws_a_markup_with_its_origin_and_one_undo_step() {
         &mut s,
         "markup.create",
         json!({
-            "name": "Hedge", "note": "Add a hedge here.", "now_ms": 7000,
+            "name": "Hedge", "note": "Add a hedge here.", "now_ms": 1_700_000_000_000_i64,
             "viewpoint": plan_view(),
             "marks": [
                 {"kind": "arrow", "points": [[0.2, 0.2], [0.5, 0.6]], "color": "#d62828"},
@@ -133,7 +133,7 @@ fn an_agent_draws_a_markup_with_its_origin_and_one_undo_step() {
     let m = get(&mut s, &id);
     assert_eq!(m["origin"], "agent");
     assert_eq!(m["name"], "Hedge");
-    assert_eq!(m["created_ms"], 7000);
+    assert_eq!(m["created_ms"], 1_700_000_000_000_i64);
     assert_eq!(m["viewpoint"]["mode"], "plan");
     assert_eq!(m["viewpoint"]["canvas"], json!([100.0, 100.0]));
     let marks = m["marks"].as_array().unwrap();
@@ -792,4 +792,232 @@ fn describe_has_the_markup_section_and_the_methods() {
     ] {
         assert!(crate::METHODS.iter().any(|(n, _)| *n == m), "{m}");
     }
+}
+
+fn size_of(v: &Value) -> (f64, f64) {
+    (v["width"].as_f64().unwrap(), v["height"].as_f64().unwrap())
+}
+
+#[test]
+fn the_pictures_keep_the_shape_of_the_canvas_within_the_limits() {
+    let mut s = session();
+    box_model(&mut s);
+    let shaped = |s: &mut Session, canvas: [f64; 2], width: u64| {
+        let mut vp = top_view();
+        vp["canvas"] = json!(canvas);
+        let id = make(s, vp, json!([mark("pen", json!([[0.1, 0.1], [0.9, 0.9]]))]));
+        ok(s, "markup.render", json!({"id": id, "width": width}))
+    };
+    let check = |r: &Value, canvas: [f64; 2]| {
+        let (w, h) = size_of(r);
+        // The side that is not the long one is within a pixel of the shape.
+        let ok = (h - w * canvas[1] / canvas[0]).abs() <= 1.0
+            || (w - h * canvas[0] / canvas[1]).abs() <= 1.0;
+        assert!(ok, "{w} x {h} for {canvas:?}");
+    };
+    // Wide, tall and huge requests: the shape stays within a pixel.
+    for (canvas, width) in [
+        ([1600.0, 1000.0], 4000u64),
+        ([1600.0, 1000.0], 16000),
+        ([1000.0, 1600.0], 800),
+        ([300.0, 1900.0], 400),
+        ([1900.0, 300.0], 3000),
+    ] {
+        let r = shaped(&mut s, canvas, width);
+        check(&r, canvas);
+        let (w, h) = size_of(&r);
+        assert!(
+            w <= 2048.0 && h <= 2048.0 && w * h <= 4_000_000.0,
+            "{w} x {h}"
+        );
+    }
+    // Small limits.
+    let mut limits = s.limits().clone();
+    limits.render_side = 1000;
+    limits.render_pixels = 500_000;
+    s.set_limits(limits);
+    for (canvas, width) in [
+        ([1600.0, 1000.0], 4000u64),
+        ([1000.0, 1600.0], 800),
+        ([1200.0, 800.0], 640),
+    ] {
+        let r = shaped(&mut s, canvas, width);
+        check(&r, canvas);
+        let (w, h) = size_of(&r);
+        assert!(
+            w <= 1000.0 && h <= 1000.0 && w * h <= 500_000.0,
+            "{w} x {h}"
+        );
+    }
+    // The pictures of markup.get have the same shape as the render.
+    let id = {
+        let mut vp = top_view();
+        vp["canvas"] = json!([1600, 1000]);
+        make(
+            &mut s,
+            vp,
+            json!([mark("pen", json!([[0.1, 0.1], [0.9, 0.9]]))]),
+        )
+    };
+    let g = ok(&mut s, "markup.get", json!({"id": id, "width": 4000}));
+    check(&g["clean"], [1600.0, 1000.0]);
+    assert_eq!(size_of(&g["clean"]), size_of(&g["with_marks"]));
+    // A canvas that cannot keep its shape within the limits is refused with a message.
+    let id = {
+        let mut vp = top_view();
+        vp["canvas"] = json!([16, 20000]);
+        make(
+            &mut s,
+            vp,
+            json!([mark("pen", json!([[0.1, 0.1], [0.9, 0.9]]))]),
+        )
+    };
+    let e = fail(&mut s, "markup.render", json!({"id": id, "width": 800}));
+    assert!(e.message.contains("too long and thin"), "{}", e.message);
+}
+
+#[test]
+fn the_bcf_snapshot_keeps_the_shape_of_the_canvas_for_tall_canvases_and_small_limits() {
+    let mut s = session();
+    box_model(&mut s);
+    let issue = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "T", "now_ms": 1_700_000_000_000_i64}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut vp = top_view();
+    vp["canvas"] = json!([400, 1800]);
+    let id = make(
+        &mut s,
+        vp,
+        json!([mark("pen", json!([[0.1, 0.1], [0.9, 0.9]]))]),
+    );
+    ok(&mut s, "markup.update", json!({"id": id, "issue": issue}));
+    let mut limits = s.limits().clone();
+    limits.render_side = 900;
+    s.set_limits(limits);
+    let out = ok(&mut s, "issue.export_bcf", json!({}));
+    assert_eq!(out["markups"]["in_file"], 1, "{out}");
+    let mut t = session();
+    ok(&mut t, "issue.import_bcf", json!({"base64": out["base64"]}));
+    let got = ok(&mut t, "issue.get", json!({"id": issue, "snapshots": true}));
+    let (_, w, h) = png(&json!({"png_base64": got["viewpoints"][0]["snapshot_base64"]}));
+    assert!(w <= 900 && h <= 900, "{w} x {h}");
+    assert!(
+        (f64::from(w) - f64::from(h) * 400.0 / 1800.0).abs() <= 1.0,
+        "{w} x {h}"
+    );
+}
+
+#[test]
+fn a_markup_knows_when_the_model_changed_after_it() {
+    let mut s = session();
+    let rect = filled_rect(&mut s);
+    let id = make(
+        &mut s,
+        plan_view(),
+        json!([mark("pen", json!([[0.5, 0.5]]))]),
+    );
+    assert_eq!(get(&mut s, &id)["stale"], false);
+    assert_eq!(
+        ok(&mut s, "markup.list", json!({}))["markups"][0]["stale"],
+        false
+    );
+    ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "move_objects", "ids": [rect], "delta": [5, 0]}}),
+    );
+    assert_eq!(get(&mut s, &id)["stale"], true);
+    assert_eq!(
+        ok(&mut s, "markup.list", json!({}))["markups"][0]["stale"],
+        true
+    );
+    // A markup does not make the model stale.
+    let other = make(&mut s, plan_view(), json!([]));
+    assert_eq!(get(&mut s, &other)["stale"], false);
+    make(
+        &mut s,
+        plan_view(),
+        json!([mark("pen", json!([[0.5, 0.5]]))]),
+    );
+    assert_eq!(get(&mut s, &other)["stale"], false);
+}
+
+#[test]
+fn a_member_of_a_group_names_the_group_that_a_click_selects() {
+    let mut s = session();
+    let a = filled_rect(&mut s);
+    let group = ok(
+        &mut s,
+        "execute",
+        json!({"command": {"op": "group", "ids": [a]}}),
+    )["created"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id = make(
+        &mut s,
+        plan_view(),
+        json!([mark("pen", json!([[0.5, 0.5]]))]),
+    );
+    let o = &get(&mut s, &id)["marks"][0]["under"]["objects"][0];
+    assert_eq!(o["id"], a);
+    assert_eq!(o["selects"], group, "{o}");
+}
+
+#[test]
+fn the_agent_cannot_choose_its_author_the_time_is_bounded_and_a_repeated_id_is_one_delete() {
+    let mut s = session();
+    let r = ok(
+        &mut s,
+        "markup.create",
+        json!({"viewpoint": plan_view(), "marks": [], "author": "Somebody Else"}),
+    );
+    assert_ne!(r["markup"]["author"], "Somebody Else");
+    let e = fail(
+        &mut s,
+        "markup.create",
+        json!({"viewpoint": plan_view(), "marks": [], "now_ms": -9_000_000_000_000_000_i64}),
+    );
+    assert!(e.message.contains("now_ms"), "{}", e.message);
+    let id = r["id"].as_str().unwrap();
+    let d = ok(&mut s, "markup.delete", json!({"ids": [id, id]}));
+    assert_eq!(d["count"], 1);
+}
+
+#[test]
+fn the_bcf_viewpoint_selects_the_objects_under_the_marks() {
+    let mut s = session();
+    let rect = filled_rect(&mut s);
+    let issue = ok(
+        &mut s,
+        "issue.create",
+        json!({"title": "T", "now_ms": 1_700_000_000_000_i64}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let id = make(
+        &mut s,
+        plan_view(),
+        json!([mark("rectangle", json!([[0.3, 0.3], [0.7, 0.7]]))]),
+    );
+    ok(&mut s, "markup.update", json!({"id": id, "issue": issue}));
+    let out = ok(&mut s, "issue.export_bcf", json!({}));
+    let mut t = session();
+    ok(&mut t, "issue.import_bcf", json!({"base64": out["base64"]}));
+    let got = ok(&mut t, "issue.get", json!({"id": issue}));
+    // The selection of the viewpoint is the object under the rectangle.
+    assert!(
+        got["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o == &json!(rect)),
+        "{got}"
+    );
 }

@@ -5,7 +5,10 @@
 //! geometry makes both pictures equal. All coordinates are points of the canvas the primitives
 //! are made for (from the top left corner, y down).
 
-use super::{HIGHLIGHT_ALPHA, HIGHLIGHT_FACTOR, Mark, MarkKind, Markup, Rgb, canvas_of};
+use super::{
+    HIGHLIGHT_ALPHA, HIGHLIGHT_FACTOR, MAX_MARK_TEXT_CHARS, MAX_WIDTH, MIN_WIDTH, Mark, MarkKind,
+    Markup, Rgb, canvas_of,
+};
 
 /// The opacity of the background of a note.
 pub const NOTE_BACKGROUND_ALPHA: f64 = 0.88;
@@ -52,8 +55,23 @@ pub enum Prim {
 /// canvas is than the canvas of the markup (lines keep their share of the width of the view).
 /// A mark of a kind this version does not know gives none.
 pub fn mark_prims(mark: &Mark, canvas: [f64; 2], scale: f64) -> Vec<Prim> {
-    let pts: Vec<[f64; 2]> = mark.points.iter().map(|p| canvas_of(*p, canvas)).collect();
-    let width = (mark.width * scale).max(0.5);
+    mark_prims_with(mark, &|p| canvas_of(p, canvas), scale)
+}
+
+/// Like [`mark_prims`], with the place of a relative point given by `place`. The app puts the
+/// frame of the markup on the canvas that is on the screen now. `scale` is how much the frame is
+/// magnified. A mark that is not drawable (a kind this version does not know, a value out of
+/// range) gives none. The width and the text are clamped here too, so no value freezes a frame.
+pub fn mark_prims_with(mark: &Mark, place: &dyn Fn([f64; 2]) -> [f64; 2], scale: f64) -> Vec<Prim> {
+    if !mark.drawable() {
+        return vec![];
+    }
+    let pts: Vec<[f64; 2]> = mark
+        .points
+        .iter()
+        .map(|p| place([p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)]))
+        .collect();
+    let width = (mark.width.clamp(MIN_WIDTH, MAX_WIDTH) * scale).max(0.5);
     match &mark.kind {
         MarkKind::Pen | MarkKind::Highlighter => {
             let highlight = mark.kind == MarkKind::Highlighter;
@@ -146,7 +164,7 @@ pub fn mark_prims(mark: &Mark, canvas: [f64; 2], scale: f64) -> Vec<Prim> {
         }
         MarkKind::Note if pts.len() == 1 => vec![Prim::Note {
             at: pts[0],
-            text: mark.text.clone(),
+            text: mark.text.chars().take(MAX_MARK_TEXT_CHARS).collect(),
             size: NOTE_TEXT_SIZE * scale,
             color: mark.color,
         }],
@@ -161,5 +179,18 @@ pub fn markup_prims(markup: &Markup, canvas: [f64; 2]) -> Vec<Prim> {
         .marks
         .iter()
         .flat_map(|m| mark_prims(m, canvas, scale))
+        .collect()
+}
+
+/// The primitives of all marks with the places given by `place`.
+pub fn markup_prims_with(
+    markup: &Markup,
+    place: &dyn Fn([f64; 2]) -> [f64; 2],
+    scale: f64,
+) -> Vec<Prim> {
+    markup
+        .marks
+        .iter()
+        .flat_map(|m| mark_prims_with(m, place, scale))
         .collect()
 }

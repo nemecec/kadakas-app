@@ -1314,7 +1314,7 @@
       "type": "object"
     },
     "Mark": {
-      "description": "One mark of a markup.",
+      "description": "The form of a mark in a file and in a command.",
       "properties": {
         "color": {
           "$ref": "#/$defs/Rgb",
@@ -1393,6 +1393,13 @@
             "$ref": "#/$defs/Mark"
           },
           "type": "array"
+        },
+        "model": {
+          "description": "A short digest of the model when the markup was made ([`model_digest`]). A markup is not\npart of a version, so this tells when the model has changed since: the picture and what\nis under the marks then belong to an older model.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "type": [

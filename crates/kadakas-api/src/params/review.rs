@@ -431,11 +431,11 @@ pub struct MarkupGetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render: Option<bool>,
     /// width of the pictures in pixels
-    #[schemars(extend("default" = 800))]
+    #[schemars(extend("default" = 640))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Int>,
     /// picks per mark, 1 to 100
-    #[schemars(extend("default" = 25))]
+    #[schemars(extend("default" = 16))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<Int>,
     /// find what is under each mark
@@ -519,7 +519,7 @@ pub struct MarkupRenderParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub with_marks: Option<bool>,
     /// width in pixels
-    #[schemars(extend("default" = 800))]
+    #[schemars(extend("default" = 640))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Int>,
 }
