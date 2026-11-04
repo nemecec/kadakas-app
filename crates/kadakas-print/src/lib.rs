@@ -8,6 +8,7 @@ pub mod annot;
 pub mod areas;
 pub mod compose;
 pub mod display;
+pub mod markup;
 pub mod pdf;
 pub mod plan;
 pub mod png;

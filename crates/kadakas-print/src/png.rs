@@ -16,7 +16,7 @@ pub const MAX_SIDE: u32 = 12_000;
 /// Largest picture in pixels (64 megapixels, about 256 MB as RGBA).
 pub const MAX_PIXELS: u64 = 64_000_000;
 
-fn font() -> FontRef<'static> {
+pub(crate) fn font() -> FontRef<'static> {
     FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("the bundled font is valid")
 }
 

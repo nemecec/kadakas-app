@@ -158,7 +158,7 @@ pub enum ViewSpec {
 }
 
 impl ViewSpec {
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let finite = |v: &[f64]| v.iter().all(|x| x.is_finite());
         let lim = crate::model::MAX_COORD;
         match self {

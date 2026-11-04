@@ -404,6 +404,126 @@ pub struct IssueExportBcfParams {
     pub overwrite: Option<bool>,
 }
 
+// Parameters of `markup.list`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupListParams {
+    /// only the markups of this issue
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    /// user or agent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[schemars(extend("default" = 200))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<Int>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Int>,
+}
+
+// Parameters of `markup.get`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupGetParams {
+    pub id: String,
+    /// add the two pictures: the model at the stored viewpoint without and with the marks
+    #[schemars(extend("default" = true))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<bool>,
+    /// width of the pictures in pixels
+    #[schemars(extend("default" = 800))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Int>,
+    /// picks per mark, 1 to 100
+    #[schemars(extend("default" = 25))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples: Option<Int>,
+    /// find what is under each mark
+    #[schemars(extend("default" = true))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick: Option<bool>,
+}
+
+// Parameters of `markup.create`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupCreateParams {
+    /// [{kind (pen, highlighter, arrow, rectangle, ellipse, note), points (0 to 1 of the canvas, y down) or points_canvas (points of the canvas), color? (#rrggbb), width? (points), text? (notes)}]
+    pub marks: Vec<Obj>,
+    /// {view? (plan or camera), fov? (degrees), canvas? ([width, height] in points), capture_visibility?}
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewpoint: Option<Obj>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// an issue ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub now_ms: Option<Int>,
+}
+
+// Parameters of `markup.update`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupUpdateParams {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// an issue ID, or null to take the markup off its issue
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Nullable<String>")]
+    pub issue: Option<Option<String>>,
+}
+
+// Parameters of `markup.delete`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("allOf" = [{"anyOf": [{"required": ["id"]}, {"required": ["ids"]}]}]))]
+pub struct MarkupDeleteParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    /// only after the person said yes to the delete of work of somebody else
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<bool>,
+}
+
+// Parameters of `markup.clear`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupClearParams {
+    pub id: String,
+    /// only after the person said yes to the removal of work of somebody else
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<bool>,
+}
+
+// Parameters of `markup.render`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkupRenderParams {
+    pub id: String,
+    /// draw the marks on the picture
+    #[schemars(extend("default" = true))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub with_marks: Option<bool>,
+    /// width in pixels
+    #[schemars(extend("default" = 800))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Int>,
+}
+
 // Parameters of `dxf.compare`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -455,5 +575,12 @@ entries! {
     "issue.delete" => IssueDeleteParams,
     "issue.import_bcf" => IssueImportBcfParams,
     "issue.export_bcf" => IssueExportBcfParams,
+    "markup.list" => MarkupListParams,
+    "markup.get" => MarkupGetParams,
+    "markup.create" => MarkupCreateParams,
+    "markup.update" => MarkupUpdateParams,
+    "markup.delete" => MarkupDeleteParams,
+    "markup.clear" => MarkupClearParams,
+    "markup.render" => MarkupRenderParams,
     "dxf.compare" => DxfCompareParams,
 }

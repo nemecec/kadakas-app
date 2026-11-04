@@ -180,7 +180,9 @@ impl From<kadakas_core::command::CommandError> for RpcError {
             | E::NoClass(_)
             | E::NoResource(_)
             | E::NoIssue(_)
-            | E::NoComment(_) => Self::not_found(e),
+            | E::NoComment(_)
+            | E::NoMarkup(_)
+            | E::NoMark(..) => Self::not_found(e),
             E::ResourceInUse(..) | E::LayerNotEmpty(_) | E::LayerLocked(_) => Self::conflict(e),
             E::MeshToSurface(ref c) => convert_rpc(c),
             E::LastLayer | E::Invalid(_) | E::Surface(_) => Self::validation(e),

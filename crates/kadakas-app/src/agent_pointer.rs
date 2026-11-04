@@ -10,7 +10,7 @@ use egui::{Pos2, Rect};
 use glam::{DVec2, DVec3, Vec2};
 use kadakas_api::{Aim, PixelSize, PointerInput, Session};
 use kadakas_core::model::ObjectId;
-use kadakas_render::{Camera, Projection};
+use kadakas_render::Camera;
 use kadakas_ui_core::tools::Ctx;
 
 /// What the object under the pointer of the plan depends on.
@@ -93,51 +93,7 @@ pub fn show_plan(session: &mut Session, frame: &Frame, under: Option<(DVec2, Vec
     });
 }
 
-/// The ray under a point of a 3D view, in drawing coordinates. `at` is in points from the top
-/// left corner of a view of `size` points. `scene_origin` is the origin of the scene: the camera
-/// works in coordinates less this point. A perspective ray starts at the eye. A parallel ray
-/// starts on a plane of the view, which can be inside the models, so it starts back by the
-/// distance of the camera and `reach` (mm), as the picking of objects does. The size of a
-/// point on the screen is given along the ray, so the size at the depth of a hit is the depth
-/// over the cosine of the angle between the ray and the view direction.
-pub fn ray_under(
-    camera: &Camera,
-    scene_origin: DVec3,
-    at: Vec2,
-    size: Vec2,
-    reach: f32,
-) -> Option<Aim> {
-    if size.x < 1.0 || size.y < 1.0 || !at.is_finite() {
-        return None;
-    }
-    let aspect = size.x / size.y;
-    let ndc = Vec2::new(at.x / size.x * 2.0 - 1.0, 1.0 - at.y / size.y * 2.0);
-    let (mut origin, dir) = camera.ray(ndc, aspect);
-    let ortho = camera.projection == Projection::Orthographic;
-    if ortho {
-        origin -= dir * (camera.distance + reach);
-    }
-    let direction = dir.as_dvec3().try_normalize()?;
-    let pixel = if ortho {
-        PixelSize {
-            constant: f64::from(camera.half_height() * 2.0 / size.y),
-            per_distance: 0.0,
-        }
-    } else {
-        // The size at a depth is depth * 2 tan(fov / 2) / height. The depth of a point at a
-        // distance along the ray is distance * cos(angle to the view direction).
-        let cos = f64::from(dir.dot(camera.forward())).max(0.0);
-        PixelSize {
-            constant: 0.0,
-            per_distance: f64::from(2.0 * (camera.fov_y / 2.0).tan() / size.y) * cos,
-        }
-    };
-    Some(Aim::Ray {
-        origin: scene_origin + origin.as_dvec3(),
-        direction,
-        pixel,
-    })
-}
+pub use kadakas_api::ray_under;
 
 /// Shows the pointer of the 3D view.
 pub fn show_3d(

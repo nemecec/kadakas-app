@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
-use glam::{DVec2, DVec3};
+use glam::{DVec2, DVec3, Vec2};
+use kadakas_render::{Camera, Projection};
 use serde_json::{Value, json};
 
 use kadakas_core::mesh::Scene;
@@ -103,9 +104,9 @@ struct Sample {
 /// What a ray meets: the nearest surface model (the `hit`), or the nearest other object when it
 /// is in front of every surface model (then `hit` is `None`).
 #[derive(Clone, Debug, Default)]
-struct Pick {
-    hit: Option<Value>,
-    nearest_object: Option<Value>,
+pub(crate) struct Pick {
+    pub(crate) hit: Option<Value>,
+    pub(crate) nearest_object: Option<Value>,
 }
 
 /// The pick of a ray, kept for one ray and one revision.
@@ -242,7 +243,12 @@ impl Session {
     /// place: the hit is then `None` and `nearest_object` names that object. With `pixel`, a ray
     /// less than one point away from the ray of the last pick that had a hit gives that pick
     /// again (the status bar asks on every move of the pointer).
-    fn ray_pick(&mut self, origin: DVec3, direction: DVec3, pixel: Option<PixelSize>) -> Pick {
+    pub(crate) fn ray_pick(
+        &mut self,
+        origin: DVec3,
+        direction: DVec3,
+        pixel: Option<PixelSize>,
+    ) -> Pick {
         let revision = self.editor.revision();
         let ray = [
             origin.x,
@@ -606,4 +612,53 @@ fn ray_triangle(origin: DVec3, dir: DVec3, tri: &[DVec3; 3]) -> Option<f64> {
     }
     let t = e2.dot(q) * inv;
     (t > 0.0).then_some(t)
+}
+
+/// The ray under a point of a 3D view, in drawing coordinates. `at` is in points from the top
+/// left corner of a view of `size` points. `scene_origin` is the origin of the scene: the camera
+/// works in coordinates less this point. A perspective ray starts at the eye. A parallel ray
+/// starts on a plane of the view, which can be inside the models, so it starts back by the
+/// distance of the camera and `reach` (mm), as the picking of objects does. The size of a
+/// point on the screen is given along the ray, so the size at the depth of a hit is the depth
+/// over the cosine of the angle between the ray and the view direction.
+///
+/// The pointer of the person (AGR-10) and the marks of a markup (REV-11) use it, so a mark
+/// is picked like the pointer is.
+pub fn ray_under(
+    camera: &Camera,
+    scene_origin: DVec3,
+    at: Vec2,
+    size: Vec2,
+    reach: f32,
+) -> Option<Aim> {
+    if size.x < 1.0 || size.y < 1.0 || !at.is_finite() {
+        return None;
+    }
+    let aspect = size.x / size.y;
+    let ndc = Vec2::new(at.x / size.x * 2.0 - 1.0, 1.0 - at.y / size.y * 2.0);
+    let (mut origin, dir) = camera.ray(ndc, aspect);
+    let ortho = camera.projection == Projection::Orthographic;
+    if ortho {
+        origin -= dir * (camera.distance + reach);
+    }
+    let direction = dir.as_dvec3().try_normalize()?;
+    let pixel = if ortho {
+        PixelSize {
+            constant: f64::from(camera.half_height() * 2.0 / size.y),
+            per_distance: 0.0,
+        }
+    } else {
+        // The size at a depth is depth * 2 tan(fov / 2) / height. The depth of a point at a
+        // distance along the ray is distance * cos(angle to the view direction).
+        let cos = f64::from(dir.dot(camera.forward())).max(0.0);
+        PixelSize {
+            constant: 0.0,
+            per_distance: f64::from(2.0 * (camera.fov_y / 2.0).tan() / size.y) * cos,
+        }
+    };
+    Some(Aim::Ray {
+        origin: scene_origin + origin.as_dvec3(),
+        direction,
+        pixel,
+    })
 }
