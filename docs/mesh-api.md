@@ -386,6 +386,73 @@ A pointer move in 3D runs one ray against the surface models. A box around each 
 
 The deliberate gesture is not built: Alt+click or a Point tool that sends `view.pointed {model, face, point, ids}` as an event. Events carry document changes only (PLAT-02). Selection events are still open (API-17). The gesture needs a second kind of event first. Until then the agent reads `pointer` when the person says "this".
 
+## Markup on the view (REV-11)
+
+A person inks a comment on the live view. The agent reads the ink with `markup.get` and needs no screenshot round trip. A markup is review data of the document, like an issue. It is not an object. `objects.list` does not list it, and no quantity, IFC or DXF export has it.
+
+The methods are in the `review` domain of MCP, in `describe` (`describe.review.markup`) and in Python (`doc.markups`):
+
+| Method | What it does |
+|---|---|
+| `markup.list {issue?, origin?, limit?, offset?}` | The markups with a summary. `unreadable` counts entries of the file that this version keeps but cannot read. |
+| `markup.get {id, render?, width?, samples?, pick?}` | The marks, the viewpoint, the two pictures, `under` and `hint3d` for each mark. |
+| `markup.render {id, with_marks?, width?}` | One picture: the model at the viewpoint, with or without the marks. |
+| `markup.create {marks, viewpoint?, name?, note?, issue?}` | Draw a markup. Origin `agent`. One undo step. |
+| `markup.update {id, name?, note?, issue?}` | Name, note and issue. `issue: null` takes the markup off its issue. |
+| `markup.clear {id, confirm?}` | Remove all marks. |
+| `markup.delete {id | ids, confirm?}` | Delete markups. |
+
+The choice for pictures: `markup.get` gives both pictures in one call, and `markup.render` gives one. There is no `markup` option of `render.png`. The viewpoint of a markup needs the canvas size and the marks, and `render.png` does not know them.
+
+### The model
+
+A markup has `id`, `name?`, `author`, `origin` (`user` or `agent`), `time`, `viewpoint`, `marks`, `issue?` and `note`. The viewpoint is `{view, fov?, canvas, layers, classes}`. `view` is `{kind: plan, center, zoom}` or `{kind: camera, target, yaw, pitch, distance, perspective}`. The plan center is the middle of the canvas in mm, and the zoom is points per mm. The camera uses drawing mm and radians. `fov` is the vertical field of view of the 3D camera in degrees, 45 when left out. `canvas` is the size of the window area in points.
+
+A mark has these fields:
+
+- `id` goes up, so the order of creation shows.
+- `kind` is `pen`, `highlighter`, `arrow`, `rectangle`, `ellipse` or `note`.
+- `color` is `#rrggbb`.
+- `width` is in points of the canvas.
+- `points` and `text` (notes). The points are relative to the view. X and y are 0 to 1 of the canvas width and height, y down. An arrow has two points (tail, tip). A rectangle and an ellipse have two opposite corners. A note has one. `markup.get` adds `points_canvas` (points of the stored canvas) and `bbox` (`relative` and `canvas`). It adds `known` too. It adds `closed`: a pen stroke that ends near its start counts as a closed shape.
+
+The reader keeps what it does not know. A newer file can have other fields, other kinds of mark and other entries. They stay in the document and go back to the file as they were.
+
+### What is under a mark
+
+`under` comes from picking at the stored viewpoint.
+
+- **Plan.** The point of a mark is a point of the drawing. The hit test is the one a click uses (`kadakas_ui_core::hit`), except that a locked layer is met. A stroke is sampled along its length. A rectangle, an ellipse and a closed stroke are sampled inside. `under` is `{samples, nothing, ids, objects: [{id, kind, hits}], models: []}`.
+- **3D.** Each sample casts a ray through the camera of the viewpoint. The code is the code of the pointer (AGR-10), so it is the code of `mesh.pick`. A surface model gives `models: [{model, faces, hits}]`. A nearer object that is not a surface model (a plant, a slab, a component) gives `objects`. `ids` lists both.
+- **Arrow.** `under` is `{tip, tail, ids}`. `tip` and `tail` have the shape above.
+- **Note.** The point of the note.
+
+Only what is displayed (`Document::is_displayed`) is met. Grey layers and classes are skipped. Locked ones are met. The layers and classes that show now decide. `viewpoint.visibility` says whether they match the markup and lists the ones that differ.
+
+`hint3d` gives a place to "a tree here": `{at, kind, point, ...}`. `at` is `tip` (arrow), `center` (rectangle, ellipse), `first_point` (stroke) or `point` (note). `kind` is `surface` (with `model`, `face`, `distance`), `object` (with `id`) or `none`. It is `ground` for the plane z = 0 of the drawing. In the plan `kind` is `plan` and `point` is `[x, y]` with `ids`. The points are drawing coordinates in mm.
+
+### Bounds and cost
+
+At most 100 samples for a mark (25 by default) and 5000 samples for a call. When the budget runs out, `truncated` is true and a note says so. Ask for one markup at a time or lower `samples`.
+
+Measured with `crates/kadakas-api/tests/markup_cost.rs`: __COST__
+
+### The pictures
+
+The clean picture is `render.png` with the camera of the viewpoint. A plan viewpoint becomes a parallel camera that looks straight down. It shows the part of the drawing that the canvas showed. The marks are painted over it with the geometry that the app uses (`kadakas_core::markup::draw`). They are antialiased, and a highlighter is half transparent. A build for the browser has no painter for the marks: `markup.get` leaves out `with_marks` and says so in `notes`.
+
+### Consent
+
+A markup of another origin or author is never removed silently. `markup.delete` and `markup.clear` fail with the conflict reason `confirm_needed` and `ask_the_person` until the caller sends `confirm: true`. The check uses who the session is, as `issue.delete` does.
+
+### BCF
+
+`issue.export_bcf` adds each markup of an exported issue as one more viewpoint. The snapshot is the picture with the marks, at most 1600 pixels on the long side. The answer has `markups: {in_file, left_out}`. The document does not change. `issue.import_bcf` keeps a snapshot as a picture and makes no markup from it.
+
+### Events
+
+A change is an `events.change` with `document.markups` true. `events.subscribe` takes the kind `markups`.
+
 ## Errors
 
 A refusal is a validation error (code 3). A missing object, layer, class, vertex, edge or face is `not_found` (code 2). A locked layer is a `conflict` (code 5). A size limit is `limit` (code 6). A wrong parameter is `invalid_params` (code -32602) and has no `error_id`.
@@ -554,5 +621,6 @@ The usual methods work on these objects: `selection.set`, and the commands `move
 | Selected parts of the 3D editor | `crates/kadakas-modeler/src/parts_sync.rs` |
 | Camera round trip | `crates/kadakas-app/src/agent_view.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs` |
 | The pointer of the person (AGR-10) | `crates/kadakas-api/src/pointer_api.rs`, `crates/kadakas-app/src/agent_pointer.rs`, `crates/kadakas-api/tests/pointer.rs`, `crates/kadakas-api/tests/pointer_cost.rs`, `crates/kadakas-app/src/app/agent_view_tests.rs`, `tests/behavior/test_agent_view.py` |
+| Markup on the view (REV-11) | `crates/kadakas-api/src/markup_api.rs`, `markup_api/pick.rs`, `markup_api/render.rs`, `crates/kadakas-print/src/markup.rs`, `crates/kadakas-api/src/markup_api/tests.rs`, `crates/kadakas-api/tests/markup_cost.rs`, `tests/behavior/test_markup.py`, `python/tests/test_markup.py` |
 
 After a change to a method, renew the Python client with `python python/tools/codegen.py`.

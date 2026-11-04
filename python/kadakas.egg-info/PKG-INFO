@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: kadakas
+Version: 0.1.0rc0.dev0
+Summary: Python API for Kadakas, the CAD app for landscape architects: scripts, plug-in objects and automation over JSON-RPC.
+License: Apache-2.0 OR MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Provides-Extra: test
+Requires-Dist: pytest>=8; extra == "test"
+
+# kadakas (Python)
+
+Python API for Kadakas. It talks to a Kadakas session over JSON-RPC. The package has no
+dependencies.
+
+```
+uv pip install -e python      # or: pip install -e python
+```
+
+```python
+import kadakas
+
+with kadakas.open() as doc:          # starts `kadakas serve`
+    doc.add.line([0, 0], [5000, 0])
+    print(doc.summary()["objects_by_kind"])
+```
+
+Inside a script that the Kadakas app starts, `kadakas.connect()` joins the live document.
+See `docs/scripting.md` in the repository for the full guide.

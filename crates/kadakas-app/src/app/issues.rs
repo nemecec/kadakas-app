@@ -146,21 +146,38 @@ impl KadakasApp {
         if !self.read_only() {
             self.session.selection = plan.selection.clone();
         }
-        match &plan.view {
-            Some(spec @ ViewSpec::Plan { .. }) => {
+        if let Some(spec) = &plan.view {
+            self.restore_view_spec(spec);
+        }
+        self.status = if plan.missing > 0 {
+            tr!(
+                "issues-ui-opened-missing",
+                title = issue.title.clone(),
+                count = plan.missing
+            )
+        } else {
+            tr!("issues-ui-opened", title = issue.title.clone())
+        };
+    }
+
+    /// Shows a view of a viewpoint: a plan view switches to the plan, a camera switches to the 3D
+    /// view with that camera and projection. The issues (REV-05) and the markups (REV-11) use it.
+    pub(super) fn restore_view_spec(&mut self, spec: &ViewSpec) {
+        match spec {
+            ViewSpec::Plan { .. } => {
                 self.set_standard_view(StandardView::Plan);
                 let (lo, hi) = self.plan_rect();
                 if let Some(v) = logic::plan_view(spec, lo, hi) {
                     self.view = v;
                 }
             }
-            Some(ViewSpec::Camera {
+            ViewSpec::Camera {
                 target,
                 yaw,
                 pitch,
                 distance,
                 perspective,
-            }) => {
+            } => {
                 if self.plan() {
                     self.set_standard_view(StandardView::RightIsometric);
                 }
@@ -172,17 +189,7 @@ impl KadakasApp {
                 // The standard view is applied in the next frame and would turn the camera back.
                 self.pending_camera = Some((*target, *yaw, *pitch, *distance));
             }
-            None => {}
         }
-        self.status = if plan.missing > 0 {
-            tr!(
-                "issues-ui-opened-missing",
-                title = issue.title.clone(),
-                count = plan.missing
-            )
-        } else {
-            tr!("issues-ui-opened", title = issue.title.clone())
-        };
     }
 
     /// A camera of a viewpoint waits for the 3D view to follow the settings of the session.

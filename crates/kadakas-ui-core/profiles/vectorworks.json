@@ -290,6 +290,9 @@
     "view.left_rear_isometric": [
       "Alt+Shift+7"
     ],
+    "view.markup": [
+      "Cmd/Ctrl+Alt+M"
+    ],
     "view.pan_down": [
       "Down"
     ],
@@ -442,6 +445,8 @@
         "view.zoom_fit",
         "view.history_previous",
         "view.history_next",
+        "-",
+        "view.markup",
         "-",
         "view.show_grid",
         "view.snapping",

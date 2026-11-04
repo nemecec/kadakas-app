@@ -1313,6 +1313,223 @@
       ],
       "type": "object"
     },
+    "Mark": {
+      "description": "One mark of a markup.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgb",
+          "default": "#d62828"
+        },
+        "id": {
+          "default": 0,
+          "description": "The number of the mark in its markup. Numbers go up, so the order of creation shows. A\nnumber of 0 in a command means \"make the next one\".",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/MarkKind"
+        },
+        "points": {
+          "description": "Points relative to the view: x and y from 0 to 1, y down. A pen or highlighter stroke has\nany number of points. An arrow has two (tail, tip). A rectangle and an ellipse have two\nopposite corners. A note has one.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "text": {
+          "description": "The text of a note.",
+          "type": "string"
+        },
+        "width": {
+          "default": 3.0,
+          "description": "The width of the line in points of the canvas the markup was drawn on. A highlighter is\ndrawn [`HIGHLIGHT_FACTOR`] times wider.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "points"
+      ],
+      "type": "object"
+    },
+    "MarkKind": {
+      "description": "pen, highlighter, arrow, rectangle, ellipse or note. Another text is a kind of a newer version and stays as it is.",
+      "type": "string"
+    },
+    "Markup": {
+      "description": "A markup: marks drawn on a view.",
+      "properties": {
+        "author": {
+          "default": "",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/MarkupId",
+          "default": "00000000-0000-0000-0000-000000000000",
+          "description": "The ID. A nil ID in a command means \"make a new one\"."
+        },
+        "issue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The issue (REV-04) that the markup belongs to."
+        },
+        "marks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Mark"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "description": "A text note for the whole markup.",
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin",
+          "default": "user",
+          "description": "Who made it: a person in the app or an agent."
+        },
+        "time": {
+          "default": 0,
+          "description": "Milliseconds since 1970 (UTC).",
+          "format": "int64",
+          "type": "integer"
+        },
+        "viewpoint": {
+          "$ref": "#/$defs/MarkupViewpoint"
+        }
+      },
+      "required": [
+        "viewpoint"
+      ],
+      "type": "object"
+    },
+    "MarkupId": {
+      "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
+    "MarkupPatch": {
+      "description": "The changes of a markup that `ModifyMarkup` makes. A field that is left out stays.",
+      "properties": {
+        "issue": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssueId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`Some(None)` takes the markup off its issue."
+        },
+        "name": {
+          "default": null,
+          "description": "`Some(\"\")` clears the name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MarkupViewpoint": {
+      "description": "The viewpoint a markup was drawn in.",
+      "properties": {
+        "canvas": {
+          "description": "The size of the canvas the markup was drawn on, in points (width, height).",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "classes": {
+          "description": "Visibility of classes when the markup was made.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/ClassId"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "fov": {
+          "description": "The vertical field of view of the 3D camera in degrees. Without it the default of the\napp (45) is used.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "layers": {
+          "description": "Visibility of layers when the markup was made (`true`: visible).",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/LayerId"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "view": {
+          "$ref": "#/$defs/ViewSpec",
+          "description": "The plan view (`kind: plan`, center in mm, zoom in points per mm) or the 3D camera\n(`kind: camera`, target in drawing mm, yaw and pitch in radians, distance, perspective)."
+        }
+      },
+      "required": [
+        "view",
+        "canvas"
+      ],
+      "type": "object"
+    },
     "ObjectId": {
       "description": "An ID: a UUID text such as 0190f1c2-7a3b-7c1d-8e2f-123456789abc.",
       "maxLength": 36,
@@ -1416,6 +1633,10 @@
       "maxLength": 36,
       "minLength": 36,
       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "type": "string"
+    },
+    "Rgb": {
+      "pattern": "^#[0-9a-fA-F]{6}$",
       "type": "string"
     },
     "SavedView": {
@@ -4720,6 +4941,164 @@
         "issue",
         "viewpoint",
         "now"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a markup (REV-11, `crate::markup`): ink drawn on a view, with its viewpoint and its\nmarks. A nil `markup.id` makes a new ID (returned first in `created`). Marks without a\nnumber get one. One undo step.",
+      "properties": {
+        "markup": {
+          "$ref": "#/$defs/Markup"
+        },
+        "op": {
+          "const": "add_markup",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "markup"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the name, the note or the issue of a markup. A patch that changes nothing makes no\nundo step.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "modify_markup",
+          "type": "string"
+        },
+        "patch": {
+          "$ref": "#/$defs/MarkupPatch"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "patch"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete a markup with its marks.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "delete_markup",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Add a mark to a markup. A mark number of 0 makes the next number (returned in `created`\nas the markup ID is not new, the number is in the `report` of the outcome as `mark`).\nOne undo step, so one drawn stroke is one step.",
+      "properties": {
+        "mark": {
+          "$ref": "#/$defs/Mark"
+        },
+        "markup": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "add_mark",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "markup",
+        "mark"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete one mark of a markup.",
+      "properties": {
+        "mark": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "markup": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "delete_mark",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "markup",
+        "mark"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change the colour or the width of a mark.",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rgb"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mark": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "markup": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "set_mark_style",
+          "type": "string"
+        },
+        "width": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "markup",
+        "mark"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete all marks of a markup. The markup, its viewpoint and its note stay.",
+      "properties": {
+        "markup": {
+          "$ref": "#/$defs/MarkupId"
+        },
+        "op": {
+          "const": "clear_markup",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "markup"
       ],
       "type": "object"
     },

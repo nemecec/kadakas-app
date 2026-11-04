@@ -62,6 +62,8 @@ const SAME_OK: &[&str] = &[
     "io-dialog-import",
     "io-dialog-ifc4-ifc4-add2-tc1",
     "issues-ui-bcf",
+    "markup-ui-mode-3d",
+    "markup-ui-agent",
     "issues-ui-bcf-import-heading",
     "issues-ui-bcf-error",
     "panels-import-menu",

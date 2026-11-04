@@ -3341,6 +3341,55 @@ if TYPE_CHECKING:
         'version': Literal['3.0', '2.1'] | None,
     }, total=False)
 
+    MarkupListParams = TypedDict("MarkupListParams", {
+        'issue': str | None,
+        'limit': int | None,
+        'offset': int | None,
+        'origin': str | None,
+    }, total=False)
+
+    MarkupGetParams = TypedDict("MarkupGetParams", {
+        'id': Required[str],
+        'pick': bool | None,
+        'render': bool | None,
+        'samples': int | None,
+        'width': int | None,
+    }, total=False)
+
+    MarkupCreateParams = TypedDict("MarkupCreateParams", {
+        'author': str | None,
+        'issue': str | None,
+        'marks': Required[list[dict[str, Any]]],
+        'name': str | None,
+        'note': str | None,
+        'now_ms': int | None,
+        'viewpoint': dict[str, Any] | None,
+    }, total=False)
+
+    MarkupUpdateParams = TypedDict("MarkupUpdateParams", {
+        'id': Required[str],
+        'issue': str | None,
+        'name': str | None,
+        'note': str | None,
+    }, total=False)
+
+    MarkupDeleteParams = TypedDict("MarkupDeleteParams", {
+        'confirm': bool | None,
+        'id': str | None,
+        'ids': list[str] | None,
+    }, total=False)
+
+    MarkupClearParams = TypedDict("MarkupClearParams", {
+        'confirm': bool | None,
+        'id': Required[str],
+    }, total=False)
+
+    MarkupRenderParams = TypedDict("MarkupRenderParams", {
+        'id': Required[str],
+        'width': int | None,
+        'with_marks': bool | None,
+    }, total=False)
+
     DxfCompareParams = TypedDict("DxfCompareParams", {
         'base': Required[str],
         'new': Required[str],
@@ -6048,6 +6097,48 @@ class Api:
         JSON-RPC method ``issue.export_bcf``."""
         return self._call("issue.export_bcf", params or None)
 
+    def markup_list(self, **params: "Unpack[MarkupListParams]") -> Any:
+        """List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset}.
+
+        JSON-RPC method ``markup.list``."""
+        return self._call("markup.list", params or None)
+
+    def markup_get(self, **params: "Unpack[MarkupGetParams]") -> Any:
+        """One markup with everything an agent needs to see what was drawn. params: {id, render? (default true: add the two pictures), width? (pixels of the pictures, default 800), samples? (picks per mark, default 25, at most 100), pick? (default true: find what is under each mark)}. Returns {id, name, author, origin, created, created_ms, note, issue, viewpoint: {mode, view, fov, canvas (points), layers, classes, visibility: {matches, layers_differ, classes_differ}}, marks: [{id, kind, color, width, points (0 to 1 of the canvas, y down), points_canvas (points of the stored canvas), text, bbox: {relative: [x0, y0, x1, y1], canvas: [x0, y0, x1, y1]}, closed, under, hint3d}], clean: {png_base64, width, height} (the model at the stored viewpoint, no marks), with_marks: {png_base64, width, height}, notes}. `under` lists what the mark points at. A plan gives object ids found by hit testing along a stroke or inside a closed shape. A 3D view casts a ray for each sample like mesh.pick and gives {models: [{model, faces, hits}], objects: [{id, kind, hits}], ids}. An arrow gives {tip, tail, ids}. `hint3d` is the first surface or ground point behind the arrow tip, the center of a shape, the first point of a stroke or the place of a note, in drawing coordinates: {at, kind (surface, object, ground, plan, none), point, model?, face?, id?}. Picking uses the layers and classes that show now and skips grey ones. A call makes at most 5000 samples. `truncated` is true when that budget ran out.
+
+        JSON-RPC method ``markup.get``."""
+        return self._call("markup.get", params or None)
+
+    def markup_create(self, **params: "Unpack[MarkupCreateParams]") -> Any:
+        """Draw a markup. One undo step. The origin is the origin of the session (agent for an agent). params: {marks: [{kind (pen, highlighter, arrow, rectangle, ellipse or note), points (0 to 1 of the canvas width and height, y down) or points_canvas (points of the canvas), color? (#rrggbb, default red), width? (points, default 3), text? (a note needs it)}], viewpoint? {view? ({kind: plan, center: [x, y], zoom} or {kind: camera, target: [x, y, z], yaw, pitch, distance, perspective?}, default the current view), fov? (degrees), canvas? ([width, height] in points, default [1200, 800]), capture_visibility? (default true)}, name?, note?, issue? (an issue ID), author?, now_ms?}. An arrow, a rectangle and an ellipse have two points. A note has one. A pen or highlighter stroke has 1 to 1000. At most 200 marks and 20000 points in a markup, 2000 markups and 400000 points in a document. A value over a limit is refused and nothing is cut. Returns {id, marks, markup: summary}.
+
+        JSON-RPC method ``markup.create``."""
+        return self._call("markup.create", params or None)
+
+    def markup_update(self, **params: "Unpack[MarkupUpdateParams]") -> Any:
+        """Change the name, the note or the issue of a markup. One undo step. params: {id, name?, note?, issue? (an issue ID, or null to take the markup off its issue)}. A markup of an issue goes into the BCF snapshot of that issue. Returns {id, changed, markup: summary}.
+
+        JSON-RPC method ``markup.update``."""
+        return self._call("markup.update", params or None)
+
+    def markup_delete(self, **params: "Unpack[MarkupDeleteParams]") -> Any:
+        """Delete markups with their marks. One undo step. The work of somebody else is never deleted silently. A markup of another origin or author needs {confirm: true}, which the caller sends only after the person said yes. Without it the call fails with a conflict error (reason confirm_needed) that lists the markups and why, and nothing is deleted. params: {id} or {ids}, confirm?. Returns {deleted: [IDs], count}.
+
+        JSON-RPC method ``markup.delete``."""
+        return self._call("markup.delete", params or None)
+
+    def markup_clear(self, **params: "Unpack[MarkupClearParams]") -> Any:
+        """Remove all marks of a markup and keep the markup with its viewpoint and note. One undo step. The consent rule of markup.delete holds. params: {id, confirm?}. Returns {id, removed (marks)}.
+
+        JSON-RPC method ``markup.clear``."""
+        return self._call("markup.clear", params or None)
+
+    def markup_render(self, **params: "Unpack[MarkupRenderParams]") -> Any:
+        """A picture of a markup: the model at its stored viewpoint, with the marks drawn on it (default) or without. params: {id, with_marks? (default true), width? (pixels, default 800)}. Returns {id, with_marks, png_base64, width, height}. The same pictures are in markup.get.
+
+        JSON-RPC method ``markup.render``."""
+        return self._call("markup.render", params or None)
+
     def dxf_compare(self, **params: "Unpack[DxfCompareParams]") -> Any:
         """Compare two DXF or DWG files without importing them (IOP-24). params: {base (the old file), new, options? {tolerance? (units of the drawing), layers? (only entities on these DXF layers), limit? (most changes listed, default 200, at most 1000), ...import options such as hatches}, render? {format: png|svg|pdf, revision_clouds? (draw revision clouds around the clusters of changes), width?, height?, palette?, unchanged?, dark?, ghosts?, previous?, view? (png, default top)}}. Returns {base, new, counts, changes: [{id, status: added|removed|changed, entity, handle?, layer, base_handle (the handle of the entity in the old file, or null), new_handle (in the new file, or null), what?, via?, distance?, text?, objects, new_objects}], listed, total_changes, notes, match, compare (the legend, counts and ghosts of the overlay, with render), image (with render: {format, svg | png_base64 | pdf_base64, width?, height?, clouds?})}. The matching is that of import.update: by handle first, else by content, geometry and nearest position. Nothing changes in the document. See describe.review.dxf_compare.
 
@@ -6587,6 +6678,13 @@ METHOD_NAMES: tuple[str, ...] = (
     "issue.delete",
     "issue.import_bcf",
     "issue.export_bcf",
+    "markup.list",
+    "markup.get",
+    "markup.create",
+    "markup.update",
+    "markup.delete",
+    "markup.clear",
+    "markup.render",
     "dxf.compare",
     "collab.status",
     "collab.connect",

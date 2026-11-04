@@ -198,6 +198,7 @@ shows a message in the status line. Other tools have no mode buttons yet.
 | Zoom to the previous change of the agent (`view.agent_change_previous`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+[ | done |
 | Mark the changes of the agent as seen (`view.agent_changes_seen`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+S | done |
 | Highlight the changes of the agent on or off (`view.agent_changes_toggle`, AGR-05) | none (Kadakas own) | Cmd/Ctrl+Alt+H | done |
+| Markup mode on or off: ink on the view (`view.markup`, REV-11) | none (Kadakas own) | Cmd/Ctrl+Alt+M | done |
 | Zoom in, factor 2 (double tap) | CC (both) | CC | planned |
 | Switch saved view | Option+Arrow / Alt+Arrow | Alt+Arrow | planned |
 | Switch active layer or class | Cmd+Arrow / Ctrl+Arrow | Ctrl+Arrow | planned |

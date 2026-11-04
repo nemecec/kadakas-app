@@ -8,7 +8,7 @@
 
 use egui::{Pos2, Rect};
 use glam::{DVec2, DVec3, Vec2};
-use kadakas_api::{Aim, PixelSize, PointerInput, Session};
+use kadakas_api::{Aim, PointerInput, Session};
 use kadakas_core::model::ObjectId;
 use kadakas_render::Camera;
 use kadakas_ui_core::tools::Ctx;

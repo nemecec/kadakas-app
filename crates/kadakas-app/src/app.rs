@@ -35,6 +35,9 @@ mod activity_tests;
 #[cfg(test)]
 mod agent_view_tests;
 mod issues;
+mod markup;
+#[cfg(test)]
+mod markup_tests;
 mod paving;
 use kadakas_core::edit2d::Transform;
 use kadakas_core::edit2d::plan::{self, SurfaceOp};
@@ -184,6 +187,8 @@ pub struct KadakasApp {
     versions_ui: crate::versions_ui::VersionsUi,
     /// The Issues palette, the pins, the new issue window and the BCF dialog (REV-05, REV-06).
     issues_ui: crate::issues_ui::IssuesUi,
+    /// The Markup palette and the ink on the plan and on the 3D view (REV-11).
+    markup_ui: crate::markup_ui::MarkupUi,
     /// The Compare window and the overlay that it puts on the plan and on the 3D view (REV-03).
     compare_ui: crate::compare_ui::CompareUi,
     /// Regions from shapes, zones, courses and the pattern check (PAT-06 to PAT-12).
@@ -602,6 +607,7 @@ impl KadakasApp {
             plugin_ui: Default::default(),
             versions_ui: Default::default(),
             issues_ui: Default::default(),
+            markup_ui: Default::default(),
             compare_ui: Default::default(),
             paving_ui: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -815,21 +821,27 @@ impl KadakasApp {
     }
 
     fn exec(&mut self, cmd: &Command) {
+        let _ = self.exec_out(cmd);
+    }
+
+    /// Like `exec`, and gives what the command made.
+    fn exec_out(&mut self, cmd: &Command) -> Option<kadakas_core::command::Outcome> {
         if self.read_only() {
             self.status = if self.update_read_only() {
                 tr!("update-ui-read-only-edit")
             } else {
                 tr!("compare-ui-read-only")
             };
-            return;
+            return None;
         }
         // The first snapshot of a shared document replaces the open one: an edit now would be lost.
         if self.collab.waiting_for_snapshot() {
             self.status = tr!("collab-ui-joining");
-            return;
+            return None;
         }
-        panels::run_command(&mut self.session, cmd, &mut self.status);
+        let out = panels::run_command(&mut self.session, cmd, &mut self.status);
         crate::annot_ui::set_revision(self.session.editor.revision());
+        out
     }
 
     /// The limits of the versions of a file follow the preferences.
@@ -1287,6 +1299,7 @@ impl KadakasApp {
             MenuAction::Versions => self.versions_ui.open(&mut self.session),
             MenuAction::Compare => self.compare_ui.open(&mut self.session),
             MenuAction::AgentActivity => self.activity_ui.model.open = true,
+            MenuAction::Markup => self.toggle_markup(ctx),
             #[cfg(not(target_arch = "wasm32"))]
             MenuAction::UpdateFromDxf => self.update_ui.start(&mut self.session),
             #[cfg(not(target_arch = "wasm32"))]
@@ -2113,6 +2126,7 @@ impl KadakasApp {
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
             // While drawing, Delete and Backspace take back the last clicked point.
+            Action::Delete if self.markup_ui.wants_delete() => self.markup_ui.delete_selected(),
             Action::Delete if self.machine.is_busy() => self.machine.pop_point(),
             Action::Delete if self.machine.tool() == Tool::Select => self.delete_selection(),
             Action::SelectAll => self.select_all(),
@@ -2211,6 +2225,7 @@ impl KadakasApp {
             Action::ViewAgentActivity => {
                 self.activity_ui.model.open = !self.activity_ui.model.open;
             }
+            Action::ViewMarkup => self.toggle_markup(ctx),
             Action::ViewAgentChangeNext => {
                 self.activity_act(ctx, crate::agent_activity_ui::Act::Next)
             }
@@ -2613,6 +2628,21 @@ impl KadakasApp {
 
         self.apply_typed_radius();
 
+        // Markup on the view (REV-11): while the mode is on and a markup is open, the pointer
+        // draws, and no tool, pin or selection gets the press.
+        let markup_took = {
+            let now = crate::markup_ui::plan_viewpoint(&self.view, rect);
+            let read_only = self.read_only();
+            self.markup_ui.canvas_frame(
+                ui,
+                &resp,
+                rect,
+                now,
+                panning || space,
+                self.session.editor.doc(),
+                read_only,
+            )
+        };
         // Pins: a press on one opens its issue. After "New Issue at a Click" the next press places
         // the issue. Neither is a tool event.
         let mut issue_press = false;
@@ -2635,7 +2665,7 @@ impl KadakasApp {
                 self.paving_ui.double_click();
             }
         }
-        if pressed && resp.hovered() && !panning && !space {
+        if pressed && resp.hovered() && !panning && !space && !markup_took {
             if let Some(p) = latest {
                 if let Some(id) = self.issues_ui.pin_at(p) {
                     self.issues_ui.click_pin(id);
@@ -2660,6 +2690,8 @@ impl KadakasApp {
         // Tool events. A running plug-in tool takes them instead of the tool machine.
         if issue_press {
             // The press was for the issues.
+        } else if markup_took {
+            // The pointer draws on the markup.
         } else if self.plugin_ui.running() {
             if !panning && !space {
                 let pixel = 1.0 / self.view.zoom;
@@ -2751,6 +2783,9 @@ impl KadakasApp {
             self.session.editor.revision(),
             &self.paving_ui,
         );
+        // The ink of the markup is over the drawing and under what the agent shows.
+        self.markup_ui
+            .paint(&ui.painter_at(rect), rect, self.session.editor.doc());
         // What the agent points at, and where the agent is (never part of the document).
         crate::agent_view_ui::paint_plan(
             &ui.painter_at(rect),
@@ -3620,6 +3655,7 @@ impl KadakasApp {
                             compare,
                             frame,
                             issues: Some(&mut self.issues_ui),
+                            markup: Some(&mut self.markup_ui),
                             nav: &mut nav,
                             agent: Some(&self.agent_view),
                             review: self
@@ -3709,6 +3745,11 @@ impl KadakasApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     self.issues_ui
                         .palette(ui, &mut self.session, &mut self.status);
+                });
+            }
+            Tab::Markup => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.markup_ui.palette(ui, &self.session);
                 });
             }
             Tab::Snapping => {
@@ -4101,6 +4142,8 @@ impl eframe::App for KadakasApp {
         self.issues_ui
             .windows(&ctx, &mut self.session, &mut self.status);
         self.run_issue_requests();
+        self.markup_ui.windows(&ctx);
+        self.run_markup_requests();
         let lock = self.edit_lock();
         self.paving_ui
             .frame(self.session.editor.revision(), lock, &mut self.status);

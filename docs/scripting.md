@@ -196,6 +196,29 @@ doc.view_camera([20000, -20000, 12000], [5000, 5000, 0], projection="perspective
 - A pointer shows an outline glow (objects), a box or a marker (a place) with a short text of at most 80 characters, in the plan and in 3D. Each color also has its own mark and line style, so colour is not the only sign. At most 32 pointers at a time and 500 objects in one. A request over a bound is refused with a message; nothing is cut. `until` is `"next_change"` (the document changes), `"dismissed"` (the default; the person dismisses it) or a time in ms.
 - The person sees the agent like a collaborator: a cursor with the name Agent at the last place it pointed at or zoomed to, and Agent in the People palette. A small panel in the drawing lists the pointers; a click zooms to one, and each can be dismissed. `Cmd/Ctrl+Alt+N` shows the next pointer.
 
+### Review: markup on the view
+
+A person can ink a comment on the plan or on the 3D view (View > Markup in the app). The ink is a markup. `doc.markups` reads it and draws markups of its own. A markup is review data of the document, not part of the model.
+
+```python
+for item in doc.markups.list()["markups"]:
+    m = doc.markups.get(item["id"])          # marks, pictures, and what is under each mark
+    for mark in m["marks"]:
+        print(mark["kind"], mark["under"]["ids"], mark["hint3d"])
+    clean, marked = m["clean"]["png_base64"], m["with_marks"]["png_base64"]
+doc.markups.create([
+    {"kind": "arrow", "points": [[0.8, 0.2], [0.5, 0.5]], "color": "#d62828"},
+    {"kind": "note", "points": [[0.8, 0.15]], "text": "Check this edge"},
+], note="Review of the gate")
+```
+
+- `markup.get` gives the marks as JSON. Each mark has kind, color, width, points (relative to the view and in points of the canvas), text and a bounding box.
+- It also gives the viewpoint and the model at the viewpoint, without and with the marks.
+- Every mark has `under` (the elements found by picking) and `hint3d` (the first surface or ground point behind it).
+- [mesh-api.md](mesh-api.md) has the details.
+- A markup that an agent draws has the origin `agent` and is one undo step. `doc.markups.delete` and `doc.markups.clear` of the work of somebody else raise `KadakasError` (reason `confirm_needed`) until the person said yes.
+- `doc.markups.update(id, issue=issue_id)` puts a markup with an issue. `doc.issues.export_bcf()` then writes it as a viewpoint with the marked picture.
+
 ### Review in the live app: what the agent changed
 
 Every call or script run of an agent that changes the document is one **step** of the activity log of the session. This works in the app and in `kadakas serve`; the window (highlight, panel, revert) is in the app only.

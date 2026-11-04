@@ -55,6 +55,7 @@ mod joint_ui;
 mod keymap;
 mod layout;
 mod locale;
+mod markup_ui;
 mod open_gate;
 mod panels;
 mod paving_ui;
