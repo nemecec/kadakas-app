@@ -435,7 +435,7 @@ Only what is displayed (`Document::is_displayed`) is met. Grey layers and classe
 
 At most 100 samples for a mark (25 by default) and 5000 samples for a call. When the budget runs out, `truncated` is true and a note says so. Ask for one markup at a time or lower `samples`.
 
-Measured with `crates/kadakas-api/tests/markup_cost.rs`: __COST__
+Measured with `crates/kadakas-api/tests/markup_cost.rs`: 200 surface models of about 2,000 triangles each, a top view, a debug build. The first call cuts the triangles of every model and takes 1.2 s. After that 25 samples take 3 ms, 250 samples take 39 ms, and the 4951 samples of a full budget take 0.86 s. One arrow with both pictures at 800 pixels takes 1.2 s in a debug build. The pictures cost the most.
 
 ### The pictures
 

@@ -6098,7 +6098,7 @@ class Api:
         return self._call("issue.export_bcf", params or None)
 
     def markup_list(self, **params: "Unpack[MarkupListParams]") -> Any:
-        """List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset}.
+        """List the markups of the document (REV-11). A markup is ink that a person or an agent drew on a plan or 3D view. params: {issue? (only markups of this issue), origin? (user or agent), limit? (default 200, at most 1000), offset?}. Returns {markups: [{id, name, author, origin, created (ISO 8601), created_ms, mode (plan or 3d), canvas, marks, points, issue, note}], count, total, offset, next_offset, unreadable (entries of the file that this version cannot read and keeps as they are)}.
 
         JSON-RPC method ``markup.list``."""
         return self._call("markup.list", params or None)

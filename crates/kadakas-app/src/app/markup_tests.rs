@@ -259,7 +259,7 @@ fn the_eraser_the_select_tool_and_clear_change_marks_in_single_steps() {
     // The swatch click of the palette goes through the same request.
     rig.app
         .markup_ui
-        .push_request(Request::Cmd(Command::SetMarkStyle {
+        .push_request(Request::cmd(Command::SetMarkStyle {
             markup: id,
             mark,
             color: Some(blue),
@@ -277,7 +277,7 @@ fn the_eraser_the_select_tool_and_clear_change_marks_in_single_steps() {
     let depth = rig.app.session.editor.undo_depth();
     rig.app
         .markup_ui
-        .push_request(Request::Cmd(Command::ClearMarkup { markup: id }));
+        .push_request(Request::cmd(Command::ClearMarkup { markup: id }));
     rig.frame(vec![]);
     assert!(rig.markup(id).marks.is_empty());
     assert_eq!(rig.app.session.editor.undo_depth(), depth + 1);
