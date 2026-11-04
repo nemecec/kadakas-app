@@ -76,6 +76,8 @@ The second guard is a probe in `kadakas-app` (`text_probe.rs`). A test draws a p
 
 Run `cargo test -p kadakas-l10n` before each commit that touches UI text.
 
+To review a translation with a native speaker, use the local tool in `tools/l10n-review/`. It shows both texts side by side, marks weird words and asks Claude for better texts. See its README.
+
 ## How to add a language
 
 1. Make the folder `crates/kadakas-l10n/locales/<tag>/`, for example `fi`. Use a BCP 47 tag.

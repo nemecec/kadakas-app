@@ -206,6 +206,9 @@ The table below is the same list as `docs/attribution-assets.tsv`. The script `s
 | EELIS protected areas, Natura 2000 and flood risk areas (WFS, queried at run time by the demo script, not stored) | `ext:keskkonnaagentuur-eelis-wfs` | Keskkonnaagentuur and Kliimaministeerium (Estonian Environmental Agency and Ministry of Climate) | CC-BY-4.0 | https://gsavalik.envir.ee/geoserver/ows | test |
 | Register of Cultural Monuments: monuments and protection zones (WFS, queried at run time by the demo script, not stored) | `ext:muinsuskaitseamet-register-wfs` | Muinsuskaitseamet (National Heritage Board) | CC-BY-4.0 | https://register.muinas.ee | test |
 | OpenStreetMap data through the Overpass API (fallback for nearby objects, queried at run time by the demo script, not stored) | `ext:openstreetmap-overpass` | OpenStreetMap contributors | ODbL-1.0 | https://www.openstreetmap.org/copyright | test |
+| Translation review tool scripts | `tools/l10n-review/**/*.js` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Translation review tool page | `tools/l10n-review/static/*.html` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
+| Translation review tool style | `tools/l10n-review/static/*.css` | Kadakas project | Apache-2.0 OR MIT | https://github.com/nemecec/kadakas-app | test |
 
 ## Keep this page current
 
