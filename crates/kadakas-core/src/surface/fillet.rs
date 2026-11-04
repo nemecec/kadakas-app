@@ -1007,6 +1007,10 @@ pub fn is_thin(degrees: f64) -> bool {
     degrees < THIN_DEGREES
 }
 
+/// One use of an edge by a face: the front normal, the direction (from, to) and the new face
+/// (an index into the new faces) or none for a changed face.
+type EdgeUse = (DVec3, Pt, Pt, Option<usize>);
+
 /// Refuses a wedge of material thinner than [`THIN_DEGREES`] at an edge of a new face.
 fn thin_wedges(
     points: &[DVec3],
@@ -1020,7 +1024,7 @@ fn thin_wedges(
         Pt::New(i) => points[i],
     };
     // Each use of an edge: the normal of the face, the direction of the use and the face.
-    let mut uses: BTreeMap<(Pt, Pt), Vec<(DVec3, Pt, Pt, Option<usize>)>> = BTreeMap::new();
+    let mut uses: BTreeMap<(Pt, Pt), Vec<EdgeUse>> = BTreeMap::new();
     for (k, f) in new_faces.iter().enumerate() {
         let l = &f.points;
         for i in 0..l.len() {

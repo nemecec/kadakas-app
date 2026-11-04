@@ -923,6 +923,13 @@ fn sweep(
     out
 }
 
+/// A shape of the review table, with a name of its own.
+type NamedCase = (
+    String,
+    Box<dyn Fn() -> SurfaceModel>,
+    Box<dyn Fn(&SurfaceModel) -> FaceId>,
+);
+
 /// A shape of a sweep: a name, how to make it and the face whose edges change.
 type Case = (
     &'static str,
@@ -1451,11 +1458,7 @@ fn the_review_table_of_leaning_legs_and_blocks() {
     };
     let mut bad = Vec::new();
     for lean in [5.0, 10.0, 20.0, 30.0] {
-        let shapes: Vec<(
-            String,
-            Box<dyn Fn() -> SurfaceModel>,
-            Box<dyn Fn(&SurfaceModel) -> FaceId>,
-        )> = vec![
+        let shapes: Vec<NamedCase> = vec![
             (
                 format!("leg {lean}"),
                 Box::new(leg(lean)),
