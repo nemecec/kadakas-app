@@ -14,7 +14,7 @@ kadakas-core = { path = "../kadakas-core" }
 # The azimuthal equidistant projection needs a C compiler for the geodesic code, which the
 # browser build does not have. Without it the crate is still wasm-compatible.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-proj4rs = { version = "0.2.1", features = ["crs-definitions"] }
+proj4rs = { version = "0.3.0", features = ["crs-definitions"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 proj4rs = { version = "0.2.1", default-features = false, features = ["crs-definitions"] }
