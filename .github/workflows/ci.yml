@@ -77,7 +77,7 @@ jobs:
       - uses: ./.github/actions/wasi-sdk
       - if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libxkbcommon-dev libgtk-3-dev
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: nextest
       - run: cargo fmt --all --check
@@ -86,7 +86,7 @@ jobs:
       # run doctests, so they follow.
       - run: cargo nextest run --workspace --no-fail-fast
       - run: cargo test --workspace --doc
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           save-cache: ${{ github.ref == 'refs/heads/main' }}
       # The release-like program for the Python tests. It is built here, and not taken from the
@@ -140,7 +140,7 @@ jobs:
           cache-all-crates: false
           cache-bin: false
       - uses: ./.github/actions/wasi-sdk
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: trunk
       - run: trunk build
@@ -151,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-deny
       - run: cargo deny check
