@@ -329,7 +329,7 @@ jobs:
       - uses: ./.github/actions/wasi-sdk
         with:
           cache-module: "false"
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: trunk
       - run: trunk build --release
@@ -395,7 +395,7 @@ jobs:
             exit 1
           fi
           echo "path=$out" >> "$GITHUB_OUTPUT"
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
           body_path: ${{ steps.notes.outputs.path }}
