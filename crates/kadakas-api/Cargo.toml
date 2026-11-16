@@ -68,7 +68,7 @@ png = "0.18"
 # Encodes JPEG in the snapshot benchmark only (to compare sizes).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 # Draws the SVG of a compare to pixels in the tests. The app ships it already. Not shipped here.
-resvg = { version = "0.48.1", default-features = false }
+resvg = { version = "0.49.0", default-features = false }
 proptest = "1.11.0"
 # Makes hostile BCF archives in the tests. Not shipped here (kadakas-review reads them).
 zip = { version = "9.0.4", default-features = false, features = ["deflate-flate2"] }
